@@ -94,8 +94,6 @@ pub fn build_router_with_srn(
             "/list_all_conversations",
             post(handlers::conversations::list_all_conversations),
         )
-        .route("/list_conversation_collaborators", post(handlers::conversations::list_conversation_collaborators))
-        .route("/set_conversation_collaborator", post(handlers::conversations::set_conversation_collaborator))
         .route(
             "/list_child_conversations",
             post(handlers::conversations::list_child_conversations),

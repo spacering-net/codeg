@@ -54,6 +54,10 @@ fn default_completed_cache_max_mb() -> u32 {
     DEFAULT_COMPLETED_CACHE_MB
 }
 
+fn default_session_messaging_enabled() -> bool {
+    true
+}
+
 /// Newtype so the Tauri managed-state lookup can distinguish the delegation
 /// UDS path from other `PathBuf`s in the state graph.
 #[derive(Clone)]
@@ -62,7 +66,7 @@ pub struct DelegationSocketPath(pub PathBuf);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegationSettings {
     pub enabled: bool,
-    #[serde(default)]
+    #[serde(default = "default_session_messaging_enabled")]
     pub session_messaging_enabled: bool,
     pub depth_limit: u32,
     /// Per-agent default overrides applied by the delegation broker when
@@ -82,7 +86,7 @@ impl Default for DelegationSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            session_messaging_enabled: false,
+            session_messaging_enabled: default_session_messaging_enabled(),
             depth_limit: 1,
             agent_defaults: BTreeMap::new(),
             completed_cache_max_mb: DEFAULT_COMPLETED_CACHE_MB,
@@ -125,14 +129,12 @@ impl DelegationSettings {
 /// for any missing or malformed value. Never errors hard — corrupt
 /// persistence is treated as "no preference yet."
 pub async fn load_delegation_settings(conn: &DatabaseConnection) -> DelegationSettings {
-    let mut settings = DelegationSettings {
-        session_messaging_enabled: app_metadata_service::get_value(conn, KEY_SESSION_MESSAGING_ENABLED)
-            .await
-            .ok()
-            .flatten()
-            .as_deref() == Some("true"),
-        ..DelegationSettings::default()
-    };
+    let mut settings = DelegationSettings::default();
+    if let Ok(Some(raw)) = app_metadata_service::get_value(conn, KEY_SESSION_MESSAGING_ENABLED).await {
+        if let Ok(value) = raw.parse::<bool>() {
+            settings.session_messaging_enabled = value;
+        }
+    }
     if let Ok(Some(raw)) = app_metadata_service::get_value(conn, KEY_DELEGATION_ENABLED).await {
         if let Ok(v) = raw.parse::<bool>() {
             settings.enabled = v;
@@ -330,7 +332,7 @@ mod tests {
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
         let settings = load_delegation_settings(&db.conn).await;
         assert!(!settings.enabled);
-        assert!(!settings.session_messaging_enabled);
+        assert!(settings.session_messaging_enabled);
         assert_eq!(settings.depth_limit, 1);
     }
 
@@ -340,7 +342,7 @@ mod tests {
         let broker = make_broker();
         let desired = DelegationSettings {
             enabled: false,
-            session_messaging_enabled: true,
+            session_messaging_enabled: false,
             depth_limit: 3,
             ..DelegationSettings::default()
         };
@@ -348,17 +350,17 @@ mod tests {
             .await
             .unwrap();
         assert!(!saved.enabled);
-        assert!(saved.session_messaging_enabled);
+        assert!(!saved.session_messaging_enabled);
         assert_eq!(saved.depth_limit, 3);
 
         let loaded = load_delegation_settings(&db.conn).await;
         assert_eq!(loaded.enabled, saved.enabled);
-        assert!(loaded.session_messaging_enabled);
+        assert!(!loaded.session_messaging_enabled);
         assert_eq!(loaded.depth_limit, saved.depth_limit);
 
         let cfg = broker.config_snapshot().await;
         assert!(!cfg.enabled);
-        assert!(cfg.session_messaging_enabled);
+        assert!(!cfg.session_messaging_enabled);
         assert_eq!(cfg.depth_limit, 3);
     }
 

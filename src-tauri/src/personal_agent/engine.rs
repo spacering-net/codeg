@@ -226,6 +226,11 @@ struct ActiveTurn {
     auto_quote: Option<i32>,
     /// For a delivery: the result cards its reply may report (A1).
     covers_from: Covers,
+    /// For a delivery: the result cards `dispatch_wait` handed it while it
+    /// ran, news that landed after its prompt went out. Its reply may report
+    /// them as it may its events; their events are settled with it only when
+    /// it said in full that it did — otherwise they go out as ever.
+    waited: Vec<i32>,
     /// For a delivery: the batches whose ledger entries count as its own —
     /// itself, and those it re-delivers what they carried of.
     ledger_scope: Vec<i32>,
@@ -700,6 +705,7 @@ impl PersonalAgentEngine {
             reply_token: None,
             auto_quote: None,
             covers_from: Covers::default(),
+            waited: Vec::new(),
             ledger_scope: vec![batch_id],
             preempted: false,
             flush: None,
@@ -748,6 +754,7 @@ impl PersonalAgentEngine {
             reply_token: Some(token.to_string()),
             auto_quote: None,
             covers_from: Covers::default(),
+            waited: Vec::new(),
             ledger_scope: vec![batch_id],
             preempted: false,
             flush: None,
@@ -1998,7 +2005,7 @@ impl PersonalAgentEngine {
 
     /// Settle a reply row: its last text becomes the body, its quote is
     /// resolved, and it records how the turn ended. A row settled already is
-    /// left alone.
+    /// left alone. Returns the result cards it was recorded to report.
     async fn settle_reply(
         &self,
         row_id: i32,
@@ -2007,7 +2014,7 @@ impl PersonalAgentEngine {
         content: ReplyContent,
         auto_quote: Option<i32>,
         covers: &Covers,
-    ) {
+    ) -> Vec<i32> {
         // The result cards it reports (A1): only a reply that was said in
         // full, to the cards it was given.
         let covers = (outcome.state == "done" && !content.text.trim().is_empty())
@@ -2057,13 +2064,16 @@ impl PersonalAgentEngine {
             "duration_ms": (finished_at - started_at).num_milliseconds().max(0),
         });
         let mut data = data;
-        if let (Some(covers), Some(map)) = (covers, data.as_object_mut()) {
+        if let (Some(covers), Some(map)) = (covers.as_ref(), data.as_object_mut()) {
             map.insert("covers".into(), serde_json::json!(covers));
         }
-        if let Ok(Some(row)) =
-            svc::settle_reply_row(&self.db.conn, row_id, content.text, data, reply_to).await
-        {
-            self.emit_rows(vec![svc::to_row(row)]);
+        match svc::settle_reply_row(&self.db.conn, row_id, content.text, data, reply_to).await {
+            Ok(Some(row)) => {
+                self.emit_rows(vec![svc::to_row(row)]);
+                covers.unwrap_or_default()
+            }
+            // Settled already, or not written: it reports nothing now.
+            _ => Vec::new(),
         }
     }
 
@@ -2722,6 +2732,7 @@ impl PersonalAgentEngine {
                 reply_token: None,
                 auto_quote: None,
                 covers_from: Covers::default(),
+                waited: Vec::new(),
                 ledger_scope: vec![batch.id],
                 preempted: false,
                 flush: Some(FlushRun {
@@ -2920,6 +2931,7 @@ impl PersonalAgentEngine {
                 reply_token: None,
                 auto_quote: None,
                 covers_from: Covers::default(),
+                waited: Vec::new(),
                 ledger_scope: Vec::new(),
                 preempted: false,
                 flush: None,
@@ -3630,6 +3642,7 @@ impl PersonalAgentEngine {
                 reply_token: (reply.is_some() || internal.is_some()).then(|| token.clone()),
                 auto_quote,
                 covers_from,
+                waited: Vec::new(),
                 ledger_scope,
                 preempted: false,
                 flush: None,
@@ -4012,6 +4025,9 @@ impl PersonalAgentEngine {
 
         // The reply settles in place: the page saw it stream there. Pushed
         // once more as it stood, then the row with its body.
+        // The result cards the reply was recorded to report: those it was
+        // handed by `dispatch_wait` are what its events are settled by.
+        let mut reported: Vec<i32> = Vec::new();
         if let Some(row) = reply_row {
             if let (ReplyCapture::Live(snap), Some(row_id)) = (&capture, turn.reply_row_id) {
                 self.emit(PersonalAgentChange::Reply {
@@ -4019,7 +4035,7 @@ impl PersonalAgentEngine {
                     current: snap.current.clone(),
                 });
             }
-            self.settle_reply(
+            reported = self.settle_reply(
                 row.id,
                 turn.started_at,
                 ReplyOutcome {
@@ -4046,7 +4062,13 @@ impl PersonalAgentEngine {
                 &if said_in_full {
                     Covers {
                         sole: turn.covers_from.sole.filter(|_| turn.owner_row_ids.is_empty()),
-                        ..turn.covers_from.clone()
+                        rows: turn
+                            .covers_from
+                            .rows
+                            .iter()
+                            .chain(&turn.waited)
+                            .copied()
+                            .collect(),
                     }
                 } else {
                     Covers::default()
@@ -4136,6 +4158,12 @@ impl PersonalAgentEngine {
                 }
             }
             let _ = svc::finish_batch_events(&self.db.conn, turn.batch_id).await;
+            // News `dispatch_wait` handed the turn, which its reply said in
+            // full it reported: settled with this turn, not delivered again.
+            // Anything else it was handed goes out as ever.
+            if !canceled {
+                self.settle_waited(&turn, &reported).await;
+            }
             self.messages_handled(turn.batch_id).await;
             // It answered what the owner asked: they hear of it (1.13).
             if !canceled && !turn.owner_row_ids.is_empty() {
@@ -5486,6 +5514,83 @@ impl PersonalAgentEngine {
             .as_ref()
             .filter(|t| t.kind == BatchKind::Delivery)
             .map(|t| (t.batch_id, t.ledger_scope.clone()))
+    }
+
+    /// The delivery a `dispatch_wait` call waits in: its batch, and whether
+    /// it was told to give way to the owner's message — `None` once no
+    /// delivery runs (it ended, or was never one).
+    pub(super) async fn waiting_turn(&self) -> Option<(i32, bool)> {
+        self.state
+            .lock()
+            .await
+            .turn
+            .as_ref()
+            .filter(|t| t.kind == BatchKind::Delivery && t.flush.is_none())
+            .map(|t| (t.batch_id, t.preempted))
+    }
+
+    /// The result cards the running delivery was given from the start (its
+    /// events): `dispatch_wait` does not hand them again.
+    pub(super) async fn turn_covers(&self, batch_id: i32) -> Vec<i32> {
+        self.state
+            .lock()
+            .await
+            .turn
+            .as_ref()
+            .filter(|t| t.batch_id == batch_id)
+            .map(|t| t.covers_from.rows.clone())
+            .unwrap_or_default()
+    }
+
+    /// `dispatch_wait` handed the delivery of `batch_id` the result card
+    /// `row`: its reply may report it. False when that delivery is over.
+    pub(super) async fn note_waited(&self, batch_id: i32, row: i32) -> bool {
+        let mut st = self.state.lock().await;
+        match st.turn.as_mut().filter(|t| t.batch_id == batch_id) {
+            Some(t) => {
+                if !t.waited.contains(&row) {
+                    t.waited.push(row);
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The news `dispatch_wait` handed a turn that its reply reported:
+    /// settled with the turn (and read), so it is not delivered again.
+    async fn settle_waited(&self, turn: &ActiveTurn, reported: &[i32]) {
+        let rows: Vec<i32> = turn
+            .waited
+            .iter()
+            .copied()
+            .filter(|r| reported.contains(r))
+            .collect();
+        if rows.is_empty() {
+            return;
+        }
+        let bot = self.bot().await;
+        let settled = match svc::settle_waited_events(&self.db.conn, bot, &rows, turn.batch_id).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!(
+                    "[personal_agent] news batch {} reported mid-turn not settled: {e}",
+                    turn.batch_id
+                );
+                return;
+            }
+        };
+        if settled.is_empty() {
+            return;
+        }
+        if let Ok(read) = svc::set_result_rows_read(&self.db.conn, bot, &settled, Some(Utc::now())).await {
+            self.emit_rows(read.into_iter().map(svc::to_row).collect());
+        }
+        // A failure held for the owner is decided now, as for the events a
+        // turn took (B6).
+        if let Some(host) = self.host_ref() {
+            host.turn_over(&settled);
+        }
     }
 
     // ── status ──────────────────────────────────────────────────────────────

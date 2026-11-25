@@ -43,39 +43,6 @@ pub async fn list_all_conversations(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConversationCollaboratorsParams {
-    conversation_id: i32,
-}
-
-pub async fn list_conversation_collaborators(
-    Extension(state): Extension<Arc<AppState>>,
-    Json(params): Json<ConversationCollaboratorsParams>,
-) -> Result<Json<Vec<crate::models::DbConversationSummary>>, AppCommandError> {
-    Ok(Json(conv_commands::list_conversation_collaborators_core(
-        &state.db.conn, params.conversation_id,
-    ).await?))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetConversationCollaboratorParams {
-    conversation_id: i32,
-    target_id: i32,
-    linked: bool,
-}
-
-pub async fn set_conversation_collaborator(
-    Extension(state): Extension<Arc<AppState>>,
-    Json(params): Json<SetConversationCollaboratorParams>,
-) -> Result<Json<()>, AppCommandError> {
-    conv_commands::set_conversation_collaborator_core(
-        &state.db.conn, &state.emitter, params.conversation_id, params.target_id, params.linked,
-    ).await?;
-    Ok(Json(()))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ListChildConversationsParams {
     pub parent_conversation_id: i32,
 }

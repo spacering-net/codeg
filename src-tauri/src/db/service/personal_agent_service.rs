@@ -2243,6 +2243,22 @@ pub async fn latest_event_of_coalesce(
         .await?)
 }
 
+/// This assistant's events under `coalesce_key` not yet handed to any
+/// delivery, oldest first.
+pub async fn pending_events_of_coalesce(
+    conn: &DatabaseConnection,
+    bot: i32,
+    coalesce_key: &str,
+) -> Result<Vec<event::Model>, DbError> {
+    Ok(event::Entity::find()
+        .filter(event::Column::BotId.eq(bot))
+        .filter(event::Column::CoalesceKey.eq(coalesce_key))
+        .filter(event::Column::State.eq(EventState::Pending))
+        .order_by_asc(event::Column::Id)
+        .all(conn)
+        .await?)
+}
+
 /// An event of this assistant's, by id: `None` for one of another's.
 pub async fn get_event_of(
     conn: &DatabaseConnection,
@@ -2266,6 +2282,76 @@ async fn delivered_event_ids(conn: &DatabaseConnection, batch_id: i32) -> Result
         .into_iter()
         .map(|e| e.id)
         .collect())
+}
+
+/// The pending news of dispatched work that the turn of `batch_id` was handed
+/// mid-turn (`dispatch_wait`) and reported, through the events of the result
+/// cards `rows`: settled with that batch — each such event and the older
+/// pending news of the same work, which only it would have said again — so
+/// no later delivery tells it once more. Only pending events move: one a
+/// delivery has taken meanwhile is that delivery's. Returns the event ids
+/// settled.
+pub async fn settle_waited_events(
+    conn: &DatabaseConnection,
+    bot: i32,
+    rows: &[i32],
+    batch_id: i32,
+) -> Result<Vec<i32>, DbError> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let event_ids: Vec<i32> = timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
+        .filter(timeline::Column::Kind.eq(TimelineKind::Result))
+        .filter(timeline::Column::Id.is_in(rows.to_vec()))
+        .all(conn)
+        .await?
+        .into_iter()
+        .filter_map(|r| r.event_id)
+        .collect();
+    if event_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let events = event::Entity::find()
+        .filter(event::Column::BotId.eq(bot))
+        .filter(event::Column::Id.is_in(event_ids))
+        .filter(event::Column::Kind.eq("dispatch_status"))
+        .all(conn)
+        .await?;
+    use sea_orm::TransactionTrait;
+    let txn = conn.begin().await?;
+    let mut settled: Vec<i32> = Vec::new();
+    for e in events {
+        let Some(key) = e.coalesce_key.as_deref() else {
+            continue;
+        };
+        let scope = event::Entity::find()
+            .filter(event::Column::BotId.eq(bot))
+            .filter(event::Column::CoalesceKey.eq(key))
+            .filter(event::Column::State.eq(EventState::Pending))
+            .filter(event::Column::Id.lte(e.id))
+            .all(&txn)
+            .await?
+            .into_iter()
+            .map(|e| e.id)
+            .collect::<Vec<_>>();
+        if scope.is_empty() {
+            continue;
+        }
+        event::Entity::update_many()
+            .col_expr(event::Column::State, Expr::value(EventState::Done))
+            .col_expr(event::Column::BatchId, Expr::value(batch_id))
+            .col_expr(event::Column::UpdatedAt, Expr::value(Utc::now()))
+            .filter(event::Column::Id.is_in(scope.clone()))
+            .filter(event::Column::State.eq(EventState::Pending))
+            .exec(&txn)
+            .await?;
+        settled.extend(scope);
+    }
+    txn.commit().await?;
+    settled.sort_unstable();
+    settled.dedup();
+    Ok(settled)
 }
 
 /// The events a batch carried are handled.

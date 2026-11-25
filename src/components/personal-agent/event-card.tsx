@@ -33,7 +33,7 @@ import type { DispatchInfo, RoutineDraft } from "@/lib/types"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { cn } from "@/lib/utils"
 
-import { asVerdict, CheckLabel, VerdictChip } from "./acceptance-bits"
+import { asVerdict, CheckLabel, DoneWhen, VerdictChip } from "./acceptance-bits"
 import { AcceptanceFacts } from "./acceptance-fold"
 import type { MessageItem } from "./message-items"
 import { MessageRow } from "./message-row"
@@ -417,7 +417,13 @@ export function EventCard({ item }: { item: EventItem }) {
       : null
   // Its acceptance, folded into it as its head (A4).
   const acceptance = item.acceptance
+  // The pill of its work, which the reply that handed it out and reported
+  // this news no longer draws: what done looks like, said here.
+  const doneWhen = item.pill
+    ? (info?.done_when ?? str(item.pill.data, "done_when"))
+    : null
   const facts =
+    !!doneWhen?.trim() ||
     strip != null ||
     answered > 0 ||
     retry != null ||
@@ -482,6 +488,7 @@ export function EventCard({ item }: { item: EventItem }) {
         {/* Where it stands, what it said in passing, what a check found. */}
         {facts ? (
           <SheetPart className="flex flex-col gap-1.5" data-pa-event-facts>
+            {doneWhen ? <DoneWhen text={doneWhen} /> : null}
             {strip ? (
               <TaskStrip d={strip} chip={newsLadder !== strip.ladder} />
             ) : null}

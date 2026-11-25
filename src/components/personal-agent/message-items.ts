@@ -77,6 +77,9 @@ export type MessageItem =
       /** The ordinals of the turn's texts drawn before its lines (`said`
        *  items): while it runs, its bubble does not draw them again. */
       saidNs: number[]
+      /** Its dispatches whose news it reported (`reportedPill`): drawn by
+       *  that news's card, not as a pill of its own. */
+      reported?: number[]
     })
   | (ItemBase & {
       kind: "event"
@@ -91,6 +94,10 @@ export type MessageItem =
        *  check and what the check found, and the card of a round its
        *  assistant accepted on a pass — `null` for none on the page. */
       acceptance: AcceptanceFold | null
+      /** The dispatch of its work, when the reply that handed the work out
+       *  reported this news too (`reportedPill`): the card draws it — what
+       *  done looks like — instead of a pill in the reply. */
+      pill?: TimelineRow | null
     })
   /** A native card codeg wrote itself (a proposal): on the assistants'
    *  side, standing alone. */
@@ -264,6 +271,77 @@ function sameDay(a: number, b: number): boolean {
   )
 }
 
+/**
+ * Work a reply handed out and whose news the same reply reported (A1): the
+ * assistant dispatched it and waited for it within the turn, so its pill
+ * and its news card would show the one piece of work twice, side by side.
+ * The card stays — where the work stands, what came of it, its buttons —
+ * and draws what done looks like; the pill goes. Only a plain pill: the
+ * pill of an acceptance check, or of a round on a pull request, says more
+ * than the card does, and a follow-up's ("continue: …", the work as it
+ * stands now) says what the card of earlier news does not. Only news drawn
+ * as its own card (not folded into a
+ * work's head) and reported by that very reply; with two such pieces of
+ * news, the newer draws it.
+ *
+ * `pillOf` maps a news card to the dispatch row it draws; `reportedBy` a
+ * reply row to the dispatch rows it no longer draws.
+ */
+function reportedPills(
+  rows: readonly TimelineRow[],
+  attachedByBatch: ReadonlyMap<number, TimelineRow[]>,
+  foldedIds: ReadonlySet<number>
+): {
+  pillOf: Map<number, TimelineRow>
+  reportedBy: Map<number, number[]>
+} {
+  // Who reported each card: the reply said in full that names it.
+  const reporter = new Map<number, TimelineRow>()
+  for (const r of rows) {
+    if (r.kind !== "reply" || replyState(r) !== "done" || r.body.trim() === "")
+      continue
+    const covers = r.data?.covers
+    if (!Array.isArray(covers)) continue
+    for (const id of covers) {
+      if (typeof id === "number" && !reporter.has(id)) reporter.set(id, r)
+    }
+  }
+  const cardOfPill = new Map<number, number>()
+  const pillOf = new Map<number, TimelineRow>()
+  const replyOfPill = new Map<number, number>()
+  for (const r of rows) {
+    if (r.kind !== "result" || r.dispatch_id == null) continue
+    if (isDiscarded(r) || foldedIds.has(r.id)) continue
+    if (numIn(r, "check_for") != null) continue
+    const reply = reporter.get(r.id)
+    if (reply?.batch_id == null) continue
+    const pill = (attachedByBatch.get(reply.batch_id) ?? []).find(
+      (a) =>
+        a.kind === "dispatch" &&
+        a.dispatch_id === r.dispatch_id &&
+        !isMirror(a) &&
+        numIn(a, "check_for") == null &&
+        a.data?.pr_fix == null &&
+        a.data?.failed !== true &&
+        a.data?.followup !== true
+    )
+    if (!pill) continue
+    // The newer news of the same work draws it.
+    const held = cardOfPill.get(pill.id)
+    if (held != null) pillOf.delete(held)
+    cardOfPill.set(pill.id, r.id)
+    pillOf.set(r.id, pill)
+    replyOfPill.set(pill.id, reply.id)
+  }
+  const reportedBy = new Map<number, number[]>()
+  for (const [pill, reply] of replyOfPill) {
+    const list = reportedBy.get(reply) ?? []
+    list.push(pill)
+    reportedBy.set(reply, list)
+  }
+  return { pillOf, reportedBy }
+}
+
 export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
   // The head of each piece of work on the page: its latest news — not a
   // check's. What its acceptance wrote folds into it (A4); with no head
@@ -318,6 +396,7 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
     if (!Array.isArray(covers)) continue
     for (const id of covers) if (typeof id === "number") covered.add(id)
   }
+  const { pillOf, reportedBy } = reportedPills(rows, attachedByBatch, foldedIds)
   const items: MessageItem[] = []
   let prev: { at: number; item: MessageItem } | null = null
   const place = (item: Placed) => {
@@ -452,6 +531,7 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
           r.dispatch_id != null && heads.get(r.dispatch_id) === r.id
             ? foldOf(folded.get(r.dispatch_id) ?? [])
             : null,
+        pill: pillOf.get(r.id) ?? null,
       }
     } else if (r.kind === "notice") {
       item = {
@@ -476,6 +556,7 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
         attached: b != null ? (attachedByBatch.get(b) ?? []) : [],
         owners: b != null ? (ownersByBatch.get(b) ?? []) : [],
         saidNs: [],
+        reported: reportedBy.get(r.id) ?? [],
       }
     } else if (GROUPED_KINDS.has(r.kind)) {
       const b = r.batch_id
@@ -562,16 +643,22 @@ export function itemRowIds(item: MessageItem): number[] {
   // A turn's text before a line is no row of its own: the line draws it.
   if (item.kind === "time" || item.kind === "said") return []
   if (item.kind === "reply") {
+    // A pill the news card draws is that card's (`reportedPills`).
+    const reported = item.reported ?? []
     return [
       item.anchor.id,
       ...(item.row ? [item.row.id] : []),
-      ...item.attached.map((r) => r.id),
+      ...item.attached.filter((r) => !reported.includes(r.id)).map((r) => r.id),
     ]
   }
   if (item.kind === "exchange") return item.rows.map((r) => r.id)
-  // A work's head draws what its acceptance folded into it (A4).
-  if (item.kind === "event" && item.acceptance) {
-    return [item.row.id, ...item.acceptance.rows.map((r) => r.id)]
+  if (item.kind === "event") {
+    return [
+      item.row.id,
+      // What its acceptance folded into it (A4), and the pill it draws.
+      ...(item.acceptance ? item.acceptance.rows.map((r) => r.id) : []),
+      ...(item.pill ? [item.pill.id] : []),
+    ]
   }
   return [item.row.id]
 }

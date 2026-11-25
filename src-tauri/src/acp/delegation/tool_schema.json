@@ -381,48 +381,6 @@
     }
   },
   {
-    "name": "read_session_history",
-    "description": "Read older context from a codeg session without changing it. session_id is the number from codeg://session/<id>. Returns the newest matching turns in chronological order, with original transcript IDs. Pass oldest_id as before for the next older page; before is exclusive. query is a case-insensitive literal substring over full text/thinking/errors (also tool names/input/output previews when include_tools=true). An unknown before returns an explanation instead of restarting. IDs remain usable while the underlying transcript preserves them; rewriting/compaction can invalidate them. No images or raw tool payloads are returned. The full transcript is parsed on each read, subject to the same concurrency and timeout limits as get_session_info.",
-    "inputSchema": {
-      "type": "object",
-      "required": [
-        "session_id"
-      ],
-      "properties": {
-        "session_id": {
-          "type": "integer",
-          "description": "Codeg conversation ID."
-        },
-        "limit": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 20,
-          "description": "Maximum returned turns, capped at 200."
-        },
-        "before": {
-          "type": "string",
-          "description": "Exclusive original turn ID from oldest_id. Omit for the newest page."
-        },
-        "query": {
-          "type": "string",
-          "description": "Optional case-insensitive literal substring. Empty matches all turns."
-        },
-        "include_tools": {
-          "type": "boolean",
-          "default": false,
-          "description": "Include tool names and recorded input/output previews; image payloads remain excluded."
-        },
-        "max_chars": {
-          "type": "integer",
-          "minimum": 0,
-          "default": 16000,
-          "description": "Character budget for the serialized history envelope, capped at 16000. JSON escaping counts. A long newest turn may be clipped (previews omitted first); truncated marks clipping or omitted older matches. If the budget cannot fit response/turn metadata, returns no turns and a note; that fixed metadata may exceed the requested budget. This bounds returned content, not transcript parsing or the MCP protocol wrapper."
-        }
-      }
-    },
-    "annotations": { "readOnlyHint": true }
-  },
-  {
     "name": "create_automation",
     "description": "Save a codeg Automation: a reusable job — a prompt plus a target project — that codeg runs on a cron schedule (or on demand) without anyone present. Use it when the user asks for work that should REPEAT or happen at a TIME rather than right now: 'every morning', 'each Monday', 'nightly', 'every 30 minutes', 'before standup', 'set up a recurring …'. Do NOT use it for work the user wants done in this conversation — just do that work. Each run starts a fresh headless session in its own worktree with no memory of this chat, so `prompt` must be completely self-contained: state the goal, the relevant paths, and what a finished run looks like. Creating an automation does not run it now; the tool returns the id and the next fire time so you can tell the user when it will first go off. The user can edit, disable, run, or delete it on the Automations page.",
     "inputSchema": {
@@ -1762,6 +1720,28 @@
         "reason": {
           "type": "string",
           "description": "With `suggest`: why you think it fits the owner."
+        }
+      }
+    }
+  },
+  {
+    "name": "dispatch_wait",
+    "description": "Wait, within the reply you are writing, for news of one of your own dispatches — only when the owner wants its result in this reply (\"have it checked, then tell me\") and it should be done within a few minutes. Never poll a work session with sleep or get_session_info instead. Waits up to 45 s per call (call again to keep waiting). When news came in, it returns it numbered like an event line ([#N] …): report it in this reply and write [[quote:#N]] — then it is settled with your reply and does not come to you again as an event. Otherwise it says how the work stands; end your reply saying it is under way and its result comes to you as an event.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "dispatch_id"
+      ],
+      "properties": {
+        "dispatch_id": {
+          "type": "integer",
+          "description": "The dispatch to wait for (one of yours, from dispatch)."
+        },
+        "wait_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 45000,
+          "description": "How long to wait at most, in ms; default and cap 45000. 0 looks once without waiting."
         }
       }
     }
