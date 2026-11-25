@@ -16,7 +16,7 @@ pub struct Model {
     /// When the recipient's turn ends, its final text is delivered back to
     /// the sender as a reply message.
     pub reply_back: bool,
-    /// queued | in_flight | completed | failed | interrupted
+    /// queued | dispatching | in_flight | received | completed | failed | interrupted
     pub status: String,
     #[sea_orm(column_type = "Text", nullable)]
     pub error: Option<String>,

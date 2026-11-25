@@ -268,6 +268,50 @@ describe("the pointer over a face", () => {
     expect(el.hasAttribute("data-hover")).toBe(false)
   })
 
+  it("turns to it where WebKit never sees a group inside an SVG on screen", () => {
+    // WebKit's IntersectionObserver: an element inside an SVG (the `<g>` a
+    // face is drawn into) has an empty box and never intersects; the `<svg>`
+    // itself, and any other box, does.
+    const watched: Element[] = []
+    class WebKitObserver {
+      constructor(private readonly cb: IntersectionObserverCallback) {}
+      observe(target: Element) {
+        watched.push(target)
+        const inSvg = target.parentElement instanceof SVGElement
+        // Its first report comes later, as a real one's does.
+        setTimeout(() =>
+          this.cb(
+            [{ target, isIntersecting: !inSvg } as IntersectionObserverEntry],
+            this as unknown as IntersectionObserver
+          )
+        )
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("IntersectionObserver", WebKitObserver)
+    try {
+      const { container } = render(
+        <BotAvatar avatar={face} name="Dev" size={28} look="idle" />
+      )
+      const el = root(container)
+      const still = art(el).innerHTML
+      boxed(el)
+      frames(1)
+      expect(watched.map((t) => t.tagName.toLowerCase())).toEqual(["svg"])
+      pointer("pointerenter", el, 128, 114)
+      // Settled on it, so what follows is its answer to the move alone.
+      frames(120)
+      const right = art(el).innerHTML
+      expect(right).not.toBe(still)
+      pointer("pointermove", el, 0, 0)
+      frames(10)
+      expect(art(el).innerHTML).not.toBe(right)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it("wakes it up when asleep, and lets it sleep again once it leaves", () => {
     const { container } = render(
       <BotAvatar avatar={face} name="Dev" size={28} look="sleeping" />

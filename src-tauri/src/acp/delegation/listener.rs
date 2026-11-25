@@ -50,7 +50,7 @@ use crate::acp::question::{QuestionOutcome, SessionQuestionAccess};
 use crate::acp::scratch_dir::{is_inside_sweep_scope, SUN_PATH_CAP};
 use crate::acp::chat_authoring::{AuthoringContext, AuthoringOutcome, ChatAuthoringAccess};
 use crate::acp::result_tool::ResultToolAccess;
-use crate::acp::session_info::{SessionHistory, SessionInfo, SessionInfoAccess};
+use crate::acp::session_info::{SessionInfo, SessionInfoAccess};
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
 use serde_json::Value;
 
@@ -602,18 +602,6 @@ impl DelegationListener {
             BrokerMessage::RenameSession(req) => BrokerResponse {
                 outcome: self.process_rename_session(req).await,
             },
-            BrokerMessage::SessionHistory(req) => {
-                let history = if self.tokens.lookup(&req.token).await.is_some() {
-                    self.session_info
-                        .read_history(req.session_id, req.options)
-                        .await
-                } else {
-                    SessionHistory::not_found(req.session_id)
-                };
-                BrokerResponse {
-                    outcome: serde_json::to_value(history).map_err(std::io::Error::other)?,
-                }
-            }
             BrokerMessage::SessionInfo(req) => {
                 // Read-only resolution (DB + a bounded transcript parse). No
                 // peer-close race needed: unlike Status/Ask this never blocks on
@@ -650,9 +638,30 @@ impl DelegationListener {
             BrokerMessage::CreateWorkTask(req) => {
                 authoring_response(self.process_create_work_task(req).await)?
             }
+            BrokerMessage::PersonalAgent(req) if req.tool == "dispatch_wait" => {
+                // The one personal-agent tool that waits (for news of the
+                // assistant's work, a bounded while). It changes nothing —
+                // what it hands the turn is noted, never settled, until the
+                // turn's reply says it reported it — so a companion that
+                // cancels and drops the socket just ends the wait, raced
+                // against peer-close as `Status` is.
+                let wait_fut = self.process_personal_agent(req);
+                tokio::pin!(wait_fut);
+                let mut probe = [0u8; 1];
+                let outcome = tokio::select! {
+                    biased;
+                    outcome = &mut wait_fut => outcome,
+                    _ = conn.read(&mut probe) => return Ok(()),
+                };
+                BrokerResponse {
+                    outcome: serde_json::to_value(&outcome).map_err(|e| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+                    })?,
+                }
+            }
             BrokerMessage::PersonalAgent(req) => {
                 // Bounded DB work that never waits on a turn or a person —
-                // every personal-agent tool returns at once — so, like
+                // every other personal-agent tool returns at once — so, like
                 // CreateWorkTask, no peer-close race.
                 let outcome = self.process_personal_agent(req).await;
                 BrokerResponse {
@@ -2267,22 +2276,6 @@ mod tests {
                 SessionInfo::not_found(session_id)
             }
         }
-
-        async fn read_history(
-            &self,
-            session_id: i32,
-            options: crate::acp::session_info::SessionHistoryOptions,
-        ) -> SessionHistory {
-            let info = self.resolve(session_id, options.limit).await;
-            SessionHistory {
-                found: info.found,
-                session_id,
-                oldest_id: options.before,
-                truncated: options.include_tools,
-                note: options.query,
-                ..Default::default()
-            }
-        }
     }
 
     /// A browser with one shared tab and one that nobody shared, recording
@@ -3518,58 +3511,6 @@ mod tests {
             *access.renames.lock().await,
             vec![(1, 1, "Chosen".to_owned()), (1, 42, "Chosen".to_owned()),]
         );
-    }
-
-    #[tokio::test]
-    async fn history_authenticates_before_lookup_and_preserves_options() {
-        let session_info = Arc::new(StubSessionInfo {
-            known: std::collections::HashSet::from([42]),
-            ..Default::default()
-        });
-        let tokens = Arc::new(TokenRegistry::default());
-        tokens
-            .register(
-                "tok".into(),
-                TokenEntry {
-                    agent_hosts_tools: false,
-                    parent_connection_id: "parent".into(),
-                    working_dir: PathBuf::from("/tmp"),
-                },
-            )
-            .await;
-        let listener = make_session_listener(tokens, session_info.clone());
-        for (token, found) in [("invalid", false), ("tok", true)] {
-            let (mut client, mut server) = duplex(8 * 1024);
-            let listener = listener.clone();
-            let server_task = tokio::spawn(async move {
-                listener.serve_one(&mut server).await.unwrap();
-            });
-            let msg = BrokerMessage::SessionHistory(
-                super::super::transport::BrokerSessionHistoryRequest {
-                    token: token.into(),
-                    session_id: 42,
-                    options: crate::acp::session_info::SessionHistoryOptions {
-                        limit: 7,
-                        before: Some("original-turn".into()),
-                        query: Some("needle".into()),
-                        include_tools: true,
-                        max_chars: 900,
-                    },
-                },
-            );
-            write_frame(&mut client, &msg).await.unwrap();
-            let response: BrokerResponse = read_frame(&mut client).await.unwrap();
-            server_task.await.unwrap();
-            assert_eq!(response.outcome["found"], found);
-            if found {
-                assert_eq!(response.outcome["oldest_id"], "original-turn");
-                assert_eq!(response.outcome["note"], "needle");
-                assert_eq!(response.outcome["truncated"], true);
-            } else {
-                assert!(session_info.calls.lock().await.is_empty());
-            }
-        }
-        assert_eq!(*session_info.calls.lock().await, vec![(42, 7)]);
     }
 
     /// A valid `get_session_info` resolves the session by id and returns its

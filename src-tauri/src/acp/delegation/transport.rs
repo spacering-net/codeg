@@ -224,15 +224,6 @@ pub struct BrokerStopSessionRequest {
     pub session_id: Option<i32>,
 }
 
-/// Read transcript history with the same token and readable-session scope as
-/// BrokerSessionRequest. Options are re-bounded by the production resolver.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BrokerSessionHistoryRequest {
-    pub token: String,
-    pub session_id: i32,
-    pub options: crate::acp::session_info::SessionHistoryOptions,
-}
-
 /// Report a progress milestone for the work task driving the parent session.
 /// Backs the `task_progress` MCP tool. Authenticated by the per-launch `token`;
 /// the listener resolves the parent connection from it and the task engine maps
@@ -510,7 +501,6 @@ pub enum BrokerMessage {
     SessionInfo(BrokerSessionRequest),
     RenameSession(BrokerRenameSessionRequest),
     StopSession(BrokerStopSessionRequest),
-    SessionHistory(BrokerSessionHistoryRequest),
     TaskProgress(BrokerTaskProgressRequest),
     TaskComplete(BrokerTaskCompleteRequest),
     ResultSchema(BrokerResultSchemaRequest),
@@ -900,13 +890,6 @@ pub async fn client_rename_session_round_trip(
     req: BrokerRenameSessionRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::RenameSession(req)).await
-}
-
-pub async fn client_session_history_round_trip(
-    socket_path: &str,
-    req: &BrokerSessionHistoryRequest,
-) -> io::Result<BrokerResponse> {
-    message_round_trip(socket_path, &BrokerMessage::SessionHistory(req.clone())).await
 }
 
 /// Dispatch a `get_session_info` request and read back the serialized

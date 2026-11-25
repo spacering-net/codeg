@@ -237,7 +237,9 @@ const TOOL_NOTES: &str = "You do work yourself with `dispatch`: it opens a work 
 investigating a project's current checkout); continue it with `dispatch_followup`. Work that is \
 another assistant's (\"Your team\" above, the first lines of each one's persona) you hand to it \
 with `bot_message`. Both return at once; progress reaches \
-you later as a <codeg-events> block. `project_list` gives the project ids they take. \
+you later as a <codeg-events> block. When the owner wants a dispatch's result in this very reply \
+(\"have it checked, then tell me\"), wait for it with `dispatch_wait` — never sleep and poll its \
+session — and mark the news you report with its [[quote:#N]]. `project_list` gives the project ids they take. \
 `item_list` / `item_read` / `item_update` keep your open matters; `timeline_read` pages back \
 through the timeline. Every turn starts with <codeg-now>: the owner's date, time, weekday and zone, \
 whether they are in codeg now — work out \"tomorrow at 3 pm\" from it. To remind the owner at a time, `item_update` with `due` \
@@ -263,7 +265,8 @@ number as `[#ID]`; when you answer one that is not the newest, write `[[quote:#I
 answer (it is shown as a quote, not as text). When you report results of work, the owner already \
 sees each result's card above your reply (its title, state, the way to its session): lead with the \
 conclusion and what they need to do, do not say its title, state or session again, and write \
-`[[quote:#ID]]` for each result you report — codeg folds away the cards you reported. Work \
+`[[quote:#ID]]` for each result you report — codeg folds away the cards you reported. In any \
+reply, never link the session of work you dispatched: its pill and card open it already. Work \
 \"The owner merged\": do not say it was merged, only what follows from it; when it is all the turn \
 brought and nothing follows, reply `[[silent]]` alone. When the owner tells you to change how you or \
 codeg work (shorter replies, ask before dispatching code changes, …), `prefs_update` changes it \

@@ -9,6 +9,7 @@ use super::connection::SteerOutcome;
 use super::delegation::broker::DelegationBroker;
 use super::error::AcpError;
 use super::manager::ConnectionManager;
+use super::prompt_receipt::{PromptReceipt, PromptReceiptSink, ReceiptVia};
 use super::types::{
     ConnectionStatus, PromptInputBlock, SessionConfigKindInfo, SessionConfigOptionInfo,
 };
@@ -25,6 +26,33 @@ type TurnResult = Result<Option<String>, String>;
 pub struct SessionMessageDelivery {
     pub db: DatabaseConnection,
     pub message_id: i32,
+}
+
+struct SessionMessageReceipt {
+    db: DatabaseConnection,
+    row_id: i32,
+}
+
+#[async_trait::async_trait]
+impl PromptReceiptSink for SessionMessageReceipt {
+    async fn attempted(&self, _op_id: &str) -> Result<(), String> {
+        if queue::transition(&self.db, self.row_id, "dispatching", "in_flight", None)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            Ok(())
+        } else {
+            Err("session message is no longer pending".into())
+        }
+    }
+
+    async fn received(&self, op_id: &str, _via: ReceiptVia) {
+        if let Err(error) =
+            queue::transition(&self.db, self.row_id, "in_flight", "received", None).await
+        {
+            tracing::warn!(%op_id, %error, "could not record session message receipt");
+        }
+    }
 }
 
 pub struct SessionCreator {
@@ -535,7 +563,9 @@ async fn dispatch(
     let Some(row) = valid.into_iter().find(|row| !busy || row.mode == "steer") else {
         return Ok(());
     };
-    if !broker.config_snapshot().await.session_messaging_enabled || !queue::claim(db, &row).await? {
+    if !broker.config_snapshot().await.session_messaging_enabled
+        || !queue::claim(db, &row, busy).await?
+    {
         return Ok(());
     }
 
@@ -569,22 +599,38 @@ async fn dispatch(
                 .await;
             }
             Ok(SteerOutcome::PromptRequired)
-            | Err(AcpError::FeedbackDisabled | AcpError::NoActiveTurn) => true,
+            | Err(AcpError::FeedbackDisabled | AcpError::NoActiveTurn) => {
+                if !queue::transition(db, row.id, "in_flight", "dispatching", None).await? {
+                    return Ok(());
+                }
+                true
+            }
             Err(error) => return finish(db, &row, Err(error.to_string())).await,
         }
     } else {
         true
     };
     let sent = if open_prompt {
+        let Some(frame) = super::agent_mentions::render_operation_frame(&prompt_id) else {
+            return finish(db, &row, Err("invalid session message operation ID".into())).await;
+        };
+        let receipt = PromptReceipt {
+            op_id: prompt_id.clone(),
+            sink: Arc::new(SessionMessageReceipt {
+                db: db.clone(),
+                row_id: row.id,
+            }),
+        };
         manager
-            .send_prompt_linked_with_message_id(
+            .send_prompt_with_receipt(
                 &AppDatabase { conn: db.clone() },
                 &connection,
                 vec![PromptInputBlock::Text { text }],
                 Some(recipient.folder_id),
                 Some(recipient.id),
-                None,
                 Some(prompt_id),
+                vec![PromptInputBlock::Text { text: frame }],
+                receipt,
             )
             .await
             .map(|_| ())
@@ -597,7 +643,7 @@ async fn dispatch(
             queue::defer_as_queue(db, row.id).await?;
         }
         Err(AcpError::TurnInProgress) => {
-            queue::transition(db, row.id, "in_flight", "queued", None).await?;
+            queue::transition(db, row.id, "dispatching", "queued", None).await?;
         }
         Err(error) => finish(db, &row, Err(error.to_string())).await?,
     }

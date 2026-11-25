@@ -4,7 +4,9 @@
 //! by a per-launch token alone, and `--features` is a string in the agent's
 //! MCP config, so any connection's companion could send one of these frames.
 //! Only the personal agent's current connection gets an answer. Every tool
-//! returns at once — none waits for a turn or a person.
+//! returns at once — none waits for a turn or a person — but
+//! `dispatch_wait`, which waits a bounded while for news of the assistant's
+//! own work, changing nothing (the listener drops it when its caller goes).
 //!
 //! A refusal is an answer (`ok: false`), not an error: the model reads why and
 //! corrects the call.
@@ -310,6 +312,15 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             }
         }
         "dispatch_answer" => engine.dispatch_answer_call(&args).await,
+        "dispatch_wait" => {
+            let Some(id) = int(&args, "dispatch_id").and_then(as_i32) else {
+                return ToolOutcome::refused("`dispatch_id` is required");
+            };
+            // Not told: as long as one call waits. 0: a look, no wait.
+            let wait = int(&args, "wait_ms")
+                .map(|ms| std::time::Duration::from_millis(ms.max(0) as u64));
+            engine.dispatch_wait(id, wait).await
+        }
         "acceptance_decide" => engine.acceptance_decide_call(&args).await,
         "prefs_update" => engine.prefs_update_call(&args).await,
         "bot_create" => engine.bot_create_call(&args).await,
