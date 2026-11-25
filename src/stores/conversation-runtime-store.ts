@@ -609,6 +609,98 @@ function retireCoveredBackgroundTurns(
   return retained.length === backgroundTurns.length ? backgroundTurns : retained
 }
 
+/**
+ * Local turns `keepAllLiveBuffers` preserved that a settled detail response
+ * PROVABLY covers — the promoted round whose persisted twin arrived under a
+ * parser id `dedupeTimeline` cannot match (see FETCH_DETAIL_SUCCESS).
+ *
+ * The proof is the batch-boundary alignment the turn-metadata sync already
+ * trusts (`syncTurnMetadata`), NEVER timestamp ordering: promoted turns carry
+ * the client-clock round START (`buildStreamingTurnsFromLiveMessage` stamps
+ * every group with `liveMessage.startedAt`), so the round's own persisted
+ * prompt reads "strictly newer" than its reply — a timestamp rule would
+ * retire the only copy of a reply whose record has not flushed yet (the
+ * settled-but-unflushed window `completeTurn`'s write race documents).
+ *
+ * The batch captured at send time anchors the proof: the batch's turns
+ * persist starting at global index `batchBoundaryIndex`, with the prefix
+ * before it fingerprinted as `batchBoundaryPrefixHash`. The response covers
+ * the local turns only when ALL of the following hold:
+ *
+ *  - it is windowed (a legacy full response cannot be verified);
+ *  - its window reaches back to the boundary (`turns_offset <= boundary`) and
+ *    the prefix it exposes up to the boundary still fingerprints to the
+ *    captured hash — no compaction rewrote the anchored history, and no
+ *    window hole can hide the batch's turns behind the uncovered prefix;
+ *  - the turn persisting AT the boundary is the batch's OWN prompt: a USER
+ *    turn whose first text block matches the local batch's leading user
+ *    turn's text — a co-controlling client's prompt racing ours onto the disk
+ *    at the same index must not pass for ours (it would inflate the counts
+ *    below while our reply is still unwritten);
+ *  - the window holds at least as many user and non-user turns after the
+ *    boundary as `localTurns` does. Records append in transcript order and a
+ *    batch's prompts precede its replies, so the counts cannot pass while any
+ *    local turn's twin is still unwritten — they may legitimately EXCEED the
+ *    local ones (later background rounds persist after the batch).
+ *
+ * Every other shape keeps the local turns: the failure direction is a
+ * recoverable transient duplicate, never a vanished message.
+ */
+function retireBatchCoveredLocalTurns(
+  localTurns: MessageTurn[],
+  detail: DbConversationDetail,
+  batchBoundaryIndex: number | null,
+  batchBoundaryPrefixHash: string | null
+): MessageTurn[] {
+  if (localTurns.length === 0) return localTurns
+  if (batchBoundaryIndex == null || batchBoundaryPrefixHash == null) {
+    return localTurns
+  }
+  if (!isWindowedDetail(detail)) return localTurns
+  if (detail.turns_offset > batchBoundaryIndex) return localTurns
+  const rel = batchBoundaryIndex - detail.turns_offset
+  const prefixHash = extendPrefixFingerprint(
+    detail.prefix_hash,
+    detail.turns.slice(0, rel)
+  )
+  if (prefixHash !== batchBoundaryPrefixHash) return localTurns
+  // The batch's first record is its prompt — verified by CONTENT, not just
+  // role. A co-controlling client's prompt can race ours onto the disk AT
+  // the captured boundary; a role-only check would take theirs for ours and
+  // let their round's turns inflate the counts below while this batch's
+  // reply is still unwritten. A parser that reformats the prompt (slash
+  // commands, wrapping) simply fails the match — keep, a safe duplicate.
+  const boundaryTurn = detail.turns[rel]
+  if (boundaryTurn == null || boundaryTurn.role !== "user") return localTurns
+  const localPrompt = firstUserTurnText(localTurns)
+  if (localPrompt === null) return localTurns
+  if (firstUserTurnText([boundaryTurn]) !== localPrompt) return localTurns
+  const batch = detail.turns.slice(rel)
+  const localUsers = localTurns.filter((t) => t.role === "user").length
+  const localOthers = localTurns.length - localUsers
+  const batchUsers = batch.filter((t) => t.role === "user").length
+  if (batchUsers < localUsers) return localTurns
+  if (batch.length - batchUsers < localOthers) return localTurns
+  return []
+}
+
+/**
+ * The trimmed text of a batch's leading user turn's first text block — the
+ * typed prompt. `null` when the local turns do not lead with a readable user
+ * prompt (an adopted/assistant-only promotion, an image-only send): there is
+ * then no content anchor for the boundary turn and retirement must not guess.
+ */
+function firstUserTurnText(turns: MessageTurn[]): string | null {
+  const first = turns[0]
+  if (first == null || first.role !== "user") return null
+  for (const block of first.blocks) {
+    if (block.type === "text" && block.text.trim() !== "") {
+      return block.text.trim()
+    }
+  }
+  return null
+}
+
 function batchStartCapture(
   current: ConversationRuntimeSession,
   promptId: string
@@ -2430,6 +2522,35 @@ function reducer(
         action.detail.uncovered_prefix_max_ts ?? null
       )
 
+      // Local turns `keepAllLiveBuffers` preserves may be rounds this response
+      // now covers. The out-of-turn pill ("Load background activity") is the
+      // canonical case: the foreground round completed and promoted long
+      // before the background round ran, so its persisted twin is in this
+      // parse — under a parser id (`msg_…`) that `dedupeTimeline` can never
+      // match against the promoted `live-<cid>-…` id. Keeping it renders the
+      // whole old round a SECOND time below the newer persisted tail, which
+      // reads as "the newest messages jumped to the top". Retire the local
+      // turns only on the batch-boundary alignment proof (see
+      // `retireBatchCoveredLocalTurns`) — never on timestamp ordering, which
+      // cannot distinguish a covered round from a reply whose record has not
+      // flushed yet. Mid-flight responses, the sub-agent dialog
+      // (`liveOwnsActiveTurn`), and an attached live message keep every local
+      // turn: a reply's transcript write can still be in flight there
+      // (`completeTurn`'s write race), and the dialog owns its own
+      // promotion/dedup path.
+      const nextLocalTurns = !keepAllLiveBuffers
+        ? []
+        : detailIsInFlight ||
+            current.liveOwnsActiveTurn ||
+            current.liveMessage !== null
+          ? current.localTurns
+          : retireBatchCoveredLocalTurns(
+              current.localTurns,
+              action.detail,
+              current.batchBoundaryIndex,
+              current.batchBoundaryPrefixHash
+            )
+
       const nextSession: ConversationRuntimeSession = {
         ...current,
         detail: action.detail,
@@ -2446,7 +2567,7 @@ function reducer(
         backgroundTurns: nextBackgroundTurns,
         ...(isActivelyInteracting
           ? keepAllLiveBuffers
-            ? {}
+            ? { localTurns: nextLocalTurns }
             : { localTurns: [] }
           : { localTurns: [], optimisticTurns: [], liveMessage: null }),
         // Applied AFTER the blanket rules above so a fork's targeted removal
@@ -2454,7 +2575,7 @@ function reducer(
         // everything except the turns it just invalidated).
         ...(dropIds
           ? {
-              localTurns: current.localTurns.filter((t) => !dropIds.has(t.id)),
+              localTurns: nextLocalTurns.filter((t) => !dropIds.has(t.id)),
               optimisticTurns: current.optimisticTurns.filter(
                 (t) => !dropIds.has(t.id)
               ),
