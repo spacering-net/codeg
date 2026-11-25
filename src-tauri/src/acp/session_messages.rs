@@ -569,9 +569,26 @@ async fn dispatch(
         return Ok(());
     }
 
+    let mut body = row.message.as_str();
+    if let Some(turn_id) = row.result_turn_id.as_deref() {
+        let prefix = format!(
+            "[Result from conversation {}; turn {turn_id}; stop_reason ",
+            row.sender_conversation_id
+        );
+        if let Some((_, legacy_body)) = body
+            .strip_prefix(&prefix)
+            .and_then(|text| text.split_once("]\n\n"))
+        {
+            body = if legacy_body.trim().is_empty() {
+                "The delegated turn returned no text."
+            } else {
+                legacy_body
+            };
+        }
+    }
     let text = format!(
         "[Codeg message from conversation {}; message {}]\n\n{}",
-        row.sender_conversation_id, row.message_id, row.message
+        row.sender_conversation_id, row.message_id, body
     );
     let prompt_id = format!("{PROMPT_ID_PREFIX}{}", row.message_id);
     let open_prompt = if busy {

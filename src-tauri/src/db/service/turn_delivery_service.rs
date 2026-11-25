@@ -393,13 +393,11 @@ async fn deliver_in_tx<C: ConnectionTrait>(
         db,
         turn.conversation_id,
         recipient,
-        format!(
-            "[Result from conversation {}; turn {}; stop_reason {}]\n\n{}",
-            turn.conversation_id,
-            turn.turn_id,
-            turn.stop_reason.as_deref().unwrap_or("unknown"),
-            turn.result_text.as_deref().unwrap_or_default()
-        ),
+        turn.result_text
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or("The delegated turn returned no text.")
+            .to_owned(),
         "queue".into(),
         false,
         Some(&provenance),
@@ -553,7 +551,7 @@ mod tests {
         recover(&db.conn).await.unwrap();
         let messages = queue::queued(&db.conn).await.unwrap();
         assert_eq!(messages.len(), 1);
-        assert!(messages[0].message.contains("saved result"));
+        assert_eq!(messages[0].message, "saved result");
     }
 
     #[tokio::test]

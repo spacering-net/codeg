@@ -113,6 +113,20 @@ describe("splitSessionMessageSource", () => {
     })
   })
 
+  it("hides internal turn details in older delivered results", () => {
+    const result =
+      "[Result from conversation 60; turn 432cc712-0e53-4257-9536-1fe5fee8943d; stop_reason end_turn]\n\nanswer"
+    for (const text of [
+      result,
+      "[Codeg message from conversation 60]\n\n" + result,
+    ]) {
+      expect(splitSessionMessageSource([{ type: "text", text }])).toEqual({
+        source: "60",
+        parts: [{ type: "text", text: "answer" }],
+      })
+    }
+  })
+
   it("keeps the sender label and removes routing details from a delivered reply", () => {
     const text =
       '[Codeg message from conversation 21 ("Sender") to you, conversation 22 ("Receiver")]\n\n' +
