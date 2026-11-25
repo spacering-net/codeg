@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useRef } from "react"
 import type { PetState } from "@/lib/pet/animation"
-import { endPetDrag, startPetDrag } from "@/lib/pet/api"
+import { endPetDrag, startNativePetDrag, startPetDrag } from "@/lib/pet/api"
 import { disposeTauriListener } from "@/lib/tauri-listener"
 import { isDesktop } from "@/lib/transport"
 
 const CLICK_THRESHOLD_PX = 5
 const PET_DRAG_DIRECTION_EVENT = "pet://drag-direction"
+let lastDragSeq = 0
 
 export interface UsePetDragOptions {
   /**
@@ -34,6 +35,7 @@ interface ActivePointerDrag {
   startX: number
   startY: number
   maxScreenTravel: number
+  nativeDragRequested: boolean
 }
 
 /**
@@ -54,7 +56,6 @@ interface ActivePointerDrag {
  */
 export function usePetDrag(opts: UsePetDragOptions): UsePetDragResult {
   const activeRef = useRef<ActivePointerDrag | null>(null)
-  const seqRef = useRef(0)
 
   const optsRef = useRef(opts)
   useEffect(() => {
@@ -105,13 +106,26 @@ export function usePetDrag(opts: UsePetDragOptions): UsePetDragResult {
 
     function onPointerMove(e: PointerEvent) {
       const active = activeRef.current
-      if (!active || active.phase === "tracked") return
+      if (!active || active.phase === "tracked" || (e.buttons & 1) === 0) {
+        return
+      }
       const dist = Math.hypot(
         e.screenX - active.startX,
         e.screenY - active.startY
       )
       if (dist > active.maxScreenTravel) {
         active.maxScreenTravel = dist
+      }
+      if (
+        dist > CLICK_THRESHOLD_PX &&
+        !active.nativeDragRequested &&
+        activeRef.current?.seq === active.seq
+      ) {
+        // The GTK check also handles moves that beat the backend probe reply.
+        active.nativeDragRequested = true
+        void startNativePetDrag(active.seq).catch((err) => {
+          console.warn("[Pet] native drag start failed:", err)
+        })
       }
     }
 
@@ -188,18 +202,24 @@ export function usePetDrag(opts: UsePetDragOptions): UsePetDragResult {
       // Synthetic events or platforms without pointer capture support.
     }
 
-    const seq = ++seqRef.current
+    // Rust keeps its high-water mark when the pet webview is recreated.
+    lastDragSeq = Math.max(
+      lastDragSeq + 1,
+      Math.floor((performance.timeOrigin + performance.now()) * 1000)
+    )
+    const seq = lastDragSeq
     activeRef.current = {
       seq,
       phase: "starting",
       startX: event.screenX,
       startY: event.screenY,
       maxScreenTravel: 0,
+      nativeDragRequested: false,
     }
 
     void (async () => {
       try {
-        const res = await startPetDrag()
+        const res = await startPetDrag(seq)
         if (activeRef.current?.seq !== seq) {
           if (res.mode === "tracked" && res.sessionId !== null) {
             void endPetDrag(res.sessionId).catch(() => {})
@@ -220,9 +240,6 @@ export function usePetDrag(opts: UsePetDragOptions): UsePetDragResult {
 
         if (res.mode === "native_os") {
           activeRef.current.phase = "native"
-          const { getCurrentWindow } = await import("@tauri-apps/api/window")
-          if (activeRef.current?.seq !== seq) return
-          await getCurrentWindow().startDragging()
           return
         }
 

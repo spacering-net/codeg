@@ -7,9 +7,9 @@ import type { PetDragEndResult, PetDragStartResult } from "@/lib/pet/api"
 type DirectionListener = (event: { payload: PetState | null }) => void
 
 const mocks = vi.hoisted(() => ({
-  startPetDrag: vi.fn<() => Promise<PetDragStartResult>>(),
+  startPetDrag: vi.fn<(sessionId: number) => Promise<PetDragStartResult>>(),
   endPetDrag: vi.fn<(sessionId: number) => Promise<PetDragEndResult>>(),
-  startDragging: vi.fn(() => Promise.resolve()),
+  startNativePetDrag: vi.fn<(sessionId: number) => Promise<void>>(),
   directionHandler: null as DirectionListener | null,
 }))
 
@@ -20,6 +20,7 @@ vi.mock("@/lib/transport", () => ({
 vi.mock("@/lib/pet/api", () => ({
   startPetDrag: mocks.startPetDrag,
   endPetDrag: mocks.endPetDrag,
+  startNativePetDrag: mocks.startNativePetDrag,
 }))
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -28,12 +29,6 @@ vi.mock("@tauri-apps/api/event", () => ({
     return () => {
       mocks.directionHandler = null
     }
-  }),
-}))
-
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({
-    startDragging: mocks.startDragging,
   }),
 }))
 
@@ -75,7 +70,7 @@ describe("usePetDrag", () => {
     mocks.directionHandler = null
     mocks.startPetDrag.mockResolvedValue(trackedStart(1))
     mocks.endPetDrag.mockResolvedValue({ clicked: false })
-    mocks.startDragging.mockResolvedValue(undefined)
+    mocks.startNativePetDrag.mockResolvedValue(undefined)
     vi.clearAllMocks()
   })
 
@@ -201,6 +196,11 @@ describe("usePetDrag", () => {
 
     expect(mocks.endPetDrag).toHaveBeenCalledTimes(1)
     expect(mocks.endPetDrag).toHaveBeenNthCalledWith(1, 101)
+    const [firstSeq, secondSeq] = mocks.startPetDrag.mock.calls.map(
+      ([seq]) => seq
+    )
+    expect(firstSeq).toBeTypeOf("number")
+    expect(secondSeq).toBeGreaterThan(firstSeq)
 
     await act(async () => {
       window.dispatchEvent(new Event("pointerup"))
@@ -211,7 +211,7 @@ describe("usePetDrag", () => {
     expect(onClick).toHaveBeenCalledTimes(1)
   })
 
-  it("falls back to window.startDragging() on Wayland", async () => {
+  it("waits for movement past the click threshold before calling startNativePetDrag() on Wayland", async () => {
     mocks.startPetDrag.mockResolvedValueOnce({
       mode: "native_os",
       sessionId: null,
@@ -223,16 +223,60 @@ describe("usePetDrag", () => {
     )
 
     await act(async () => {
-      result.current.onPointerDown(pressEvent())
+      result.current.onPointerDown(pressEvent({ screenX: 40, screenY: 50 }))
       await Promise.resolve()
       await Promise.resolve()
     })
 
-    expect(mocks.startDragging).toHaveBeenCalledTimes(1)
+    expect(mocks.startNativePetDrag).not.toHaveBeenCalled()
+
+    await act(async () => {
+      window.dispatchEvent(
+        new MouseEvent("pointermove", {
+          screenX: 45,
+          screenY: 50,
+          buttons: 1,
+        })
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.startNativePetDrag).not.toHaveBeenCalled()
+
+    act(() => {
+      window.dispatchEvent(
+        new MouseEvent("pointermove", {
+          screenX: 46,
+          screenY: 50,
+          buttons: 1,
+        })
+      )
+    })
+
+    expect(mocks.startNativePetDrag).toHaveBeenCalledExactlyOnceWith(
+      mocks.startPetDrag.mock.calls[0][0]
+    )
+
+    await act(async () => {
+      window.dispatchEvent(
+        new MouseEvent("pointermove", {
+          screenX: 70,
+          screenY: 50,
+          buttons: 1,
+        })
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.startNativePetDrag).toHaveBeenCalledExactlyOnceWith(
+      mocks.startPetDrag.mock.calls[0][0]
+    )
     expect(mocks.endPetDrag).not.toHaveBeenCalled()
   })
 
-  it("keeps tap feedback after the native OS fallback returns", async () => {
+  it("triggers onClick without calling startNativePetDrag() on a zero-displacement Wayland tap", async () => {
     mocks.startPetDrag.mockResolvedValueOnce({
       mode: "native_os",
       sessionId: null,
@@ -244,18 +288,97 @@ describe("usePetDrag", () => {
     )
 
     await act(async () => {
-      result.current.onPointerDown(pressEvent())
+      result.current.onPointerDown(pressEvent({ screenX: 40, screenY: 50 }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.startNativePetDrag).not.toHaveBeenCalled()
+
+    await act(async () => {
+      window.dispatchEvent(
+        new MouseEvent("pointerup", {
+          screenX: 40,
+          screenY: 50,
+        })
+      )
+      await Promise.resolve()
+    })
+
+    expect(mocks.startNativePetDrag).not.toHaveBeenCalled()
+    expect(onClick).toHaveBeenCalledTimes(1)
+    expect(mocks.endPetDrag).not.toHaveBeenCalled()
+  })
+
+  it("does not call startNativePetDrag() if the primary button is no longer held", async () => {
+    mocks.startPetDrag.mockResolvedValueOnce({
+      mode: "native_os",
+      sessionId: null,
+    })
+    const onDragDirection = vi.fn()
+    const onClick = vi.fn()
+    const { result } = renderHook(() =>
+      usePetDrag({ onDragDirection, onClick })
+    )
+
+    await act(async () => {
+      result.current.onPointerDown(pressEvent({ screenX: 40, screenY: 50 }))
       await Promise.resolve()
       await Promise.resolve()
     })
 
     await act(async () => {
-      window.dispatchEvent(new Event("pointerup"))
+      window.dispatchEvent(
+        new MouseEvent("pointermove", {
+          screenX: 80,
+          screenY: 50,
+          buttons: 0,
+        })
+      )
+      await Promise.resolve()
       await Promise.resolve()
     })
 
-    expect(onClick).toHaveBeenCalledTimes(1)
-    expect(mocks.endPetDrag).not.toHaveBeenCalled()
+    expect(mocks.startNativePetDrag).not.toHaveBeenCalled()
+  })
+
+  it("requests native dragging on the threshold-crossing move while start is pending", async () => {
+    let resolveStart: (res: PetDragStartResult) => void = () => {}
+    mocks.startPetDrag.mockReturnValueOnce(
+      new Promise<PetDragStartResult>((resolve) => {
+        resolveStart = resolve
+      })
+    )
+    const onDragDirection = vi.fn()
+    const onClick = vi.fn()
+    const { result } = renderHook(() =>
+      usePetDrag({ onDragDirection, onClick })
+    )
+
+    act(() => {
+      result.current.onPointerDown(pressEvent({ screenX: 40, screenY: 50 }))
+      window.dispatchEvent(
+        new MouseEvent("pointermove", {
+          screenX: 60,
+          screenY: 50,
+          buttons: 1,
+        })
+      )
+    })
+
+    expect(mocks.startNativePetDrag).toHaveBeenCalledExactlyOnceWith(
+      mocks.startPetDrag.mock.calls[0][0]
+    )
+
+    await act(async () => {
+      resolveStart({ mode: "native_os", sessionId: null })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.startNativePetDrag).toHaveBeenCalledExactlyOnceWith(
+      mocks.startPetDrag.mock.calls[0][0]
+    )
   })
 
   it("uses desktop travel rather than the moving viewport for native drags", async () => {

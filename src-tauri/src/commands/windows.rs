@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 #[cfg(target_os = "macos")]
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering as AtomicOrdering};
 use std::sync::Mutex;
 
 use sea_orm::DatabaseConnection;
@@ -1333,22 +1333,45 @@ struct ActivePetDrag {
     id: u64,
     max_travel_logical: f64,
     emitted_dir: Option<crate::models::pet::PetState>,
+    last_placed_origin: Option<(f64, f64, Option<f64>)>,
 }
 
 #[derive(Default)]
 struct PetDragSessions {
     active: Option<ActivePetDrag>,
+    latest_seen_id: Option<u64>,
     completed_results: HashMap<u64, PetDragEndResult>,
 }
 
 struct PetDragSessionEnd {
     result: PetDragEndResult,
     finished_active: bool,
+    last_placed_origin: Option<(f64, f64, Option<f64>)>,
 }
 
 impl PetDragSessions {
-    fn start(&mut self, session: ActivePetDrag) {
+    fn observe_start(&mut self, session_id: u64) -> bool {
+        if self.latest_seen_id.is_some_and(|id| id >= session_id) {
+            return false;
+        }
+        self.latest_seen_id = Some(session_id);
+        true
+    }
+
+    fn start(&mut self, session: ActivePetDrag) -> bool {
+        if self.latest_seen_id != Some(session.id) {
+            return false;
+        }
         self.active = Some(session);
+        true
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    fn start_native_move(&self, session_id: u64, primary_button_down: bool, begin: impl FnOnce()) {
+        // The threshold request can beat the async pet_start_drag task.
+        if primary_button_down && self.latest_seen_id.is_none_or(|id| id <= session_id) {
+            begin();
+        }
     }
 
     fn finish(&mut self, session_id: u64, retain_result: bool) -> Option<PetDragSessionEnd> {
@@ -1367,6 +1390,7 @@ impl PetDragSessions {
             return Some(PetDragSessionEnd {
                 result,
                 finished_active: true,
+                last_placed_origin: session.last_placed_origin,
             });
         }
 
@@ -1375,11 +1399,11 @@ impl PetDragSessions {
             .map(|result| PetDragSessionEnd {
                 result,
                 finished_active: false,
+                last_placed_origin: None,
             })
     }
 }
 
-static NEXT_PET_DRAG_ID: AtomicU64 = AtomicU64::new(1);
 static PET_DRAG_SESSIONS: std::sync::LazyLock<Mutex<PetDragSessions>> =
     std::sync::LazyLock::new(|| Mutex::new(PetDragSessions::default()));
 
@@ -1764,13 +1788,17 @@ pub async fn open_pet_window(
 }
 
 #[cfg(target_os = "macos")]
-fn macos_primary_scale_factor(app: &AppHandle) -> f64 {
+fn macos_primary_scale_factor_opt(app: &AppHandle) -> Option<f64> {
     app.primary_monitor()
         .ok()
         .flatten()
         .map(|m| m.scale_factor())
         .filter(|sf| sf.is_finite() && *sf > 0.0)
-        .unwrap_or(1.0)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_primary_scale_factor(app: &AppHandle) -> f64 {
+    macos_primary_scale_factor_opt(app).unwrap_or(1.0)
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -1789,11 +1817,31 @@ fn macos_cursor_logical_points(cursor_physical: (f64, f64), primary_sf: f64) -> 
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn macos_cursor_logical_sample(
+fn macos_cursor_logical_if_scale_consistent(
+    scale_before: f64,
     cursor_physical: (f64, f64),
-    primary_scale_factor: impl FnOnce() -> f64,
+    scale_after: f64,
 ) -> Option<(f64, f64)> {
-    macos_cursor_logical_points(cursor_physical, primary_scale_factor())
+    if !scale_before.is_finite()
+        || !scale_after.is_finite()
+        || scale_before <= 0.0
+        || scale_after <= 0.0
+        || (scale_before - scale_after).abs() >= 1e-6
+    {
+        return None;
+    }
+    macos_cursor_logical_points(cursor_physical, scale_after)
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn macos_cursor_logical_sample(
+    mut read_scale: impl FnMut() -> Option<f64>,
+    read_cursor: impl FnOnce() -> Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    let scale_before = read_scale()?;
+    let cursor_physical = read_cursor()?;
+    let scale_after = read_scale()?;
+    macos_cursor_logical_if_scale_consistent(scale_before, cursor_physical, scale_after)
 }
 
 /// Global cursor in Cocoa logical points (top-left of main screen `(0, 0)`,
@@ -1811,9 +1859,10 @@ fn macos_cursor_logical(app: &AppHandle, primary_sf: f64) -> Option<(f64, f64)> 
 
 #[cfg(target_os = "macos")]
 fn macos_cursor_logical_current(app: &AppHandle) -> Option<(f64, f64)> {
-    let primary_sf = macos_primary_scale_factor(app);
-    let cursor = app.cursor_position().ok()?;
-    macos_cursor_logical_sample((cursor.x, cursor.y), || primary_sf)
+    macos_cursor_logical_sample(
+        || macos_primary_scale_factor_opt(app),
+        || app.cursor_position().ok().map(|c| (c.x, c.y)),
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -1845,6 +1894,14 @@ fn compute_macos_drag_origin(
         cursor_log.0 - grab_offset_log.0,
         cursor_log.1 - grab_offset_log.1,
     )
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_drag_cursor_is_continuous(previous_cursor: (f64, f64), cursor: (f64, f64)) -> bool {
+    // Allow fast mouse motion at the 8 ms poll cadence, while rejecting a
+    // one-frame scale jump even when it lands inside a different display.
+    const MAX_STEP_LOGICAL: f64 = 256.0;
+    (cursor.0 - previous_cursor.0).hypot(cursor.1 - previous_cursor.1) <= MAX_STEP_LOGICAL
 }
 
 /// Physical desktop drag target for Windows / X11 Linux.
@@ -2109,20 +2166,25 @@ async fn finish_pet_drag_session(
     );
     if !end.result.clicked {
         PET_HOVER_WAS_INSIDE.store(true, AtomicOrdering::Relaxed);
-        if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
-            if let Some((x, y, position_scale_factor)) = pet_window_live_origin(&window) {
-                if let Some(db) = app.try_state::<AppDatabase>() {
-                    let _ = crate::commands::pet::pet_save_window_state_core(
-                        &db.conn,
-                        crate::models::pet::PetWindowStatePatch {
-                            x: Some(x),
-                            y: Some(y),
-                            position_scale_factor,
-                            ..Default::default()
-                        },
-                    )
-                    .await;
-                }
+        #[cfg(target_os = "macos")]
+        let origin_to_save = end.last_placed_origin;
+        #[cfg(not(target_os = "macos"))]
+        let origin_to_save = end.last_placed_origin.or_else(|| {
+            app.get_webview_window(PET_WINDOW_LABEL)
+                .and_then(|window| pet_window_live_origin(&window))
+        });
+        if let Some((x, y, position_scale_factor)) = origin_to_save {
+            if let Some(db) = app.try_state::<AppDatabase>() {
+                let _ = crate::commands::pet::pet_save_window_state_core(
+                    &db.conn,
+                    crate::models::pet::PetWindowStatePatch {
+                        x: Some(x),
+                        y: Some(y),
+                        position_scale_factor,
+                        ..Default::default()
+                    },
+                )
+                .await;
             }
         }
     }
@@ -2132,6 +2194,72 @@ async fn finish_pet_drag_session(
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn linux_native_drag_required_for_gdk_backend(gdk_backend: Option<&str>) -> bool {
     gdk_backend != Some("GdkX11Display")
+}
+
+#[cfg(all(feature = "tauri-runtime", target_os = "linux"))]
+async fn probe_linux_gdk_backend(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+) -> Option<String> {
+    use gtk::prelude::*;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let window = window.clone();
+    if app
+        .run_on_main_thread(move || {
+            let backend = window
+                .gtk_window()
+                .ok()
+                .map(|gtk_window| gtk_window.display().type_().name().to_string());
+            let _ = tx.send(backend);
+        })
+        .is_err()
+    {
+        return None;
+    }
+    match tokio::time::timeout(std::time::Duration::from_secs(2), rx).await {
+        Ok(Ok(backend)) => backend,
+        _ => None,
+    }
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub fn pet_start_native_drag(app: AppHandle, session_id: u64) -> Result<(), AppCommandError> {
+    #[cfg(target_os = "linux")]
+    if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
+        use gtk::prelude::*;
+
+        app.run_on_main_thread(move || {
+            let Ok(gtk_window) = window.gtk_window() else {
+                return;
+            };
+            let display = gtk_window.display();
+            if !linux_native_drag_required_for_gdk_backend(Some(display.type_().name())) {
+                return;
+            }
+            let Some(pointer) = display.default_seat().and_then(|seat| seat.pointer()) else {
+                return;
+            };
+            let Some(surface) = gtk_window.window() else {
+                return;
+            };
+            let (_, x, y, modifiers) = surface.device_position(&pointer);
+            let (root_x, root_y) = surface.root_coords(x, y);
+            if let Ok(sessions) = PET_DRAG_SESSIONS.lock() {
+                sessions.start_native_move(
+                    session_id,
+                    modifiers.contains(gtk::gdk::ModifierType::BUTTON1_MASK),
+                    // Call GTK here: Tauri's start_dragging queues another request.
+                    || gtk_window.begin_move_drag(1, root_x, root_y, 0),
+                );
+            }
+        })
+        .map_err(|e| AppCommandError::window("Failed to start native pet drag", e.to_string()))?;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (app, session_id);
+    Ok(())
 }
 
 /// Begin an OS-cursor-driven drag of the floating pet window.
@@ -2145,7 +2273,20 @@ fn linux_native_drag_required_for_gdk_backend(gdk_backend: Option<&str>) -> bool
 /// window position through the compositor.
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCommandError> {
+pub async fn pet_start_drag(
+    app: AppHandle,
+    session_id: u64,
+) -> Result<PetDragStartResult, AppCommandError> {
+    let observed = PET_DRAG_SESSIONS
+        .lock()
+        .ok()
+        .is_some_and(|mut sessions| sessions.observe_start(session_id));
+    if !observed {
+        return Ok(PetDragStartResult {
+            mode: PetDragMode::Noop,
+            session_id: None,
+        });
+    }
     let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) else {
         return Ok(PetDragStartResult {
             mode: PetDragMode::Noop,
@@ -2155,11 +2296,7 @@ pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCom
 
     #[cfg(target_os = "linux")]
     {
-        use gtk::prelude::*;
-        let gdk_backend = window
-            .gtk_window()
-            .ok()
-            .map(|gtk_window| gtk_window.display().type_().name().to_string());
+        let gdk_backend = probe_linux_gdk_backend(&app, &window).await;
         if linux_native_drag_required_for_gdk_backend(gdk_backend.as_deref()) {
             return Ok(PetDragStartResult {
                 mode: PetDragMode::NativeOs,
@@ -2235,12 +2372,18 @@ pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCom
         )
     };
 
-    let session_id = NEXT_PET_DRAG_ID.fetch_add(1, AtomicOrdering::Relaxed);
-    if let Ok(mut guard) = PET_DRAG_SESSIONS.lock() {
+    let installed = PET_DRAG_SESSIONS.lock().ok().is_some_and(|mut guard| {
         guard.start(ActivePetDrag {
             id: session_id,
             max_travel_logical: 0.0,
             emitted_dir: None,
+            last_placed_origin: None,
+        })
+    });
+    if !installed {
+        return Ok(PetDragStartResult {
+            mode: PetDragMode::Noop,
+            session_id: None,
         });
     }
 
@@ -2265,9 +2408,10 @@ pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCom
             interval.tick().await;
 
             let still_active = PET_DRAG_SESSIONS.lock().ok().is_some_and(|g| {
-                g.active
-                    .as_ref()
-                    .is_some_and(|session| session.id == session_id)
+                g.latest_seen_id == Some(session_id)
+                    && g.active
+                        .as_ref()
+                        .is_some_and(|session| session.id == session_id)
             });
             if !still_active {
                 break;
@@ -2288,7 +2432,7 @@ pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCom
             }
 
             #[cfg(target_os = "macos")]
-            let (travel_log, inst_dx_log, moved_this_tick) = {
+            let (travel_log, inst_dx_log, moved_this_tick, origin_to_place) = {
                 let Some(cur) = macos_cursor_logical_current(&app) else {
                     continue;
                 };
@@ -2296,16 +2440,28 @@ pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCom
                 let inst_dx = cur.0 - last_cursor.0;
                 let moved =
                     (cur.0 - last_cursor.0).abs() > 0.01 || (cur.1 - last_cursor.1).abs() > 0.01;
-                last_cursor = cur;
+                let mut origin_to_place = None;
                 if moved {
+                    if !macos_drag_cursor_is_continuous(last_cursor, cur) {
+                        continue;
+                    }
                     let (tx, ty) = compute_macos_drag_origin(cur, grab_offset);
+                    // tao checks these points against logical CGDisplayBounds.
+                    if !matches!(app.monitor_from_point(tx, ty), Ok(Some(_))) {
+                        // Keep following an on-screen cursor while the grab
+                        // offset puts the origin in a gap between displays.
+                        if matches!(app.monitor_from_point(cur.0, cur.1), Ok(Some(_))) {
+                            last_cursor = cur;
+                        }
+                        continue;
+                    }
+                    last_cursor = cur;
                     let pos_key = ((tx * 2.0).round() as i64, (ty * 2.0).round() as i64);
                     if last_applied_pos != Some(pos_key) {
-                        last_applied_pos = Some(pos_key);
-                        let _ = window.set_position(LogicalPosition::new(tx, ty));
+                        origin_to_place = Some((tx, ty, pos_key));
                     }
                 }
-                (travel, inst_dx, moved)
+                (travel, inst_dx, moved, origin_to_place)
             };
 
             #[cfg(not(target_os = "macos"))]
@@ -2374,6 +2530,9 @@ pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCom
                 let Ok(mut guard) = PET_DRAG_SESSIONS.lock() else {
                     break;
                 };
+                if guard.latest_seen_id != Some(session_id) {
+                    break;
+                }
                 let Some(session) = guard
                     .active
                     .as_mut()
@@ -2383,6 +2542,15 @@ pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCom
                 };
                 if travel_log > session.max_travel_logical {
                     session.max_travel_logical = travel_log;
+                }
+                #[cfg(target_os = "macos")]
+                if let Some((x, y, pos_key)) = origin_to_place {
+                    // Release and placement share this lock so release sees the
+                    // accepted origin as soon as the position is dispatched.
+                    session.last_placed_origin = Some((x, y, Some(1.0)));
+                    if window.set_position(LogicalPosition::new(x, y)).is_ok() {
+                        last_applied_pos = Some(pos_key);
+                    }
                 }
                 if inst_dx_log.abs() > PET_DRAG_DIRECTION_THRESHOLD_LOGICAL {
                     let next = Some(if inst_dx_log > 0.0 {
@@ -2419,8 +2587,8 @@ pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCom
     })
 }
 
-/// End one pet drag, persist the final live window origin + scale factor when
-/// the pet actually moved, and report whether that interaction was a tap.
+/// End one pet drag, persist its final origin when the pet actually moved,
+/// and report whether that interaction was a tap.
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn pet_end_drag(
@@ -4246,11 +4414,13 @@ mod pet_window_origin_tests {
     #[test]
     fn pet_drag_end_preserves_the_native_result_for_the_same_session() {
         let mut sessions = super::PetDragSessions::default();
-        sessions.start(super::ActivePetDrag {
+        assert!(sessions.observe_start(11));
+        assert!(sessions.start(super::ActivePetDrag {
             id: 11,
             max_travel_logical: 1.0,
             emitted_dir: None,
-        });
+            last_placed_origin: None,
+        }));
 
         let native_end = sessions
             .finish(11, true)
@@ -4268,11 +4438,13 @@ mod pet_window_origin_tests {
     #[test]
     fn renderer_first_pet_drag_end_does_not_cache_a_stale_result() {
         let mut sessions = super::PetDragSessions::default();
-        sessions.start(super::ActivePetDrag {
+        assert!(sessions.observe_start(12));
+        assert!(sessions.start(super::ActivePetDrag {
             id: 12,
             max_travel_logical: 1.0,
             emitted_dir: None,
-        });
+            last_placed_origin: None,
+        }));
 
         let end = sessions.finish(12, false).expect("renderer ends the drag");
         assert!(end.finished_active);
@@ -4283,35 +4455,140 @@ mod pet_window_origin_tests {
     #[test]
     fn stale_pet_drag_end_cannot_finish_the_next_session() {
         let mut sessions = super::PetDragSessions::default();
-        sessions.start(super::ActivePetDrag {
+        assert!(sessions.observe_start(20));
+        assert!(sessions.start(super::ActivePetDrag {
             id: 20,
             max_travel_logical: 0.0,
             emitted_dir: None,
-        });
-        sessions.start(super::ActivePetDrag {
+            last_placed_origin: None,
+        }));
+        assert!(sessions.observe_start(21));
+        assert!(sessions.start(super::ActivePetDrag {
             id: 21,
             max_travel_logical: 0.0,
             emitted_dir: None,
-        });
+            last_placed_origin: None,
+        }));
 
         assert!(sessions.finish(20, false).is_none());
         assert_eq!(sessions.active.as_ref().map(|session| session.id), Some(21));
     }
 
     #[test]
+    fn late_pet_drag_start_cannot_overwrite_a_newer_session() {
+        let mut sessions = super::PetDragSessions::default();
+        // B reaches Rust first but has not installed its polling session yet.
+        assert!(sessions.observe_start(22));
+        assert!(!sessions.observe_start(21));
+        assert!(!sessions.start(super::ActivePetDrag {
+            id: 21,
+            max_travel_logical: 0.0,
+            emitted_dir: None,
+            last_placed_origin: None,
+        }));
+        assert!(sessions.start(super::ActivePetDrag {
+            id: 22,
+            max_travel_logical: 10.0,
+            emitted_dir: None,
+            last_placed_origin: Some((550.0, 450.0, Some(1.0))),
+        }));
+        assert!(!sessions.start(super::ActivePetDrag {
+            id: 21,
+            max_travel_logical: 0.0,
+            emitted_dir: None,
+            last_placed_origin: None,
+        }));
+        assert_eq!(sessions.active.as_ref().map(|session| session.id), Some(22));
+        assert!(sessions.finish(21, false).is_none());
+        assert_eq!(sessions.active.as_ref().map(|session| session.id), Some(22));
+
+        let end = sessions.finish(22, false).expect("session B still ends normally");
+        assert!(end.finished_active);
+        assert!(!end.result.clicked);
+        assert_eq!(end.last_placed_origin, Some((550.0, 450.0, Some(1.0))));
+
+        // Even after B ends, stale A (id 21) must not install itself.
+        assert!(!sessions.start(super::ActivePetDrag {
+            id: 21,
+            max_travel_logical: 0.0,
+            emitted_dir: None,
+            last_placed_origin: None,
+        }));
+        assert!(sessions.active.is_none());
+    }
+
+    #[test]
+    fn linux_native_move_checks_the_gesture_at_dispatch() {
+        let mut sessions = super::PetDragSessions::default();
+        assert!(sessions.observe_start(21));
+        assert!(sessions.observe_start(22));
+
+        let mut moves = 0;
+        sessions.start_native_move(21, true, || moves += 1);
+        sessions.start_native_move(22, false, || moves += 1);
+        assert_eq!(moves, 0);
+        sessions.start_native_move(22, true, || moves += 1);
+        assert_eq!(moves, 1);
+    }
+
+    #[test]
     fn macos_cursor_reads_the_current_primary_scale_for_each_sample() {
         let scale = std::cell::Cell::new(1.0);
-        let read_scale = || scale.get();
 
         assert_eq!(
-            super::macos_cursor_logical_sample((320.0, 240.0), read_scale),
+            super::macos_cursor_logical_sample(|| Some(scale.get()), || Some((320.0, 240.0))),
             Some((320.0, 240.0))
         );
         scale.set(2.0);
         assert_eq!(
-            super::macos_cursor_logical_sample((640.0, 480.0), read_scale),
+            super::macos_cursor_logical_sample(|| Some(scale.get()), || Some((640.0, 480.0))),
             Some((320.0, 240.0))
         );
+    }
+
+    #[test]
+    fn macos_cursor_rejects_mismatched_scale_around_cursor_read() {
+        // Cursor was multiplied by 2× (logical 900, 400 -> physical 1800, 800)
+        // while the pre-read scale was 1×: must drop the sample instead of
+        // producing the doubled logical point (1800, 800).
+        assert_eq!(
+            super::macos_cursor_logical_if_scale_consistent(1.0, (1800.0, 800.0), 2.0),
+            None
+        );
+        assert_eq!(
+            super::macos_cursor_logical_if_scale_consistent(2.0, (900.0, 400.0), 1.0),
+            None
+        );
+        assert_eq!(
+            super::macos_cursor_logical_if_scale_consistent(2.0, (1800.0, 800.0), 2.0),
+            Some((900.0, 400.0))
+        );
+
+        let scale = std::cell::Cell::new(1.0);
+        let mismatched = super::macos_cursor_logical_sample(
+            || Some(scale.get()),
+            || {
+                scale.set(2.0);
+                Some((1800.0, 800.0))
+            },
+        );
+        assert_eq!(mismatched, None);
+
+        let consistent =
+            super::macos_cursor_logical_sample(|| Some(scale.get()), || Some((1800.0, 800.0)));
+        assert_eq!(consistent, Some((900.0, 400.0)));
+    }
+
+    #[test]
+    fn macos_drag_rejects_a_doubled_point_with_matching_scale_reads() {
+        let previous = (900.0, 400.0);
+        let doubled = super::macos_cursor_logical_if_scale_consistent(1.0, (1800.0, 800.0), 1.0)
+            .expect("matching scales alone accept the doubled point");
+        assert!(!super::macos_drag_cursor_is_continuous(previous, doubled));
+        assert!(super::macos_drag_cursor_is_continuous(
+            previous,
+            (905.0, 402.0),
+        ));
     }
 
     #[test]

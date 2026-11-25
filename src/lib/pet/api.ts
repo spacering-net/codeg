@@ -168,8 +168,14 @@ export interface PetDragEndResult {
   clicked: boolean
 }
 
-export async function startPetDrag(): Promise<PetDragStartResult> {
-  return getTransport().call("pet_start_drag")
+export async function startPetDrag(
+  sessionId: number
+): Promise<PetDragStartResult> {
+  return getTransport().call("pet_start_drag", { sessionId })
+}
+
+export async function startNativePetDrag(sessionId: number): Promise<void> {
+  return getTransport().call("pet_start_native_drag", { sessionId })
 }
 
 export async function endPetDrag(sessionId: number): Promise<PetDragEndResult> {
