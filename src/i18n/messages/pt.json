@@ -2280,6 +2280,7 @@
       "viewOptions": "Opções de exibição",
       "listOptions": "Lista de conversas",
       "showCompleted": "Mostrar conversas concluídas",
+      "showAssistant": "Mostrar conversas de assistentes",
       "showWorktrees": "Mostrar branches de worktree",
       "showRecent": "Mostrar grupo Recentes",
       "tabsFollowFolder": "Abas acompanham a pasta",
@@ -2484,14 +2485,21 @@
       "title": "Conversas de perguntas",
       "total": "{count, plural, one {# conversa} other {# conversas}}",
       "untitled": "Nova pergunta",
-      "actions": "Mais ações",
-      "open": "Abrir",
       "convertToRegular": "Converter em conversa normal",
+      "convertConfirmTitle": "Converter em conversa normal?",
+      "convertConfirmDescription": "\"{title}\" será desvinculada desta conversa e listada como uma conversa normal. Esta ação não pode ser desfeita.",
+      "convertConfirm": "Converter",
+      "cancel": "Cancelar",
       "converted": "Convertida em conversa normal",
       "convertFailed": "Não foi possível converter a conversa",
       "drawerTitle": "Conversa de pergunta",
       "drawerDescription": "Uma conversa paralela aberta a partir de uma seleção desta conversa",
       "pendingFirstMessage": "Sua pergunta está aguardando o agente ficar pronto. Faça isso de novo para descartá-la."
+    },
+    "checkConversations": {
+      "title": "Conversas de verificação",
+      "untitled": "Verificação",
+      "drawerDescription": "As verificações do agente pessoal sobre mensagens desta conversa"
     },
     "conversationCard": {
       "untitledConversation": "Conversa sem título",

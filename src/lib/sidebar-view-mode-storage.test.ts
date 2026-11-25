@@ -10,6 +10,7 @@ import {
   loadRecentFilter,
   loadSectionCollapsed,
   loadSectionOrder,
+  loadShowAssistant,
   loadShowRecent,
   loadTagFilter,
   loadRecentGroupingMode,
@@ -20,6 +21,7 @@ import {
   saveNavItemVisibility,
   saveRecentFilter,
   saveSectionOrder,
+  saveShowAssistant,
   saveShowRecent,
   saveTagFilter,
   type SidebarRecentFilter,
@@ -163,6 +165,21 @@ describe("section-order persistence", () => {
   it("falls back to the default for corrupt JSON", () => {
     localStorage.setItem(SECTION_ORDER_KEY, "{oops")
     expect(loadSectionOrder()).toEqual(DEFAULT_SECTION_ORDER)
+  })
+})
+
+describe("loadShowAssistant", () => {
+  beforeEach(() => localStorage.clear())
+
+  it("defaults to off", () => {
+    expect(loadShowAssistant()).toBe(false)
+  })
+
+  it("follows what was saved", () => {
+    saveShowAssistant(true)
+    expect(loadShowAssistant()).toBe(true)
+    saveShowAssistant(false)
+    expect(loadShowAssistant()).toBe(false)
   })
 })
 

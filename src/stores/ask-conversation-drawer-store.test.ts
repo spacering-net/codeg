@@ -19,6 +19,7 @@ function openNew() {
 
 function openExisting(conversationId: number) {
   return useAskConversationDrawerStore.getState().openExisting({
+    kind: "ask",
     parentConversationId: 1,
     conversationId,
     agentType: "claude_code",

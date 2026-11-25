@@ -35,17 +35,25 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
-import { personalAgentCheckMessage, personalAgentChecks } from "@/lib/api"
+import { useCheckConversations } from "@/hooks/use-ask-conversations"
+import {
+  listCheckConversations,
+  personalAgentCheckMessage,
+  personalAgentChecks,
+} from "@/lib/api"
 import { messageFingerprint } from "@/lib/message-check"
 import { followPersonalAgentLink } from "@/lib/personal-agent-notify"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
 import {
   PERSONAL_AGENT_CHANGED_EVENT,
+  type DbConversationSummary,
   type MessageCheck,
   type MessageCheckVerdict,
   type PersonalAgentChange,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { useAskConversationDrawerStore } from "@/stores/ask-conversation-drawer-store"
 import { useRoster } from "@/stores/personal-agent-roster-store"
 
 /** How often the checks are read again while one runs. */
@@ -75,6 +83,8 @@ interface MessageChecksValue {
   setOpenId: (id: number | null) => void
   /** A check is being asked for. */
   asking: boolean
+  /** Show how a check went: its conversation. */
+  openProcess: (check: MessageCheck) => void
 }
 
 const MessageChecksContext = createContext<MessageChecksValue | null>(null)
@@ -97,16 +107,22 @@ function withCheck(held: MessageCheck[], next: MessageCheck): MessageCheck[] {
 
 export function MessageChecksProvider({
   conversationId,
+  openInDrawer = false,
   children,
 }: {
   conversationId: number
+  /** A check's conversation opens in the ask drawer beside the transcript
+   *  (the conversation page has one), not in a tab. */
+  openInDrawer?: boolean
   children: ReactNode
 }) {
   const roster = useRoster()
   const offered =
     conversationId > 0 && (roster?.some((e) => e.kind === "primary") ?? false)
   return offered ? (
-    <ChecksOf conversationId={conversationId}>{children}</ChecksOf>
+    <ChecksOf conversationId={conversationId} openInDrawer={openInDrawer}>
+      {children}
+    </ChecksOf>
   ) : (
     <>{children}</>
   )
@@ -114,12 +130,15 @@ export function MessageChecksProvider({
 
 function ChecksOf({
   conversationId,
+  openInDrawer,
   children,
 }: {
   conversationId: number
+  openInDrawer: boolean
   children: ReactNode
 }) {
   const t = useTranslations("MessageCheck")
+  const tAsk = useTranslations("Folder.askConversations")
   const [held, setHeld] = useState<{ of: number; checks: MessageCheck[] }>({
     of: conversationId,
     checks: [],
@@ -249,9 +268,63 @@ function ChecksOf({
     [byMessage, conversationId, reload, t]
   )
 
+  // The conversations the checks run in, nested under this one — read only
+  // where they open in the drawer, and once there is a check to open.
+  const checkRows = useCheckConversations(
+    openInDrawer && checks.length > 0 ? conversationId : null
+  )
+  const openProcess = useCallback(
+    (c: MessageCheck) => {
+      const id = c.check_conversation_id
+      if (id == null) return
+      const inTab = () =>
+        followPersonalAgentLink({
+          kind: "conversation",
+          conversation_id: id,
+          folder_id: null,
+        })
+      if (!openInDrawer) {
+        inTab()
+        return
+      }
+      const open = (row: DbConversationSummary) => {
+        const opened = useAskConversationDrawerStore.getState().openExisting({
+          kind: "check",
+          parentConversationId: c.conversation_id,
+          conversationId: id,
+          agentType: row.agent_type,
+          folderId: row.folder_id,
+          workingDir:
+            useAppWorkspaceStore
+              .getState()
+              .allFolders.find((f) => f.id === row.folder_id)?.path ?? null,
+        })
+        if (!opened) toast.warning(tAsk("pendingFirstMessage"))
+      }
+      // Nested under this conversation; or, converted into an ordinary
+      // conversation, a root of the list.
+      const row =
+        checkRows?.find((r) => r.id === id) ??
+        useAppWorkspaceStore.getState().conversations.find((r) => r.id === id)
+      if (row) {
+        open(row)
+        return
+      }
+      // The list may not have come in yet.
+      listCheckConversations(c.conversation_id)
+        .then((rows) => {
+          const found = rows.find((r) => r.id === id)
+          if (found) open(found)
+          else inTab()
+        })
+        .catch(inTab)
+    },
+    [checkRows, openInDrawer, tAsk]
+  )
+
   const value = useMemo<MessageChecksValue>(
-    () => ({ byMessage, check, openId, setOpenId, asking }),
-    [byMessage, check, openId, asking]
+    () => ({ byMessage, check, openId, setOpenId, asking, openProcess }),
+    [byMessage, check, openId, asking, openProcess]
   )
   return (
     <MessageChecksContext.Provider value={value}>
@@ -464,11 +537,7 @@ function CheckMark({
               variant="ghost"
               onClick={() => {
                 ctx.setOpenId(null)
-                followPersonalAgentLink({
-                  kind: "conversation",
-                  conversation_id: check.check_conversation_id as number,
-                  folder_id: null,
-                })
+                ctx.openProcess(check)
               }}
             >
               {t("process")}

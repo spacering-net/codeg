@@ -1,4 +1,5 @@
 import { create } from "zustand"
+import type { LinkedConversationKind } from "@/hooks/use-ask-conversations"
 import type { AgentType, PromptDraft } from "@/lib/types"
 import { randomUUID } from "@/lib/utils"
 
@@ -7,6 +8,10 @@ export interface AskConversationDrawerTarget {
   /** ACP connection key of the drawer's surface — stable for as long as this
    *  target is open, and the drawer's remount key. */
   contextKey: string
+  /** An ask conversation, or a check of a message (the personal agent's "is
+   *  this right?"): which of its main conversation's lists it is on. A new
+   *  one is always an ask. */
+  kind: LinkedConversationKind
   /** The main conversation the ask belongs to (its list is where the drawer's
    *  header looks the ask's title up). */
   parentConversationId: number
@@ -34,9 +39,11 @@ interface AskConversationDrawerState {
   /** Connection key of the surface whose first send is creating its row and
    *  sending — until that settles, the message has not reached the agent. */
   creatingKey: string | null
-  /** Open an existing ask conversation. Re-opening the one already on show
-   *  keeps its surface (and connection key) as it is. `false` when refused. */
+  /** Open an existing ask (or check) conversation. Re-opening the one already
+   *  on show keeps its surface (and connection key) as it is. `false` when
+   *  refused. */
   openExisting: (args: {
+    kind: LinkedConversationKind
     parentConversationId: number
     conversationId: number
     agentType: AgentType
@@ -118,6 +125,7 @@ export const useAskConversationDrawerStore =
           discardArmed: false,
           target: {
             ...args,
+            kind: "ask",
             contextKey: `ask-drawer-new-${randomUUID()}`,
             conversationId: null,
           },

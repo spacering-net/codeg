@@ -1,13 +1,26 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { listAskConversations } from "@/lib/api"
+import { listAskConversations, listCheckConversations } from "@/lib/api"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
 import {
   CONVERSATION_CHANGED_EVENT,
   type ConversationChange,
   type DbConversationSummary,
 } from "@/lib/types"
+
+/** The kinds of conversation a conversation lists as its own in Session
+ *  Details: its asks, and the personal agent's checks of its messages. */
+export type LinkedConversationKind = "ask" | "check"
+
+function listOf(
+  kind: LinkedConversationKind,
+  parentId: number
+): Promise<DbConversationSummary[]> {
+  return kind === "check"
+    ? listCheckConversations(parentId)
+    : listAskConversations(parentId)
+}
 
 /** Newest first, id as the tie-break — the backend's `list_ask_children`
  *  order, so a row added live lands where a refetch would put it. */
@@ -21,7 +34,8 @@ function byCreatedAtDesc(
 }
 
 /**
- * Fold one `conversation://changed` event into `parentId`'s ask list.
+ * Fold one `conversation://changed` event into `parentId`'s ask list (or,
+ * given `kind`, its check list).
  *
  * - An upsert naming `parentId` inserts or replaces the row.
  * - An upsert of a listed row that no longer names it — unlinked into an
@@ -34,12 +48,13 @@ function byCreatedAtDesc(
 export function applyAskConversationChange(
   rows: readonly DbConversationSummary[],
   parentId: number,
-  change: ConversationChange
+  change: ConversationChange,
+  kind: LinkedConversationKind = "ask"
 ): readonly DbConversationSummary[] {
   if (change.kind === "upsert") {
     const { summary } = change
     const index = rows.findIndex((row) => row.id === summary.id)
-    if (summary.kind === "ask" && summary.parent_id === parentId) {
+    if (summary.kind === kind && summary.parent_id === parentId) {
       const next = rows.slice()
       if (index < 0) next.push(summary)
       else next[index] = summary
@@ -61,6 +76,7 @@ export function applyAskConversationChange(
 
 interface LoadedAsks {
   parentId: number
+  kind: LinkedConversationKind
   rows: readonly DbConversationSummary[]
 }
 
@@ -75,6 +91,23 @@ interface LoadedAsks {
 export function useAskConversations(
   parentId: number | null
 ): readonly DbConversationSummary[] | null {
+  return useLinkedConversations(parentId, "ask")
+}
+
+/** The check conversations of `parentId`, kept live the way
+ *  {@link useAskConversations} keeps its asks. */
+export function useCheckConversations(
+  parentId: number | null
+): readonly DbConversationSummary[] | null {
+  return useLinkedConversations(parentId, "check")
+}
+
+/** `parentId`'s asks or its checks, by `kind` (see
+ *  {@link useAskConversations}). */
+export function useLinkedConversations(
+  parentId: number | null,
+  kind: LinkedConversationKind
+): readonly DbConversationSummary[] | null {
   const [loaded, setLoaded] = useState<LoadedAsks | null>(null)
 
   useEffect(() => {
@@ -86,22 +119,24 @@ export function useAskConversations(
 
     const load = () => {
       early = early ?? []
-      listAskConversations(parentId)
+      listOf(kind, parentId)
         .then((fetched) => {
           if (disposed) return
           let rows: readonly DbConversationSummary[] = fetched
           for (const change of early ?? []) {
-            rows = applyAskConversationChange(rows, parentId, change)
+            rows = applyAskConversationChange(rows, parentId, change, kind)
           }
           early = null
-          setLoaded({ parentId, rows })
+          setLoaded({ parentId, kind, rows })
         })
         .catch((error: unknown) => {
           if (disposed) return
-          console.error("[ask-conversations] list failed:", error)
+          console.error(`[${kind}-conversations] list failed:`, error)
           early = null
           setLoaded((prev) =>
-            prev?.parentId === parentId ? prev : { parentId, rows: [] }
+            prev?.parentId === parentId && prev.kind === kind
+              ? prev
+              : { parentId, kind, rows: [] }
           )
         })
     }
@@ -116,9 +151,14 @@ export function useAskConversations(
             return
           }
           setLoaded((prev) => {
-            if (prev?.parentId !== parentId) return prev
-            const rows = applyAskConversationChange(prev.rows, parentId, change)
-            return rows === prev.rows ? prev : { parentId, rows }
+            if (prev?.parentId !== parentId || prev.kind !== kind) return prev
+            const rows = applyAskConversationChange(
+              prev.rows,
+              parentId,
+              change,
+              kind
+            )
+            return rows === prev.rows ? prev : { parentId, kind, rows }
           })
         }
       )
@@ -133,8 +173,14 @@ export function useAskConversations(
       unlisten?.()
       offReconnect?.()
     }
-  }, [parentId])
+  }, [parentId, kind])
 
-  if (parentId == null || loaded?.parentId !== parentId) return null
+  if (
+    parentId == null ||
+    loaded?.parentId !== parentId ||
+    loaded.kind !== kind
+  ) {
+    return null
+  }
   return loaded.rows
 }

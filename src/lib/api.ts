@@ -4664,8 +4664,18 @@ export async function listAskConversations(
   })
 }
 
-/** Turn an ask conversation into an ordinary one (it becomes a root of the
- *  sidebar). */
+/** The check conversations of `parentConversationId` — the personal agent
+ *  checking a message of it — newest first. */
+export async function listCheckConversations(
+  parentConversationId: number
+): Promise<DbConversationSummary[]> {
+  return getTransport().call("list_check_conversations", {
+    parentConversationId,
+  })
+}
+
+/** Turn an ask (or check) conversation into an ordinary one (it becomes a
+ *  root of the sidebar). */
 export async function detachAskConversation(
   conversationId: number
 ): Promise<void> {

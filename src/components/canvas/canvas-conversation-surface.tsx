@@ -152,6 +152,10 @@ interface CanvasConversationSurfaceProps {
    * instead — every card showed that tab's folder and switching moved that tab.
    */
   folderPickerOverride?: ConversationFolderPickerOverride
+  /** The surface is the ask drawer's: a check's "how it was checked" opens
+   *  in that drawer too (`MessageListView.checksOpenInDrawer`). A canvas card
+   *  has no drawer beside it and opens a tab. */
+  checksOpenInDrawer?: boolean
   /** Focus/priority hint for the connection lifecycle and the transcript. */
   isActive?: boolean
   className?: string
@@ -211,6 +215,7 @@ export function CanvasConversationSurface({
   onCreatingChange,
   onSaveSelectionAsNote,
   folderPickerOverride,
+  checksOpenInDrawer = false,
   isActive = true,
   className,
 }: CanvasConversationSurfaceProps) {
@@ -1107,6 +1112,7 @@ export function CanvasConversationSurface({
             acpLoadError={acpLoadError}
             hideEmptyState={isDraft}
             onSaveNoteSelection={onSaveSelectionAsNote}
+            checksOpenInDrawer={checksOpenInDrawer}
             liveRuns={liveRuns}
           />
         </ConversationShell>

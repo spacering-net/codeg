@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react"
 import { useTranslations } from "next-intl"
+import { Sparkles } from "lucide-react"
 import type { DbConversationSummary } from "@/lib/types"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { cn } from "@/lib/utils"
@@ -120,6 +121,14 @@ export function SidebarConversationHoverDetails({
           agentType={conversation.agent_type}
           model={model}
         />
+        {/* Who sent it, when the personal agent did: the row itself keeps to
+            the executor's avatar and leaves this to the bubble. */}
+        {conversation.source === "personal_agent" && (
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Sparkles aria-hidden="true" className="size-3.5 shrink-0" />
+            {tSidebar("personalAgentBadge")}
+          </p>
+        )}
         {/* Every tag, wrapping: the row itself shows at most two. */}
         {tags.length > 0 && (
           <div

@@ -142,7 +142,7 @@ impl CodeBuddyParser {
                     // `_` arm — `parse_detail` applies the SAME exclusion, and
                     // the two paths MUST agree or the auto-title backfill would
                     // oscillate between them.
-                    "user" if !is_injected_user_record(&value) => {
+                    "user" if !is_injected_user_record(&value) && !is_compaction_record(&value) => {
                         message_count += 1;
                         if first_user_text.is_none() {
                             let text = shown_user_text(collect_text(&value, "input_text"));
@@ -151,7 +151,7 @@ impl CodeBuddyParser {
                             }
                         }
                     }
-                    "assistant" => message_count += 1,
+                    "assistant" if !is_compaction_record(&value) => message_count += 1,
                     _ => {}
                 },
                 _ => {}
@@ -249,6 +249,14 @@ impl CodeBuddyParser {
             match record_type {
                 "custom-title" | "ai-title" | "topic" => titles.feed(record_type, &value),
                 "message" => match value.get("role").and_then(|r| r.as_str()).unwrap_or("") {
+                    "user" if is_compaction_record(&value) => {
+                        // Never a prompt either (see `is_compaction_record`):
+                        // the boundary becomes the compaction divider, and the
+                        // rest of the compaction is dropped.
+                        if let Some(divider) = compaction_divider(&value, idx, ts) {
+                            messages.push(divider);
+                        }
+                    }
                     "user" => {
                         let text = collect_text(&value, "input_text");
                         if is_injected_user_record(&value) {
@@ -285,6 +293,7 @@ impl CodeBuddyParser {
                             }
                         }
                     }
+                    "assistant" if is_compaction_record(&value) => {}
                     "assistant" => {
                         message_count += 1;
                         let text = collect_text(&value, "output_text");
@@ -1039,6 +1048,115 @@ fn is_injected_user_record(value: &Value) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a `message` record is CodeBuddy's compaction bookkeeping rather
+/// than something the person or the agent said.
+///
+/// The flags are the ones CodeBuddy's own `isNonUserUserRoleItem` and
+/// `convertHistoryItemContentToAcp` read: the compaction boundary that holds
+/// the kept summary (`isCompacted` / `isSummary`, with a `compactType`), the
+/// "Please continue with the conversation based on the summarized context
+/// above" prompt that resumes the turn (`isCompactInternal`), and, up to
+/// 2.185.0, the compact agent's instruction prompt and its reply (`agent:
+/// "compact"`). Rendered as messages they put the raw summary XML in a user
+/// bubble and counted as prompts.
+fn is_compaction_record(value: &Value) -> bool {
+    let Some(data) = value.get("providerData") else {
+        return false;
+    };
+    let flag = |key: &str| data.get(key).and_then(Value::as_bool) == Some(true);
+    flag("isCompactInternal")
+        || flag("isCompacted")
+        || flag("isSummary")
+        || data.get("compactType").is_some_and(Value::is_string)
+        || data.get("agent").and_then(Value::as_str) == Some("compact")
+}
+
+/// The compaction divider for a compaction boundary record, carrying the
+/// summary it kept, or `None` for any other compaction record.
+///
+/// A boundary is CodeBuddy's `isCompactBoundaryMessage`: a user record flagged
+/// `isCompacted` or `isSummary` that is not a prompt-too-long or media-body
+/// recovery. Its text wraps the summary in `<cb_summary>` (a `/compact`) or
+/// `<conversation_history_summary>` (an automatic compaction). The divider is
+/// the `_meta.contextCompaction` call the live session draws from the same
+/// compaction (`acp::connection::codebuddy_compaction_divider`).
+fn compaction_divider(value: &Value, idx: usize, ts: DateTime<Utc>) -> Option<UnifiedMessage> {
+    let data = value.get("providerData")?;
+    let flag = |key: &str| data.get(key).and_then(Value::as_bool) == Some(true);
+    if !(flag("isCompacted") || flag("isSummary"))
+        || flag("isPtlRecovery")
+        || flag("isMediaBodyRecovery")
+    {
+        return None;
+    }
+    let tool_use_id = data
+        .get("compactionId")
+        .or_else(|| value.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("cb-compaction-{idx}"));
+    let mut marker = serde_json::Map::new();
+    marker.insert("version".to_string(), 1.into());
+    let trigger = match data.get("compactType").and_then(Value::as_str) {
+        Some("user-command") => Some("manual"),
+        Some("pre-message-auto" | "emergency-auto" | "model-request") => Some("auto"),
+        _ => None,
+    };
+    if let Some(trigger) = trigger {
+        marker.insert("trigger".to_string(), trigger.into());
+    }
+    let mut content = vec![
+        ContentBlock::ToolUse {
+            tool_use_id: Some(tool_use_id.clone()),
+            tool_name: "context_compaction".to_string(),
+            input_preview: None,
+            status: None,
+            meta: Some(serde_json::json!({ "contextCompaction": marker })),
+        },
+        ContentBlock::ToolResult {
+            tool_use_id: Some(tool_use_id),
+            output_preview: None,
+            is_error: false,
+            agent_stats: None,
+            images: Vec::new(),
+            exit_code: None,
+        },
+    ];
+    if let Some(summary) = compaction_summary(&collect_text(value, "input_text")) {
+        crate::parsers::attach_compaction_summary(&mut content, summary);
+    }
+    Some(UnifiedMessage {
+        id: format!("cb-compaction-{idx}"),
+        role: MessageRole::Assistant,
+        content,
+        timestamp: ts,
+        usage: None,
+        duration_ms: None,
+        model: None,
+        completed_at: Some(ts),
+        agent_message_id: None,
+    })
+}
+
+/// The summary inside a compaction boundary's `<cb_summary>` or
+/// `<conversation_history_summary>` wrapper.
+fn compaction_summary(text: &str) -> Option<String> {
+    let mut text = text.trim();
+    for (open, close) in [
+        ("<cb_summary>", "</cb_summary>"),
+        (
+            "<conversation_history_summary>",
+            "</conversation_history_summary>",
+        ),
+    ] {
+        if let Some(inner) = text.strip_prefix(open) {
+            text = inner.strip_suffix(close).unwrap_or(inner).trim();
+            break;
+        }
+    }
+    (!text.is_empty()).then(|| text.to_string())
+}
+
 /// Record the `<task-notification>` an injected user message carries, keyed by
 /// `<task-id>`. Anything else (a `/goal` kick-off, a future injection kind) is
 /// ignored — it is simply dropped from the stream by the caller.
@@ -1691,6 +1809,113 @@ mod tests {
                 ("assistant", "FINAL_ANSWER: done after tool result"),
                 ("user", "PLEASE_PTC again"),
                 ("assistant", "hello from fake model"),
+            ]
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Compaction records (shapes from 2.185.0 and 2.186.0 transcripts, text
+    /// shortened) are no prompts: each boundary becomes a compaction divider
+    /// holding its summary, and the continue prompt and the old compact agent's
+    /// exchange disappear.
+    #[test]
+    fn compaction_records_become_dividers_not_messages() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-compact-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-compact";
+        let user = |ts: i64, text: &str, data: Value| {
+            json!({"type":"message","role":"user","timestamp":ts,"cwd":"/Users/demo/app","sessionId":sid,
+                   "content":[{"type":"input_text","text":text}],"providerData":data})
+        };
+        let reply = |ts: i64, text: &str, data: Value| {
+            json!({"type":"message","role":"assistant","timestamp":ts,"cwd":"/Users/demo/app","sessionId":sid,
+                   "content":[{"type":"output_text","text":text}],"providerData":data})
+        };
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                user(1795542351000, "hello there", json!({"agent":"cli"})),
+                reply(1795542352000, "hi", json!({"agent":"cli"})),
+                // 2.185.0's `/compact`: the compact agent's own exchange.
+                user(1795542357010, "**IMPORTANT CONSTRAINTS:**\n- Do NOT use any tools",
+                     json!({"startsNewUserRequest":true,"agent":"compact"})),
+                reply(1795542357062, "<conversation_history_summary>old</conversation_history_summary>",
+                      json!({"agent":"compact"})),
+                // 2.186.0's `/compact`: the typed command, then the boundary.
+                user(1795542379441, "/compact",
+                     json!({"skipRun":true,"isManualCompactCommand":true,"agent":"cli"})),
+                user(1795542379480, "<cb_summary>\nSummary of the conversation so far:\nhello there\n</cb_summary>",
+                     json!({"compactType":"user-command","compactionId":"cmp_manual","isCompacted":true,
+                            "isCompactInternal":true,"isSummary":false,"agent":"cli"})),
+                // An automatic compaction: the boundary, then the continue prompt.
+                user(1795542389359, "<conversation_history_summary>\nhello from fake model\n</conversation_history_summary>",
+                     json!({"compactType":"emergency-auto","compactionId":"cmp_auto","isCompacted":true,
+                            "isCompactInternal":true,"isSummary":true,"agent":"cli"})),
+                user(1795542389369, "Please continue with the conversation based on the summarized context above.",
+                     json!({"isCompactInternal":true,"agent":"cli"})),
+                reply(1795542389408, "continuing", json!({"agent":"cli"})),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let summaries = parser.list_conversations().expect("list");
+        // hello there, hi, /compact, continuing.
+        assert_eq!(summaries[0].message_count, 4);
+        let detail = parser.get_conversation(sid).expect("detail");
+        assert_eq!(detail.summary.message_count, 4);
+
+        let texts: Vec<String> = detail
+            .turns
+            .iter()
+            .flat_map(|t| &t.blocks)
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["hello there", "hi", "/compact", "continuing"]);
+
+        let dividers: Vec<(String, Value, Option<String>, Option<Value>)> = detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.windows(2))
+            .filter_map(|pair| match pair {
+                [ContentBlock::ToolUse {
+                    tool_use_id: Some(id),
+                    tool_name,
+                    meta: Some(meta),
+                    ..
+                }, ContentBlock::ToolResult { output_preview, .. }]
+                    if tool_name == "context_compaction" =>
+                {
+                    Some((
+                        id.clone(),
+                        meta["contextCompaction"].clone(),
+                        output_preview.clone(),
+                        meta.get(crate::parsers::COMPACTION_SUMMARY_META_KEY)
+                            .cloned(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            dividers,
+            vec![
+                (
+                    "cmp_manual".to_string(),
+                    json!({"version": 1, "trigger": "manual"}),
+                    Some("Summary of the conversation so far:\nhello there".to_string()),
+                    Some(json!(true)),
+                ),
+                (
+                    "cmp_auto".to_string(),
+                    json!({"version": 1, "trigger": "auto"}),
+                    Some("hello from fake model".to_string()),
+                    Some(json!(true)),
+                ),
             ]
         );
 

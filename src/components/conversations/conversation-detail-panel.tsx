@@ -2352,6 +2352,9 @@ const ConversationTabView = memo(function ConversationTabView({
           // rather than a usable composer here — a transcript whose composer is
           // blocked (session/load failure) can still spawn the question elsewhere.
           renderAskComposer={canAskSelection ? renderAskComposer : undefined}
+          // The ask drawer is mounted beside this transcript (below): a
+          // check's conversation opens in it.
+          checksOpenInDrawer
           // Fork carries no draft, so — unlike a send — a non-empty queue is
           // not at risk of being jumped and needs no guard here. A turn in
           // flight is still rejected, by the backend, which is the only place
