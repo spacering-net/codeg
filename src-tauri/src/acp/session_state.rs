@@ -6295,6 +6295,7 @@ mod tests {
             name: value.into(),
             description: None,
             reasoning_efforts: None,
+            context_window: None,
         };
         let listing = |id: &str, current: &str, values: &[&str]| {
             let mut option = select_option(id, Some("mode"), current);
