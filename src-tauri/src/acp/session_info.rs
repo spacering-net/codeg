@@ -101,10 +101,6 @@ pub struct SessionInfo {
     pub stats: Option<SessionStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub messages: Option<SessionMessages>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub children: Vec<SessionChild>,
-    #[serde(default)]
-    pub children_truncated: bool,
     /// Human-readable note for a not-found result, or a partial one (e.g. the
     /// transcript parse timed out so `messages` is absent). `None` on a clean
     /// full result.
@@ -195,16 +191,6 @@ impl SessionHistory {
             ..Default::default()
         }
     }
-}
-
-/// Durable delegation links, recoverable after the parent's context compacts.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionChild {
-    pub session_id: i32,
-    pub task_id: Option<String>,
-    /// Persisted conversation status; detailed broker reports are obtained with
-    /// get_delegation_status, which has its own task ownership check.
-    pub status: String,
 }
 
 /// Listener-facing access to resolve a session by its codeg conversation id. The
