@@ -85,7 +85,7 @@ export function SidebarSectionOrderControl({
           ? t("sectionChats")
           : id === "btw"
             ? t("sectionBtw")
-          : t("sectionRecent")
+            : t("sectionRecent")
 
   const move = (id: SidebarSectionId, delta: number, viaKeyboard: boolean) => {
     if (viaKeyboard) pendingFocusRef.current = id
