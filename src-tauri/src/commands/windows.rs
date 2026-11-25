@@ -1335,8 +1335,53 @@ struct ActivePetDrag {
     emitted_dir: Option<crate::models::pet::PetState>,
 }
 
+#[derive(Default)]
+struct PetDragSessions {
+    active: Option<ActivePetDrag>,
+    completed_results: HashMap<u64, PetDragEndResult>,
+}
+
+struct PetDragSessionEnd {
+    result: PetDragEndResult,
+    finished_active: bool,
+}
+
+impl PetDragSessions {
+    fn start(&mut self, session: ActivePetDrag) {
+        self.active = Some(session);
+    }
+
+    fn finish(&mut self, session_id: u64, retain_result: bool) -> Option<PetDragSessionEnd> {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|session| session.id == session_id)
+        {
+            let session = self.active.take()?;
+            let result = PetDragEndResult {
+                clicked: session.max_travel_logical < PET_CLICK_THRESHOLD_LOGICAL,
+            };
+            if retain_result {
+                self.completed_results.insert(session_id, result);
+            }
+            return Some(PetDragSessionEnd {
+                result,
+                finished_active: true,
+            });
+        }
+
+        self.completed_results
+            .remove(&session_id)
+            .map(|result| PetDragSessionEnd {
+                result,
+                finished_active: false,
+            })
+    }
+}
+
 static NEXT_PET_DRAG_ID: AtomicU64 = AtomicU64::new(1);
-static ACTIVE_PET_DRAG: Mutex<Option<ActivePetDrag>> = Mutex::new(None);
+static PET_DRAG_SESSIONS: std::sync::LazyLock<Mutex<PetDragSessions>> =
+    std::sync::LazyLock::new(|| Mutex::new(PetDragSessions::default()));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1350,9 +1395,10 @@ pub enum PetDragMode {
 #[serde(rename_all = "camelCase")]
 pub struct PetDragStartResult {
     pub mode: PetDragMode,
+    pub session_id: Option<u64>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PetDragEndResult {
     pub clicked: bool,
@@ -1727,6 +1773,29 @@ fn macos_primary_scale_factor(app: &AppHandle) -> f64 {
         .unwrap_or(1.0)
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn macos_cursor_logical_points(cursor_physical: (f64, f64), primary_sf: f64) -> Option<(f64, f64)> {
+    if !cursor_physical.0.is_finite()
+        || !cursor_physical.1.is_finite()
+        || !primary_sf.is_finite()
+        || primary_sf <= 0.0
+    {
+        return None;
+    }
+    Some((
+        cursor_physical.0 / primary_sf,
+        cursor_physical.1 / primary_sf,
+    ))
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn macos_cursor_logical_sample(
+    cursor_physical: (f64, f64),
+    primary_scale_factor: impl FnOnce() -> f64,
+) -> Option<(f64, f64)> {
+    macos_cursor_logical_points(cursor_physical, primary_scale_factor())
+}
+
 /// Global cursor in Cocoa logical points (top-left of main screen `(0, 0)`,
 /// Y increasing downward — the exact space `LogicalPosition` expects).
 ///
@@ -1737,10 +1806,14 @@ fn macos_primary_scale_factor(app: &AppHandle) -> f64 {
 #[cfg(target_os = "macos")]
 fn macos_cursor_logical(app: &AppHandle, primary_sf: f64) -> Option<(f64, f64)> {
     let cursor = app.cursor_position().ok()?;
-    if !cursor.x.is_finite() || !cursor.y.is_finite() {
-        return None;
-    }
-    Some((cursor.x / primary_sf, cursor.y / primary_sf))
+    macos_cursor_logical_points((cursor.x, cursor.y), primary_sf)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_cursor_logical_current(app: &AppHandle) -> Option<(f64, f64)> {
+    let primary_sf = macos_primary_scale_factor(app);
+    let cursor = app.cursor_position().ok()?;
+    macos_cursor_logical_sample((cursor.x, cursor.y), || primary_sf)
 }
 
 #[cfg(target_os = "macos")]
@@ -1998,35 +2071,43 @@ pub async fn pet_window_record_position(
     Ok(())
 }
 
-fn take_pet_drag_session(expected_id: Option<u64>) -> Option<ActivePetDrag> {
-    let Ok(mut guard) = ACTIVE_PET_DRAG.lock() else {
+fn take_pet_drag_session(expected_id: u64) -> Option<ActivePetDrag> {
+    let Ok(mut guard) = PET_DRAG_SESSIONS.lock() else {
         return None;
     };
-    match expected_id {
-        Some(id) => {
-            if guard.as_ref().is_some_and(|s| s.id == id) {
-                guard.take()
-            } else {
-                None
-            }
-        }
-        None => guard.take(),
+    if guard
+        .active
+        .as_ref()
+        .is_some_and(|session| session.id == expected_id)
+    {
+        guard.active.take()
+    } else {
+        None
     }
 }
 
 #[cfg(feature = "tauri-runtime")]
 async fn finish_pet_drag_session(
     app: &AppHandle,
-    expected_id: Option<u64>,
+    expected_id: u64,
+    retain_result: bool,
 ) -> Option<PetDragEndResult> {
-    let session = take_pet_drag_session(expected_id)?;
+    let end = {
+        let Ok(mut guard) = PET_DRAG_SESSIONS.lock() else {
+            return None;
+        };
+        guard.finish(expected_id, retain_result)?
+    };
+    if !end.finished_active {
+        return Some(end.result);
+    }
+
     let _ = app.emit_to(
         PET_WINDOW_LABEL,
         PET_DRAG_DIRECTION_EVENT,
         Option::<crate::models::pet::PetState>::None,
     );
-    let clicked = session.max_travel_logical < PET_CLICK_THRESHOLD_LOGICAL;
-    if !clicked {
+    if !end.result.clicked {
         PET_HOVER_WAS_INSIDE.store(true, AtomicOrdering::Relaxed);
         if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
             if let Some((x, y, position_scale_factor)) = pet_window_live_origin(&window) {
@@ -2045,7 +2126,12 @@ async fn finish_pet_drag_session(
             }
         }
     }
-    Some(PetDragEndResult { clicked })
+    Some(end.result)
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn linux_native_drag_required_for_gdk_backend(gdk_backend: Option<&str>) -> bool {
+    gdk_backend != Some("GdkX11Display")
 }
 
 /// Begin an OS-cursor-driven drag of the floating pet window.
@@ -2054,43 +2140,53 @@ async fn finish_pet_drag_session(
 /// cross-monitor dragging continuous at ~120 Hz without per-frame IPC and
 /// avoids both macOS `PhysicalPosition` scale division and Windows WebView2
 /// mid-drag `devicePixelRatio` jumps while preserving directional run
-/// animations. On Linux Wayland (where global cursor polling and `set_position`
-/// are unsupported by the compositor), returns `PetDragMode::NativeOs` so the
-/// caller falls back to `startDragging()`.
+/// animations. On Linux, the actual GTK backend selects native OS dragging
+/// unless the window is on X11; Wayland cannot poll a global cursor or set a
+/// window position through the compositor.
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCommandError> {
-    #[cfg(target_os = "linux")]
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        return Ok(PetDragStartResult {
-            mode: PetDragMode::NativeOs,
-        });
-    }
-
     let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) else {
         return Ok(PetDragStartResult {
             mode: PetDragMode::Noop,
+            session_id: None,
         });
     };
 
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        let gdk_backend = window
+            .gtk_window()
+            .ok()
+            .map(|gtk_window| gtk_window.display().type_().name().to_string());
+        if linux_native_drag_required_for_gdk_backend(gdk_backend.as_deref()) {
+            return Ok(PetDragStartResult {
+                mode: PetDragMode::NativeOs,
+                session_id: None,
+            });
+        }
+    }
+
     #[cfg(target_os = "macos")]
-    let (primary_sf, start_cursor, grab_offset) = {
-        let primary_sf = macos_primary_scale_factor(&app);
-        let Some(cursor) = macos_cursor_logical(&app, primary_sf) else {
+    let (start_cursor, grab_offset) = {
+        let Some(cursor) = macos_cursor_logical_current(&app) else {
             return Ok(PetDragStartResult {
                 mode: PetDragMode::Noop,
+                session_id: None,
             });
         };
         let Some((wx, wy, ww, wh)) = macos_window_logical_rect(&window) else {
             return Ok(PetDragStartResult {
                 mode: PetDragMode::Noop,
+                session_id: None,
             });
         };
         let offset = (
             (cursor.0 - wx).clamp(0.0, ww.max(1.0)),
             (cursor.1 - wy).clamp(0.0, wh.max(1.0)),
         );
-        (primary_sf, cursor, offset)
+        (cursor, offset)
     };
 
     #[cfg(not(target_os = "macos"))]
@@ -2105,11 +2201,13 @@ pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCom
         let Ok(cursor) = app.cursor_position() else {
             return Ok(PetDragStartResult {
                 mode: PetDragMode::Noop,
+                session_id: None,
             });
         };
         let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else {
             return Ok(PetDragStartResult {
                 mode: PetDragMode::Noop,
+                session_id: None,
             });
         };
         let ww = f64::from(size.width).max(1.0);
@@ -2138,8 +2236,8 @@ pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCom
     };
 
     let session_id = NEXT_PET_DRAG_ID.fetch_add(1, AtomicOrdering::Relaxed);
-    if let Ok(mut guard) = ACTIVE_PET_DRAG.lock() {
-        *guard = Some(ActivePetDrag {
+    if let Ok(mut guard) = PET_DRAG_SESSIONS.lock() {
+        guard.start(ActivePetDrag {
             id: session_id,
             max_travel_logical: 0.0,
             emitted_dir: None,
@@ -2166,23 +2264,24 @@ pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCom
         loop {
             interval.tick().await;
 
-            let still_active = ACTIVE_PET_DRAG
-                .lock()
-                .ok()
-                .is_some_and(|g| g.as_ref().is_some_and(|s| s.id == session_id));
+            let still_active = PET_DRAG_SESSIONS.lock().ok().is_some_and(|g| {
+                g.active
+                    .as_ref()
+                    .is_some_and(|session| session.id == session_id)
+            });
             if !still_active {
                 break;
             }
 
             let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) else {
-                let _ = take_pet_drag_session(Some(session_id));
+                let _ = take_pet_drag_session(session_id);
                 break;
             };
 
             match is_primary_mouse_button_down() {
                 Some(true) => saw_button_down = true,
                 Some(false) if saw_button_down => {
-                    let _ = finish_pet_drag_session(&app, Some(session_id)).await;
+                    let _ = finish_pet_drag_session(&app, session_id, true).await;
                     break;
                 }
                 _ => {}
@@ -2190,7 +2289,7 @@ pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCom
 
             #[cfg(target_os = "macos")]
             let (travel_log, inst_dx_log, moved_this_tick) = {
-                let Some(cur) = macos_cursor_logical(&app, primary_sf) else {
+                let Some(cur) = macos_cursor_logical_current(&app) else {
                     continue;
                 };
                 let travel = (cur.0 - start_cursor.0).hypot(cur.1 - start_cursor.1);
@@ -2272,10 +2371,14 @@ pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCom
             }
 
             let emit_dir = {
-                let Ok(mut guard) = ACTIVE_PET_DRAG.lock() else {
+                let Ok(mut guard) = PET_DRAG_SESSIONS.lock() else {
                     break;
                 };
-                let Some(session) = guard.as_mut().filter(|s| s.id == session_id) else {
+                let Some(session) = guard
+                    .active
+                    .as_mut()
+                    .filter(|session| session.id == session_id)
+                else {
                     break;
                 };
                 if travel_log > session.max_travel_logical {
@@ -2312,15 +2415,19 @@ pub async fn pet_start_drag(app: AppHandle) -> Result<PetDragStartResult, AppCom
 
     Ok(PetDragStartResult {
         mode: PetDragMode::Tracked,
+        session_id: Some(session_id),
     })
 }
 
-/// End the active pet drag, persist the final live window origin + scale factor
-/// when the pet actually moved, and report whether the interaction was a tap.
+/// End one pet drag, persist the final live window origin + scale factor when
+/// the pet actually moved, and report whether that interaction was a tap.
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn pet_end_drag(app: AppHandle) -> Result<PetDragEndResult, AppCommandError> {
-    Ok(finish_pet_drag_session(&app, None)
+pub async fn pet_end_drag(
+    app: AppHandle,
+    session_id: u64,
+) -> Result<PetDragEndResult, AppCommandError> {
+    Ok(finish_pet_drag_session(&app, session_id, false)
         .await
         .unwrap_or(PetDragEndResult { clicked: false }))
 }
@@ -4134,5 +4241,87 @@ mod pet_window_origin_tests {
         assert_eq!(x, -143);
         assert_eq!(y, 344);
         assert!(80 >= x && 80 <= x + 288, "cursor remains inside pet window");
+    }
+
+    #[test]
+    fn pet_drag_end_preserves_the_native_result_for_the_same_session() {
+        let mut sessions = super::PetDragSessions::default();
+        sessions.start(super::ActivePetDrag {
+            id: 11,
+            max_travel_logical: 1.0,
+            emitted_dir: None,
+        });
+
+        let native_end = sessions
+            .finish(11, true)
+            .expect("native release ends the drag");
+        assert!(native_end.finished_active);
+        assert!(native_end.result.clicked);
+
+        let renderer_end = sessions
+            .finish(11, false)
+            .expect("renderer receives the saved result");
+        assert!(!renderer_end.finished_active);
+        assert!(renderer_end.result.clicked);
+    }
+
+    #[test]
+    fn renderer_first_pet_drag_end_does_not_cache_a_stale_result() {
+        let mut sessions = super::PetDragSessions::default();
+        sessions.start(super::ActivePetDrag {
+            id: 12,
+            max_travel_logical: 1.0,
+            emitted_dir: None,
+        });
+
+        let end = sessions.finish(12, false).expect("renderer ends the drag");
+        assert!(end.finished_active);
+        assert!(end.result.clicked);
+        assert!(sessions.finish(12, false).is_none());
+    }
+
+    #[test]
+    fn stale_pet_drag_end_cannot_finish_the_next_session() {
+        let mut sessions = super::PetDragSessions::default();
+        sessions.start(super::ActivePetDrag {
+            id: 20,
+            max_travel_logical: 0.0,
+            emitted_dir: None,
+        });
+        sessions.start(super::ActivePetDrag {
+            id: 21,
+            max_travel_logical: 0.0,
+            emitted_dir: None,
+        });
+
+        assert!(sessions.finish(20, false).is_none());
+        assert_eq!(sessions.active.as_ref().map(|session| session.id), Some(21));
+    }
+
+    #[test]
+    fn macos_cursor_reads_the_current_primary_scale_for_each_sample() {
+        let scale = std::cell::Cell::new(1.0);
+        let read_scale = || scale.get();
+
+        assert_eq!(
+            super::macos_cursor_logical_sample((320.0, 240.0), read_scale),
+            Some((320.0, 240.0))
+        );
+        scale.set(2.0);
+        assert_eq!(
+            super::macos_cursor_logical_sample((640.0, 480.0), read_scale),
+            Some((320.0, 240.0))
+        );
+    }
+
+    #[test]
+    fn linux_drag_mode_follows_the_actual_gdk_backend() {
+        assert!(!super::linux_native_drag_required_for_gdk_backend(Some(
+            "GdkX11Display"
+        )));
+        assert!(super::linux_native_drag_required_for_gdk_backend(Some(
+            "GdkWaylandDisplay"
+        )));
+        assert!(super::linux_native_drag_required_for_gdk_backend(None));
     }
 }

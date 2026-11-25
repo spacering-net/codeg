@@ -161,6 +161,7 @@ export type PetDragMode = "tracked" | "native_os" | "noop"
 
 export interface PetDragStartResult {
   mode: PetDragMode
+  sessionId: number | null
 }
 
 export interface PetDragEndResult {
@@ -171,8 +172,8 @@ export async function startPetDrag(): Promise<PetDragStartResult> {
   return getTransport().call("pet_start_drag")
 }
 
-export async function endPetDrag(): Promise<PetDragEndResult> {
-  return getTransport().call("pet_end_drag")
+export async function endPetDrag(sessionId: number): Promise<PetDragEndResult> {
+  return getTransport().call("pet_end_drag", { sessionId })
 }
 
 // Toggle the session panel anchored next to the sprite (open if closed, close

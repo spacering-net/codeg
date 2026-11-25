@@ -29,10 +29,11 @@ export interface UsePetDragResult {
 
 interface ActivePointerDrag {
   seq: number
-  phase: "starting" | "tracked"
+  phase: "starting" | "tracked" | "native"
+  sessionId?: number
   startX: number
   startY: number
-  maxClientTravel: number
+  maxScreenTravel: number
 }
 
 /**
@@ -104,25 +105,32 @@ export function usePetDrag(opts: UsePetDragOptions): UsePetDragResult {
 
     function onPointerMove(e: PointerEvent) {
       const active = activeRef.current
-      if (!active || active.phase !== "starting") return
+      if (!active || active.phase === "tracked") return
       const dist = Math.hypot(
-        e.clientX - active.startX,
-        e.clientY - active.startY
+        e.screenX - active.startX,
+        e.screenY - active.startY
       )
-      if (dist > active.maxClientTravel) {
-        active.maxClientTravel = dist
+      if (dist > active.maxScreenTravel) {
+        active.maxScreenTravel = dist
       }
     }
 
-    function finishPointer(isCancel: boolean) {
+    function finishPointer(isCancel: boolean, event: PointerEvent) {
       const active = activeRef.current
       if (!active) return
       activeRef.current = null
 
-      if (active.phase === "starting") {
-        // Released before `pet_start_drag` resolved; the pending start handler
-        // will immediately call `endPetDrag()` once its IPC returns.
-        if (!isCancel && active.maxClientTravel < CLICK_THRESHOLD_PX) {
+      if (active.phase !== "tracked") {
+        // A pending tracked start ends its own session after the IPC returns;
+        // native OS dragging has no Rust session to end.
+        const releaseTravel = Number.isFinite(event.screenX)
+          ? Math.hypot(
+              event.screenX - active.startX,
+              event.screenY - active.startY
+            )
+          : 0
+        const maxTravel = Math.max(active.maxScreenTravel, releaseTravel)
+        if (!isCancel && maxTravel < CLICK_THRESHOLD_PX) {
           optsRef.current.onClick()
         } else {
           optsRef.current.onDragDirection(null)
@@ -130,7 +138,12 @@ export function usePetDrag(opts: UsePetDragOptions): UsePetDragResult {
         return
       }
 
-      void endPetDrag()
+      if (active.sessionId === undefined) {
+        optsRef.current.onDragDirection(null)
+        return
+      }
+
+      void endPetDrag(active.sessionId)
         .then((res) => {
           if (disposed) return
           if (!isCancel && res.clicked) {
@@ -145,16 +158,17 @@ export function usePetDrag(opts: UsePetDragOptions): UsePetDragResult {
         })
     }
 
-    const onPointerUp = () => finishPointer(false)
-    const onPointerCancel = () => finishPointer(true)
+    const onPointerUp = (event: PointerEvent) => finishPointer(false, event)
+    const onPointerCancel = (event: PointerEvent) => finishPointer(true, event)
 
     window.addEventListener("pointermove", onPointerMove)
     window.addEventListener("pointerup", onPointerUp)
     window.addEventListener("pointercancel", onPointerCancel)
     return () => {
       disposed = true
-      if (activeRef.current?.phase === "tracked") {
-        void endPetDrag().catch(() => {})
+      const active = activeRef.current
+      if (active?.phase === "tracked" && active.sessionId !== undefined) {
+        void endPetDrag(active.sessionId).catch(() => {})
       }
       activeRef.current = null
       window.removeEventListener("pointermove", onPointerMove)
@@ -178,31 +192,41 @@ export function usePetDrag(opts: UsePetDragOptions): UsePetDragResult {
     activeRef.current = {
       seq,
       phase: "starting",
-      startX: event.clientX,
-      startY: event.clientY,
-      maxClientTravel: 0,
+      startX: event.screenX,
+      startY: event.screenY,
+      maxScreenTravel: 0,
     }
 
     void (async () => {
       try {
         const res = await startPetDrag()
         if (activeRef.current?.seq !== seq) {
-          if (res.mode === "tracked") {
-            void endPetDrag().catch(() => {})
+          if (res.mode === "tracked" && res.sessionId !== null) {
+            void endPetDrag(res.sessionId).catch(() => {})
           }
           return
         }
 
         if (res.mode === "tracked") {
+          if (res.sessionId === null) {
+            activeRef.current = null
+            optsRef.current.onDragDirection(null)
+            return
+          }
           activeRef.current.phase = "tracked"
+          activeRef.current.sessionId = res.sessionId
+          return
+        }
+
+        if (res.mode === "native_os") {
+          activeRef.current.phase = "native"
+          const { getCurrentWindow } = await import("@tauri-apps/api/window")
+          if (activeRef.current?.seq !== seq) return
+          await getCurrentWindow().startDragging()
           return
         }
 
         activeRef.current = null
-        if (res.mode === "native_os") {
-          const { getCurrentWindow } = await import("@tauri-apps/api/window")
-          await getCurrentWindow().startDragging()
-        }
       } catch (err) {
         console.warn("[Pet] drag start failed:", err)
         if (activeRef.current?.seq === seq) {
