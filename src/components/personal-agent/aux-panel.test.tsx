@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import type {
+  BotLive,
   DispatchInfo,
   ItemInfo,
   PersonalAgentSnapshot,
@@ -123,7 +124,10 @@ vi.mock("@/components/token-usage/charts", () => ({
   RankedBars: () => <div data-chart="ranked" />,
 }))
 
-import { __resetRosterForTests } from "@/stores/personal-agent-roster-store"
+import {
+  __resetRosterForTests,
+  usePersonalAgentRoster,
+} from "@/stores/personal-agent-roster-store"
 import { __resetThumbsForTests } from "./aux-parts/output/use-thumb"
 
 import { PersonalAgentAuxPanel } from "./aux-panel"
@@ -384,6 +388,8 @@ describe("the panel", () => {
     expect(face.getAttribute("aria-label")).toBe("Nova")
     expect(face.style.width).toBe("4rem")
     expect(face.hasAttribute("data-bot-look")).toBe(true)
+    // The whole head is where it follows the pointer.
+    expect(head.hasAttribute("data-pa-face-host")).toBe(true)
     expect(
       within(head).getByRole("heading", { name: "Nova", level: 2 })
     ).toBeTruthy()
@@ -418,6 +424,56 @@ describe("the panel", () => {
       auxTab: "stats",
       auxOpen: true,
     })
+  })
+
+  it("keeps its face at rest while the assistant replies and once it has — only waiting, stuck or asleep shows", async () => {
+    draw()
+    // Live pushes land on the roster once it has been read.
+    await waitFor(() =>
+      expect(usePersonalAgentRoster.getState().entries).not.toBeNull()
+    )
+    const look = () =>
+      document
+        .querySelector("[data-pa-aux-head] [data-slot='bot-avatar']")
+        ?.getAttribute("data-bot-look")
+    expect(look()).toBe("idle")
+    const now = Date.now()
+    let n = 0
+    const push = (patch: Partial<BotLive>) =>
+      act(() =>
+        usePersonalAgentRoster.getState().applyLive({
+          bot_id: 1,
+          work: "done",
+          attention: "none",
+          needs: null,
+          unread: 0,
+          activity: null,
+          activity_known: true,
+          work_on_hand: [],
+          awaiting: [],
+          face: "idle",
+          flash: null,
+          connected: true,
+          last_line: null,
+          last_activity_at: new Date(now).toISOString(),
+          updated_at: new Date(now + ++n).toISOString(),
+          expires_at: new Date(now + 30_000).toISOString(),
+          ...patch,
+        })
+      )
+    // Thinking, writing, then done or failed: no motion of a reply here.
+    push({ work: "busy", face: "thinking" })
+    expect(look()).toBe("idle")
+    push({ work: "busy", face: "working" })
+    expect(look()).toBe("idle")
+    const until = new Date(now + 8000).toISOString()
+    push({ flash: { face: "done", until } })
+    expect(look()).toBe("idle")
+    push({ flash: { face: "failed", until } })
+    expect(look()).toBe("idle")
+    // Waiting on its owner is not a reply's: it shows.
+    push({ face: "waiting" })
+    expect(look()).toBe("waiting")
   })
 
   it("renames the assistant in place: Enter or leaving the field saves it, Escape takes it back and goes no further", async () => {
