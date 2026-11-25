@@ -209,6 +209,34 @@ describe("SessionDetailsTab", () => {
     expect(within(line).getByText("Status: In Progress")).toHaveClass("sr-only")
   })
 
+  it("leads with the assistant a sub-session ran as, named before the agent", () => {
+    setupScene({
+      hasActiveConversation: true,
+      conversation: {
+        parent_id: 3,
+        assistant_id: 5,
+        assistant_name: "Reviewer",
+      },
+    })
+    const { getAllByRole, getByTestId, getByText } = renderTab()
+    const avatar = getByTestId("session-agent-avatar")
+    // The assistant's avatar instead of the agent's icon; the status dot stays.
+    expect(avatar.querySelector('[data-testid="agent-icon"]')).toBeNull()
+    expect(avatar.querySelector(".bg-yellow-400")).not.toBeNull()
+    const line = getByTestId("session-agent-line")
+    const name = getByTestId("session-assistant-name")
+    expect(line.firstElementChild).toBe(name)
+    expect(name).toHaveTextContent("Reviewer")
+    expect(line).toContainElement(getByText("Claude Code"))
+    // No property cell of its own any more.
+    expect(getAllByRole("term").map((term) => term.textContent)).toEqual([
+      "Git Branch",
+      "Session ID",
+      "Session Index",
+      "Parent Session",
+    ])
+  })
+
   it("says nothing of when the conversation last moved", () => {
     setupScene({ hasActiveConversation: true })
     const { queryByText } = renderTab()

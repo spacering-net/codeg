@@ -2270,6 +2270,7 @@
       "viewOptions": "顯示選項",
       "listOptions": "會話列表",
       "showCompleted": "顯示已完成對話",
+      "showAssistant": "顯示助手會話",
       "showWorktrees": "顯示工作樹分支",
       "showRecent": "顯示「最近」分組",
       "tabsFollowFolder": "分頁跟隨資料夾",
@@ -2474,14 +2475,21 @@
       "title": "提問會話",
       "total": "共 {count} 個",
       "untitled": "新提問",
-      "actions": "更多操作",
-      "open": "開啟",
       "convertToRegular": "轉為一般會話",
+      "convertConfirmTitle": "轉為一般會話？",
+      "convertConfirmDescription": "「{title}」將與目前會話解除關聯，作為一般會話列出。此操作無法復原。",
+      "convertConfirm": "轉換",
+      "cancel": "取消",
       "converted": "已轉為一般會話",
       "convertFailed": "轉為一般會話失敗",
       "drawerTitle": "提問會話",
       "drawerDescription": "從此會話選取內容發起的提問會話",
       "pendingFirstMessage": "問題正等待智慧體就緒後傳送，再操作一次將放棄它。"
+    },
+    "checkConversations": {
+      "title": "核查會話",
+      "untitled": "核查",
+      "drawerDescription": "個人助手核查此會話中訊息的過程"
     },
     "conversationCard": {
       "untitledConversation": "未命名會話",

@@ -302,6 +302,10 @@ pub fn build_router_with_srn(
             post(handlers::conversations::list_ask_conversations),
         )
         .route(
+            "/list_check_conversations",
+            post(handlers::conversations::list_check_conversations),
+        )
+        .route(
             "/detach_ask_conversation",
             post(handlers::conversations::detach_ask_conversation),
         )

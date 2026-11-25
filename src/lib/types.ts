@@ -1103,7 +1103,9 @@ export type ConversationStatus =
  *  `personal` rows are the personal agent's own session segments, shown on its
  *  page only; `ask` rows ("ask about this selection") nest under the
  *  conversation they were asked from (`parent_id`) and are listed in its
- *  Session Details. */
+ *  Session Details; `check` rows — the personal agent checking a message of a
+ *  conversation ("is this right?") — nest and are listed the same way under
+ *  the conversation the message is in. */
 export type ConversationKind =
   | "regular"
   | "chat"
@@ -1111,6 +1113,7 @@ export type ConversationKind =
   | "delegate"
   | "personal"
   | "ask"
+  | "check"
 
 /** Mirrors Rust `FolderKind` (src-tauri/src/db/entities/folder.rs).
  *  `personal` is the personal agent's working directory: hidden everywhere,

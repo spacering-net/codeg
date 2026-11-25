@@ -6327,12 +6327,15 @@ mod tests {
         assert_eq!(out(&dir, &["show", &format!("{rev}:{SOUL_FILE}")]).await, "# Persona\nAlone.");
     }
 
-    /// A fixed file a commit added beside another spelling it kept — on a
-    /// volume that tells them apart — or beside a folder or a link of that
+    /// A fixed file a commit added beside a folder or a link of another
     /// spelling: undone, it goes, and the other spelling stays as it was.
+    /// Beside a file of another spelling — two files only on a volume that
+    /// tells case apart — the commit takes that file for the name (a fixed
+    /// name is kept to one spelling), so the undo puts its content back as
+    /// the rules, the other spelling's file left in the working tree.
     #[cfg(unix)]
     #[tokio::test]
-    async fn an_added_fixed_file_beside_another_spelling_kept_goes_on_undo() {
+    async fn an_added_fixed_file_is_undone_beside_another_spelling() {
         let probe = tempfile::tempdir().unwrap();
         std::fs::write(probe.path().join("a"), "").unwrap();
         let tells_case_apart = !probe.path().join("A").exists();
@@ -6370,16 +6373,20 @@ mod tests {
                 .collect();
             assert_eq!(files.len(), 1, "{alias}");
             undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap();
+            let rules = read_file(&dir, RULES_FILE).unwrap();
+            if alias == "file" {
+                let tree = out(&dir, &["ls-tree", "--name-only", &rev]).await;
+                assert!(!tree.lines().any(|l| l == "agents.md"), "taken for the name: {tree}");
+                assert_eq!(rules.as_deref(), Some("lower\n"), "put back as it was");
+                assert_eq!(std::fs::read_to_string(dir.join("agents.md")).unwrap(), "lower\n");
+                continue;
+            }
             // Gone, or — a change from a link, not undone — as the turn left
             // it; never the link's target written in as rules.
-            let rules = read_file(&dir, RULES_FILE).unwrap();
             assert!(
                 rules.is_none() || rules.as_deref() == Some("# Rules\nNew.\n"),
                 "{alias}: {rules:?}"
             );
-            if alias == "file" {
-                assert_eq!(std::fs::read_to_string(dir.join("agents.md")).unwrap(), "lower\n");
-            }
         }
     }
 

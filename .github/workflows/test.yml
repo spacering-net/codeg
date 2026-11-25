@@ -121,6 +121,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Enlarge swap on the Linux runner
+        # `cargo test` builds several targets of the codeg crate at once (lib,
+        # lib tests, bins, integration tests), each rustc several GB. On the
+        # 16 GB Linux runner with its stock 4 GB swap that starved the VM:
+        # the runner lost contact mid-compile ("The runner has received a
+        # shutdown signal", exit 143). macOS grows swap on demand and Windows
+        # has its pagefile, so only Linux needs this. The preinstalled SDKs
+        # removed first are never used here and make room for the swapfile.
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo swapoff -a
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+          df -h /
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:

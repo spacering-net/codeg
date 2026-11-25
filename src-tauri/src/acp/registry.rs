@@ -3718,9 +3718,47 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // foreground bash, tools and plan options match after
             // normalization. Fresh installs of both now pull
             // `@anthropic-ai/sdk` 1.13.0 instead of 1.12.0, and both still work.
+            //
+            // 0.111.0 (2026-11-24) moves to Claude Agent SDK 0.3.331 (Claude
+            // Code 2.1.331) and ACP SDK 2.11.0; `engines.node` stays ">=22".
+            // Measured live with fresh installs of 0.110.1 and 0.111.0, the
+            // twenty-three harness scenarios (`initialize`, model and effort
+            // switches, MCP titles, MCP over stdin, foreground and background
+            // bash, tools, plan options, idle compaction, resume, cron, the
+            // picker and the slash menu) match after normalization; the CLI
+            // only retries its title request more often. CLI 2.1.331 adds an
+            // internal `progress_reminder_sent` attachment, which
+            // `parsers::claude` skips like every attachment it does not list,
+            // and no transcript record type.
+            //   * #1708 is the one change codeg sees. A managed
+            //     `disableSideloadFlags` policy makes Claude Code refuse
+            //     `--mcp-config`, which carries codeg-mcp. Before, every
+            //     `session/new`, `session/resume` and `session/load` failed
+            //     with -32603 "Claude Code process exited with code 1" and no
+            //     `startupFailureReason` (a new chat failed to connect, a
+            //     reopened one showed the `session_unavailable` banner). Now
+            //     the adapter starts the session again without its MCP
+            //     servers, and the first turn sends a warning `notice` ("MCP
+            //     server \"codeg-mcp\" failed to start", or "N MCP servers…"
+            //     with the names in the description), which codeg shows as a
+            //     toast (`session_notice`). The model simply has no codeg-mcp
+            //     tools; a call to one fails with "No such tool available" and
+            //     the turn ends normally. codeg's delegation, result-tool and
+            //     question flags still assume codeg-mcp in such a session, as
+            //     they already do whenever codeg-mcp fails to start.
+            //   * #1705 attributes MCP requests sent over ACP; codeg declares
+            //     only stdio/http/sse servers, so no `acp` server and none of
+            //     its hooks. The `toolUseOwner` refactor computes the same
+            //     `parentToolUseId` and tool-call session as before.
+            //   * #1709 drops backticks from thirteen -32602 messages, none of
+            //     which codeg matches or provokes.
+            //   * ACP SDK 2.11.0's stricter v1 schema (a stdio MCP server's
+            //     `type` must be absent or "stdio", a boolean config option
+            //     needs a boolean value) accepts what codeg sends: codeg's
+            //     stdio entry has no `type` key, and it sends booleans typed.
             distribution: AgentDistribution::Npx {
-                version: "0.110.1",
-                package: "@agentclientprotocol/claude-agent-acp@0.110.1",
+                version: "0.111.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.111.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -5031,7 +5069,9 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `<send_user_message_question_reply>` envelope and not echoed;
             // a decline sends nothing; the turn's end sends `$/cancel_request`
             // for the form (codeg closes the card); an answer after that is
-            // dropped with a "Answer not sent" warning notice. codeg asks it on
+            // dropped with a "Answer not sent" warning notice. (From 2.11.0 the
+            // form stays open past the turn and codeg declines it at its own
+            // `TurnComplete`; see (kkk).) codeg asks it on
             // the usual question card, which gives way to the next question on
             // the connection (`register_yielding_question`), so a blocking ask
             // the model makes meanwhile is not refused unseen, and shows the
@@ -5267,9 +5307,49 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // rollout metadata (`model_search_state`, `environment_id`) that
             // the parser ignores; every `config.toml` key codeg writes keeps
             // its shape, and every codex sentence codeg matches is unchanged.
+            //
+            // 2.11.0 (2026-11-23) keeps `@openai/codex` ^0.171.0 (a fresh
+            // install still resolves 0.171.0, the same binary byte for byte;
+            // npm's 0.172.0 is outside the caret) and the inline ACP SDK
+            // ~2.9.1. The twenty-one live scenarios replay as on 2.10.0 bar
+            // `initialize`, which adds `sessionCapabilities.options`, and what
+            // (jjj)–(lll) say.
+            //
+            // (jjj) **Steering a `/compact` or `/review` turn.** 2.10.0 answered
+            // the steer with `{"outcome":"failed"}`, which codeg read as a
+            // protocol error (a "steer failed" toast); 2.11.0 answers
+            // `promptRequired`/`noRunningTurn`, which codeg reads as no active
+            // turn, so the composer queues the message and sends it as a
+            // prompt once the command's turn ends. Measured on both.
+            //
+            // (kkk) **Async questions outlive the turn** (see (ww)). 2.11.0 no
+            // longer sends `$/cancel_request` for an async form when the asking
+            // turn ends; an answer that arrives later starts a new turn that no
+            // `session/prompt` owns. codeg closes the card itself: its
+            // `TurnComplete` declines every question still parked on the
+            // connection (`cancel_questions_by_parent`), and a decline sends
+            // the model nothing (measured on both). Only an answer submitted
+            // in the moment between the adapter's turn end and codeg's could
+            // still start such a turn; its output then shows after a reload.
+            //
+            // (lll) Inert or not adopted. #797 serves `session/options` and
+            // takes initial `configOptions` on `session/new`, `session/load`
+            // and `session/resume` (applied in order, unknown ids skipped
+            // silently, a duplicate refused with -32602). It does not change
+            // what a v1 resume or load restores: plan mode and fast come back
+            // and effort and mode do not, exactly as on 2.10.0, so
+            // `apply_preferred_session_options` still sends what differs. It
+            // is not adopted, for claude's #1592 reasons (the schema crate has
+            // neither field, and a skipped initial value would bypass codeg's
+            // rejection feedback). A v1 `session/load` replay now leaves out
+            // the "Implement the approved plan." prompt (tagged `client_id:
+            // codex-acp:plan-implementation:<uuid>`); codeg reads Codex history
+            // from the rollout, where `parsers::codex` still finds it. #744's
+            // v2 work, #795's CRLF terminal output, `customAnswerFields` and
+            // the renamed background-task module do not reach a v1 client.
             distribution: AgentDistribution::Npx {
-                version: "2.10.0",
-                package: "@agentclientprotocol/codex-acp@2.10.0",
+                version: "2.11.0",
+                package: "@agentclientprotocol/codex-acp@2.11.0",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -5923,8 +6003,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // Docker / Nix are the supported channels. The npm `hermes-agent`
             // package is a COMMUNITY bridge (wyrtensi/hermes-agent-npm, not
             // Nous Research), pinned here at an exact, audited version: its
-            // postinstall clones the OFFICIAL repo at tag v0.23.3 verifying the
-            // full commit SHA (caafe538…), bootstraps an isolated, uv-managed
+            // postinstall clones the OFFICIAL repo at tag v0.23.4 verifying the
+            // full commit SHA (8fc03744…), bootstraps an isolated, uv-managed
             // Python 3.14 venv with a checksum-pinned uv, and runs `uv sync
             // --frozen --extra all --no-dev` (⊇ the acp+mcp extras) from
             // upstream's lockfile — all inside the npm package directory;
@@ -5946,26 +6026,24 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // hard-compares `rev-parse <tag>^{commit}` against the 40-hex pin
             // before the `checkout --detach`.
             //
-            // 0.23.3 audited (0.23.1 to 0.23.3; 0.23.2 was pinned without its
-            // own audit): at each step only `package.json` moves (version,
-            // description, upstream tag and commit), so `bin/`,
+            // 0.23.4 audited (0.23.3 to 0.23.4): only `package.json` moves
+            // (version, description, upstream tag and commit), so `bin/`,
             // `scripts/postinstall.js` and `lib/` (uv 0.12.13 and its digest
             // table, the first-launch provisioning in `lib/provision.js`) are
-            // 0.23.0's; `pythonVersion` stays 3.14, and the install marker still
-            // keys on the npm version, tag, commit, Python and uv versions, so
-            // upgrading rebuilds the checkout and its venv. The annotated tag
-            // v0.23.3 dereferences to exactly caafe538…, tagged by "Hermes
-            // Release Automation" on 2026-11-20 (unsigned), 9,829 commits after
-            // v0.23.1 and 1,675 after v0.23.2, though upstream calls both patch
-            // releases. `uv.lock` is 0.23.1's at 0.23.2; 0.23.3 moves 13
-            // packages by a patch (oauthlib, tornado, opentelemetry) and adds or
-            // drops none (354 packages), so `--extra all` still installs 103
-            // packages on macOS arm64. npm 12.2.3 runs the postinstall under
-            // codeg's `--allow-scripts`; an install that skipped it is still
-            // provisioned by the first `hermes acp`, with its progress on stderr
-            // only (about 50 s with uv's caches warm, as measured on 0.23.1).
+            // still 0.23.0's; `pythonVersion` stays 3.14, and the install
+            // marker still keys on the npm version, tag, commit, Python and uv
+            // versions, so upgrading rebuilds the checkout and its venv. The
+            // annotated tag v0.23.4 dereferences to exactly 8fc03744…, tagged
+            // by "Hermes Release Automation" on 2026-11-24 (unsigned), 1,122
+            // non-merge commits after v0.23.3, which upstream calls a patch
+            // release. The ACP adapter (`acp_adapter/`), `uv.lock` and
+            // `pyproject.toml` are 0.23.3's byte for byte, so `--extra all`
+            // still installs 103 packages on macOS arm64. npm 12.2.3 runs the
+            // postinstall under codeg's `--allow-scripts`; an install that
+            // skipped it is still provisioned by the first `hermes acp`, with
+            // its progress on stderr only (about 55 s with uv's caches warm).
             //
-            // Known regressions on 0.23.3, both measured and both as on 0.23.1.
+            // Known regressions on 0.23.4, both measured and both as on 0.23.1.
             // From 0.22.3 `hermes acp` is a viewer: sessions, turns and MCP
             // servers run in a shared `gateway run --idle-exit` daemon, which
             // the first viewer for a `HERMES_HOME` starts with its own
@@ -5976,7 +6054,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // session with codeg-mcp injected does, each call to a config.yaml
             // `mcp_servers` entry fails with "MCP server '<name>' is not
             // connected", while the same server answers in a session with none
-            // (upstream issue #143502, still open; the lookup in
+            // (upstream issue #143502, still open and confirmed there on 0.23.4;
+            // its fix, #154438, is not merged; the lookup in
             // `tools/mcp_tool_scope.py` is 0.23.0's byte for byte). codeg hands
             // Hermes the user's own servers only through config.yaml, so on
             // every OS they are cut off whenever codeg-mcp rides along. (2)
@@ -5990,12 +6069,13 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // unknown…" or "Gateway draining: not_ready", by timing), while one
             // sent seconds later works. When launchd takes the job, the daemon
             // runs outside the viewer's tree and the stop reaches only that
-            // viewer (both setups measured on macOS; 0.23.2 reworked the code
-            // that starts the daemon, but it is still spawned detached into its
-            // own session as the viewer's child on POSIX, and through launchd
-            // first on macOS). Re-check both on the next bump.
+            // viewer (both setups measured on macOS; 0.23.4 changed only the
+            // environment the daemon is given, and it is still spawned detached
+            // into its own session as the viewer's child on POSIX, and through
+            // launchd first on macOS). Re-check both on the next bump.
             //
-            // Otherwise 0.23.3 answers as 0.23.1 did, as far as checked:
+            // Otherwise 0.23.4 answers as 0.23.3 and 0.23.1 did, as far as
+            // checked:
             // `initialize` is the same (`protocolVersion: 1`,
             // `agentInfo.version` "0.0.0"); the session reply (legacy `models`
             // and `modes`, and Hermes' own `edit_approval_policy` / `model` /
@@ -6031,8 +6111,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // with every column `parsers::hermes` reads; 0.23.2 added
             // `sessions.prompt_cache_clock` and a `resumable_subagents` table,
             // and 0.23.3 moved Hermes' own store access behind a persistence
-            // interface without moving the file. A session 0.23.2 wrote loads
-            // and continues on 0.23.3, also after its daemon died. Sessions are
+            // interface without moving the file. A session 0.23.3 wrote loads
+            // and continues on 0.23.4 after its daemon died. Sessions are
             // `local-<64 hex>` with `source = 'local'`. Load and resume neither
             // rewrite message rows nor clear `ended_at` (the next prompt does),
             // and a literal `\x00json:` message stays escaped; through 0.22.2
@@ -6042,15 +6122,17 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // source 0.23.1 also takes a turn the provider refused for safety
             // out of the model context (`active = 0`, which `parsers::hermes`
             // skips like a rewound turn), while its own load replay still shows
-            // the refused ask with a notice (not re-checked on 0.23.3). From
+            // the refused ask with a notice (not re-checked since 0.23.1). From
             // 0.23.2 each viewer and the daemon may start a detached
             // default-plugin installer that fetches the plugin catalog; it is
-            // the viewer's child, so codeg's stop ends it too. `hermes
-            // --version` prints `Hermes Agent v0.23.3 (2026.9.24) · stable ·
-            // local caafe5389ae5` first, which is the line codeg parses; the
-            // update check it runs next took 7 s with a route to GitHub and
-            // 11.6 s with the proxy black-holed (11 to 13 s on 0.23.0 and
-            // 0.23.1).
+            // the viewer's child, so codeg's stop ends it too. By its source,
+            // from 0.23.4 a profile that a host plugin marks as run elsewhere
+            // makes `hermes acp` print a refusal to stderr and exit 1 before
+            // `initialize`; codeg's own config never does that. `hermes
+            // --version` prints `Hermes Agent v0.23.4 (2026.9.24) · stable ·
+            // local 8fc037444731` first, which is the line codeg parses; the
+            // update check it runs next took 5 s with a route to GitHub and
+            // 11.4 s with the proxy black-holed (7 s and 11.6 s on 0.23.3).
             //
             // Launch preference: `resolve_npx_command("hermes")` checks PATH,
             // then `~/.local/bin` (the official installer's target), then the
@@ -6060,8 +6142,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `~/.local/bin`. The npm global install is the managed/one-click
             // channel codeg's Install button drives.
             distribution: AgentDistribution::Npx {
-                version: "0.23.3",
-                package: "hermes-agent@0.23.3",
+                version: "0.23.4",
+                package: "hermes-agent@0.23.4",
                 cmd: "hermes",
                 args: &["acp"],
                 env: &[],
@@ -6280,7 +6362,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // Two behaviours around a Stop, the same in 2.171.0, 2.177.0, 2.177.1,
             // 2.179.0, 2.179.2, 2.179.3, 2.180.0, 2.181.0, 2.182.0, 2.183.0,
-            // 2.184.0 and 2.185.0, need codeg's help.
+            // 2.184.0, 2.185.0 and 2.186.0, need codeg's help.
             // CodeBuddy answers a `session/prompt` that starts within 500 ms of a
             // `session/cancel` it took mid-turn with `cancelled`, without running
             // the prompt or keeping it in its history, so codeg holds the first
@@ -6588,9 +6670,43 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // during a sub-agent, the cancelled prompt was answered after 60 ms,
             // 65 ms and, behind the background summary request, 12.1 s. An
             // install without optional dependencies still runs whole turns.
+            //
+            // 2.186.0 keeps `bin/codebuddy` byte for byte and the inlined ACP
+            // SDK module (transport included); `package.json` changes its
+            // version and the sandbox-cli pins (5.13.0-beta.2 to beta.14).
+            // `initialize` and the unauthenticated `session/new` answer exactly
+            // as 2.185.0 does (`protocolVersion: 1`), the models (default
+            // `default-model`), modes, `thought_level`, `sandbox` and
+            // `multitask` keep their values, and no `sessionUpdate` kind,
+            // `session/*` method or `_codebuddy.ai/*` notification came or
+            // went. A Read result still ends with the same tool-hint line, live,
+            // in the `session/load` replay and in the transcript, and
+            // `strip_read_range_hint` still removes it. The compaction divider
+            // (two `agent_message_chunk`s flagged
+            // `_meta["codebuddy.ai/isCompactInternal"]`, sent on `/compact` and
+            // on automatic compaction) now carries one content block instead of
+            // an array, so it parses and would have reached the chat as reply
+            // text; `codebuddy_compaction_divider` in `acp::connection` turns it
+            // into the compaction card and drops the rest of the compaction. A
+            // manual `/compact` now answers with only that divider and writes
+            // `/compact` plus a `<cb_summary>` boundary record, which the
+            // history parser draws as the same card. A prompt answered
+            // `cancelled` inside the 500 ms barrier is now kept in the history
+            // with an "Interrupted by user" reply and gets a `userMessageId`;
+            // codeg's hold keeps its prompts out of the barrier (a prompt sent
+            // 600 ms after the cancelled prompt's answer ran). After a Stop that
+            // caught a permission request, the next prompt still answers
+            // `cancelled` with `codebuddy.ai/finishReason: "stop"`. A stdio
+            // server handed over on `session/new` is started and its tool
+            // reaches the model, and one named `codeg-mcp` still asks once per
+            // call, for `DeferExecuteTool`. Of three Stops during a sub-agent,
+            // the cancelled prompt was answered after 40 ms, 39 ms and, behind
+            // the background summary request, 12.1 s. 2.186.0 loads a 2.185.0
+            // session on `default-model`, and an install without optional
+            // dependencies still runs whole turns.
             distribution: AgentDistribution::Npx {
-                version: "2.185.0",
-                package: "@tencent-ai/codebuddy-code@2.185.0",
+                version: "2.186.0",
+                package: "@tencent-ai/codebuddy-code@2.186.0",
                 cmd: "codebuddy",
                 args: &["--acp"],
                 env: &[],
@@ -8326,9 +8442,46 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // official CLI starts a forwarded stdio MCP server (no ZCode install
             // here); the bridge forwards `mcpServers` to `session/create`
             // unchanged.
+            //
+            // Bridge 0.93.1, after 0.93.0 (both 2026-11-24), changes
+            // `package.json` only in its version. Installed fresh on
+            // 2026-11-25, 0.92.0 and 0.93.1 resolve the same dependencies (ACP
+            // SDK 1.9.0), and `dist/cli.js` is byte-identical. Against the
+            // stand-in backend given codeg's env and capabilities,
+            // `initialize` (`protocolVersion: 1`), `session/new` (same mode,
+            // thought and model values), the mode gate, stdio MCP forwarding,
+            // text, tool and permission turns, completed, retried, failed and
+            // cancelled prompts, backend steering, `/rename` and
+            // `session/load` give the client the same frames as 0.92.0, with
+            // two exceptions. When the bridge cannot fetch ZCode's client
+            // config (as in the stand-in runs), the dynamic-workflow gate now
+            // reads `onDemand` instead of off: the backend gets a workflow
+            // policy and `dynamicWorkflowEnabled` on `session/create`, and the
+            // command list gains `workflow` and `workflows`, which codeg lists.
+            // And when a turn leaves a background sub-agent task running,
+            // `session/prompt` now stays open until the task ends and takes the
+            // backend's follow-up turn into the same prompt, where 0.92.0
+            // answered at the end of the first turn and sent the follow-up text
+            // outside any prompt. Such a prompt ends with one
+            // `_zcode/turnState` end whose `usage` sums both turns and whose
+            // `turnMs` spans them, which `zcode_turn` records as one window. A
+            // Stop while the prompt waits answers `cancelled`, and a failed
+            // follow-up ends `end_turn` after a "[A background follow-up turn
+            // failed; …]" text, both without usage. By the bridge's account
+            // ZCode 4.0 runs every Agent call in the background by default, so
+            // with a 4.0 desktop app such prompts hold whenever the model
+            // starts a sub-agent (the bridge config's
+            // `subagents.alwaysBackground: false` turns that off). Read in the
+            // source: the catalog probe also accepts the desktop's 4.0.0
+            // `zcode.cjs`; the backend's `session/readReplyLanguage` ask is
+            // answered from `~/.zcode/v2/setting.json`; and the Node that runs
+            // the backend must also load `node:sea`, so a `ZCODE_NODE` that
+            // cannot is skipped for the next Node the bridge finds. Not
+            // measured: whether the official CLI starts a forwarded stdio MCP
+            // server; the bridge still forwards `mcpServers` unchanged.
             distribution: AgentDistribution::Npx {
-                version: "0.92.0",
-                package: "zcode-acp-server@0.92.0",
+                version: "0.93.1",
+                package: "zcode-acp-server@0.93.1",
                 cmd: "zcode-acp-server",
                 args: &["server"],
                 env: &[],
@@ -9698,9 +9851,27 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `/design` work are the terminal UI's or the bundled skill's; a
             // sub-agent that hits its turn limit now ends with a status report
             // inside its tool result.
+            //
+            // 1.93.3, after 1.93.2, changes nothing in `package.json` but its
+            // version, and `dist/index.mjs` is unchanged. Installed fresh on
+            // 2026-11-24, 1.93.2 and 1.93.3 resolve the same dependency
+            // versions, and `acp` is still on the updater's skip list. With the
+            // minified names normalized, the ACP server and the model catalog
+            // are unchanged, and `initialize` (`protocolVersion: 1`) and the
+            // signed-out `session/new` answer as 1.93.2 did apart from the
+            // version. The same zero-cost turns match 1.93.2 frame for frame,
+            // still without an `fs/*` or `terminal/*` request, and so do the
+            // modes, the `model` ids and each model's `effort` values, the MCP
+            // sources and the session files; a `session/load` of a 1.93.2
+            // session in 1.93.3 replays it identically. `--effort` now sets the
+            // effort for that launch only, a flag codeg never passes, and
+            // `/connect`, the cloud `/model` fixes and the update error log are
+            // the terminal UI's. Under `CMD_ZDR=1` a custom provider can opt in
+            // with `"zdr": true`, and the refusal for one that has not now names
+            // that opt-in; codeg passes the text through unclassified.
             distribution: AgentDistribution::Npx {
-                version: "1.93.2",
-                package: "command-code@1.93.2",
+                version: "1.93.3",
+                package: "command-code@1.93.3",
                 cmd: "command-code",
                 args: &["acp"],
                 env: &[],
@@ -10227,8 +10398,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.110.1",
-            "@agentclientprotocol/claude-agent-acp@0.110.1",
+            "0.111.0",
+            "@agentclientprotocol/claude-agent-acp@0.111.0",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -10255,8 +10426,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::CodeBuddy,
-            "2.185.0",
-            "@tencent-ai/codebuddy-code@2.185.0",
+            "2.186.0",
+            "@tencent-ai/codebuddy-code@2.186.0",
             Some("22.0.0"),
         );
         // Kimi Code must never land on 0.37.0–0.38.0: every session in that
@@ -10269,8 +10440,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.10.0",
-            "@agentclientprotocol/codex-acp@2.10.0",
+            "2.11.0",
+            "@agentclientprotocol/codex-acp@2.11.0",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.35", "pi-acp@0.0.35", Some("22.0.0"));
@@ -10294,8 +10465,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::CommandCode,
-            "1.93.2",
-            "command-code@1.93.2",
+            "1.93.3",
+            "command-code@1.93.3",
             Some("22.0.0"),
         );
         assert_binary_version(AgentType::OpenCode, "2.4.1", "/releases/download/v2.4.1/");
@@ -10305,8 +10476,8 @@ mod tests {
         // audited wrapper code is only what the pinned version ships.
         assert_npx_version(
             AgentType::Hermes,
-            "0.23.3",
-            "hermes-agent@0.23.3",
+            "0.23.4",
+            "hermes-agent@0.23.4",
             Some("20.0.0"),
         );
     }

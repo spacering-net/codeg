@@ -5,6 +5,7 @@ import { EMPTY_TAG_FILTER, type TagFilter } from "@/lib/conversation-tags"
 const FOLDER_EXPANDED_KEY = "workspace:sidebar-folder-expanded"
 const FOLDER_GROUP_EXPANDED_KEY = "workspace:sidebar-folder-group-expanded"
 const SHOW_COMPLETED_KEY = "workspace:sidebar-show-completed"
+const SHOW_ASSISTANT_KEY = "workspace:sidebar-show-assistant"
 const SHOW_WORKTREES_KEY = "workspace:sidebar-show-worktrees"
 const SHOW_RECENT_KEY = "workspace:sidebar-show-recent"
 const RECENT_FILTER_KEY = "workspace:sidebar-recent-filter"
@@ -289,6 +290,29 @@ export function saveShowCompleted(value: boolean): void {
   if (typeof window === "undefined") return
   try {
     localStorage.setItem(SHOW_COMPLETED_KEY, String(value))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Whether the conversations the personal agent's assistants started
+ *  (`source === "personal_agent"`) are listed in the sidebar. Defaults to OFF:
+ *  they are the assistants' work, followed on their own page; only an
+ *  explicitly-stored "true" (the user turned it on) lists them. */
+export function loadShowAssistant(): boolean {
+  if (typeof window === "undefined") return false
+  try {
+    return localStorage.getItem(SHOW_ASSISTANT_KEY) === "true"
+  } catch {
+    /* ignore */
+  }
+  return false
+}
+
+export function saveShowAssistant(value: boolean): void {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(SHOW_ASSISTANT_KEY, String(value))
   } catch {
     /* ignore */
   }

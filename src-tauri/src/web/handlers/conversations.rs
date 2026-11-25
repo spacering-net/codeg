@@ -378,6 +378,16 @@ pub async fn list_ask_conversations(
     Ok(Json(rows))
 }
 
+pub async fn list_check_conversations(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ListAskConversationsParams>,
+) -> Result<Json<Vec<DbConversationSummary>>, AppCommandError> {
+    let rows =
+        conv_commands::list_check_conversations_core(&state.db.conn, params.parent_conversation_id)
+            .await?;
+    Ok(Json(rows))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DetachAskConversationParams {
