@@ -1,14 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import {
-  ArrowLeft,
-  FileText,
-  NotebookPen,
-  Plus,
-  Search,
-  Trash2,
-} from "lucide-react"
+import { ArrowLeft, FileText, NotebookPen, Plus, Trash2 } from "lucide-react"
 import { useFormatter, useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { getTransport } from "@/lib/transport"
@@ -25,9 +18,11 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+
+import { AuxPanelSearchToolbar } from "./aux-panel-search-toolbar"
+import { GIT_TOOLBAR_ICON_BUTTON_CLASS } from "./git-toolbar-controls"
 
 type Kind = "notes" | "plans"
 
@@ -158,21 +153,7 @@ function ProjectKnowledgePanel({
     )
   }
 
-  const tabs = (
-    <TabsList
-      variant="line"
-      className="h-9 items-stretch gap-2 px-1 group-data-horizontal/tabs:h-9"
-    >
-      <TabsTrigger value="notes" className="text-xs" disabled={busy}>
-        <NotebookPen className="size-3.5" />
-        {t("notes")}
-      </TabsTrigger>
-      <TabsTrigger value="plans" className="text-xs" disabled={busy}>
-        <FileText className="size-3.5" />
-        {t("plans")}
-      </TabsTrigger>
-    </TabsList>
-  )
+  const newEntryLabel = t(kind === "notes" ? "newNote" : "newPlan")
 
   return (
     <div className="flex h-full min-h-0 flex-col text-sm">
@@ -325,32 +306,44 @@ function ProjectKnowledgePanel({
           }}
           className="min-h-0 flex-1 gap-0"
         >
-          <div className="flex shrink-0 items-center justify-between border-b px-2 py-1">
-            {tabs}
+          <AuxPanelSearchToolbar
+            query={query}
+            onQueryChange={(value) => {
+              if (value.trim() !== keyword) setEntries([])
+              setQuery(value)
+            }}
+            placeholder={t(kind === "notes" ? "searchNotes" : "searchPlans")}
+            type="search"
+          >
+            <TabsList className="shrink-0 gap-0.5 group-data-horizontal/tabs:h-7">
+              <TabsTrigger
+                value="notes"
+                className="px-2 py-0 text-xs"
+                disabled={busy}
+              >
+                {t("notes")}
+              </TabsTrigger>
+              <TabsTrigger
+                value="plans"
+                className="px-2 py-0 text-xs"
+                disabled={busy}
+              >
+                {t("plans")}
+              </TabsTrigger>
+            </TabsList>
             <Button
-              size="sm"
-              variant="outline"
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={GIT_TOOLBAR_ICON_BUTTON_CLASS}
+              title={newEntryLabel}
+              aria-label={newEntryLabel}
               onClick={newEntry}
               disabled={busy}
             >
-              <Plus />
-              {t(kind === "notes" ? "newNote" : "newPlan")}
+              <Plus className="size-3.5" aria-hidden />
             </Button>
-          </div>
-          <div className="relative shrink-0 px-3 py-2.5">
-            <Search className="pointer-events-none absolute start-5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              type="search"
-              className="h-8 ps-8 text-xs"
-              aria-label={t(kind === "notes" ? "searchNotes" : "searchPlans")}
-              placeholder={t(kind === "notes" ? "searchNotes" : "searchPlans")}
-              value={query}
-              onChange={(event) => {
-                if (event.target.value.trim() !== keyword) setEntries([])
-                setQuery(event.target.value)
-              }}
-            />
-          </div>
+          </AuxPanelSearchToolbar>
           <TabsContent
             key={kind}
             value={kind}
