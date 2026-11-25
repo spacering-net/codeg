@@ -7185,11 +7185,17 @@ const CODEX_COMPACT_COMMAND: &str = "/compact";
 /// pairs rounds from the start). The Claude parser places the echo of its
 /// `/compact` at the divider for the same reason.
 ///
-/// Only a task that CLOSES with a compaction and no user record qualifies.
-/// codex also compacts at the start of an ordinary turn, before writing that
-/// turn's prompt, and the prompt then follows within milliseconds in the same
-/// task; that compaction belongs to the prompt's round. A task still open when
-/// the file ends is left alone for the same reason.
+/// Only a task that CLOSES with a compaction and nothing that started it
+/// qualifies. codex also compacts at the start of an ordinary turn, before
+/// writing that turn's prompt, and the prompt then follows within milliseconds
+/// in the same task; that compaction belongs to the prompt's round. A task
+/// still open when the file ends is left alone for the same reason. And a
+/// turn another agent's message started has no user record either, yet may
+/// compact when it reaches the context limit: codex 0.171 stamps every such
+/// regular turn with a `turn_attribution` (a `/compact` task carries none —
+/// 12 of 12 in the local corpus), and older versions write the message that
+/// started it as a `response_item.agent_message`, which no `/compact` task
+/// holds.
 #[derive(Default)]
 struct CompactPromptTasks {
     open: Option<CompactPromptTask>,
@@ -7201,7 +7207,9 @@ struct CompactPromptTasks {
 
 struct CompactPromptTask {
     started_at: Option<DateTime<Utc>>,
-    has_user_record: bool,
+    /// A user record, another agent's message, or codex's own attribution
+    /// of a regular turn: something other than a `/compact` started it.
+    started_by_input: bool,
     compacted: bool,
     divider: Option<String>,
 }
@@ -7217,22 +7225,27 @@ impl CompactPromptTasks {
         match (msg_type, payload_type) {
             ("event_msg", "task_started") => {
                 self.close();
+                let attributed = payload
+                    .and_then(|p| p.get("turn_attribution"))
+                    .is_some_and(|attribution| !attribution.is_null());
                 self.open = Some(CompactPromptTask {
                     started_at: parse_codex_timestamp(value),
-                    has_user_record: false,
+                    started_by_input: attributed,
                     compacted: false,
                     divider: None,
                 });
             }
             ("event_msg", "task_complete" | "turn_aborted") => self.close(),
-            ("event_msg", "user_message") => self.saw_user_record(),
+            ("event_msg", "user_message") | ("response_item", "agent_message") => {
+                self.saw_input()
+            }
             ("response_item", "message")
                 if payload
                     .and_then(|p| p.get("role"))
                     .and_then(serde_json::Value::as_str)
                     == Some("user") =>
             {
-                self.saw_user_record()
+                self.saw_input()
             }
             ("compacted", _) => {
                 if let Some(task) = self.open.as_mut() {
@@ -7243,9 +7256,9 @@ impl CompactPromptTasks {
         }
     }
 
-    fn saw_user_record(&mut self) {
+    fn saw_input(&mut self) {
         if let Some(task) = self.open.as_mut() {
-            task.has_user_record = true;
+            task.started_by_input = true;
         }
     }
 
@@ -7261,7 +7274,7 @@ impl CompactPromptTasks {
 
     fn close(&mut self) {
         if let Some(task) = self.open.take() {
-            if task.compacted && !task.has_user_record {
+            if task.compacted && !task.started_by_input {
                 self.found.push((task.divider, task.started_at));
             }
         }
@@ -18062,6 +18075,60 @@ mod tests {
             !shape.iter().any(|(_, text)| text.as_deref() == Some("/compact")),
             "{shape:?}"
         );
+    }
+
+    /// A turn another agent's message started has no user record either, and
+    /// it compacts like any turn that reaches the context limit. It is no
+    /// `/compact`: codex 0.171 marks it a regular turn with a
+    /// `turn_attribution`, and older codex shows the message that started it
+    /// as a `response_item.agent_message`. Neither shape grows a prompt, in the
+    /// detail or in the sidebar count.
+    #[test]
+    fn an_agent_started_turn_that_compacts_gets_no_compact_prompt() {
+        let attributed = serde_json::json!({
+            "type": "task_started",
+            "turn_id": "t2",
+            "turn_attribution": {"turn_id": "t2", "turn_trigger": null, "parent_turn_id": null, "initiating_agent_path": null, "root_turn_id": "t2"}
+        });
+        let agent_input = record(
+            "2026-11-25T08:58:00.710Z",
+            "response_item",
+            serde_json::json!({"type": "agent_message", "id": "amsg_1", "author": "/root/review", "recipient": "/root", "content": [{"type": "input_text", "text": "Message Type: FINAL_ANSWER"}]}),
+        );
+        for (label, started, input) in [
+            ("attributed", attributed, None),
+            ("agent-input", serde_json::json!({"type": "task_started", "turn_id": "t2"}), Some(agent_input)),
+        ] {
+            let mut records = vec![record(
+                "2026-11-25T08:52:13.000Z",
+                "session_meta",
+                serde_json::json!({"id": "compact-3", "cwd": "/w", "cli_version": "0.171.0"}),
+            )];
+            records.extend(prompted_task("52:13", "t1", "hello one", "Reply 1: done."));
+            let mut task = compact_task("58:00", "t2", true);
+            task[0] = record("2026-11-25T08:58:00.700Z", "event_msg", started);
+            if let Some(input) = input {
+                task.insert(1, input);
+            }
+            records.extend(task);
+            let content = jsonl(&records);
+            let detail = parse_rollout(label, &content, "compact-3");
+            let shape = turn_texts(&detail);
+            assert!(
+                !shape.iter().any(|(_, text)| text.as_deref() == Some("/compact")),
+                "{label}: {shape:?}"
+            );
+            assert!(
+                detail.turns.iter().any(|t| super::is_codex_compaction_divider(&t.blocks)),
+                "{label}: the divider stays"
+            );
+            // The prompt and the reply; nothing for the compaction.
+            assert_eq!(
+                summary_of(&format!("{label}-sum"), &content).message_count,
+                2,
+                "{label}"
+            );
+        }
     }
 
     /// A note steered into a running codex turn (codex-acp 2.4.0 + codex
