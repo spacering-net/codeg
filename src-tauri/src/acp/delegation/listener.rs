@@ -454,7 +454,7 @@ impl DelegationListener {
                 // `assistants: true` is the capability the companion checks
                 // before it forwards an `assistant_id` call — see
                 // `BrokerMessage::Ping`.
-                outcome: serde_json::json!({ "ok": true, "assistants": true }),
+                outcome: serde_json::json!({ "ok": true, "assistants": true, "bots": true }),
             },
             BrokerMessage::ListAssistants(req) => BrokerResponse {
                 outcome: self.process_list_assistants(req).await,
@@ -530,6 +530,9 @@ impl DelegationListener {
                     write_frame(conn, &ask_declined_response()?).await?;
                     return Ok(());
                 };
+                // Before the card exists: an assistant's engine files the
+                // question under the input it names when it records it.
+                crate::personal_agent::note_ask_for(&parent_conn_id, req.for_input.clone()).await;
                 let Some(reg) = self
                     .questions
                     .register_question(&parent_conn_id, req.questions)
@@ -609,6 +612,38 @@ impl DelegationListener {
             }
             BrokerMessage::CreateWorkTask(req) => {
                 authoring_response(self.process_create_work_task(req).await)?
+            }
+            BrokerMessage::PersonalAgent(req) if req.tool == "dispatch_wait" => {
+                // The one personal-agent tool that waits (for news of the
+                // assistant's work, a bounded while). It changes nothing —
+                // what it hands the turn is noted, never settled, until the
+                // turn's reply says it reported it — so a companion that
+                // cancels and drops the socket just ends the wait, raced
+                // against peer-close as `Status` is.
+                let wait_fut = self.process_personal_agent(req);
+                tokio::pin!(wait_fut);
+                let mut probe = [0u8; 1];
+                let outcome = tokio::select! {
+                    biased;
+                    outcome = &mut wait_fut => outcome,
+                    _ = conn.read(&mut probe) => return Ok(()),
+                };
+                BrokerResponse {
+                    outcome: serde_json::to_value(&outcome).map_err(|e| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+                    })?,
+                }
+            }
+            BrokerMessage::PersonalAgent(req) => {
+                // Bounded DB work that never waits on a turn or a person —
+                // every other personal-agent tool returns at once — so, like
+                // CreateWorkTask, no peer-close race.
+                let outcome = self.process_personal_agent(req).await;
+                BrokerResponse {
+                    outcome: serde_json::to_value(&outcome).map_err(|e| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+                    })?,
+                }
             }
             BrokerMessage::BrowserTabs(req) => {
                 // A registry read. No peer-close race for the same reason as
@@ -1240,6 +1275,22 @@ impl DelegationListener {
         self.authoring.create_work_task(ctx, req.spec).await
     }
 
+    /// Validate the token and hand the call to the personal agent's engine,
+    /// which answers only its own current connection. The socket is gated by
+    /// the token alone and `--features` is a string in the agent's MCP config,
+    /// so hiding the tools from every other companion is not enough: the
+    /// engine re-checks that the caller is the personal agent.
+    async fn process_personal_agent(
+        &self,
+        req: crate::acp::delegation::transport::BrokerPersonalAgentRequest,
+    ) -> crate::personal_agent::tools::ToolOutcome {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return crate::personal_agent::tools::ToolOutcome::refused("invalid token");
+        };
+        crate::personal_agent::tools::call(&entry.parent_connection_id, &req.tool, req.arguments)
+            .await
+    }
+
     /// The roster for the companion's schema. A bad token gets an error
     /// payload rather than a dropped connection: the companion must always get
     /// an answer from a listener that understands the message.
@@ -1247,7 +1298,11 @@ impl DelegationListener {
         if self.tokens.lookup(&req.token).await.is_none() {
             return serde_json::json!({ "assistants": [], "error": "invalid token" });
         }
-        serde_json::json!({ "assistants": self.broker.assistant_roster().await })
+        let roster = crate::acp::delegation::assistants::roster_for_companion(
+            self.broker.assistant_roster().await,
+            req.bots,
+        );
+        serde_json::json!({ "assistants": roster })
     }
 
     async fn process(&self, req: BrokerRequest) -> DelegationTaskReport {
@@ -1278,21 +1333,34 @@ impl DelegationListener {
         //    `assistant_id` wins over `agent_type` and is resolved NOW, from
         //    the database: the assistant supplies the agent, its options and
         //    its brief, frozen for this run.
-        let (agent_type, assistant) = match delegation_target_from_args(&req.input) {
-            Ok(DelegationTarget::Agent(agent_type)) => (agent_type, None),
-            Ok(DelegationTarget::Assistant(id)) => match self.broker.resolve_assistant(id).await {
-                Some((agent_type, assistant)) => (agent_type, Some(assistant)),
-                None => return self.assistant_not_found(&id.to_string()).await,
-            },
-            Err(DelegationTargetError::InvalidAssistantId(raw)) => {
+        //    `bot` (one of the owner's assistants, by uid) wins, then an old
+        //    link's `assistant_id` (the assistant converted from it); neither
+        //    found is refused, never run on a bare agent.
+        let asked = match delegation_target_from_args(&req.input) {
+            Ok(t) => t,
+            Err(DelegationTargetError::InvalidBot(raw))
+            | Err(DelegationTargetError::InvalidAssistantId(raw)) => {
                 return self.assistant_not_found(&raw).await;
             }
             Err(DelegationTargetError::InvalidAgentType(raw)) => return invalid_agent_type(&raw),
             Err(DelegationTargetError::Missing) => {
                 return report_failed(
                     "invalid_agent_type",
-                    "missing agent_type (or assistant_id, to delegate to an assistant)",
+                    "missing agent_type (or bot, to delegate to an assistant)",
                 );
+            }
+        };
+        let (agent_type, assistant) = match &asked {
+            DelegationTarget::Agent(agent_type) => (*agent_type, None),
+            DelegationTarget::Bot(uid) => match self.broker.resolve_bot(uid).await {
+                Some((agent_type, assistant)) => (agent_type, Some(assistant)),
+                None => return self.assistant_not_found(uid).await,
+            },
+            DelegationTarget::Assistant(id) => {
+                match self.broker.resolve_legacy_assistant(*id).await {
+                    Some((agent_type, assistant)) => (agent_type, Some(assistant)),
+                    None => return self.assistant_not_found(&id.to_string()).await,
+                }
             }
         };
         let task = match req.input.get("task").and_then(|v| v.as_str()) {
@@ -1323,6 +1391,7 @@ impl DelegationListener {
             requested_working_dir,
             external_handle: req.external_handle,
             assistant,
+            asked: Some(asked),
         };
         self.broker.start_delegation(delegation_req).await
     }
@@ -1588,6 +1657,7 @@ fn report_canceled(message: &str) -> DelegationTaskReport {
         blocked_on: None,
         assistant_id: None,
         assistant_name: None,
+        bot: None,
         progress: None,
     }
 }
@@ -1606,6 +1676,7 @@ fn report_failed(error_code: &str, message: &str) -> DelegationTaskReport {
         blocked_on: None,
         assistant_id: None,
         assistant_name: None,
+        bot: None,
         progress: None,
     }
 }
@@ -1625,6 +1696,7 @@ fn unknown_report(task_id: &str) -> DelegationTaskReport {
         blocked_on: None,
         assistant_id: None,
         assistant_name: None,
+        bot: None,
         progress: None,
     }
 }
@@ -2429,6 +2501,7 @@ mod tests {
                 requested_working_dir: None,
                 external_handle: None,
                 assistant: None,
+                asked: None,
             })
             .await;
         let task_id = ack.task_id.clone().expect("running task carries an id");
@@ -2584,6 +2657,7 @@ mod tests {
                         requested_working_dir: None,
                         external_handle: None,
                         assistant: None,
+                        asked: None,
                     })
                     .await
                     .task_id
@@ -2688,6 +2762,7 @@ mod tests {
                 requested_working_dir: None,
                 external_handle: None,
                 assistant: None,
+                asked: None,
             })
             .await;
         let task_id = ack.task_id.clone().unwrap();
@@ -2741,6 +2816,7 @@ mod tests {
                     requested_working_dir: None,
                     external_handle: Some("h-1".into()),
                     assistant: None,
+                    asked: None,
                 };
                 broker.handle_request(req).await
             })
@@ -3471,6 +3547,7 @@ mod tests {
                 is_secret: false,
                 allow_other: true,
             }],
+            for_input: None,
         })
     }
 
@@ -4343,43 +4420,49 @@ mod tests {
     }
     // ── Assistants ──────────────────────────────────────────────────────────
 
-    /// In-memory assistants: `delegatable` answers only for the ids listed as
-    /// usable, the way the database lookup filters deleted / disabled rows.
-    struct StubAssistants(Vec<crate::models::AssistantInfo>);
+    /// In-memory assistants: only those listed are usable, the way the
+    /// database lookup leaves deleted / hidden ones out.
+    struct StubAssistants(Vec<crate::acp::delegation::assistants::DelegatableAssistant>);
 
     #[async_trait]
     impl crate::acp::delegation::assistants::AssistantLookup for StubAssistants {
-        async fn delegatable(&self, id: i32) -> Option<crate::models::AssistantInfo> {
-            self.0.iter().find(|a| a.id == id).cloned()
+        async fn by_uid(
+            &self,
+            uid: &str,
+        ) -> Option<crate::acp::delegation::assistants::DelegatableAssistant> {
+            self.0.iter().find(|a| a.uid == uid).cloned()
         }
-        async fn roster(&self) -> Vec<crate::models::AssistantInfo> {
+        async fn by_legacy_id(
+            &self,
+            legacy_id: i32,
+        ) -> Option<crate::acp::delegation::assistants::DelegatableAssistant> {
+            self.0.iter().find(|a| a.legacy_id == Some(legacy_id)).cloned()
+        }
+        async fn roster(&self) -> Vec<crate::acp::delegation::assistants::DelegatableAssistant> {
             self.0.clone()
         }
     }
 
-    fn assistant_info(id: i32, name: &str) -> crate::models::AssistantInfo {
-        let now = chrono::Utc::now();
-        crate::models::AssistantInfo {
+    /// Assistant row `id` (uid `u-<id>`), converted from the collaboration
+    /// settings' assistant `legacy_id` when given.
+    fn assistant_info(
+        id: i32,
+        name: &str,
+        legacy_id: Option<i32>,
+    ) -> crate::acp::delegation::assistants::DelegatableAssistant {
+        crate::acp::delegation::assistants::DelegatableAssistant {
             id,
             uid: format!("u-{id}"),
             name: name.into(),
-            description: format!("{name} description"),
-            avatar: crate::models::AssistantAvatar::Monogram {
-                color: "teal".into(),
-            },
+            persona: format!("{name} description"),
             agent_type: AgentType::Codex,
             agent_options: crate::acp::delegation::types::AgentDelegationDefaults {
                 mode_id: None,
                 config_values: [("model".to_string(), "gpt-5.5".to_string())].into(),
             },
-            label_snapshot: Default::default(),
             instructions: "Cite line numbers.".into(),
-            enabled: true,
-            sort_order: id,
-            revision: 1,
-            created_at: now,
-            updated_at: now,
-            deleted_at: None,
+            avatar: crate::models::personal_agent_bots::BotAvatar::default_for("u"),
+            legacy_id,
         }
     }
 
@@ -4391,7 +4474,10 @@ mod tests {
                 mock as Arc<dyn ConnectionSpawner>,
                 Arc::new(AlwaysRootLookup) as Arc<dyn ConversationDepthLookup>,
             )
-            .with_assistants(Arc::new(StubAssistants(vec![assistant_info(3, "Reviewer")]))),
+            .with_assistants(Arc::new(StubAssistants(vec![
+                assistant_info(7, "Reviewer", Some(3)),
+                assistant_info(8, "Writer", None),
+            ]))),
         );
         broker
             .set_config(DelegationConfig {
@@ -4440,8 +4526,10 @@ mod tests {
         mock.queue_spawn(Ok("child-1".into())).await;
         mock.queue_send(Ok(42)).await;
         let (listener, _tokens) = assistant_listener(mock.clone()).await;
-        // `agent_type` is ignored once `assistant_id` is given — even a bogus
-        // one, and even with the id as a string.
+        // `agent_type` is ignored once an old link's `assistant_id` is given
+        // — even a bogus one, and even with the id as a string: it is the
+        // assistant converted from it, named by its uid (never its row id,
+        // which a caller could not pass back).
         let ack = serve(
             listener,
             call(json!({"assistant_id": "3", "agent_type": "not-an-agent", "task": "review"})),
@@ -4449,7 +4537,8 @@ mod tests {
         .await;
         assert_eq!(ack["status"], "running");
         assert_eq!(ack["agent_type"], "codex");
-        assert_eq!(ack["assistant_id"], 3);
+        assert_eq!(ack["bot"], "u-7");
+        assert!(ack.get("assistant_id").is_none(), "{ack}");
         assert_eq!(ack["assistant_name"], "Reviewer");
         let spawn = mock.spawn_args.lock().await[0].clone();
         assert_eq!(spawn.agent_type, AgentType::Codex);
@@ -4462,6 +4551,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_call_by_uid_runs_as_that_assistant_whatever_else_it_names() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("child-1".into())).await;
+        mock.queue_send(Ok(42)).await;
+        let (listener, _tokens) = assistant_listener(mock.clone()).await;
+        let ack = serve(
+            listener,
+            call(json!({"bot": "u-8", "assistant_id": 3, "agent_type": "claude_code", "task": "write"})),
+        )
+        .await;
+        assert_eq!(ack["status"], "running", "{ack}");
+        assert_eq!(ack["bot"], "u-8");
+        assert_eq!(ack["assistant_name"], "Writer");
+        assert_eq!(mock.spawn_args.lock().await[0].agent_type, AgentType::Codex);
+    }
+
+    #[tokio::test]
     async fn an_unusable_assistant_is_refused_with_the_usable_roster() {
         let mock = Arc::new(MockSpawner::new());
         let (listener, _tokens) = assistant_listener(mock.clone()).await;
@@ -4470,8 +4576,19 @@ mod tests {
         assert_eq!(refusal["error_code"], "assistant_not_found");
         let message = refusal["message"].as_str().unwrap();
         assert!(message.contains("No usable assistant 9"));
-        assert!(message.contains("3: Reviewer [Codex CLI]"));
+        assert!(message.contains("u-7: Reviewer [Codex CLI]"));
         assert!(message.contains("Do not delegate this to another agent instead"));
+
+        // A uid that is none — or not one at all — likewise, never run on the
+        // `agent_type` beside it.
+        for bot in [json!("u-99"), json!("Not A Uid"), json!(5)] {
+            let refusal = serve(
+                listener.clone(),
+                call(json!({"bot": bot, "agent_type": "codex", "task": "x"})),
+            )
+            .await;
+            assert_eq!(refusal["error_code"], "assistant_not_found", "{bot}");
+        }
 
         // An id that is not one at all is refused the same way — never run on
         // the `agent_type` the call also carried.
@@ -4485,14 +4602,14 @@ mod tests {
 
         let missing = serve(listener, call(json!({"task": "x"}))).await;
         assert_eq!(missing["error_code"], "invalid_agent_type");
-        assert!(missing["message"].as_str().unwrap().contains("assistant_id"));
+        assert!(missing["message"].as_str().unwrap().contains("bot"));
     }
 
     #[tokio::test]
     async fn ping_announces_assistant_support() {
         let (listener, _tokens) = assistant_listener(Arc::new(MockSpawner::new())).await;
         let pong = serve(listener, BrokerMessage::Ping).await;
-        assert_eq!(pong, json!({"ok": true, "assistants": true}));
+        assert_eq!(pong, json!({"ok": true, "assistants": true, "bots": true}));
     }
 
     #[tokio::test]
@@ -4502,6 +4619,7 @@ mod tests {
             listener.clone(),
             BrokerMessage::ListAssistants(BrokerListAssistantsRequest {
                 token: "tok".into(),
+                bots: true,
             }),
         )
         .await;
@@ -4509,17 +4627,37 @@ mod tests {
             roster,
             json!({"assistants": [{
                 "id": 3,
+                "uid": "u-7",
                 "name": "Reviewer",
                 "description": "Reviewer description",
                 "agent_type": "codex"
+            }, {
+                "id": 0,
+                "uid": "u-8",
+                "name": "Writer",
+                "description": "Writer description",
+                "agent_type": "codex"
             }]})
         );
+        // A companion from before uids is sent only those it can name, by
+        // the id it knows them by.
+        let old = serve(
+            listener.clone(),
+            BrokerMessage::ListAssistants(BrokerListAssistantsRequest {
+                token: "tok".into(),
+                bots: false,
+            }),
+        )
+        .await;
+        assert_eq!(old["assistants"].as_array().unwrap().len(), 1);
+        assert_eq!(old["assistants"][0]["id"], 3);
         // A bad token still gets an answer — never a dropped connection, which
         // a companion could mistake for a listener that predates the message.
         let refused = serve(
             listener,
             BrokerMessage::ListAssistants(BrokerListAssistantsRequest {
                 token: "nope".into(),
+                bots: true,
             }),
         )
         .await;

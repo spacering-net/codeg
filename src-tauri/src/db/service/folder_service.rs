@@ -341,6 +341,81 @@ pub async fn add_chat_folder(
     Ok(to_detail(model))
 }
 
+/// The paths of every folder open in codeg that is not a personal agent's —
+/// the owner's projects.
+pub async fn other_folder_paths(conn: &DatabaseConnection) -> Result<Vec<String>, DbError> {
+    Ok(folder::Entity::find()
+        .filter(folder::Column::DeletedAt.is_null())
+        .filter(folder::Column::Kind.ne(FolderKind::Personal))
+        .all(conn)
+        .await?
+        .into_iter()
+        .map(|f| f.path)
+        .collect())
+}
+
+/// The hidden folder backing the personal agent's working directory at
+/// `path`: the live row there when one exists, else a new `personal` one.
+/// Get-or-create, unlike [`add_chat_folder`]: the path is fixed and the agent
+/// comes back to it session after session.
+///
+/// A live row of another kind at the same path (the owner opened the
+/// directory as a project, say) is refused — conversations of both would end
+/// up in one folder.
+pub async fn ensure_personal_folder(
+    conn: &DatabaseConnection,
+    path: &str,
+) -> Result<FolderDetail, DbError> {
+    if let Some(existing) = folder::Entity::find()
+        .filter(folder::Column::Path.eq(path))
+        .one(conn)
+        .await?
+    {
+        if existing.deleted_at.is_none() {
+            if existing.kind != FolderKind::Personal {
+                return Err(DbError::Validation(format!(
+                    "{path} is already open in codeg as a folder; pick another directory"
+                )));
+            }
+            return Ok(to_detail(existing));
+        }
+        // A tombstone holds the path's unique key: bring it back as the
+        // personal folder rather than fail the insert below.
+        let mut active: folder::ActiveModel = existing.into();
+        let now = Utc::now();
+        active.deleted_at = Set(None);
+        active.kind = Set(FolderKind::Personal);
+        active.is_open = Set(false);
+        active.parent_id = Set(None);
+        active.group_id = Set(None);
+        active.updated_at = Set(now);
+        return Ok(to_detail(active.update(conn).await?));
+    }
+    let now = Utc::now();
+    let next_order = next_sort_order(conn).await?;
+    let active = folder::ActiveModel {
+        id: NotSet,
+        name: Set("Personal agent".to_string()),
+        path: Set(path.to_string()),
+        git_branch: Set(None),
+        default_agent_type: Set(None),
+        last_opened_at: Set(now),
+        created_at: Set(now),
+        updated_at: Set(now),
+        deleted_at: Set(None),
+        // Never in the sidebar's open list: the personal agent has its own page.
+        is_open: Set(false),
+        sort_order: Set(next_order),
+        color: Set(DEFAULT_FOLDER_COLOR.to_string()),
+        parent_id: Set(None),
+        kind: Set(FolderKind::Personal),
+        alias: Set(None),
+        group_id: Set(None),
+    };
+    let model = active.insert(conn).await?;
+    Ok(to_detail(model))
+}
+
 pub async fn update_folder_color(
     conn: &DatabaseConnection,
     folder_id: i32,
@@ -528,6 +603,55 @@ pub async fn remove_folder(conn: &DatabaseConnection, path: &str) -> Result<(), 
         active.update(conn).await?;
     }
     Ok(())
+}
+
+/// Soft-delete folder `folder_id` only while no live conversation is filed in
+/// it — the check and the write are ONE statement, so a conversation inserted
+/// concurrently either lands first (and keeps the folder) or finds the folder
+/// already retired (and revives it, see [`revive_chat_folder`]). Returns
+/// whether the folder was retired.
+pub async fn retire_folder_if_unused(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+) -> Result<bool, DbError> {
+    use crate::db::entities::conversation;
+    use sea_orm::sea_query::{Expr, Query};
+    let now = Utc::now();
+    let in_use = Query::select()
+        .expr(Expr::val(1))
+        .from(conversation::Entity)
+        .and_where(Expr::col((conversation::Entity, conversation::Column::FolderId)).eq(folder_id))
+        .and_where(Expr::col((conversation::Entity, conversation::Column::DeletedAt)).is_null())
+        .to_owned();
+    let res = folder::Entity::update_many()
+        .col_expr(folder::Column::DeletedAt, Expr::value(Some(now)))
+        .col_expr(folder::Column::UpdatedAt, Expr::value(now))
+        .filter(folder::Column::Id.eq(folder_id))
+        .filter(folder::Column::DeletedAt.is_null())
+        .filter(Expr::exists(in_use).not())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
+/// Bring a retired hidden chat folder back: something is running in its
+/// scratch directory again (an ask conversation started there while its main
+/// conversation was being moved out). Only chat folders, and a no-op for a
+/// live one. Returns whether the folder was revived.
+pub async fn revive_chat_folder(conn: &DatabaseConnection, folder_id: i32) -> Result<bool, DbError> {
+    use sea_orm::sea_query::Expr;
+    let res = folder::Entity::update_many()
+        .col_expr(
+            folder::Column::DeletedAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
+        .col_expr(folder::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(folder::Column::Id.eq(folder_id))
+        .filter(folder::Column::Kind.eq(FolderKind::Chat))
+        .filter(folder::Column::DeletedAt.is_not_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
 }
 
 /// Soft-delete a folder by id and close it — the permanent counterpart of

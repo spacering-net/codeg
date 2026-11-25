@@ -247,6 +247,12 @@
         "appliedToast": "壁纸已应用",
         "credit": "图片来源 wallhaven.cc · 仅 SFW 内容"
       }
+    },
+    "paAccent": {
+      "title": "助手强调色",
+      "description": "助手对话里卡片的强调边和卡片按钮用什么颜色；你的气泡始终用助手的颜色。",
+      "default": "默认",
+      "bot": "跟随助手颜色"
     }
   },
   "SystemSettings": {
@@ -561,6 +567,54 @@
       "zoom_reset": {
         "title": "重置缩放",
         "description": "把窗口缩放恢复为 100%"
+      },
+      "switch_assistant_1": {
+        "title": "切到第 1 个助手",
+        "description": "在助手页：打开名册上第 1 个助手（1 是主助手）"
+      },
+      "switch_assistant_2": {
+        "title": "切到第 2 个助手",
+        "description": "在助手页：打开名册上第 2 个助手（1 是主助手）"
+      },
+      "switch_assistant_3": {
+        "title": "切到第 3 个助手",
+        "description": "在助手页：打开名册上第 3 个助手（1 是主助手）"
+      },
+      "switch_assistant_4": {
+        "title": "切到第 4 个助手",
+        "description": "在助手页：打开名册上第 4 个助手（1 是主助手）"
+      },
+      "switch_assistant_5": {
+        "title": "切到第 5 个助手",
+        "description": "在助手页：打开名册上第 5 个助手（1 是主助手）"
+      },
+      "switch_assistant_6": {
+        "title": "切到第 6 个助手",
+        "description": "在助手页：打开名册上第 6 个助手（1 是主助手）"
+      },
+      "switch_assistant_7": {
+        "title": "切到第 7 个助手",
+        "description": "在助手页：打开名册上第 7 个助手（1 是主助手）"
+      },
+      "switch_assistant_8": {
+        "title": "切到第 8 个助手",
+        "description": "在助手页：打开名册上第 8 个助手（1 是主助手）"
+      },
+      "switch_assistant_9": {
+        "title": "切到第 9 个助手",
+        "description": "在助手页：打开名册上第 9 个助手（1 是主助手）"
+      },
+      "prev_assistant": {
+        "title": "上一个助手",
+        "description": "在助手页：打开名册上的上一个助手"
+      },
+      "next_assistant": {
+        "title": "下一个助手",
+        "description": "在助手页：打开名册上的下一个助手"
+      },
+      "cycle_assistant": {
+        "title": "循环切换助手",
+        "description": "在助手页：按最近打开的顺序切换助手"
       }
     }
   },
@@ -810,25 +864,24 @@
       "agentDefaultHint": "智能体默认：{value}",
       "defaultOptionLabel": "默认（{value}）",
       "overrideCount": "已自定义 {count} 项",
-      "tabAssistants": "助手配置",
+      "tabAssistants": "助手",
       "booleanOn": "开启",
       "booleanOff": "关闭",
       "modelNotSwitched": "智能体没有切换到所选模型，下面的选项可能属于另一个模型。",
       "unsavedChanges": "有未保存的修改",
       "assistants": {
-        "description": "助手是可以被 @ 的委派预设：一个智能体、选定的每一项选项，加上常驻指令。委派给助手时，就按这套设置运行。",
-        "create": "新建助手",
-        "delegationOff": "多智能体协同已关闭，助手暂时不能被委派。",
+        "create": "新建执行配置",
+        "delegationOff": "多智能体协同已关闭，执行配置暂时不能被委派。",
         "delegationOffAction": "前往「{tab}」",
         "unsavedElsewhere": "{tabs}有未保存的修改。",
         "unsavedGoBack": "返回",
-        "loadFailed": "加载助手失败：{detail}",
-        "emptyTitle": "还没有助手",
+        "loadFailed": "加载执行配置失败：{detail}",
+        "emptyTitle": "还没有执行配置",
         "empty": "新建一个，给智能体一套固定的设置和常驻指令，在任何会话里都能 @ 它。",
-        "reorderFailed": "调整助手顺序失败",
-        "saveFailed": "保存助手失败",
+        "reorderFailed": "调整执行配置顺序失败",
+        "saveFailed": "保存执行配置失败",
         "duplicated": "已创建 {name}",
-        "deleteFailed": "删除助手失败",
+        "deleteFailed": "删除执行配置失败",
         "deleteTitle": "删除 {name}？",
         "deleteDescription": "它会从设置和提及面板中消失，也不能再被委派。会话里已有的委派卡片仍会显示它。",
         "cancel": "取消",
@@ -840,19 +893,19 @@
         "more": "{name} 的更多操作",
         "agentNotInstalled": "未安装",
         "agentDisabled": "已停用",
-        "createTitle": "新建助手",
-        "editTitle": "编辑助手",
-        "editorDescription": "委派给这个助手时，就按这里设定的智能体、选项和常驻指令运行。",
+        "createTitle": "新建执行配置",
+        "editTitle": "编辑执行配置",
+        "editorDescription": "委派给这个执行配置时，就按这里设定的智能体、选项和常驻指令运行。",
         "nameLabel": "名称",
         "namePlaceholder": "例如：代码审查员",
         "descriptionLabel": "简介",
-        "descriptionPlaceholder": "什么时候用这个助手",
-        "descriptionHint": "显示在提及面板中，也会告诉发起委派的智能体什么时候该选这个助手。",
+        "descriptionPlaceholder": "什么时候用这个执行配置",
+        "descriptionHint": "显示在提及面板中，也会告诉发起委派的智能体什么时候该选这个执行配置。",
         "agentLabel": "智能体",
         "agentPlaceholder": "选择智能体",
         "agentHint": "它的每一项选项都要选定。",
         "instructionsLabel": "常驻指令",
-        "instructionsPlaceholder": "这个助手每次接任务时都要遵守的角色和工作要求",
+        "instructionsPlaceholder": "智能体每次接任务时都要遵守的角色和工作要求",
         "instructionsHint": "每次委派时随任务一起交给智能体，不会显示在子会话的消息里。",
         "charCount": "{count} / {max}",
         "save": "保存",
@@ -882,23 +935,24 @@
         "avatarUseMonogram": "使用字母",
         "avatarEmojiPlaceholder": "输入或粘贴 emoji",
         "avatarEmojiUse": "使用",
-        "avatarUpload": "上传图片",
-        "avatarUploadHint": "会居中裁成正方形，并缩小到 128×128。",
-        "avatarTooLarge": "这张图片缩小之后仍然太大，请换一张。",
-        "avatarUnreadable": "无法把这个文件读成图片。",
         "avatarColor": "颜色",
         "errors": {
-          "emptyName": "请填写助手名称。",
+          "emptyName": "请填写执行配置名称。",
           "nameTooLong": "名称最多 {max} 个字。",
-          "duplicateName": "已经有一个名为“{name}”的助手。",
+          "duplicateName": "已经有一个名为“{name}”的执行配置。",
           "descriptionTooLong": "简介最多 {max} 个字。",
           "instructionsTooLong": "常驻指令最多 {max} 个字。",
           "invalidAvatar": "这个头像不能用，请换一个。",
           "avatarTooLarge": "头像图片太大。",
-          "invalidAgentOptions": "智能体的选项没有选齐。请重新打开助手，把每一项都选上。",
-          "notFound": "这个助手已经不存在了。"
-        }
-      }
+          "invalidAgentOptions": "智能体的选项没有选齐。请重新打开执行配置，把每一项都选上。",
+          "notFound": "这个执行配置已经不存在了。"
+        },
+        "disableTitle": "停用「{name}」？",
+        "disableConfirm": "停用"
+      },
+      "assistantsMoved": "助手：在左侧栏的「个人助手」分组里管理",
+      "assistantsMovedHint": "会话里 @ 的就是你的个人助手：每位都用自己干活用的智能体和常驻指令。",
+      "assistantsMovedOpen": "打开"
     },
     "actions": {
       "dragSort": "拖拽排序",
@@ -2214,6 +2268,7 @@
       "viewOptions": "显示选项",
       "listOptions": "会话列表",
       "showCompleted": "显示已完成会话",
+      "showAssistant": "显示助手会话",
       "showWorktrees": "显示工作树分支",
       "showRecent": "显示「最近」分组",
       "tabsFollowFolder": "标签页跟随文件夹",
@@ -2286,6 +2341,12 @@
       "sectionFolders": "文件夹",
       "sectionChats": "聊天",
       "sectionRecent": "最近",
+      "timeGroupPriorities": "优先事项（进行中）",
+      "timeGroupToday": "今天",
+      "timeGroupYesterday": "昨天",
+      "timeGroupPrevious7Days": "前 7 天",
+      "timeGroupPrevious30Days": "过去 30 天",
+      "timeGroupOlder": "更早",
       "noChats": "没有聊天",
       "noRecent": "暂无最近会话",
       "showMoreRecent": "显示更多（{count}）",
@@ -2322,6 +2383,13 @@
       "noRecentFolders": "没有最近的文件夹会话",
       "noRecentCli": "没有最近从命令行启动的会话",
       "recentFilterMenuLabel": "最近显示",
+      "personalAgent": "个人助手",
+      "personalAgentUnreadBots": "{count} 个助手有未读消息",
+      "personalAgentBadge": "由个人助手派出",
+      "sectionAssistants": "个人助手",
+      "timeGroupPrioritiesTooltip": "包含当前正在执行的任务",
+      "recentGroupingModeTime": "切换为时间分组",
+      "recentGroupingModeFlat": "切换为平铺列表",
       "sectionBtw": "侧问"
     },
     "conversation": {
@@ -2337,6 +2405,10 @@
       "forkSessionSuccess": "会话分叉成功",
       "forkSessionFailed": "会话分叉失败：{error}",
       "forkSessionBusy": "分叉失败：当前有回合正在进行",
+      "editMessageRefused": "无法编辑这条消息：{reason, select, busy {智能体仍在工作} backgroundWork {仍有后台任务在运行} beforeCompaction {这条消息在会话压缩之前} clearedContext {这条消息之后会话被清空过} unavailable {智能体无法回到这条消息} other {智能体拒绝了}}",
+      "editMessageBusy": "无法编辑这条消息：有回合正在运行",
+      "editMessageFailed": "无法编辑这条消息：{error}",
+      "editMessageQueued": "无法编辑这条消息：请先发送或移除排队中的消息",
       "exportConversation": "导出会话",
       "exportImage": "图片",
       "exportMarkdown": "Markdown",
@@ -2401,6 +2473,26 @@
       "copyField": "复制{field}",
       "copiedField": "已复制{field}",
       "assistant": "助手"
+    },
+    "askConversations": {
+      "title": "提问会话",
+      "total": "共 {count} 个",
+      "untitled": "新提问",
+      "convertToRegular": "转为普通会话",
+      "convertConfirmTitle": "转为普通会话？",
+      "convertConfirmDescription": "“{title}”将与当前会话解除关联，作为普通会话列出。此操作不可撤销。",
+      "convertConfirm": "转换",
+      "cancel": "取消",
+      "converted": "已转为普通会话",
+      "convertFailed": "转为普通会话失败",
+      "drawerTitle": "提问会话",
+      "drawerDescription": "从此会话选中内容发起的提问会话",
+      "pendingFirstMessage": "问题正等待智能体就绪后发送，再操作一次将放弃它。"
+    },
+    "checkConversations": {
+      "title": "核查会话",
+      "untitled": "核查",
+      "drawerDescription": "个人助手核查此会话中消息的过程"
     },
     "conversationCard": {
       "untitledConversation": "未命名会话",
@@ -3567,6 +3659,7 @@
         "mentionGroupCommit": "提交",
         "mentionGroupSkill": "技能",
         "mentionGroupAssistant": "助手",
+        "mentionManageAssistants": "管理助手…",
         "btwDescription": "在本会话的副本里提一个侧问"
       },
       "messageQueue": {
@@ -3816,6 +3909,11 @@
         "systemMessage": "系统消息",
         "turnFailed": "本轮失败：{message}",
         "copyMessage": "复制",
+        "editMessage": "编辑消息",
+        "editMessageBusy": "等回复结束后再编辑",
+        "editMessageHint": "这条消息之后的内容会被替换",
+        "editMessageCancel": "取消",
+        "editMessageSend": "发送",
         "forkFromHere": "从此处分叉",
         "forkBusy": "当前有回合正在进行，暂不可分叉",
         "forkNotReady": "这条回复暂时还不能作为分叉点，请稍后再试",
@@ -3828,7 +3926,7 @@
         "selectionSaveAsNote": "存为便签",
         "selectionAsk": "提问",
         "selectionAskPlaceholder": "针对选中内容提问…",
-        "selectionAskSubmit": "在新建会话中提问",
+        "selectionAskClose": "关闭",
         "downloadImage": "下载图片",
         "copyImage": "复制图片",
         "copiedImage": "已复制图片",
@@ -4154,7 +4252,8 @@
           "allowAlways": "总是允许",
           "rejected": "已拒绝",
           "viaChatChannel": "来自聊天频道",
-          "byPolicy": "由运行的权限策略决定"
+          "byPolicy": "由运行的权限策略决定",
+          "byAssistant": "由助手代答"
         }
       },
       "messageNav": {
@@ -5155,7 +5254,9 @@
       "statusRunning": "运行中",
       "statusWaiting": "等待中",
       "statusError": "出错",
-      "subAgentOf": "子智能体"
+      "subAgentOf": "子智能体",
+      "askQuestion": "在问你",
+      "askPlan": "计划等你审批"
     },
     "menu": {
       "scale": "缩放",
@@ -5507,6 +5608,7 @@
     "passphrasePlaceholder": "加密口令",
     "passphraseHint": "只保存在这台设备的钥匙串里，不会上传。请在你的其他设备上输入同一个口令。",
     "assistantsRenamed": "有 {count} 个助手与本机已有的助手重名，已自动改名。",
+    "assistantsPersonaKept": "有 {count} 个助手保留了本机的人设：它们已经在本机写好了人设文件，导入不会覆盖。",
     "conflictTitle": "自动上传已暂停",
     "conflictBody": "服务器上有一份来自 {device}、{time} 的快照，本机还没有恢复过。上传会替换它，而服务器不保留旧版本。",
     "conflictRestore": "恢复它",
@@ -6588,6 +6690,8 @@
     "deliverPrBackSubmit": "推送",
     "deliverPrBackDone": "已推回 PR",
     "deliverPrBackDoneMr": "已推回合并请求",
+    "badgePersonalAgent": "个人助手派出",
+    "badgePersonalAgentExecutor": "个人助手派出 · {executor}",
     "deliverPrUncommitted": "任务工作树里还有 {count} 个未提交的文件。会先提交到 {branch}，再和其余改动一起推送。",
     "deliverPrUncommittedFiles": "要提交的文件",
     "deliverPrCommitMessageLabel": "提交信息",
@@ -10117,6 +10221,2884 @@
         "probeFailed": "内置浏览器无法确认它能通过隧道访问远端主机。请稍后重试。"
       }
     }
+  },
+  "PersonalAgent": {
+    "title": "个人助手",
+    "readOnly": "个人助手在同一数据目录的另一个 codeg 进程里运行，本页在这里只读。",
+    "viewSession": "查看底层会话",
+    "viewSessionHint": "当前会话段的完整记录，实时更新。",
+    "sessionTitle": "第 {seq} 段 · 完整记录",
+    "errors": {
+      "engineElsewhere": "个人助手在同一数据目录的另一个 codeg 进程里运行，本页在这里只读。"
+    },
+    "state": {
+      "queued": "排队中",
+      "running": "进行中",
+      "waiting_input": "等你处理",
+      "review": "待验收",
+      "completed": "已完成",
+      "failed": "失败",
+      "canceled": "已取消",
+      "interrupted": "已中断",
+      "handed_over": "已接手"
+    },
+    "mode": {
+      "task": "看板任务",
+      "chat": "聊天会话",
+      "session": "工作会话"
+    },
+    "reason": {
+      "first": "首次启动",
+      "switch": "切换大脑",
+      "option_restart": "启动设置有变",
+      "workdir": "更换工作目录",
+      "manual": "新会话",
+      "recovery": "原会话无法恢复",
+      "overflow": "上下文溢出"
+    },
+    "timeline": {
+      "loadOlder": "加载更早的记录",
+      "empty": "打个招呼，或者交给它一件事。",
+      "newMessages": "以下是新消息",
+      "openTask": "在看板中打开",
+      "openConversation": "打开会话",
+      "viewSession": "查看会话",
+      "loading": "正在载入对话…"
+    },
+    "work": {
+      "taskNotStarted": "这个任务还没开始，开始后这里会显示它的会话。",
+      "taskGone": "找不到这个任务，可能已被删除。"
+    },
+    "composer": {
+      "placeholder": "给 {name} 发消息…",
+      "placeholderBusy": "{name} 正在处理，你的消息会排在后面",
+      "readOnly": "本进程只读",
+      "ariaLabel": "发给个人助手的消息",
+      "send": "发送",
+      "queue": "加入队列",
+      "waitForUpload": "请等图片上传完成。"
+    },
+    "aux": {
+      "rename": "点击修改名称",
+      "title": "助手面板",
+      "waiting": "{count} 件等你处理"
+    },
+    "status": {
+      "thresholdMark": "{percent}% 自动压缩",
+      "elsewhere": "个人助手在另一个 codeg 进程里运行，这里显示的是数据库里的状态。",
+      "model": "模型",
+      "mode": "模式",
+      "session": "会话段",
+      "started": "开始于",
+      "connection": "连接",
+      "segmentValue": "第 {seq} 段 · {reason}",
+      "noSegment": "尚未开始",
+      "connected": "在线",
+      "disconnected": "未连接（下一条消息时重新连接）",
+      "handoff": "交接卡",
+      "handoffSize": "{size} 字",
+      "handoffTrimmed": "已裁剪",
+      "context": "上下文",
+      "usageValue": "已用 {percent}%（{source}）",
+      "usageSource": {
+        "live": "实时",
+        "transcript": "来自会话文件"
+      },
+      "usageUnknown": "用量未知：这个 agent 不报告用量",
+      "threshold": "达到 {percent}% 自动压缩",
+      "thresholdOff": "自动压缩已关闭",
+      "noCommand": "不知道这个 agent 的压缩命令",
+      "compactions": "压缩次数",
+      "compactionCounts": "codeg {auto} · 你 {manual} · agent {agent}",
+      "lastCheck": "最近一次检查",
+      "check": {
+        "below": "低于阈值",
+        "compacted": "投递前已压缩",
+        "disabled": "自动压缩已关闭",
+        "usage_unknown": "跳过：用量未知",
+        "no_command": "跳过：没有压缩命令",
+        "paused": "跳过：本段已暂停",
+        "skipped_after_attempt": "刚压缩过，直接投递"
+      },
+      "paused": "本段已暂停自动压缩",
+      "resume": "恢复",
+      "queued": "等待中",
+      "queuedValue": "{messages} 条消息 · {events} 条进展",
+      "dispatchSlots": "派出的会话",
+      "slotsValue": "运行 {running}/{limit} · 排队 {queued}",
+      "slotsUnlimited": "运行 {running} · 排队 {queued}",
+      "engine": "运行在",
+      "engineHere": "本进程",
+      "engineElsewhere": "另一个 codeg 进程",
+      "workdir": "工作目录",
+      "lastError": "最近错误",
+      "compactionStatus": {
+        "ok": "成功",
+        "failed": "失败",
+        "canceled": "已取消",
+        "running": "进行中"
+      },
+      "usageUnknownOffline": "用量未知：重新连接后读取",
+      "copyPath": "复制路径",
+      "copied": "已复制",
+      "startedValue": "开始于 {when}",
+      "pendingValue": "下一条消息起新会话：{reason}",
+      "agent": "智能体",
+      "state": "状态"
+    },
+    "items": {
+      "waitingAnswer": "等 {name} 回复：{text}",
+      "wroteToYou": "{name} 发来消息：{text}",
+      "waits": {
+        "owner": "等你",
+        "agent": "等助手",
+        "external": "进行中",
+        "time": "稍后",
+        "none": "其他"
+      },
+      "kind": {
+        "dispatch": "派活",
+        "reminder": "提醒",
+        "followup": "跟进",
+        "question": "提问",
+        "when_mentioned": "提到时提醒",
+        "message": "消息"
+      },
+      "onDone": "完成后：{text}",
+      "mention": "你提到 {words} 时提醒 · 已提醒 {times}/{max} 次 · 到 {until}"
+    },
+    "data": {
+      "inDays": "{days} 天内 {count} 次",
+      "smallSample": "样本仅 {count} 次，参考有限",
+      "rangeMenu": "时间范围",
+      "interactions": "每日交互",
+      "messages": "你的消息",
+      "replies": "回复",
+      "dispatches": "每日派活",
+      "completed": "已完成",
+      "other": "其他",
+      "failed": "失败",
+      "completedHint": "完成 {count}",
+      "tokens": "每日 token",
+      "agentTokens": "个人助手",
+      "dispatchTokens": "派出的工作",
+      "syncedAt": "token 数据截至上次用量同步：{when}",
+      "notSynced": "token 数据在用量同步后显示（见 Token 用量页）。",
+      "usageCurve": "上下文用量",
+      "noUsage": "还没有读数。",
+      "empty": "暂无数据",
+      "range": "近 {days} 天",
+      "figure": {
+        "conversation": "对话",
+        "conversationSub": "你 {owner} · 回复 {replies}",
+        "dispatches": "派活",
+        "dispatchesSub": "完成 {completed} · 失败 {failed}",
+        "completion": "完成率",
+        "completionSub": "派出去的活里",
+        "tokens": "Token",
+        "tokensSub": "助手 {agent} · 派活 {dispatch}",
+        "tokensUnsynced": "用量同步后显示"
+      },
+      "agents": "按智能体"
+    },
+    "settings": {
+      "setupStart": "与助手对话",
+      "setupAskName": "给我起个名字吧？",
+      "setupHello": "嗨，我是「{name}」！",
+      "setupRandomName": "随机起个名字",
+      "setupNames": "小橙|阿星|团子|小满|知了|米粒|阿福|小七|糯米|布丁|芝麻|可可",
+      "setupMoreAgents": "更多（{count}）",
+      "setupFewerAgents": "收起",
+      "setupNoAgents": "还没有可用的 agent：先在设置里安装一个。",
+      "setupMissing": "智能体还有 {count} 项未选",
+      "setupBrainAgent": "大脑用的智能体",
+      "name": "名称",
+      "nameHint": "它在页面和消息里显示的名字和头像；助手也知道自己叫这个名字。名字留空则用默认名称。",
+      "namePlaceholder": "个人助手",
+      "agentHint": "和你聊天、帮你想事情时用的智能体。",
+      "agentOptions": "模型和配置",
+      "switchNote": "换成另一个 agent 后，下一条消息会新起一个会话。不会续接旧会话，codeg 把时间线交接给新会话。",
+      "autoCompact": "自动压缩阈值",
+      "autoCompactHint": "上下文占用达到这个比例时，codeg 在下一条消息前先发压缩命令。0 表示关闭。应低于 agent 自己的自动压缩触发点。",
+      "compactCommand": "压缩命令",
+      "compactCommandHint": "按原样发送；留空时自动选用 agent 自己的命令（/compact、/compress…）。切换到别的 agent 时清空。",
+      "compactionNote": "压缩后还是同一个会话：下一条消息会附上状态卡，带上人设、规则和在途事项。连续两次压缩都没起作用，本段会暂停自动压缩。",
+      "concurrency": "同时运行的派出会话",
+      "concurrencyHint": "聊天会话和工作会话同时运行的上限，超出的排队。0 表示不限。看板任务沿用看板自己的上限。",
+      "handoffBudget": "交接卡预算",
+      "handoffBudgetHint": "新会话交接卡最多用多少字；裁掉的部分助手可以用工具翻阅。",
+      "skill": "内置技能",
+      "skillHint": "通过工作目录里的技能，教助手它的约定（派活方式、在途事项、记忆文件）。",
+      "saveFile": "保存文件",
+      "fileSaved": "已保存 {name}。",
+      "cancel": "取消",
+      "save": "保存",
+      "fileGroups": {
+        "persona": "人设",
+        "rules": "规则",
+        "owner": "主人",
+        "memory": "记忆",
+        "skills": "流程技能"
+      },
+      "byOwner": "你维护",
+      "byAgent": "助手维护",
+      "soulHint": "它是谁、怎么说话。由你来写，助手只在你要求时才改。每个会话开始时完整读入。",
+      "rulesHint": "它必须遵守的规则。由你来写，助手只在你要求时才改。每个会话开始时完整读入。",
+      "userHint": "助手对你的了解：角色、项目、偏好。它了解到新情况会自己更新，每个会话开始时完整读入。",
+      "memoryHint": "记忆的索引，每条一行：事实、参考资料，以及工作方式上的教训（你纠正过的、认可过的做法）。每一条是 memory/ 下自己的文件，类型写在文件开头。两者都由助手维护。每个会话开始时读入索引的前 200 行，条目在需要时才读。",
+      "entryHint": "单个条目，助手需要时才读。删除时，索引里指向它的那一行也会一并删掉。",
+      "entryType": {
+        "lesson": "教训",
+        "fact": "事实",
+        "reference": "参考"
+      },
+      "deleteEntry": "删除",
+      "confirmDelete": "确定删除",
+      "confirmDeleteHint": "删除这个条目和索引里指向它的那一行？",
+      "entryDeleted": "已删除 {name}。",
+      "saved": "已保存。",
+      "saveFailed": "保存失败",
+      "restoreDefaults": "恢复本页默认",
+      "back": "返回对话",
+      "viewTitle": "助手偏好设置",
+      "readOnly": "助手在另一个 codeg 进程里运行，这里的设置只读。",
+      "setUpFirst": "请先设置主助手。",
+      "nav": {
+        "identity": "身份与大脑",
+        "persona": "人设与记忆",
+        "notify": "通知",
+        "advanced": "高级",
+        "communication": "沟通",
+        "proactive": "主动与通知",
+        "automation": "派活与自动",
+        "about": "了解你",
+        "projects": "你的项目"
+      },
+      "pages": {
+        "communicationNote": "语气与称呼不在这一页：写在各助手的 SOUL.md 和主助手的 USER.md 里。",
+        "proactiveNote": "每个助手自己的开关（通知我、静音、隐藏）在它的「通知」页。codeg 常规设置里的通知总开关和「隐藏通知内容」（设置 → 通知）对助手同样有效。",
+        "byKind": "按类别调整",
+        "byKindHint": "每类消息能打扰你到什么程度。紧急：立刻送到；一般：挑合适的时候送；低：只进「今日」。",
+        "automationNote": "要你确认的，出一张卡，卡上就是要执行的完整内容，点了才执行。"
+      },
+      "prefs": {
+        "default": "（默认）",
+        "reply_length": {
+          "title": "回复长短",
+          "hint": "助手回复的长短。",
+          "short": "简短",
+          "medium": "适中",
+          "long": "详细"
+        },
+        "cards": {
+          "title": "用卡片回复",
+          "hint": "助手回复时用不用卡片（界面渲染）。",
+          "prefer": "尽量用卡片",
+          "decisions": "只在要你决定时用",
+          "never": "不用卡片"
+        },
+        "when_unsure": {
+          "title": "拿不准你的意思时",
+          "hint": "助手替你办事时怎么理解你的话。执行会话的提问另算。",
+          "assume": "按最合理的理解先做，写明假设",
+          "ask": "先问你"
+        },
+        "chat_changes": {
+          "title": "你在对话里要改的",
+          "hint": "你让助手改的设置。",
+          "apply": "直接改，出卡可撤销",
+          "show": "先给我看"
+        },
+        "confirm_dispatch": {
+          "title": "派活前确认",
+          "hint": "要确认时出「等你确认」卡，卡上是完整的派活内容，点了才派。",
+          "never": "不用，直接派",
+          "code": "改代码的先确认",
+          "always": "每次都确认"
+        },
+        "followups": {
+          "title": "自己派出的活的续作与重试",
+          "hint": "助手续作或重试它派出的活时。",
+          "auto": "直接做",
+          "ask": "先问我"
+        },
+        "messages": {
+          "title": "给别的助手发消息",
+          "hint": "一个助手写给另一个助手时。",
+          "auto": "直接发",
+          "ask": "先问我"
+        },
+        "loop_rounds": {
+          "title": "助手之间来回没进展时停下",
+          "hint": "同一对助手来回几轮（每轮两条消息）没有进展就停；成环立刻停。0 是不限。"
+        },
+        "automation_level": {
+          "title": "自动程度",
+          "standard": "标准",
+          "ask_more": "多问我",
+          "custom": "自定义",
+          "standardHint": "一切自动，做了都出卡告诉你。",
+          "ask_moreHint": "续作与重试、中断后的重试、给别的助手发消息、对话里的改动、改代码的派活，都先出卡，你点了才做；执行会话的提问和计划审批一律转给你。",
+          "customHint": "下面有几项是你自己调过的。",
+          "confirmTitle": "切到「{level}」？",
+          "confirmBody": "会覆盖你改过的 {count} 项。",
+          "confirm": "切换"
+        },
+        "interrupt_retry": {
+          "title": "中断后自动重试",
+          "hint": "codeg 重启打断了助手派出的活时。",
+          "auto": "自动重试",
+          "ask": "先问我"
+        },
+        "retry_rounds": {
+          "title": "同一件活最多自动重试",
+          "hint": "同一件活 codeg 自己重试几次，之后交给你决定。0 是不自动重试。"
+        },
+        "exec_questions": {
+          "title": "执行会话的提问",
+          "hint": "助手派出的会话停下来问问题时。要填密钥的问题总是交给你。",
+          "assistant": "助手代答，拿不准时转给我",
+          "owner": "一律转给我"
+        },
+        "exec_plans": {
+          "title": "执行会话的计划审批",
+          "hint": "助手派出的会话要先批准计划才往下做时。",
+          "assistant": "助手代答，拿不准时转给我",
+          "owner": "一律转给我"
+        },
+        "time_zone": {
+          "title": "时区",
+          "hint": "助手读写的每个时间——提醒、「明天上午」、告诉它的当前时间——都按这个时区。",
+          "system": "跟随系统"
+        },
+        "presence": {
+          "title": "记录在场与作息",
+          "hint": "记下你在 codeg 里有操作的分钟（保留 60 天），学你一天通常几点开始、几点结束。关掉后不再记录，作息用默认值。",
+          "on": "开",
+          "off": "关"
+        },
+        "disturb_level": {
+          "title": "打扰程度",
+          "quiet": "少打扰",
+          "standard": "标准",
+          "more": "多提醒",
+          "custom": "自定义",
+          "quietHint": "只有紧急的消息和你设的提醒会通知你，其余进「今日」；收尾只在你说时出。",
+          "standardHint": "一般的消息在你在场、没在打字时通知你；打字时等你停手再说，离开时攒到你回来。",
+          "moreHint": "一般的消息打字时也照常通知；低级的消息合并成一条，最多每 2 小时一次。",
+          "customHint": "下面有几项是你自己调过的。",
+          "confirmTitle": "切到「{level}」？",
+          "confirmBody": "会覆盖你改过的 {count} 项。",
+          "confirm": "切换"
+        },
+        "level": {
+          "urgent": "紧急",
+          "normal": "一般",
+          "low": "低"
+        },
+        "proactive": {
+          "title": "主动功能",
+          "hint": "关掉后，助手只在你说话时回应；你设的提醒照常到点。",
+          "on": "开",
+          "off": "关"
+        },
+        "urgent_via": {
+          "title": "紧急消息",
+          "hint": "你设的提醒、助手转给你的提问、助手在等你批准、会话等你超过 10 分钟。",
+          "system_attention": "系统通知，加程序坞 / 任务栏提醒",
+          "system": "只发系统通知",
+          "in_page": "只在 codeg 里"
+        },
+        "normal_via": {
+          "title": "一般消息",
+          "hint": "派出的活做完了、它回你结论了、有卡片等你处理。",
+          "system": "系统通知",
+          "in_page": "只在 codeg 里",
+          "today": "只进「今日」"
+        },
+        "low_via": {
+          "title": "低级消息",
+          "hint": "进展、助手之间的往来、按你说的改了设置。",
+          "today": "只进「今日」",
+          "digest": "合并成一条通知，最多每 2 小时一次"
+        },
+        "focus_wait": {
+          "title": "打字时",
+          "hint": "你停手几分钟后，再把一般的消息合并成一条发出。0 表示照常发。"
+        },
+        "quiet_hours": {
+          "title": "安静时段",
+          "hint": "安静时段里只送你设的提醒，其余等你回来。",
+          "auto": "作息之外（学到作息之前是 22:00～08:00）",
+          "fixed": "固定时段",
+          "none": "不设"
+        },
+        "quiet_from": {
+          "title": "安静开始",
+          "hint": "安静时段从几点开始。"
+        },
+        "quiet_to": {
+          "title": "安静结束",
+          "hint": "安静时段到几点结束。"
+        },
+        "quiet_lets": {
+          "title": "安静时段里",
+          "hint": "这段时间仍会通知你的。",
+          "reminders": "只送到期提醒",
+          "urgent": "到期提醒和紧急消息"
+        },
+        "morning": {
+          "title": "提醒里的「明天上午」",
+          "hint": "把提醒推到「明天上午」时，它几点再来。",
+          "hours": "按作息的开始时间",
+          "fixed": "固定时刻"
+        },
+        "morning_at": {
+          "title": "「明天上午」是",
+          "hint": "「明天上午」指的时刻。"
+        },
+        "projects": {
+          "title": "你的项目",
+          "hint": "助手替你留意哪些项目。",
+          "all": "所有项目",
+          "more": "{names} 等 {count} 个",
+          "none": "一个都不盯"
+        },
+        "level_reminder": {
+          "title": "提醒",
+          "hint": "你设的提醒到点了。"
+        },
+        "level_forwarded": {
+          "title": "转给你的",
+          "hint": "助手派出的会话里的提问或计划，它转给了你。"
+        },
+        "level_approval": {
+          "title": "助手等你批准",
+          "hint": "助手要你批准一步才能继续。"
+        },
+        "level_waiting": {
+          "title": "等你 10 分钟",
+          "hint": "会话或派出的活等你回答已经 10 分钟。"
+        },
+        "level_question": {
+          "title": "助手在问你",
+          "hint": "助手自己的提问，或它的选择卡。"
+        },
+        "level_confirm": {
+          "title": "等你确认的卡",
+          "hint": "你要求先确认的事，或先给你看的改动。"
+        },
+        "level_stuck": {
+          "title": "卡住了",
+          "hint": "不知道做成没有的一步，或助手之间来回没进展停下了。"
+        },
+        "level_done": {
+          "title": "活做完了",
+          "hint": "助手派出的活做完了、失败了，或等你验收。"
+        },
+        "level_reply": {
+          "title": "回复",
+          "hint": "助手回答了你让它办的事。"
+        },
+        "level_exchange": {
+          "title": "助手之间",
+          "hint": "助手之间的往来消息。"
+        },
+        "level_changed": {
+          "title": "改了设置",
+          "hint": "助手按你说的改了一项设置。"
+        },
+        "level_answered": {
+          "title": "替你回答了",
+          "hint": "派出的会话里的提问，助手替你回答了。"
+        },
+        "auto_accept": {
+          "title": "自动验收",
+          "hint": "助手派出的改代码的活进入待验收时，用它干活的智能体只读检查一遍，助手对照验收标准下结论。关掉就回到你自己验收。",
+          "on": "开",
+          "off": "关"
+        },
+        "accept_revise": {
+          "title": "验收后退回",
+          "hint": "检查之后助手要退回修改时。",
+          "auto": "自动退回",
+          "ask": "先问我（出验收卡）"
+        },
+        "accept_rounds": {
+          "title": "验收检查最多几轮",
+          "hint": "检查到这么多轮还要退回，就交给你决定。0 是不自动退回。"
+        },
+        "level_acceptance": {
+          "title": "验收",
+          "hint": "派出的活验收通过可以合并、已合并，或要你定。"
+        },
+        "level_used_up": {
+          "title": "用完轮次仍没过",
+          "hint": "退回到你允许的轮数还没过。"
+        },
+        "forge_comment": {
+          "title": "在 forge 上评论",
+          "hint": "助手在 issue 或 PR 上发评论时。",
+          "auto": "直接发",
+          "ask": "先问我（出审批卡）"
+        },
+        "issue_close": {
+          "title": "关 issue",
+          "hint": "助手在 forge 上关 issue 时。",
+          "auto": "直接关",
+          "ask": "先问我（出审批卡）"
+        },
+        "pr_merge": {
+          "title": "合并 PR",
+          "hint": "只有头提交是该合的那个版本（开着自动验收时，是验收通过的那个）、而且检查全部通过时才合；仓库的分支保护照常起作用。CNB 读不到检查、合并也锁不住头提交，所以 CNB 上的合并总是先问你。",
+          "auto": "检查全绿时直接合并",
+          "ask": "先问我（出审批卡）"
+        },
+        "ci_failure": {
+          "title": "看护的 PR 检查没过",
+          "hint": "由它的任务去修：交付它的任务还在待验收时续作，否则在这个 PR 上开一个新任务。验收通过后 codeg 把修复推上去，最多修下面设的次数。",
+          "fix": "自动修",
+          "ask": "先问我（卡片上确认）",
+          "tell": "只告诉我"
+        },
+        "pr_conflict": {
+          "title": "看护的 PR 有冲突",
+          "hint": "由它的任务把目标分支合进来并解决冲突（不是 rebase：codeg 从不往 PR 上强推）。",
+          "auto": "自动解决",
+          "ask": "先问我（卡片上确认）"
+        },
+        "review_feedback": {
+          "title": "有写权限的人的评审意见",
+          "hint": "能写这个仓库的人要求修改、或者在某一行留了意见：原文交给任务，逐条「接受 / 澄清 / 有理由地反驳」。",
+          "auto": "交回任务",
+          "ask": "先问我（卡片上确认）"
+        },
+        "outsider_comments": {
+          "title": "没有写权限的人的评论",
+          "hint": "助手看到是谁写了什么，自己判断：交给任务、告诉你，或者不理（比如机器人刷屏）。",
+          "auto": "助手判断要不要交给任务",
+          "ask": "先问我（卡片上确认）"
+        },
+        "ci_rounds": {
+          "title": "同一个 PR 最多自动修几次",
+          "hint": "检查没过和有冲突都算，跨任务累计。修到这么多次还不行，下一次失败就紧急告诉你，并写明每次改了什么。0 是不自动修。"
+        },
+        "level_forge": {
+          "title": "forge 上的动作",
+          "hint": "助手发的评论、关的 issue、合的 PR。"
+        },
+        "level_pr_ready": {
+          "title": "PR 可以合并",
+          "hint": "看护的 PR 检查全绿、平台也能合了，或者 codeg 已经自动合并了。"
+        },
+        "level_pr": {
+          "title": "PR 的其他动态",
+          "hint": "看护的 PR：检查没过或又绿了、有冲突、已合并、已关闭。"
+        },
+        "routine_dispatch": {
+          "title": "例程派活",
+          "hint": "派活型例程每次运行时派出的活。",
+          "auto": "直接派",
+          "ask": "每次先问我（等你确认卡）"
+        },
+        "level_routine": {
+          "title": "例程报告",
+          "hint": "你设的例程跑完有话要说时。"
+        },
+        "level_routine_paused": {
+          "title": "例程被暂停",
+          "hint": "连续失败 3 次，或者它干活用的智能体不能用了。"
+        },
+        "level_proposal": {
+          "title": "提议：卡在你身上的",
+          "hint": "失败没人管、待验收太久、PR 等你评审。"
+        },
+        "level_proposal_low": {
+          "title": "提议：其他",
+          "hint": "改动没提交、事项太久没动、分支落后、重复的请求。"
+        },
+        "rule_failed": {
+          "title": "失败没人管",
+          "hint": "派活或看板任务失败了一直没人处理。卡片出在派出它的助手那里。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_review": {
+          "title": "待验收太久",
+          "hint": "看板任务待验收，这一轮还没验收过。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_session": {
+          "title": "会话一直等你",
+          "hint": "任何会话等你批准或回答，而你不在那个会话里。紧急。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_pr_review": {
+          "title": "PR 等你评审",
+          "hint": "在你盯着的项目里；从 codeg 第一次看到这个请求时算起。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_uncommitted": {
+          "title": "改动没提交",
+          "hint": "项目或工作树里有没提交的改动。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_idle": {
+          "title": "事项太久没动",
+          "hint": "没收尾的事项一直没有变化。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_behind": {
+          "title": "分支落后",
+          "hint": "助手派出的任务分支落后目标分支，而且有冲突。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_repeat": {
+          "title": "重复的请求",
+          "hint": "30 天内相近的请求到第几次时，提议做成例程。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_suggest": {
+          "title": "助手的建议",
+          "hint": "关掉后助手不再提建议；带 suggest 的调用会被告知「你现在不收建议」。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_undo": {
+          "title": "撤销得多的改动",
+          "hint": "周回顾里：你撤销了不少按你的话直接做的改动时，问你要不要改成「先给我看」。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_idle_bot": {
+          "title": "闲着的助手",
+          "hint": "周回顾里：两周都没被叫醒的助手，问你要不要隐藏或删掉。",
+          "on": "开",
+          "off": "关"
+        },
+        "rule_failed_hours": {
+          "title": "失败没人管：多少小时后出卡",
+          "hint": "失败没人管：多少小时后出卡"
+        },
+        "rule_review_hours": {
+          "title": "待验收太久：多少小时后出卡",
+          "hint": "待验收太久：多少小时后出卡"
+        },
+        "rule_session_minutes": {
+          "title": "会话一直等你：多少分钟后出卡",
+          "hint": "会话一直等你：多少分钟后出卡"
+        },
+        "rule_pr_review_days": {
+          "title": "PR 等你评审：多少天后出卡",
+          "hint": "PR 等你评审：多少天后出卡"
+        },
+        "rule_uncommitted_hours": {
+          "title": "改动没提交：多少小时后出卡",
+          "hint": "改动没提交：多少小时后出卡"
+        },
+        "rule_idle_days": {
+          "title": "事项太久没动：多少天后出卡",
+          "hint": "事项太久没动：多少天后出卡"
+        },
+        "rule_repeat_count": {
+          "title": "重复的请求：第几次时提议",
+          "hint": "重复的请求：第几次时提议"
+        },
+        "brief": {
+          "title": "晨报",
+          "hint": "主助手每天汇总需要你的事、上次晨报以来的进展和今天的安排，在你当天第一次出现时送到。",
+          "on": "开",
+          "off": "关"
+        },
+        "brief_time": {
+          "title": "什么时候准备",
+          "hint": "无论哪种，都在你出现时送到。",
+          "hours": "按作息，通常开始前 15 分钟",
+          "fixed": "固定时刻"
+        },
+        "brief_at": {
+          "title": "准备时刻",
+          "hint": "晨报在这个时刻准备。"
+        },
+        "brief_needs": {
+          "title": "需要你",
+          "hint": "所有等你的事：等了多久、为什么需要你。",
+          "on": "开",
+          "off": "关"
+        },
+        "brief_night": {
+          "title": "夜里的进展",
+          "hint": "完成或失败的活、有变化的 PR、例程报告、助手替你做的事，以及昨晚做的活怎么样了。",
+          "on": "开",
+          "off": "关"
+        },
+        "brief_bots": {
+          "title": "各助手",
+          "hint": "每个助手一行：做完了什么、在做什么、卡在哪。隐藏的不列。",
+          "on": "开",
+          "off": "关"
+        },
+        "brief_schedule": {
+          "title": "今天的安排",
+          "hint": "今天还会到的提醒和例程。",
+          "on": "开",
+          "off": "关"
+        },
+        "brief_loose": {
+          "title": "没收尾的事",
+          "hint": "一周没动的事项、改动一天以上没提交的工作树、你没收尾的会话。",
+          "on": "开",
+          "off": "关"
+        },
+        "brief_yesterday": {
+          "title": "昨天的你",
+          "hint": "昨天在哪些项目、用了哪些 agent、开了几个会话。",
+          "on": "开",
+          "off": "关"
+        },
+        "brief_suggestions": {
+          "title": "建议条数",
+          "hint": "晨报里最多给几条建议，每条写明为什么；0 表示不要。"
+        },
+        "wrap": {
+          "title": "收尾",
+          "hint": "今天完成的、还在跑的、明天需要你的，以及今晚助手可以做的。随时说「今天到这」也会出。",
+          "auto": "快收工时自动出",
+          "ask": "只在我说「今天到这」时",
+          "off": "关"
+        },
+        "wrap_tonight": {
+          "title": "「今晚我可以做」",
+          "hint": "收尾时把今晚能做的活写成卡片，你点了才做；第二天晨报汇报结果。",
+          "on": "开",
+          "off": "关"
+        },
+        "keep_awake": {
+          "title": "今晚做时防睡眠",
+          "hint": "你点了「今晚做」的活在跑时，电脑不会自动睡眠；只在接着电源时生效。",
+          "on": "开",
+          "off": "关"
+        },
+        "menubar": {
+          "title": "菜单栏显示忙着的助手",
+          "hint": "助手干活时，codeg 的菜单栏图标换成它的脸，时不时眨眨眼。图标旁是有未读的助手个数；菜单里列出最近的 5 个助手。",
+          "on": "开",
+          "off": "关"
+        },
+        "dock_badge": {
+          "title": "程序坞角标",
+          "hint": "codeg 程序坞或任务栏图标上的数字：有未读的助手个数，不算隐藏的和静音的。",
+          "on": "有未读的助手个数",
+          "off": "关"
+        },
+        "history_sessions": {
+          "title": "检索全部会话",
+          "hint": "codeg 里的每个会话也能搜到：你的输入和每回合最后的回答。关掉后从索引里删掉。",
+          "on": "开",
+          "off": "关"
+        },
+        "history_tasks": {
+          "title": "检索看板任务",
+          "hint": "看板任务也能搜到：标题、要求和结果。关掉后从索引里删掉。",
+          "on": "开",
+          "off": "关"
+        },
+        "reactions": {
+          "title": "记录你对卡片的反应",
+          "hint": "codeg 记下你对每类卡片的处理方式。同一条提议卡你连续关掉 3 次，就降一级，周回顾里会告诉你。关掉后不再降级，已降的恢复原级。",
+          "on": "开",
+          "off": "关"
+        },
+        "weekly_review": {
+          "title": "周回顾",
+          "hint": "用数字回顾一周：派出的活、替你代答的、按天和按助手的用量，以及 codeg 调整了什么。",
+          "brief": "每周第一个工作日的晨报",
+          "wrap": "周五的收尾",
+          "off": "关"
+        },
+        "level_brief": {
+          "title": "晨报与收尾",
+          "hint": "晨报或收尾写好了。"
+        },
+        "flush": {
+          "title": "压缩前记要点",
+          "hint": "codeg 压缩助手的上下文之前，先让它把今天到现在的要点记进日志，值得留下的不会丢。最多两分钟，之后照常压缩。",
+          "on": "开",
+          "off": "关"
+        },
+        "level_memory": {
+          "title": "记忆更新",
+          "hint": "助手改了它的记忆、人设或规则，包括夜间整理和流程技能。"
+        },
+        "plans": {
+          "title": "计划",
+          "hint": "助手把大事拆成步骤的计划。",
+          "auto": "拆好就开始",
+          "ask": "先给我看（点了「开始」才推进）"
+        },
+        "level_plan": {
+          "title": "计划完成",
+          "hint": "一个计划的步骤全部做完。"
+        },
+        "level_plan_stuck": {
+          "title": "计划卡住",
+          "hint": "有一步失败了，而且一直没做成。"
+        },
+        "tidy": {
+          "title": "整理记忆与流程技能",
+          "hint": "每晚你停下之后，各助手整理自己的记忆、人设和规则；一串活顺利做完后，把做法写成流程技能。",
+          "auto": "自动生效，出卡可撤销",
+          "draft": "先给我看（出草稿卡，点了才生效）",
+          "off": "不做"
+        }
+      },
+      "workdir": {
+        "title": "工作目录",
+        "hint": "它存放人设、规则和记忆的地方，用 git 管着。现在是：{current}。换目录会新起一个会话，旧目录原样保留。",
+        "placeholder": "默认：在数据目录里",
+        "useDefault": "用默认",
+        "apply": "迁移",
+        "saved": "工作目录已迁移。"
+      },
+      "changed": {
+        "on": "开",
+        "off": "关",
+        "default": "默认"
+      },
+      "tabPersona": "人设与记忆",
+      "brain": "大脑",
+      "about": {
+        "followSystem": "跟随系统",
+        "followSystemZone": "跟随系统（{zone}）",
+        "zoneSearch": "搜索时区",
+        "zoneNoMatch": "没有匹配的时区。",
+        "zoneNow": "那里现在是 {time}。",
+        "hoursTitle": "codeg 看到的作息（最近 {days} 天）",
+        "workday": "工作日",
+        "restday": "周末",
+        "span": "{start}–{end}",
+        "spanOvernight": "{start}–次日 {end}",
+        "learnedFrom": "根据 {count} 天",
+        "stillLearning": "还在学，先用默认值",
+        "recordOff": "记录已关：作息用默认值。",
+        "presentNow": "你现在在 codeg 里。",
+        "lastActive": "最近一次操作：{time}。",
+        "notSeen": "codeg 启动以来还没看到你的操作。",
+        "note": "你此刻在不在仍会实时判断（有焦点的窗口、最近两分钟有操作），用来决定什么时候通知你；这个不会被记下。提醒上的「明天上午」按你一天通常开始的时间。",
+        "history": {
+          "title": "时光机",
+          "hint": "之前说过、做过的事都能搜：你在助手名字旁的搜索里搜，助手也会自己搜。各助手的对话和它们之间的消息总能搜到。",
+          "rebuild": "重建索引",
+          "rebuilt": "正在重建索引…",
+          "reading": "正在读取会话：已读 {done}/{total} 个（共 {documents} 条）。",
+          "ready": "已是最新：{total} 个会话，共 {documents} 条。",
+          "readyNoSessions": "共 {documents} 条。"
+        },
+        "setByYou": "你设的",
+        "change": "修改",
+        "backToLearned": "改回学到的（{span}）",
+        "backToLearning": "改回自动学习",
+        "start": "开始",
+        "end": "结束",
+        "save": "保存",
+        "cancel": "取消",
+        "seen": {
+          "title": "codeg 看到的",
+          "hint": "来自 codeg 里的会话（不含助手自己的），不读会话内容。设为不关注的项目，不会告诉助手，在「需要你」里排在后面。",
+          "projects": "项目（最近 7 / 30 天）",
+          "noProjects": "还没有项目。",
+          "projectCounts": "{recent} / {all} 个会话",
+          "mind": "恢复关注",
+          "dontMind": "不关注",
+          "agents": "agent 占比（最近 30 天）"
+        },
+        "reactions": {
+          "none": "最近 30 天没有卡片。",
+          "off": "不记录：卡片不会自动降级。",
+          "kind": "卡片",
+          "raised": "出现",
+          "acted": "处理",
+          "dismissed": "关掉",
+          "undone": "撤销",
+          "wait": "用时",
+          "minutes": "{n} 分钟",
+          "kinds": {
+            "proposal": "待确认的卡片",
+            "uncertain": "不确定的步骤",
+            "loop": "停下的往来",
+            "changed": "已改",
+            "choice": "选择",
+            "reminder": "提醒",
+            "acceptance": "验收",
+            "forge": "对外动作",
+            "pr": "PR",
+            "routine": "例程",
+            "rule": "提议",
+            "memory": "记忆",
+            "tidy": "整理记忆",
+            "skill": "流程技能"
+          }
+        },
+        "clear": {
+          "title": "清空学到的",
+          "hint": "忘掉记下的在场时间和自动降级；项目、agent 和卡片反应从现在起重新算。你自己设的保留。",
+          "clearedAt": "上次清空：{when}。",
+          "button": "清空…",
+          "confirmTitle": "清空 codeg 学到的？",
+          "confirmBody": "作息回到默认值，等 codeg 重新学（你设的作息保留）；自动降级的提议卡恢复原级。清空后无法恢复。",
+          "cancel": "取消",
+          "confirm": "清空"
+        }
+      },
+      "notifyPage": {
+        "notify": "通知我",
+        "notifyHint": "做完或等你时通知你",
+        "muted": "静音",
+        "mutedHint": "不弹它的系统通知；它说的照样算未读。",
+        "hidden": "隐藏",
+        "hiddenHint": "照常运行，但不通知你、不在名册里显示、不计入角标；名册底部「已隐藏 N 个」点开能看。"
+      },
+      "grade": {
+        "firstPass": "一次过 {rate}%（{pass}/{settled}）",
+        "average": "平均 {time}",
+        "minutes": "{n} 分钟",
+        "hours": "{h} 小时 {m} 分",
+        "apart": "按智能体和方式",
+        "byBot": "按助手和方式",
+        "someone": "早先的派活",
+        "unjudged": "派了 {count} 件，还没有做完的"
+      },
+      "processSkillHint": "助手自己写下的做事流程：你说要做这件事时，它照着走。你在这里改的，保存就生效；停用后不再加载。",
+      "skillOff": "已停用",
+      "skillTurnOn": "启用",
+      "skillTurnOff": "停用",
+      "skillTurnedOn": "已启用 {name}",
+      "skillTurnedOff": "已停用 {name}",
+      "deleteSkill": "删除技能",
+      "confirmDeleteSkillHint": "删除这个流程技能？它的文件夹会从工作目录里删掉。",
+      "skillDeleted": "已删除 {name}",
+      "personaUnwritten": "还没写人设。它会在自我介绍、你交代工作、每晚整理时自己补，你也可以直接写。",
+      "projects": {
+        "about": "助手会在这些项目里替你留意等你评审的 PR，第一次见面时也从这里找能帮你做的事。",
+        "scope": "盯哪些项目",
+        "all": "所有项目",
+        "allHint": "以后新加的也算。",
+        "only": "只盯选中的项目",
+        "onlyHint": "新加的项目不会自动加入，要盯就在这里勾上。",
+        "loading": "正在读你的项目…",
+        "empty": "codeg 里还没有项目。",
+        "openFolder": "打开一个项目文件夹",
+        "onForge": "在 {forge} 上",
+        "noAccount": "在 {forge} 上，还没连账号",
+        "noForge": "没有连着代码托管",
+        "connectAccount": "连接账号",
+        "note": "关闭的项目不会被盯，重新打开后自动回来。"
+      },
+      "workTitle": "干活用的智能体",
+      "workHint": "派给它的活——写代码、跑命令——都在这个智能体上做。",
+      "workSame": "和大脑一样",
+      "workOther": "另选",
+      "workSameHint": "照抄大脑的智能体和全部选项；之后两边各自独立。",
+      "workUnavailable": "{agent} 用不了（没装或被停用）：另选一个。",
+      "instructionsTitle": "干活时的常驻指令",
+      "instructionsHint": "每次它开工作会话（派活、在普通会话里被 @）时都会带上；大脑看不到。",
+      "instructionsPlaceholder": "它干活时要遵守的约定、要检查的事、要避开的坑……",
+      "instructionsTooLong": "常驻指令最多 {max} 个字。",
+      "noBrainYet": "它还没有大脑：初始化主助手后，会照抄一份主助手的大脑。"
+    },
+    "statusWord": {
+      "idle": "空闲",
+      "replying": "正在回复…",
+      "compacting": "正在整理上下文…",
+      "waiting": "等你确认",
+      "elsewhere": "在另一个进程运行（只读）",
+      "open": "查看状态",
+      "noting": "记要点…"
+    },
+    "menu": {
+      "more": "更多",
+      "showPanel": "显示辅助面板",
+      "hidePanel": "隐藏辅助面板",
+      "settings": "个人助手设置",
+      "viewSession": "查看底层会话",
+      "compact": "压缩上下文",
+      "compactHint": "现在就压缩会话的上下文",
+      "stopCompaction": "停止整理",
+      "stopReply": "停止回复",
+      "newSession": "开启新会话…",
+      "stopAll": "全部停下",
+      "stopAllHint": "停下回复、它派出的活，以及对方还没开始处理的消息",
+      "stoppedAll": "这个助手手上的事已全部停下"
+    },
+    "newSession": {
+      "title": "开启新会话？",
+      "description": "你的下一条消息会在一个新的底层会话里继续。人设、记忆、在途事项都会带过去，这里的对话照常保留。",
+      "cancel": "取消",
+      "confirm": "开启新会话",
+      "queued": "下一条消息会在新会话里继续。"
+    },
+    "time": {
+      "yesterday": "昨天 {time}"
+    },
+    "actions": {
+      "quote": "引用",
+      "copy": "复制",
+      "copySelection": "复制选中内容",
+      "copied": "已复制",
+      "copyFailed": "复制失败",
+      "stop": "停止回复",
+      "timeTook": "{time} · 用时 {took}"
+    },
+    "owner": {
+      "unread": "未读",
+      "unfinished": "未处理完",
+      "resend": "重新发送",
+      "resent": "已重新发送",
+      "merged": "已并入正在进行的回复",
+      "received": "已收到",
+      "mentioned": "你提到了「{keyword}」——提醒：{text}"
+    },
+    "quote": {
+      "you": "你",
+      "dispatch": "派活：{title}",
+      "attachment": "[附件]",
+      "noText": "（没有文字）",
+      "unavailable": "原消息不可用",
+      "jump": "跳到原消息",
+      "dismiss": "取消引用",
+      "preview": "原消息",
+      "previewHint": "被引用的消息，太早了，没有加载到这里。"
+    },
+    "step": {
+      "awaiting": "等你确认：{title}",
+      "anAction": "一项操作",
+      "thinking": "思考中…",
+      "compacting": "正在整理上下文…",
+      "plan": "更新计划",
+      "planNamed": "计划：{title}",
+      "own": {
+        "dispatch": "派出一件活",
+        "dispatch_followup": "继续一件活",
+        "dispatch_wait": "等派出的活回来",
+        "items": "整理在途事项",
+        "timeline_read": "翻看对话记录",
+        "project_list": "查看项目"
+      },
+      "kind": {
+        "read": "读取文件",
+        "edit": "修改文件",
+        "delete": "删除文件",
+        "move": "移动文件",
+        "search": "搜索",
+        "execute": "运行命令",
+        "think": "思考中…",
+        "fetch": "打开网页",
+        "plan": "更新计划",
+        "compact": "正在整理上下文…",
+        "question": "向你提问",
+        "other": "调用工具"
+      }
+    },
+    "reply": {
+      "starting": "开始处理",
+      "noteDispatched": "已派出 {count} 件活",
+      "noteContinued": "已继续 {count} 件活",
+      "noteNothing": "已处理，没有文字回复",
+      "answeredPermission": "你选择了：{option}",
+      "answeredQuestion": "你的回答：{answer}",
+      "answeredSkipped": "你跳过了这个问题",
+      "answeredPlan": {
+        "approve": "你批准了计划",
+        "request_changes": "你要求修改计划",
+        "abandon": "你放弃了计划"
+      },
+      "stopped": "已停止",
+      "errorMidway": "回复中途出错：{error}",
+      "interrupted": "这次回复没有完成：{reason}",
+      "truncated": "回复达到长度上限，被截断了",
+      "preempted": "让位给你的消息",
+      "resend": "{count, plural, one {重新发送这条消息} other {重新发送这 # 条消息}}",
+      "why": {
+        "connection": "连接断开了",
+        "overflow": "上下文满了",
+        "rejected": "agent 拒绝了",
+        "error": "出错了",
+        "restart": "codeg 重启了",
+        "unknown": "意外停止了"
+      },
+      "requestInputs": "这一回合同时在处理几件事：{list}"
+    },
+    "dispatchCard": {
+      "continue": "继续：{title}",
+      "notSent": "没发出去",
+      "more": "还有 {count} 件",
+      "doneWhen": "验收标准",
+      "check": "验收检查",
+      "checkRound": "验收检查 · 第 {round} 轮"
+    },
+    "event": {
+      "acceptanceEvidence": "验收依据",
+      "someone": "岗位助手",
+      "replacedBy": "已由「{title}」接手",
+      "more": "展开",
+      "less": "收起",
+      "source": "来源",
+      "showText": "展开原文",
+      "hideText": "收起原文",
+      "makeRoutine": "设成例程…",
+      "note": {
+        "boot": "codeg 重启了",
+        "lost": "会话连接断开了",
+        "gone": "看板上的任务被删除了"
+      },
+      "retry": {
+        "pending": "正在自动重试（第 {attempt}/{max} 次）…",
+        "retried": "已自动重试（第 {attempt}/{max} 次）",
+        "failed": "自动重试失败：{error}",
+        "asked": "已问你要不要重试",
+        "exhausted": "已经自动重试 {max} 次，交给你决定"
+      }
+    },
+    "overview": {
+      "editBrain": "更换它运行的 agent",
+      "lastCompaction": "上次整理：{when}，{outcome}{range}",
+      "runLog": "运行记录",
+      "details": "运行详情",
+      "command": "压缩命令"
+    },
+    "runLog": {
+      "empty": "还没有记录。",
+      "newSession": "在 {agent} 上换了新会话（{reason}）",
+      "pendingSwitch": "下一条消息起换新会话（{reason}）",
+      "reconnected": "重新连上了原会话",
+      "optionsChanged": "选项变了",
+      "range": " · {before}% → {after}%",
+      "by": {
+        "auto": "（自动）",
+        "owner": "（你发起的）",
+        "agent": "（agent 自己）"
+      },
+      "compaction": {
+        "ok": "上下文已整理{who}{range}",
+        "failed": "整理上下文失败{who}{range}",
+        "canceled": "整理上下文被停止{who}{range}"
+      },
+      "compactionPaused": "连续两次整理都没起作用，这个会话暂停了自动整理",
+      "overflowNewSession": "整理后上下文又溢出了，换了新会话",
+      "overflowCompact": "上下文溢出，已自动整理",
+      "turnStopped": "一次回复被停止了",
+      "turnFailed": "一次回复失败了：{error}",
+      "turnInterrupted": "一次回复没有完成",
+      "turnPreempted": "一次回复让位给了你的消息",
+      "workdirChanged": "工作目录换到了 {path}",
+      "notesFirst": "（先记了要点）"
+    },
+    "matters": {
+      "noneOpen": "现在没有在途事项。",
+      "origin": "定位到来源消息"
+    },
+    "notice": {
+      "open": "提议 · 等你确认",
+      "acted": "已照这个提议做了",
+      "dismissed": "没有采用这个提议",
+      "acting": "正在执行…",
+      "unknown": "不知道执行了没有",
+      "unknownHint": "执行到一半被打断了，codeg 不知道做成没有；没有自动再做。",
+      "followupOf": "继续「{title}」",
+      "intent": {
+        "revise": "退回修改",
+        "continue": "接着做",
+        "question": "追问",
+        "verify": "自查验证"
+      },
+      "accept": "照这个做",
+      "dismiss": "不用",
+      "again": "再执行一次",
+      "failed": "没能执行：{error}",
+      "uncertain": {
+        "open": "这一步不知道做成没有",
+        "hint": "发送这条续作时被打断了，codeg 不知道执行者收到没有；没有自动重发。",
+        "look": "查看",
+        "again": "再发一次",
+        "dismiss": "不用",
+        "acting": "正在重发…",
+        "acted": "已重发",
+        "dismissed": "不再处理",
+        "resolved": "确认已送达"
+      },
+      "loop": {
+        "open": "往来已停下 · 等你处理",
+        "noProgress": "{a} 和 {b} 来回 {count} 条都没有进展，codeg 让它们停下了。",
+        "cycle": "{a} 发给了 {b}，而 {b} 自己也在这条往来上等回信：绕成了一圈，codeg 让它停下了。",
+        "refused": "没发出去的：“{text}”",
+        "look": "查看往来",
+        "goOn": "让它们继续",
+        "mine": "我来处理",
+        "continued": "已让它们继续",
+        "takenOver": "交给你了"
+      },
+      "stopped": {
+        "this": "已停下，连同它带起的事",
+        "all": "已全部停下",
+        "work": "停下了 {count} 件活",
+        "messages": "收回了 {count} 条消息",
+        "messageTo": "给 {name}：{text}",
+        "notStopped": "对方已经在处理，没有停：",
+        "onIt": "{name} 已经在看“{text}”",
+        "stopToo": "也停下 {name} 的这一件",
+        "alsoStopped": "也停下了"
+      },
+      "confirm": {
+        "open": "等你确认",
+        "acted": "已确认，已发出",
+        "dismissed": "没发",
+        "accept": "确认，发出",
+        "dismiss": "不发了",
+        "messageTo": "发给 {name} 的消息"
+      },
+      "changed": {
+        "applied": "已按你的话改了",
+        "accepted": "已改",
+        "undone": "已撤销",
+        "dismissed": "没改",
+        "suggested": "建议改一项设置",
+        "show": "按你的话要改 · 等你确认",
+        "line": "{name} 按你的话改了",
+        "quote": "你说：「{quote}」",
+        "reason": "理由：{reason}",
+        "kept": "这几项之后又改过，没有撤回：{items}",
+        "accept": "改成这样",
+        "dismiss": "不用",
+        "undo": "撤销",
+        "seeSettings": "去设置里看",
+        "team": {
+          "of": "{name} · {field}",
+          "botField": {
+            "name": "名字",
+            "avatar": "头像",
+            "brain": "大脑",
+            "notify": "通知我",
+            "muted": "静音",
+            "hidden": "隐藏",
+            "persona": "人设",
+            "work_agent": "干活用的 agent"
+          },
+          "avatarOther": "自定义头像",
+          "empty": "（空）",
+          "nothingSet": "未设置",
+          "personaNow": "现在",
+          "personaNew": "改成"
+        },
+        "uncheckedQuote": "主助手说是你说的：「{quote}」，但这一轮你没打过"
+      },
+      "retryOf": "重试「{title}」",
+      "tonight": {
+        "open": "今晚我可以做",
+        "acted": "今晚做",
+        "dismissed": "今晚不做",
+        "accept": "今晚做",
+        "dismiss": "不用",
+        "awake": "电脑会保持唤醒到这些活结束。"
+      }
+    },
+    "exchange": {
+      "sentTo": "已发消息给 <peer></peer>",
+      "from": "消息来自 <peer></peer>",
+      "exchanged": "与 {names} 往来 {count} 条消息",
+      "state": {
+        "stopped": "已收回",
+        "looped": "因循环停下",
+        "canceled": "已取消"
+      },
+      "sheetTitle": "{a} ⇄ {b}",
+      "openPeer": "打开{name}的对话",
+      "sheetHint": "这两个助手在这条往来线上互相写的全部消息。",
+      "unavailable": "往来记录读不出来：{error}"
+    },
+    "mirror": {
+      "question": "{name} 问你",
+      "permission": "{name} 请你批准",
+      "answered": "已回答",
+      "skipped": "已跳过",
+      "withdrawn": "已不再需要",
+      "resolved": "已处理"
+    },
+    "bots": {
+      "new": "新建助手",
+      "copyName": "{name} 副本",
+      "copied": "已复制成 {name}",
+      "copy": "复制",
+      "deleteAction": "删除",
+      "face": {
+        "shape": "形状",
+        "color": "颜色",
+        "tooLarge": "图片太大了。",
+        "unreadable": "这个文件读不成图片。",
+        "shapes": {
+          "ring": "戒指",
+          "terminal": "终端",
+          "braces": "花括号",
+          "shield": "盾牌",
+          "chip": "芯片",
+          "bug": "小虫",
+          "cursor": "鼠标指针",
+          "gear": "齿轮",
+          "file": "代码文件",
+          "magnifier": "放大镜",
+          "package": "包裹",
+          "rocket": "火箭",
+          "mug": "咖啡杯"
+        },
+        "colors": {
+          "black": "黑",
+          "brown": "棕",
+          "red": "红",
+          "orange": "橙",
+          "yellow": "黄",
+          "green": "绿",
+          "teal": "青",
+          "blue": "蓝",
+          "purple": "紫",
+          "magenta": "品红",
+          "gray": "灰"
+        },
+        "edit": "编辑头像",
+        "reset": "重置",
+        "pages": {
+          "bot": "模型",
+          "make": "文本",
+          "upload": "上传"
+        },
+        "dropHint": "拖拽或粘贴图片",
+        "or": "或",
+        "pickFile": "选择本地图片",
+        "dragHint": "拖动以调整位置",
+        "zoom": "缩放",
+        "zoomIn": "放大",
+        "zoomOut": "缩小",
+        "restart": "重新开始",
+        "setAvatar": "设置头像",
+        "monogram": "名字首字",
+        "typeOne": "输入一个字或表情",
+        "useIt": "用它"
+      },
+      "create": {
+        "title": "新建助手",
+        "description": "名字和几句人设；大脑和主助手一样。",
+        "name": "名字",
+        "namePlaceholder": "比如：代码评审",
+        "cancel": "取消",
+        "create": "建好",
+        "persona": "人设",
+        "personaPlaceholder": "比如：我负责代码评审，看改动对不对、测试够不够。",
+        "personaHint": "一两句：它是谁、什么活找它。留空也行，它会先做自我介绍，之后按你交代的和它做过的活自己补。",
+        "workSameHint": "大脑用主助手的；干活照抄一份大脑，选项全都一样，之后各自独立。两样都能在它的页面里改。"
+      },
+      "roster": {
+        "title": "助手",
+        "add": "新建助手",
+        "pinned": "置顶",
+        "others": "其余",
+        "muted": "已静音",
+        "handWork": "手上的活",
+        "awaiting": "在等回信",
+        "nothing": "手上没有活",
+        "groupName": "分组名",
+        "newGroupTitle": "新分组",
+        "newGroupSave": "移过去",
+        "collapse": "折叠 {name}",
+        "expand": "展开 {name}",
+        "menu": {
+          "pin": "置顶",
+          "unpin": "取消置顶",
+          "moveTo": "移到分组",
+          "newGroup": "新分组…",
+          "noGroup": "不分组",
+          "hide": "隐藏",
+          "show": "取消隐藏",
+          "mute": "静音",
+          "unmute": "取消静音",
+          "markUnread": "标为未读",
+          "markRead": "标为已读",
+          "notifyOn": "通知我",
+          "copy": "复制…",
+          "stopAll": "全部停下",
+          "delete": "删除…",
+          "details": "查看详情"
+        },
+        "mergeable": "#{id} 可以合并了：{title}",
+        "prReady": "可以合并了：{text}",
+        "prFailed": "#{id} 检查没过：{title}",
+        "prStuck": "#{id} 有冲突：{title}",
+        "prChecks": "#{id} 等检查 {passed}/{total}",
+        "resize": "调整助手列表宽度",
+        "dropNewGroup": "拖到这里新建分组",
+        "switch": "切换助手",
+        "addShort": "新建助手",
+        "opening": "正在打开 {name}…",
+        "noBrainLine": "初始化主助手后可以和它对话",
+        "hiddenMark": "已隐藏",
+        "setUpPrimary": "初始化主助手",
+        "filter": "筛选",
+        "showHidden": "显示已隐藏的助手（{count}）"
+      },
+      "choice": {
+        "other": "其他",
+        "otherPlaceholder": "自己写…",
+        "send": "发送",
+        "answered": "你选了：{choice}",
+        "answeredOwn": "你写了：{text}",
+        "noProjects": "codeg 里还没有打开的项目。",
+        "from": {
+          "given": "照你说的",
+          "other_config": "沿用别的助手干活的配置",
+          "agent": "agent 自己的默认值"
+        },
+        "progress": "{at} / {total}",
+        "several": "可多选",
+        "back": "上一题",
+        "next": "下一题",
+        "submit": "提交",
+        "skip": "跳过",
+        "noLongerAsked": "这个问题已不再等你回答",
+        "otherWrote": "其他：{text}"
+      },
+      "changed": {
+        "applied": "建好了一个助手",
+        "show": "要建这个助手吗？（你要求这类改动先给你看）",
+        "suggested": "建议：新建一个助手",
+        "dismissed": "没建",
+        "undone": "已撤销",
+        "open": "打开",
+        "undoOne": "撤销",
+        "undoneOne": "已撤销",
+        "quote": "你说：「{quote}」",
+        "reason": "理由：{reason}",
+        "accept": "建",
+        "dismiss": "不用",
+        "undo": "撤销",
+        "undoAll": "全部撤销",
+        "uncheckedQuote": "主助手说是你说的：「{quote}」，但这一轮你没打过",
+        "persona": "人设",
+        "workFilled": "干活用 {agent}，补了 {count} 项选项",
+        "workOn": "干活用 {agent}"
+      },
+      "delete": {
+        "title": "删除 {name}？",
+        "description": "它的记忆和对话一起删掉。主助手不能删。",
+        "running": "它派出的 {count} 件活还在跑：",
+        "handOver": "交给主助手接着跟（推荐）",
+        "stop": "停下",
+        "messages": "发给它的 {count} 条消息还没回：退回给发信的助手。",
+        "listJoiner": "、",
+        "dropWorkdir": "一起删掉它的工作目录",
+        "workdirCustom": "这个目录是你选的，codeg 不动它。",
+        "cancel": "取消",
+        "confirm": "删除",
+        "plans": "它的 {count} 个计划会停下：{titles}。",
+        "planSteps": "别的计划里有 {count} 步交给了它：{steps}。轮到时，由那个计划的助手另挑一个。"
+      },
+      "edit": {
+        "name": "名称"
+      },
+      "personaUnwritten": "还没写人设"
+    },
+    "face": {
+      "idle": "闲着",
+      "thinking": "在想",
+      "working": "在做",
+      "waiting": "等你",
+      "stuck": "等你好一会儿了",
+      "done": "刚做完",
+      "failed": "出了问题",
+      "sleeping": "睡着",
+      "unread": "有未读",
+      "stale": "状态暂时拿不到",
+      "label": "{name}，{state}",
+      "labelUnread": "{name}，{state}，有未读"
+    },
+    "activity": {
+      "think0": "正在仔细想",
+      "think1": "正在琢磨",
+      "think2": "正在理思路",
+      "work0": "正在推进",
+      "work1": "正在处理",
+      "work2": "正在搞定",
+      "work3": "正在一点点推进",
+      "work4": "正在完成",
+      "reply": "正在写回复",
+      "read": "正在读 {target}",
+      "readSome": "正在读文件",
+      "edit": "正在改 {target}",
+      "editSome": "正在改文件",
+      "search": "正在找“{target}”",
+      "searchSome": "正在找东西",
+      "fetch": "正在读资料",
+      "execute": "正在跑几条命令",
+      "test": "正在跑测试",
+      "wait": "正在等结果",
+      "commit": "正在提交",
+      "plan": "正在拟计划",
+      "compact": "正在整理上下文",
+      "dispatch": "正在交给 {target}",
+      "dispatchSome": "正在派活",
+      "followup": "正在跟进 #{id}",
+      "followupSome": "正在跟进",
+      "message": "正在问 {target}",
+      "messageSome": "正在问别的助手",
+      "awaitingReply": "等 {name} 回信",
+      "needsAnswer": "需要你回答",
+      "needsApproval": "需要你批准",
+      "workPrefix": "#{id} {title}：{activity}",
+      "notes": "压缩前记要点"
+    },
+    "did": {
+      "edit": "改了 {target} +{added} −{removed}",
+      "editPlain": "改了 {target}",
+      "editSome": "改了文件",
+      "test": "跑完测试 {passed} 通过",
+      "testFailed": "跑完测试 {passed} 通过，{failed} 失败",
+      "testExit": "跑完测试，退出码 {code}",
+      "testBad": "跑完测试，没通过",
+      "testPlain": "跑完测试",
+      "execute": "跑了 {target}",
+      "executeExit": "跑了 {target}，退出码 {code}",
+      "executeBad": "跑了 {target}，失败了",
+      "executeSome": "跑了一条命令",
+      "executeSomeBad": "跑了一条命令，失败了",
+      "read": "读了 {target}",
+      "readSome": "读了文件",
+      "search": "找了“{target}”",
+      "searchHits": "找了“{target}”，{hits} 处",
+      "searchSome": "找了东西",
+      "commit": "提交了：{target}",
+      "commitPlain": "提交了",
+      "dispatch": "交给了 {target}：#{id}",
+      "dispatchPlain": "派出了 #{id}",
+      "dispatchSome": "派出了活",
+      "followup": "跟进了 #{id}",
+      "followupSome": "跟进了",
+      "message": "已发消息给 {target}",
+      "messageSome": "发了消息",
+      "think": "想了想",
+      "reply": "写了回复",
+      "plan": "拟了计划",
+      "compact": "整理了上下文",
+      "fetch": "读了资料",
+      "question": "问了你：{target}",
+      "questionSome": "问了你",
+      "other": "{target}",
+      "otherPlain": "做了一步",
+      "notes": "记下了今天的要点"
+    },
+    "needs": {
+      "answer": "需要你回答：{text}",
+      "approval": "需要你批准：{text}",
+      "you": "需要你处理：{text}",
+      "answerPlain": "需要你回答",
+      "approvalPlain": "需要你批准",
+      "youPlain": "需要你处理",
+      "acceptance": "验收要你定：{text}",
+      "acceptancePlain": "验收要你定"
+    },
+    "statusLine": {
+      "steps": "这一回合的步骤",
+      "loading": "正在读步骤…",
+      "empty": "还没有步骤",
+      "fold": "收起步骤",
+      "openWork": "打开这件活"
+    },
+    "sending": {
+      "waking": "正在唤醒 {name}…",
+      "afterTurn": "等这一回合说完",
+      "yielding": "正在让出"
+    },
+    "pills": {
+      "attention": "{count} 项需要你关注",
+      "dismissAttention": "先不提示，有新的需要关注时再显示",
+      "newMessages": "新消息",
+      "toBottom": "回到最新"
+    },
+    "detail": {
+      "title": "详情",
+      "close": "收起详情",
+      "tabs": {
+        "activity": "动态",
+        "output": "产出",
+        "workspace": "工作区",
+        "stats": "统计"
+      },
+      "sections": {
+        "today": "今日",
+        "matters": "事项",
+        "data": "数据",
+        "routines": "例程"
+      },
+      "notify": "通知我",
+      "notifyHint": "做完或等你时通知你",
+      "item": {
+        "done": "完成",
+        "later": "稍后",
+        "drop": "放弃",
+        "in15m": "15 分钟后",
+        "in1h": "1 小时后",
+        "tomorrow": "明天上午",
+        "untimed": "不定时（等时间）",
+        "act": "到点去做"
+      },
+      "output": {
+        "allTitle": "全部产出",
+        "clear": "显示全部",
+        "tasksSummary": "最近 {count} 个任务",
+        "outcomeDone": "已完成",
+        "outcomeFailed": "失败",
+        "outcomeClosed": "已关闭",
+        "outcomeOpen": "待处理",
+        "files": "{count} 个文件",
+        "moreFiles": "另有 {count} 个文件",
+        "all": "全部",
+        "tasks": "任务",
+        "reports": "报告",
+        "docs": "文档",
+        "empty": "还没有产出",
+        "doc": "文档"
+      },
+      "workspace": {
+        "empty": "现在没有在跑的活",
+        "open": "打开",
+        "emptyHint": "派出去的活在跑时，这里实时显示它的会话。",
+        "whose": "{name} 的工作区"
+      },
+      "notifyOn": "已开启",
+      "notifyOff": "已关闭"
+    },
+    "ladder": {
+      "working": "在做",
+      "waiting_you": "等你处理",
+      "mergeable": "可合并",
+      "merging": "正在合并",
+      "pr_open": "已提 PR",
+      "merged": "已合并",
+      "done": "已完成",
+      "failed": "失败",
+      "paused": "暂停",
+      "canceled": "已取消",
+      "handed_over": "已接手",
+      "checking": "检查中",
+      "waiting_checks": "等检查",
+      "waiting_checks_n": "等检查 {passed}/{total}",
+      "checks_failed": "检查没过",
+      "stuck": "卡住",
+      "pr_closed": "PR 已关闭"
+    },
+    "taskCard": {
+      "diff": "<add>+{added}</add> <del>−{removed}</del>，{files} 个文件",
+      "diffOnly": "<add>+{added}</add> <del>−{removed}</del>",
+      "viewPr": "查看 PR",
+      "openSession": "打开会话",
+      "stop": "停止",
+      "prOpened": "已提 PR",
+      "prNotTracked": "codeg 没在看护它",
+      "pastStopping": "已经做完或正在合并，停不了了",
+      "prChecks": "检查 {passed}/{total} 通过",
+      "prChecksFailed": "{n} 个没过",
+      "prChecksRunning": "{n} 个在跑",
+      "prChecksUnknown": "检查状态未知",
+      "prNoChecks": "没有配置检查",
+      "prWaitsOnForge": "平台还不让合（{state}）",
+      "prNoConflict": "没有冲突",
+      "prHead": "头提交 {head}",
+      "prNotWatched": "已不再看护",
+      "prStale": "PR 状态可能已过时（上次读到 {time}）"
+    },
+    "ask": {
+      "heading": {
+        "question": "干活时遇到一个问题",
+        "plan": "干活时要你批准计划"
+      },
+      "someone": "执行者",
+      "mirror": "来自 {name} 替你接手的活",
+      "state": {
+        "asking": "{name} 正在代你回答…",
+        "forwarded": "等你回答",
+        "submitting": "正在提交…",
+        "withdrawn": "已撤回，不再等回答"
+      },
+      "why": {
+        "assistant": "{name} 拿不准，转给了你",
+        "settings": "你的设置让这类问题交给你",
+        "secret": "这是要填密钥的问题",
+        "no_brain": "没有可代答的助手",
+        "turn_ended": "{name} 这一回合结束了，没有回答",
+        "turn_failed": "{name} 这一回合没跑完就失败了",
+        "timeout": "{name} 10 分钟没有回答",
+        "handed_over": "你接手了这件活"
+      },
+      "suggestion": "{name} 倾向于：{suggestion}",
+      "reason": "依据：{reason}",
+      "openSession": "打开会话",
+      "answer": {
+        "skipped": "略过",
+        "empty": "没有回答",
+        "approved": "批准了计划",
+        "revised": "要求修改计划",
+        "revisedWith": "要求修改：{feedback}",
+        "abandoned": "放弃了计划",
+        "approvedAs": "批准了计划（{option}）",
+        "sentBackAs": "退回了计划（{option}）"
+      },
+      "by": {
+        "assistant": "{name} 代答：{answer}",
+        "ownerSession": "你在会话里答了：{answer}",
+        "ownerPage": "你在助手页答了：{answer}",
+        "owner": "你答了：{answer}",
+        "channel": "从聊天频道答了：{answer}",
+        "policy": "由运行的策略答了：{answer}",
+        "someone": "已回答：{answer}"
+      },
+      "toast": {
+        "already": "已经答过了，卡上记着采用的是谁的答案",
+        "withdrawn": "它已经不再等回答了"
+      },
+      "answeredForYou": "助手代答 {count} 次"
+    },
+    "card": {
+      "stripped": "已移除自动触发的动作",
+      "cancel": "取消",
+      "confirm": "确定",
+      "notFound": "找不到了",
+      "replyAssistant": "回复助手",
+      "reply": {
+        "title": "发送这条消息？",
+        "description": "卡片上的「{label}」会以你的名义发出这段话：",
+        "send": "发送",
+        "toComposer": "放进输入框"
+      },
+      "drop": {
+        "title": "放弃这件事？",
+        "description": "「{summary}」会从事项里移除。",
+        "confirm": "放弃"
+      }
+    },
+    "due": {
+      "tomorrow": "明天 {time}",
+      "yesterday": "昨天 {time}",
+      "dayTime": "{day} {time}",
+      "duration": {
+        "minutes": "{n} 分钟",
+        "hours": "{n} 小时",
+        "hoursMinutes": "{h} 小时 {m} 分钟",
+        "days": "{n} 天"
+      },
+      "repeat": {
+        "daily": "每天 {time}",
+        "weekdays": "每个工作日 {time}",
+        "weekly": "每{days} {time}",
+        "monthly": "每月 {day} 日 {time}",
+        "until": "{rule}，截至 {date}",
+        "sep": "、"
+      },
+      "dueAt": "{when} 到期",
+      "overdue": "已过期 · {when} 到期",
+      "reminded": "已提醒 · {when} 到期",
+      "late": "晚了 {duration}",
+      "missed": "错过了 {count} 次"
+    },
+    "reminder": {
+      "title": "提醒",
+      "done": "完成",
+      "snooze15m": "15 分钟后",
+      "snooze1h": "1 小时后",
+      "snoozeTomorrow": "明天上午",
+      "handOver": "交给助手",
+      "handOverText": "处理提醒 #{id}：{summary}",
+      "state": {
+        "done": "已完成",
+        "snoozed": "推迟到 {when}",
+        "handed": "已交给助手",
+        "dropped": "已放弃",
+        "expired": "已过期（有了新的一次）",
+        "closed": "已处理",
+        "woke": "到点了，已叫醒助手去做"
+      }
+    },
+    "notify": {
+      "open": "打开"
+    },
+    "feed": {
+      "groups": {
+        "needs": "等你",
+        "watching": "进行中",
+        "next": "接下来",
+        "done": "今天完成"
+      },
+      "empty": "没有要你做的，也没有在跑的。",
+      "failed": "暂时读不到动态。",
+      "handed": "交给{name}了",
+      "checking": "验收中 · 第 {round} 轮",
+      "queued": "已排队合并",
+      "waitsAgent": "等{name}处理",
+      "routineRunning": "在跑",
+      "routineLast": "上次：{outcome}",
+      "fold": "收起详情",
+      "unfold": "展开详情",
+      "viewReminder": "查看提醒",
+      "viewCheck": "查看验收会话",
+      "openTask": "打开任务",
+      "routineDeleted": "这个例程已经删除了。"
+    },
+    "today": {
+      "title": "今日",
+      "empty": "今天没有需要你的事",
+      "yours": "你自己的",
+      "open": "打开",
+      "undo": "撤销",
+      "more": "再显示 {count} 项",
+      "groups": {
+        "needs": "需要你",
+        "watching": "在盯",
+        "schedule": "今天的安排",
+        "done": "今天完成"
+      },
+      "kind": {
+        "approval": "等你批准",
+        "forwarded": "在问你",
+        "question": "在问你",
+        "confirm": "等你确认",
+        "stuck": "不知道做成没有",
+        "waiting": "派出的活在等你",
+        "proposal": "提议",
+        "failed": "失败",
+        "reminder": "提醒",
+        "finished": "已完成",
+        "checked": "核对消息",
+        "checkCanceled": "核对已停止",
+        "canceled": "已停止",
+        "answered": "替你答了",
+        "changed": "替你改了",
+        "undone": "改过，已撤销",
+        "acceptance": "验收要你定",
+        "forge": "在 forge 上做的",
+        "pr_ready": "可以合并",
+        "pr_merged": "PR 已合并",
+        "pr": "看护的 PR",
+        "memory": "记住了",
+        "memoryUndone": "记住了，又撤销了",
+        "plan_stuck": "计划卡住",
+        "routine_paused": "例程已暂停",
+        "used_up": "退回几轮仍不对"
+      },
+      "reason": {
+        "failed": "失败",
+        "accepted_queued": "验收已通过，排队合并中",
+        "merge_queued": "排队合并中",
+        "accepted_unchecked": "未核实就通过了，请你看一下",
+        "needs_delivery": "验收已通过，待提交 PR",
+        "merge_ready": "验收已通过，可以合并",
+        "review": "等你审阅",
+        "looking": "没做成，{name}在看"
+      },
+      "go": {
+        "merge": "去合并",
+        "board": "去看板",
+        "review": "去审阅"
+      },
+      "session": {
+        "permission": "等你批准",
+        "question": "在问你",
+        "plan": "等你批准计划"
+      },
+      "task": {
+        "awaiting_input": "等你输入",
+        "review": "待验收",
+        "failed": "失败",
+        "preparing": "准备中",
+        "running": "进行中",
+        "merging": "合并中",
+        "checking": "检查中"
+      },
+      "dispatch": {
+        "queued": "排队中",
+        "running": "进行中",
+        "waiting_input": "助手正在替你答",
+        "review": "待验收",
+        "handed_over": "已转交"
+      },
+      "item": {
+        "notify": "{time} 提醒",
+        "act": "{time} 去做"
+      },
+      "pr": {
+        "waiting_checks": "等检查",
+        "checks_failed": "检查没过",
+        "conflict": "有冲突",
+        "mergeable": "可以合并",
+        "no_conflict": "没有冲突，检查未知",
+        "open": "PR 进行中",
+        "merged": "已合并",
+        "closed": "已关闭"
+      },
+      "routine": {
+        "at": "{time} 例程",
+        "running": "例程在跑",
+        "asked": "例程等你确认",
+        "reported": "例程报告",
+        "silent": "例程：没有变化"
+      },
+      "preparingBrief": "正在准备晨报…",
+      "preparingWrap": "正在准备收尾…",
+      "tidy": {
+        "acted": "整理了记忆",
+        "draft": "整理草稿等你看",
+        "applied": "整理已应用",
+        "undone": "整理已撤销",
+        "discarded": "整理没用",
+        "stale": "整理草稿已过时"
+      },
+      "skill": {
+        "acted": "流程技能",
+        "draft": "流程技能草稿等你看",
+        "applied": "流程技能已安装",
+        "undone": "流程技能改动已撤销",
+        "discarded": "流程技能没装",
+        "stale": "流程技能草稿已过时",
+        "deleted": "流程技能已删除"
+      },
+      "apply": "应用",
+      "install": "安装",
+      "notThis": "不用"
+    },
+    "meet": {
+      "name": {
+        "heading": "认识一下",
+        "call": "我该怎么称呼你？",
+        "name": "给我起个名字？",
+        "systemUser": "你在这台电脑上的用户名",
+        "currentName": "我现在的名字",
+        "answered": "称呼你「{call}」，我叫「{name}」",
+        "answeredName": "我叫「{name}」",
+        "skipped": "先跳过了称呼"
+      },
+      "connect": {
+        "heading": "马上帮你做一件事",
+        "about": "你的项目我都会帮你留意，有 PR 等你评审会告诉你。",
+        "aboutOnly": "你选的项目我都会帮你留意，有 PR 等你评审会告诉你。",
+        "noProjects": "codeg 里还没有项目，打开一个之后我就能帮你留意。",
+        "ask": "要不要我现在就去找一件能帮你做的事？",
+        "settingsHint": "盯哪些项目，随时可以在设置里改。",
+        "settings": "设置",
+        "go": "现在就找",
+        "notNow": "先不用",
+        "openFolder": "打开一个项目文件夹",
+        "accountHint": "连上 {forge} 账号，我还能看 PR、CI 和议题。",
+        "connectAccount": "连接账号",
+        "went": "好，去找了。",
+        "skipped": "先不找了。之后随时叫我。",
+        "connected": "连上了：{projects}",
+        "joiner": "、"
+      },
+      "starter": {
+        "heading": "我能先帮你做这件",
+        "lookingHeading": "马上找一件事",
+        "noneHeading": "现在没有要你管的",
+        "looking": "正在找一件能马上帮你做的事…",
+        "none": "现在没有红的，我会替你盯着。",
+        "noMore": "现在没有别的了，我会替你盯着。",
+        "handed": "交给我了：{what}",
+        "dismissed": "先不用：{what}",
+        "handIt": "交给我",
+        "next": "换一件",
+        "notNow": "先不用",
+        "lead": {
+          "pr_ci": "PR #{number} 的 CI 红了（{checks}）— {project}：{title}",
+          "review": "PR #{number} 在等你评审 — {project}：{title}",
+          "issue": "议题 #{number} 分给了你 — {project}：{title}",
+          "task": "看板任务「{title}」失败了，还没人管",
+          "worktree": "工作树 {title} 有改动一天多没提交"
+        },
+        "hand": {
+          "pr_ci": "处理 {project} 的 PR #{number} 的 CI：{url}",
+          "review": "评审 {project} 的 PR #{number}：{url}",
+          "issue": "处理 {project} 的议题 #{number}：{url}",
+          "task": "处理失败的看板任务「{title}」（#{task}）",
+          "worktree": "看看工作树 {path} 里没提交的改动"
+        }
+      },
+      "promises": {
+        "heading": "我会主动做这些",
+        "intro": "你希望我多主动？下面这些默认都开着，想自己来的就关掉。",
+        "items": {
+          "proactive": {
+            "title": "有事需要你时告诉你",
+            "hint": "提问、审批、做完的活和你设的提醒，一到就说。"
+          },
+          "brief": {
+            "title": "每天早上给你写晨报",
+            "hint": "你一天开始时：等你的事、夜里跑完的活、今天的安排。"
+          },
+          "wrap": {
+            "title": "帮你收尾一天",
+            "hint": "你收工前：做完了什么、还剩什么、今晚可以接着跑什么。"
+          },
+          "exec_questions": {
+            "title": "替你回答派出去的会话的提问",
+            "hint": "能答的我先答，拿不准的转给你。"
+          },
+          "exec_plans": {
+            "title": "替你审批派出去的会话的计划",
+            "hint": "我对照你的要求看计划，说不清的转给你。"
+          },
+          "followups": {
+            "title": "自己跟进和重试派出去的活",
+            "hint": "派出去的活需要再来一轮时，我直接接着做。"
+          },
+          "ci_failure": {
+            "title": "看护的 PR 检查没过时自动修",
+            "hint": "检查失败或有冲突的 PR，由它的任务一轮一轮修好。"
+          },
+          "interrupt_retry": {
+            "title": "重启打断的活自动重试",
+            "hint": "codeg 停下时正在跑的活，回来后重新开始。"
+          },
+          "presence": {
+            "title": "学你的作息",
+            "hint": "按你在 codeg 里的时间，在合适的时候找你。"
+          },
+          "auto_accept": {
+            "title": "检查并验收派出去的改代码的活",
+            "hint": "用干活的智能体只读检查一遍，我对照你的要求下结论。"
+          }
+        },
+        "prefs": "调整偏好",
+        "pet": "把我放到桌面上",
+        "petFailed": "打不开桌面伙伴",
+        "done": "完成",
+        "folded": "我会主动做这些 · 打扰程度：{level}",
+        "collapse": "收起",
+        "list": "具体做哪些：开着 {on} 项，共 {total} 项",
+        "listShow": "展开",
+        "listHide": "收起",
+        "unavailable": "要在助手运行的那一端改。"
+      }
+    },
+    "acceptance": {
+      "title": "验收 · 第 {round} 轮",
+      "titleMax": "验收 · 第 {round} 轮（最多 {max} 轮）",
+      "check": "检查：",
+      "verdict": {
+        "pass": "通过",
+        "fail": "不通过",
+        "unverified": "未能验证"
+      },
+      "unchecked": "未经独立检查",
+      "notVerified": "未经验证",
+      "decision": {
+        "accept": "通过",
+        "revise": "退回修改",
+        "ask_owner": "问你"
+      },
+      "assistant": "助手：{decision}",
+      "assistantWhy": "助手：{decision}，理由：{reason}",
+      "fallback": "助手没给结论，按检查结论处理",
+      "owner": "你的决定：{decision}",
+      "result": "结果",
+      "why": "理由",
+      "by": {
+        "owner": "你决定的",
+        "assistant": "助手决定的"
+      },
+      "question": "问你：{question}",
+      "usedUp": "已经检查了 {count} 轮，到了你允许的轮数",
+      "wouldSend": "退回时会发出的修改意见",
+      "revise": "按卡上的意见退回",
+      "accept": "算通过",
+      "recheck": "重新检查",
+      "openTask": "打开任务",
+      "accepted": "已通过",
+      "revised": "已退回修改",
+      "void": "检查期间工作树被改动，这一轮作废",
+      "changed": "工作树在检查后被改动，验收已失效",
+      "changedAfterAccept": "验收之后工作树变了",
+      "superseded": "已重新检查",
+      "stale": "已失效，没有执行",
+      "merged": "已合并 {commit}",
+      "delivered": "已交付，头提交 {head}",
+      "history": "之前几轮",
+      "historyRevised": "第 {round} 轮：退回「{message}」",
+      "historyAccepted": "第 {round} 轮：通过",
+      "historyAsked": "第 {round} 轮：问你",
+      "historyChanged": "第 {round} 轮：通过后工作树变了",
+      "historyOpen": "第 {round} 轮：进行中"
+    },
+    "forge": {
+      "heading": {
+        "approve": "等你批准",
+        "suggested": "建议，等你批准",
+        "cnb": "CNB 上的合并：总是由你批准",
+        "acting": "正在做…",
+        "done": "已在 {provider} 上完成",
+        "refused": "没有做",
+        "notMerged": "没有合并",
+        "failed": "没有做成",
+        "unknown": "不知道做成没有",
+        "not_run": "没有执行：情况变了",
+        "dismissed": "没有做"
+      },
+      "title": {
+        "comment": "在 {target} 上评论",
+        "close": "关闭 {target}",
+        "merge": "合并 {target}"
+      },
+      "merge": {
+        "head": "头提交 {head}",
+        "method": {
+          "merge": "合并提交",
+          "squash": "压缩合并",
+          "rebase": "变基合并"
+        },
+        "checks": {
+          "green": "检查：全部通过",
+          "none": "检查：没有配置",
+          "unknown": "检查：未知（CNB 读不到检查）"
+        },
+        "version": {
+          "accepted": "验收通过的那个版本",
+          "green": "这个头提交的检查都通过了"
+        },
+        "unguaranteed": "版本未保证（这个平台的合并接口不带头提交）",
+        "commit": "合并提交 {commit}"
+      },
+      "code": {
+        "merged": "已经合并了",
+        "closed": "已经关闭",
+        "draft": "还是草稿",
+        "after_acceptance": "PR 有验收之后的新提交",
+        "not_accepted": "验收还没有通过",
+        "not_delivered": "验收通过的版本不是 codeg 交付到这个 PR 的",
+        "checks_unreadable": "codeg 读不到它的检查",
+        "checks_partial": "有些检查读不到",
+        "checks_running": "检查还在跑",
+        "checks_failing": "有检查没通过"
+      },
+      "notRun": "没有执行：{error}",
+      "failed": "平台拒绝了：{error}",
+      "unknown": "平台没有回应：{error}。codeg 不会自己再做一次；再做之前会先去平台上核对。",
+      "reason": "理由：{reason}",
+      "approve": "批准",
+      "decline": "拒绝",
+      "look": "查看",
+      "again": "再做一次",
+      "letBe": "不用了",
+      "open": "打开"
+    },
+    "pr": {
+      "event": {
+        "checks_failed": "检查没过",
+        "checks_passed": "检查又绿了",
+        "conflict": "和目标分支有冲突",
+        "mergeable": "可以合并了",
+        "no_conflict": "没有冲突，检查状态未知",
+        "merged": "已合并",
+        "closed": "没合并就关了",
+        "feedback": "评审意见"
+      },
+      "head": "头提交 {head}",
+      "checks": {
+        "unknown": "检查状态未知",
+        "none": "没有配置检查",
+        "passed": "检查 {passed}/{total} 通过",
+        "running": "{n} 个在跑",
+        "partial": "有些读不到"
+      },
+      "more": "……还有 {n} 个",
+      "noConflictNote": "这个平台读不到检查，所以 codeg 不说它「可以合并」。",
+      "mergeState": "平台的说法：{state}",
+      "state": {
+        "later": "之后有了变化。",
+        "stopped": "已不再看护。"
+      },
+      "view": "查看 PR",
+      "gotIt": "知道了",
+      "unwatch": "不用再盯了",
+      "fix": {
+        "followup": {
+          "checks": "它的任务在修 —— 第 {n} 次，续作。",
+          "conflict": "它的任务在把目标分支合进来 —— 第 {n} 次，续作。"
+        },
+        "task": {
+          "checks": "在这个 PR 上开了新任务去修 —— 第 {n} 次。",
+          "conflict": "在这个 PR 上开了新任务把目标分支合进来 —— 第 {n} 次。"
+        },
+        "failed": "codeg 没能开始修：{error}",
+        "none": "codeg 没法自己修：{why}",
+        "busy": "这个 PR 上已经有一轮在进行，结束后 codeg 再看。",
+        "ask": {
+          "checks": "要让它的任务去修吗？",
+          "conflict": "要让它的任务把目标分支合进来吗？"
+        },
+        "told": "按你的设置，只告诉你。",
+        "off": "codeg 不自动修（设置里是 0 次）。",
+        "gaveUpHeading": "修到上限了，还是没过",
+        "gaveUp": "codeg 已经修了 {n} 次，接下来交给你。每次改了什么：",
+        "round": "第 {n} 次",
+        "cause": {
+          "checks": "检查没过",
+          "conflict": "有冲突"
+        },
+        "lines": "{files} 个文件，+{added} −{removed}",
+        "doChecks": "去修",
+        "doConflict": "把目标分支合进来"
+      },
+      "feedback": {
+        "kind": {
+          "changes": "要求修改",
+          "review": "评审",
+          "line": "行内意见",
+          "comment": "评论"
+        },
+        "someone": "有人",
+        "writer": "有写权限",
+        "outsider": "没有写权限",
+        "forward": "交给任务",
+        "skip": "不用",
+        "forwarded": "已交给任务。",
+        "waiting": "等正在进行的这一轮结束后交给任务。"
+      },
+      "round": {
+        "checks": "修 CI —— 第 {n} 次",
+        "conflict": "解决冲突 —— 第 {n} 次",
+        "feedback": "处理评审意见"
+      },
+      "merge": {
+        "refused": "codeg 没有自动合并：{why}",
+        "unread": "codeg 读不到平台，没能合并：{why}"
+      }
+    },
+    "routines": {
+      "zone": "（{zone}）",
+      "onEvent": "触发：{event}",
+      "withLabel": "标签 {label}",
+      "mineOnly": "只看它自己的活",
+      "event": {
+        "dispatch_ended": "派出的活结束",
+        "task_status": "看板任务状态变化",
+        "session_waiting": "有会话在等你",
+        "pr_checks_failed": "看护的 PR 检查没过",
+        "pr_checks_passed": "看护的 PR 检查又绿了",
+        "pr_conflict": "看护的 PR 有冲突",
+        "pr_mergeable": "看护的 PR 可以合并",
+        "pr_no_conflict": "看护的 PR 没有冲突（检查未知）",
+        "pr_merged": "看护的 PR 已合并",
+        "pr_closed": "看护的 PR 被关闭",
+        "pr_review": "看护的 PR 有新评审",
+        "forge_issue": "平台上有新的 issue 或 PR"
+      },
+      "precheck": {
+        "commits": "{branch} 有新提交才跑",
+        "forgeIssue": "有新 issue 才跑",
+        "forgePr": "有新 PR 才跑",
+        "itemsWaiting": "有事项等了超过 {hours} 小时才跑",
+        "changes": "工作树有改动才跑"
+      },
+      "outcome": {
+        "running": "在跑",
+        "skipped": "跳过：没有新情况",
+        "silent": "没有变化",
+        "reported": "有报告",
+        "failed": "失败",
+        "missed": "错过",
+        "asked": "等你确认",
+        "declined": "没有确认",
+        "stopped": "已停止"
+      },
+      "empty": "还没有例程。可以在对话里让它帮你设一个。",
+      "new": "新建例程",
+      "kind": {
+        "brain": "叫醒助手看",
+        "dispatch": "直接派活"
+      },
+      "paused": {
+        "owner": "已暂停"
+      },
+      "row": {
+        "when": "时间",
+        "trigger": "触发",
+        "how": "方式",
+        "next": "下次",
+        "last": "上次",
+        "why": "原因",
+        "runs": "共 {n} 次"
+      },
+      "runNow": "立即跑",
+      "pause": "暂停",
+      "resume": "恢复",
+      "edit": "编辑",
+      "delete": "删除",
+      "deleteTitle": "删除这个例程？",
+      "deleteDescription": "「{title}」将不再运行。它已经派出的活不受影响。",
+      "cancel": "取消",
+      "reply": "例程「{title}」· 第 {seq} 次",
+      "editor": {
+        "titleNew": "新建例程",
+        "titleEdit": "编辑例程",
+        "trialNote": "保存后会立刻试跑一次，之后由 codeg 按时运行。",
+        "editNote": "改动从下一次运行起生效。",
+        "name": "名称",
+        "what": "要做什么",
+        "whatHint": "比如：看一下夜里 CI 有没有红的，有就告诉我",
+        "kind": "怎么跑",
+        "kindBrain": "叫醒助手",
+        "kindDispatch": "直接派活",
+        "kindBrainHint": "它看完会告诉你；没有值得说的就不出声。",
+        "kindDispatchHint": "codeg 直接按下面的设置派活，不叫醒助手；结果照常回来。",
+        "mode": "方式",
+        "modeTask": "看板任务",
+        "modeSession": "项目里的工作会话",
+        "modeChat": "对话",
+        "deliverable": "交付",
+        "change": "改代码",
+        "report": "出报告",
+        "project": "项目",
+        "pickProject": "选一个项目",
+        "anyProject": "任意项目",
+        "when": "什么时候",
+        "schedule": "定时",
+        "event": "有事件时",
+        "presetDaily": "每天 9:00",
+        "presetWeekdays": "工作日 9:00",
+        "presetWeekly": "每周一 9:00",
+        "custom": "自定义…",
+        "timezone": "时区",
+        "ownerZone": "跟你一样（{zone}）",
+        "eventKind": "事件",
+        "issueOrPr": "issue 还是 PR",
+        "issues": "issue",
+        "prs": "PR",
+        "label": "标签",
+        "states": "状态（逗号分隔）",
+        "mine": "只看它自己的活",
+        "precheck": "先看一眼",
+        "check": {
+          "none": "每次都跑",
+          "commits": "有新提交才跑",
+          "forge_new": "有新 issue 或 PR 才跑",
+          "items_waiting": "有事项等太久才跑",
+          "changes": "工作树有改动才跑"
+        },
+        "branch": "分支（默认 HEAD）",
+        "hours": "小时",
+        "needTitle": "起个名字。",
+        "needWhat": "写一下要做什么。",
+        "needCron": "设一个时间。",
+        "made": "例程已建，正在试跑",
+        "saved": "例程已保存",
+        "cancel": "取消",
+        "save": "保存",
+        "saveRun": "保存并试跑一次"
+      },
+      "card": {
+        "made": "已建例程",
+        "changed": "已改例程",
+        "proposal": "建议的例程",
+        "proposalChange": "建议改一个例程",
+        "repeat": "做成例程？",
+        "paused": "例程已暂停",
+        "undone": "已撤销",
+        "dismissed": "先不了",
+        "resumed": "已恢复",
+        "madeNote": "已建好，在例程列表里。",
+        "action": {
+          "pause": "暂停",
+          "resume": "恢复",
+          "delete": "删除",
+          "run_now": "立即跑",
+          "edit": "修改"
+        },
+        "repeatBody": "30 天里你第 {count} 次让它做这类事。",
+        "pausedWorkAgent": "它干活用的智能体用不了：没装，或者被停用了。",
+        "pausedFailures": "连续失败了 3 次。",
+        "trial": "已开始试跑。",
+        "reason": "依据：{reason}",
+        "undo": "撤销",
+        "edit": "编辑",
+        "accept": "建这个",
+        "acceptChange": "照这个改",
+        "dismiss": "不用",
+        "makeIt": "做成例程",
+        "resume": "恢复",
+        "open": "打开例程",
+        "confirm": "待确认的例程",
+        "confirmChange": "待确认的例程改动",
+        "setWorkAgent": "去选干活用的智能体"
+      },
+      "more": "更多操作"
+    },
+    "rules": {
+      "mute": "这类别再提",
+      "muted": "这类不会再提。",
+      "mutedRestore": "在偏好里重新打开",
+      "notNow": "不用",
+      "failed": "没办成：{error}",
+      "since": "自 {when}",
+      "lowered": "这类提议你连续 3 次都没用，已不再发通知。",
+      "loweredNow": "已关掉。这类已经连续 3 次没用，以后不再发通知（可在偏好里改回）。",
+      "dismissed": "已关掉，一周内不再提。",
+      "expired": "已经不需要了：情况变了。",
+      "openPr": "打开 PR",
+      "byAuthor": "{author} 提的",
+      "worktreeOf": "{project} 的工作树",
+      "behindDetail": "{branch} 落后于 {base}，合并会有冲突。",
+      "heading": {
+        "failed": "失败了，没人处理",
+        "review": "等验收很久了",
+        "session": "有会话在等你",
+        "pr_review": "PR 等你评审",
+        "uncommitted": "改动还没提交",
+        "idle": "事项很久没动了",
+        "behind": "分支落后且有冲突",
+        "undo": "你撤销的改动",
+        "idle_bot": "闲着的助手"
+      },
+      "wait": {
+        "permission": "等你批准",
+        "question": "在问你",
+        "plan": "等你批准计划"
+      },
+      "step": {
+        "failed": {
+          "retry": "重试",
+          "hand": "交给助手看看"
+        },
+        "review": {
+          "check": "让助手先验收",
+          "remind": "提醒我"
+        },
+        "session": {
+          "open": "打开会话"
+        },
+        "pr_review": {
+          "summary": "先出一份评审摘要"
+        },
+        "uncommitted": {
+          "open": "打开",
+          "hand": "交给助手整理提交"
+        },
+        "idle": {
+          "hand": "继续跟",
+          "close": "关掉"
+        },
+        "behind": {
+          "rebase": "派人 rebase"
+        },
+        "undo": {
+          "ask_first": "改成「先给我看」"
+        },
+        "idle_bot": {
+          "hide": "隐藏",
+          "delete": "删掉…"
+        }
+      },
+      "done": {
+        "handed": "已交给助手。",
+        "retried": "已重试。",
+        "checking": "已开始验收，检查完由助手下结论。",
+        "reminding": "明天上午提醒你。",
+        "opened": "已打开。",
+        "closed": "事项已关掉。",
+        "rebasing": "已派人 rebase。",
+        "asking_first": "以后你要改的设置会先给你看，点了才改。",
+        "hidden": "已隐藏，在隐藏的助手里还能找到。",
+        "deleted": "已删掉。"
+      },
+      "hand": {
+        "failed": "「{title}」失败了，一直没人处理。帮我看看是怎么回事，告诉我你的建议。",
+        "review": "看板任务「{title}」等验收很久了。先帮我验收：派人检查改动，再告诉我结论。",
+        "remind": "验收看板任务「{title}」",
+        "prReview": "{project} 的 PR #{number} 等我评审有一阵了，先帮我出一份评审摘要：{url}",
+        "uncommitted": "{name}（{path}）有未提交的改动有一阵了，帮我看看并整理提交。",
+        "idle": "事项「{summary}」很久没动了，继续跟一下。"
+      },
+      "prefs": {
+        "title": "提议卡",
+        "hint": "codeg 自己留意这些情况（不调模型），发现了就出一张卡，写明依据和下一步。每条都可以单独关掉、改时间。",
+        "mutedMark": "在卡上点了「这类别再提」，已关掉。",
+        "loweredMark": "你连续 3 次都没用，已不再发通知。",
+        "putBack": "改回",
+        "counts": "近 30 天：出了 {raised} 张，用了 {acted} 张，关掉 {dismissed} 张",
+        "unit": {
+          "hours": "小时",
+          "minutes": "分钟",
+          "days": "天",
+          "times": "次"
+        },
+        "failed": {
+          "title": "失败没人管",
+          "hint": "派活或看板任务失败了一直没人处理。卡片出在派出它的助手那里。"
+        },
+        "review": {
+          "title": "待验收太久",
+          "hint": "看板任务待验收，这一轮还没验收过。"
+        },
+        "session": {
+          "title": "会话一直等你",
+          "hint": "任何会话等你批准或回答，而你不在那个会话里。紧急。"
+        },
+        "pr_review": {
+          "title": "PR 等你评审",
+          "hint": "在你盯着的项目里；从 codeg 第一次看到这个请求时算起。"
+        },
+        "uncommitted": {
+          "title": "改动没提交",
+          "hint": "项目或工作树里有没提交的改动。"
+        },
+        "idle": {
+          "title": "事项太久没动",
+          "hint": "没收尾的事项一直没有变化。"
+        },
+        "behind": {
+          "title": "分支落后",
+          "hint": "助手派出的任务分支落后目标分支，而且有冲突。"
+        },
+        "repeat": {
+          "title": "重复的请求",
+          "hint": "30 天内相近的请求到第几次时，提议做成例程。"
+        },
+        "suggest": {
+          "title": "助手的建议",
+          "hint": "关掉后助手不再提建议；带 suggest 的调用会被告知「你现在不收建议」。"
+        },
+        "undo": {
+          "title": "撤销得多的改动",
+          "hint": "周回顾里：你撤销了不少按你的话直接做的改动时，问你要不要改成「先给我看」。"
+        },
+        "idle_bot": {
+          "title": "闲着的助手",
+          "hint": "周回顾里：两周都没被叫醒的助手，问你要不要隐藏或删掉。"
+        }
+      },
+      "undoDetail": "最近两周按你的话直接做的 {made} 处改动，你撤销了 {undone} 处。",
+      "idleBotDetail": "已经两周没被叫醒了。"
+    },
+    "brief": {
+      "title": "晨报",
+      "byCodeg": "这份由 codeg 按记录写成——助手没能写。",
+      "part": {
+        "needs": "需要你",
+        "tonight": "昨晚做的",
+        "night": "上次晨报以来",
+        "running": "在盯",
+        "schedule": "今天的安排",
+        "bots": "各助手",
+        "loose": "没收尾的事",
+        "yesterday": "昨天的你"
+      },
+      "more": "……还有 {count} 件",
+      "bot": {
+        "done": "做完 {count} 件（{titles}）",
+        "idle": "没有做完的",
+        "doing": "在做 {what}",
+        "stuck": "{count} 件等你"
+      },
+      "loose": {
+        "item": "{days} 天没动",
+        "worktree": "改动 {days} 天没提交",
+        "session": "没收尾"
+      },
+      "sessions": "{count} 个会话",
+      "nothing": "今天没有需要你的事。",
+      "replyBrief": "晨报",
+      "replyWrap": "收尾",
+      "message": {
+        "to": "发给 {name}：",
+        "answered": "回复：{text}",
+        "open": "还没回复"
+      },
+      "week": {
+        "title": "上周（{first} – {last}）",
+        "titleSoFar": "本周至今（{first} – {last}）",
+        "mode": {
+          "task": "看板",
+          "chat": "对话",
+          "session": "会话"
+        },
+        "work": "派活 {count} 件（{modes}）· 完成 {completed}，失败 {failed} · 一次过 {firstPass}/{settled}",
+        "byBot": "按助手：{list}",
+        "doneForYou": "替你办完的：验收拦下 {caught} · 自动重试 {retried} · 自动修 CI {ciFixed} · 例程完成 {routines} · 合并 PR {merged}",
+        "asks": "执行会话的提问：{count} 次 · 助手代答 {answered} · 转给你 {forwarded}",
+        "between": "助手之间：{messages} 条消息，{threads} 条往来线 · 停下 {loops} 次",
+        "unblock": "你处理等你的事平均用 {minutes} 分钟（{count} 次）",
+        "unblockBefore": "你处理等你的事平均用 {minutes} 分钟（{count} 次；前一周 {before} 分钟）",
+        "held": "替你挡下的打扰：合并 {merged} · 延后 {deferred} · 只进今日 {kept}",
+        "proposals": "提议：{count} 张 · 接受 {taken} · 不用 {dismissed}",
+        "undone": "撤销：改动 {changesUndone}/{changes} · 记忆 {memoryUndone}/{memory}",
+        "reminders": "提醒：到点 {count} · 完成 {done} · 推迟 {snoozed}",
+        "lowered": "codeg 降了级：{rules}",
+        "tokens": "用量：{total} tokens",
+        "botTokens": "{total}（自己 {own}，派出的活 {handed}）"
+      }
+    },
+    "memory": {
+      "title": "记住了",
+      "undoneTitle": "已撤销这次记忆更新",
+      "added": "新增 {count} 条",
+      "updated": "更新 {count} 条",
+      "removed": "删除 {count} 条",
+      "changedFile": "改了{file}",
+      "sep": "；",
+      "listSep": "、",
+      "file": {
+        "index": "记忆索引",
+        "user": "你的资料",
+        "soul": "人设",
+        "rules": "规则"
+      },
+      "status": {
+        "added": "新增",
+        "modified": "更新",
+        "deleted": "删除"
+      },
+      "kept": "之后又改过、没撤回：{files}",
+      "showDiff": "展开差异",
+      "hideDiff": "收起差异",
+      "diffCut": "只显示了差异的开头。",
+      "undo": "撤销",
+      "used": "用到的记忆："
+    },
+    "history": {
+      "open": "搜索历史",
+      "title": "时光机",
+      "description": "搜之前说过、做过的：各助手的对话、助手之间的消息、全部会话和看板任务。",
+      "placeholder": "比如：为什么把 X 改成 Y",
+      "hint": "每个词都要出现。一两个字只搜最近 90 天。",
+      "none": "没有找到。",
+      "short": "一两个字：只搜了最近 90 天。",
+      "sessionsOff": "未检索全部会话（在「了解你」里设置）。",
+      "tasksOff": "未检索看板任务（在「了解你」里设置）。",
+      "reading": "还在读取会话（{done}/{total}）：较早的可能暂时搜不到。",
+      "untitled": "会话 #{id}",
+      "task": "任务 #{id}",
+      "message": "{from} → {to}",
+      "timeline": "与{name}的对话",
+      "handedOut": "{name}派出",
+      "matches": "{count} 处匹配",
+      "role": {
+        "owner": "你",
+        "assistant": "助手",
+        "agent": "智能体"
+      },
+      "scope": {
+        "all": "全部",
+        "timeline": "助手对话",
+        "sessions": "会话",
+        "tasks": "看板任务",
+        "messages": "助手消息"
+      }
+    },
+    "plan": {
+      "title": "计划",
+      "progress": "{done}/{total} 步",
+      "sep": "、",
+      "after": "在第 {steps} 步之后",
+      "doneWhen": "验收标准：",
+      "changes": "改动",
+      "undo": "撤销",
+      "undone": "已撤销",
+      "undoneKept": "已撤销——第 {steps} 步已经开始，保留了这次改动",
+      "state": {
+        "draft": "等你开始",
+        "running": "进行中",
+        "stuck": "卡住了",
+        "stopped": "已停止",
+        "done": "已完成",
+        "canceled": "已结束"
+      },
+      "step": {
+        "pending": "等前面的步骤",
+        "ready": "马上派出",
+        "confirm": "等你确认",
+        "running": "在做",
+        "done": "已完成",
+        "failed": "失败",
+        "canceled": "已取消",
+        "stopped": "没开始"
+      },
+      "hint": {
+        "draft": "点「开始」之前什么都不派；开始后，codeg 按依赖一步步派出。",
+        "stopped": "已停止：不再派新的步骤，在跑的照常跑完。",
+        "stuck": "卡在第 {seq} 步「{title}」：它失败了，助手也没能接着做下去。不依赖它的步骤照常推进。",
+        "stuckCanceled": "第 {seq} 步「{title}」已取消：依赖它的步骤不会开始。"
+      },
+      "act": {
+        "start": "开始",
+        "change": "改一下",
+        "cancel": "取消",
+        "stop": "停止",
+        "resume": "继续",
+        "end": "结束计划",
+        "open": "打开",
+        "confirm": "确认",
+        "cancelStep": "取消"
+      },
+      "change": {
+        "added": "加了第 {seq} 步「{title}」",
+        "removed": "删了第 {seq} 步「{title}」",
+        "retry": "第 {seq} 步「{title}」重新来",
+        "changed": "改了第 {seq} 步「{title}」：{fields}",
+        "title": "改名为「{title}」",
+        "goal": "改了目标"
+      },
+      "field": {
+        "title": "标题",
+        "who": "交给谁",
+        "mode": "方式",
+        "project": "项目",
+        "deliverable": "交付物",
+        "prompt": "要求",
+        "done_when": "验收标准",
+        "depends_on": "依赖",
+        "kind": "活的种类"
+      },
+      "self": "自己"
+    },
+    "tidy": {
+      "title": {
+        "acted": "整理了记忆（{day}）",
+        "draft": "{day} 的整理（草稿）",
+        "applied": "{day} 的整理（已应用）",
+        "undone": "{day} 的整理（已整次撤销）",
+        "discarded": "{day} 的整理（没用）",
+        "stale": "{day} 的整理（已过时）"
+      },
+      "note": {
+        "draft": "整理结果先存成了草稿，现在的记忆没变；点「应用」才生效。",
+        "applied": "已应用：记忆按这次整理改好了。",
+        "discarded": "没有用这次整理，记忆保持原样。",
+        "stale": "草稿之后记忆又改过，合不进来了；下一晚会重新整理。",
+        "notAside": "没能先存成草稿（{why}），已经生效；可以整次撤销。"
+      },
+      "undoAll": "整次撤销",
+      "apply": "应用",
+      "dismiss": "不用",
+      "lines": "昨晚整理",
+      "view": "查看",
+      "line": {
+        "done": "{name}整理了记忆",
+        "draft": "{name}整理了记忆（草稿）"
+      },
+      "state": {
+        "applied": "已应用",
+        "undone": "已整次撤销",
+        "discarded": "没有用",
+        "stale": "已过时，今晚重新整理"
+      }
+    },
+    "skill": {
+      "heading": {
+        "added": "新的流程技能",
+        "modified": "流程技能有改动",
+        "deleted": "流程技能删掉了",
+        "draft": "流程技能草稿"
+      },
+      "line": {
+        "learned": "我把「{title}」整理成了流程技能，下次你要做这件事，我就照这个走。",
+        "changed": "我改了流程技能「{title}」，已经生效。",
+        "removed": "我删掉了流程技能「{title}」。",
+        "draft": "我写了流程技能「{title}」，你点「安装」才生效。"
+      },
+      "when": "什么时候用：{text}",
+      "note": {
+        "off": "已停用：不再加载。",
+        "draft": "现在还是原来的样子。",
+        "applied": "已安装。",
+        "undone": "已撤销这次改动。",
+        "discarded": "没有装，保持原样。",
+        "stale": "之后又改过，这份草稿装不上了。",
+        "deleted": "已删除。",
+        "notAside": "没能先存成草稿（{why}），先停用了：点「启用」才加载。",
+        "notAsideOn": "没能先存成草稿（{why}），也没能停用：已经生效，可以停用或撤销。"
+      },
+      "show": "看内容",
+      "hide": "收起",
+      "view": "查看",
+      "disable": "停用",
+      "enable": "启用",
+      "undo": "撤销",
+      "delete": "删除",
+      "confirmDelete": "确定删除",
+      "cancel": "取消",
+      "install": "安装",
+      "dismiss": "不用"
+    },
+    "botPage": {
+      "primary": "主助手",
+      "worker": "助手",
+      "chat": "和它聊天"
+    },
+    "workRanOn": "用 {agent} 干",
+    "workOff": "{agent}（它干活用的智能体）用不了：没装或被停用，它暂时不能自己干活。",
+    "setWork": "去另选一个",
+    "noBrain": {
+      "title": "{name} 还没有大脑",
+      "body": "它是从协作设置迁移来的助手。初始化主助手后，它会照抄一份主助手的大脑，就可以和它对话了。在这之前，普通会话里照样可以 @ 它。",
+      "setUp": "初始化主助手"
+    }
+  },
+  "MessageCheck": {
+    "action": "让助手核查",
+    "selection": "核查",
+    "verdict": {
+      "true": "属实",
+      "false": "不属实",
+      "partly": "部分属实",
+      "unsure": "无法判断"
+    },
+    "checking": "核查中…",
+    "unfinished": "没核查完",
+    "mark": "助手核查：{verdict}",
+    "markQuote": "核查「{quote}」：{verdict}",
+    "again": "重新核查",
+    "inAssistant": "在助手对话里看",
+    "process": "看核查过程",
+    "openConversation": "打开原会话",
+    "sentNoName": "已开始核查，结果会显示在这条消息下面",
+    "startFailed": "没能开始核查：{message}",
+    "evidence": "证据",
+    "noEvidence": "没有给出证据。",
+    "checkedMessage": "被核查的消息",
+    "checkedSentence": "被核查的一句",
+    "asked": "它回答的是",
+    "note": {
+      "no_verdict": "核查没给出结论。",
+      "no_evidence": "核查给了结论却没给证据，按无法判断算。",
+      "restarted": "codeg 重启时打断了它。",
+      "stopped": "它被停掉了。",
+      "taken_over": "你接手了它的会话。",
+      "failed": "它失败了：{error}"
+    },
+    "heading": {
+      "checking": "正在核查",
+      "done": "核查结论",
+      "failed": "没核查完"
+    },
+    "cardLine": {
+      "checking": "正在核查{title}里的一条消息",
+      "checkingSentence": "正在核查{title}里的一句话",
+      "done": "核查了{title}里的一条消息：{verdict}",
+      "doneSentence": "核查了{title}里的一句话：{verdict}",
+      "failed": "{title}里的一条消息没核查完",
+      "failedSentence": "{title}里的一句话没核查完"
+    },
+    "titleQuoted": "「{title}」",
+    "untitled": "一个会话",
+    "expand": "展开",
+    "collapse": "收起"
   },
   "SrnAccount": {
     "name": "SRN",

@@ -592,6 +592,7 @@ change. `next_steps` are commands or actions to try, when there are any.
 | `cancelled` | `error_during_execution` | The run was cancelled in Codeg |
 | `run_stopped`, `run_lost` | `error_during_execution` | The run stopped before its prompt was sent |
 | `stop_<reason>` | `error_during_execution` | The turn ended for another reason than finishing: `stop_max_tokens`, `stop_refusal`, `stop_max_turn_requests`, … |
+| `turn_failed` | `error_during_execution` | The agent said the turn failed instead of replying (Antigravity: its API refused the request, its quota ran out, …): `message` is the agent's account |
 | `too_many_reservations` | `error_during_execution` | Too many runs are being set up on that Codeg at once. Try again shortly |
 | `agents_unavailable`, `assistants_unavailable` | `error_during_execution` | Codeg could not list them |
 | `http_error` | `error_during_execution` | An unexpected HTTP answer |

@@ -56,6 +56,7 @@ mod network;
 pub mod office_watch;
 pub mod parsers;
 pub mod paths;
+pub mod personal_agent;
 pub mod pet_sessions;
 pub mod pet_state_mapper;
 pub mod pets;
@@ -1231,11 +1232,14 @@ mod tauri_app {
                         chat_authoring_config,
                         browser_tools_config,
                         computer_tools_config,
-                    ) = crate::app_state::build_delegation_stack(
-                        &cm_state,
-                        db_conn.clone(),
-                        effective_data_dir.clone(),
-                    );
+                    ) = {
+                        crate::personal_agent::host::pin_data_dir(effective_data_dir.clone());
+                        crate::app_state::build_delegation_stack(
+                            &cm_state,
+                            db_conn.clone(),
+                            effective_data_dir.clone(),
+                        )
+                    };
                     app.manage(broker.clone());
                     app.manage(tokens.clone());
                     app.manage(feedback_config.clone());
@@ -1516,6 +1520,22 @@ mod tauri_app {
                     effective_data_dir.clone(),
                 ) {
                     tauri::async_runtime::spawn(crate::work_task::run_task_engine(engine));
+                    // The personal agent dispatches kanban tasks and lives
+                    // next to the engine that runs them: the one process
+                    // holding this data directory's task lock.
+                    if let Some(host) = crate::personal_agent::host::build(
+                        crate::db::AppDatabase {
+                            conn: app.state::<crate::db::AppDatabase>().conn.clone(),
+                        },
+                        app.state::<ConnectionManager>().clone_ref(),
+                        crate::web::event_bridge::EventEmitter::from_app(app.handle()),
+                        app.state::<std::sync::Arc<crate::acp::InternalEventBus>>()
+                            .inner()
+                            .clone(),
+                        effective_data_dir.clone(),
+                    ) {
+                        tauri::async_runtime::spawn(crate::personal_agent::host::run(host));
+                    }
                     // The repository panel's auto-processing mints tasks
                     // unattended, so it runs only where the task engine does —
                     // the one process holding this data directory's task lock.
@@ -1666,7 +1686,15 @@ mod tauri_app {
                     match id.as_str() {
                         windows::TRAY_MENU_ID_SHOW => windows::show_main_window(app),
                         windows::TRAY_MENU_ID_QUIT => app.exit(0),
-                        _ => {}
+                        windows::TRAY_MENU_ID_SETTINGS => windows::tray_open_settings(app),
+                        other => {
+                            if let Some(bot) = other
+                                .strip_prefix(windows::TRAY_MENU_ID_BOT_PREFIX)
+                                .and_then(|n| n.parse::<i32>().ok())
+                            {
+                                windows::tray_open_bot(app, bot);
+                            }
+                        }
                     }
                     return;
                 }
@@ -1897,16 +1925,80 @@ mod tauri_app {
                 conversations::get_stats,
                 conversations::get_sidebar_data,
                 conversations::create_conversation,
+                conversations::create_ask_conversation,
+                conversations::list_ask_conversations,
+                conversations::list_check_conversations,
+                conversations::detach_ask_conversation,
                 conversations::create_chat_conversation,
                 conversations::create_chat_dir,
                 conversations::update_conversation_status,
                 conversations::update_conversation_title,
                 conversations::update_conversation_pinned,
                 assistant_commands::assistant_list,
-                assistant_commands::assistant_create,
-                assistant_commands::assistant_update,
-                assistant_commands::assistant_delete,
-                assistant_commands::assistant_reorder,
+                crate::commands::personal_agent::personal_agent_get,
+                crate::commands::personal_agent::personal_agent_timeline,
+                crate::commands::personal_agent::personal_agent_timeline_rows,
+                crate::commands::personal_agent::personal_agent_timeline_updated_since,
+                crate::commands::personal_agent::personal_agent_items,
+                crate::commands::personal_agent::personal_agent_dispatches,
+                crate::commands::personal_agent::personal_agent_files,
+                crate::commands::personal_agent::personal_agent_stats,
+                crate::commands::personal_agent::personal_agent_save,
+                crate::commands::personal_agent::personal_agent_send,
+                crate::commands::personal_agent::personal_agent_cancel,
+                crate::commands::personal_agent::personal_agent_stop_all,
+                crate::commands::personal_agent::personal_agent_bots,
+                crate::commands::personal_agent::personal_agent_roster_act,
+                crate::commands::personal_agent::personal_agent_outputs,
+                crate::commands::personal_agent::personal_agent_output_read,
+                crate::commands::personal_agent::personal_agent_turn_steps,
+                crate::commands::personal_agent::personal_agent_item_act,
+                crate::commands::personal_agent::personal_agent_presence,
+                crate::commands::personal_agent::personal_agent_profile,
+                crate::commands::personal_agent::personal_agent_profile_update,
+                crate::commands::personal_agent::personal_agent_grades,
+                crate::commands::personal_agent::personal_agent_history_search,
+                crate::commands::personal_agent::personal_agent_history_status,
+                crate::commands::personal_agent::personal_agent_history_rebuild,
+                crate::commands::personal_agent::personal_agent_today,
+                crate::commands::personal_agent::personal_agent_activity,
+                crate::commands::personal_agent::notification_prefs_sync,
+                crate::commands::personal_agent::personal_agent_avatar_png,
+                crate::commands::personal_agent::personal_agent_card_act,
+                crate::commands::personal_agent::personal_agent_dispatch_stop,
+                crate::commands::personal_agent::personal_agent_ask_answer,
+                crate::commands::personal_agent::personal_agent_conversation_target,
+                crate::commands::personal_agent::personal_agent_settings_patch,
+                crate::commands::personal_agent::personal_agent_bot_create,
+                crate::commands::personal_agent::personal_agent_bot_copy,
+                crate::commands::personal_agent::personal_agent_bot_impact,
+                crate::commands::personal_agent::personal_agent_bot_delete,
+                crate::commands::personal_agent::personal_agent_choice_answer,
+                crate::commands::personal_agent::personal_agent_meet_projects,
+                crate::commands::personal_agent::personal_agent_starter,
+                crate::commands::personal_agent::personal_agent_thread,
+                crate::commands::personal_agent::personal_agent_compact,
+                crate::commands::personal_agent::personal_agent_new_session,
+                crate::commands::personal_agent::personal_agent_resume_auto_compact,
+                crate::commands::personal_agent::personal_agent_keepalive,
+                crate::commands::personal_agent::personal_agent_resend,
+                crate::commands::personal_agent::personal_agent_mark_seen,
+                crate::commands::personal_agent::personal_agent_notice_act,
+                crate::commands::personal_agent::personal_agent_routines,
+                crate::commands::personal_agent::personal_agent_routine_runs,
+                crate::commands::personal_agent::personal_agent_routine_save,
+                crate::commands::personal_agent::personal_agent_routine_act,
+                crate::commands::personal_agent::personal_agent_rules,
+                crate::commands::personal_agent::personal_agent_rule_reset,
+                crate::commands::personal_agent::personal_agent_answer_question,
+                crate::commands::personal_agent::personal_agent_answer_plan,
+                crate::commands::personal_agent::personal_agent_respond_permission,
+                crate::commands::personal_agent::personal_agent_file_save,
+                crate::commands::personal_agent::personal_agent_file_delete,
+                crate::commands::personal_agent::personal_agent_skill_switch,
+                crate::commands::personal_agent::personal_agent_check_message,
+                crate::commands::personal_agent::personal_agent_checks,
+                crate::commands::personal_agent::personal_agent_set_workdir,
                 conversation_tags::list_conversation_tags,
                 conversation_tags::create_conversation_tag,
                 conversation_tags::update_conversation_tag,
@@ -2076,6 +2168,7 @@ mod tauri_app {
                 windows::close_pet_panel,
                 windows::resize_pet_panel,
                 windows::focus_conversation,
+                windows::open_personal_agent_page,
                 crate::deep_link::take_pending_deep_link,
                 crate::deep_link::take_pending_harness_link,
                 windows::update_traffic_light_position,

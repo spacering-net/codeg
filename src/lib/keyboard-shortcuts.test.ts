@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest"
 
 import {
+  ASSISTANT_SHORTCUT_IDS,
   DEFAULT_SHORTCUTS,
   SHORTCUTS_STORAGE_KEY,
   NUMBERED_TAB_ACTION_IDS,
   SHORTCUT_DEFINITIONS,
+  assistantShortcutFromEvent,
+  canShareShortcut,
   formatShortcutLabel,
   matchShortcutEvent,
   normalizeShortcut,
@@ -550,5 +553,130 @@ describe("a new default never steals a stored binding", () => {
       if (definition.id === "toggle_search") continue
       expect(settings[definition.id]).toBe(DEFAULT_SHORTCUTS[definition.id])
     }
+  })
+})
+
+describe("the assistants page's keys", () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it("registers them on the tab keys' chords and ⌥↑ / ⌥↓", () => {
+    const ids = SHORTCUT_DEFINITIONS.map((definition) => definition.id)
+    for (const id of ASSISTANT_SHORTCUT_IDS) expect(ids).toContain(id)
+    for (let n = 1; n <= 9; n += 1) {
+      expect(
+        DEFAULT_SHORTCUTS[`switch_assistant_${n}` as (typeof ids)[number]]
+      ).toBe(`mod+${n}`)
+    }
+    expect(DEFAULT_SHORTCUTS.prev_assistant).toBe("alt+arrowup")
+    expect(DEFAULT_SHORTCUTS.next_assistant).toBe("alt+arrowdown")
+    // Ctrl+Tab, as the matcher reads it.
+    expect(DEFAULT_SHORTCUTS.cycle_assistant).toBe(
+      normalizeShortcut("ctrl+tab")
+    )
+  })
+
+  it("reads an event as the key it is", () => {
+    expect(
+      assistantShortcutFromEvent(
+        keyEvent("3", { ctrlKey: true }),
+        DEFAULT_SHORTCUTS
+      )
+    ).toEqual({ kind: "switch", index: 2 })
+    expect(
+      assistantShortcutFromEvent(
+        keyEvent("1", { metaKey: true }),
+        DEFAULT_SHORTCUTS
+      )
+    ).toEqual({ kind: "switch", index: 0 })
+    expect(
+      assistantShortcutFromEvent(
+        keyEvent("ArrowUp", { altKey: true }),
+        DEFAULT_SHORTCUTS
+      )
+    ).toEqual({ kind: "prev" })
+    expect(
+      assistantShortcutFromEvent(
+        keyEvent("ArrowDown", { altKey: true }),
+        DEFAULT_SHORTCUTS
+      )
+    ).toEqual({ kind: "next" })
+    expect(
+      assistantShortcutFromEvent(
+        keyEvent("Tab", { ctrlKey: true }),
+        DEFAULT_SHORTCUTS
+      )
+    ).toEqual({ kind: "cycle" })
+    expect(
+      assistantShortcutFromEvent(keyEvent("1"), DEFAULT_SHORTCUTS)
+    ).toBeNull()
+    expect(
+      assistantShortcutFromEvent(
+        keyEvent("ArrowUp", { altKey: true, shiftKey: true }),
+        DEFAULT_SHORTCUTS
+      )
+    ).toBeNull()
+    // The owner's own binding, not the default.
+    expect(
+      assistantShortcutFromEvent(keyEvent("2", { ctrlKey: true }), {
+        ...DEFAULT_SHORTCUTS,
+        switch_assistant_2: "mod+shift+2",
+      })
+    ).toBeNull()
+  })
+
+  it("shares chords with the tab keys only", () => {
+    expect(canShareShortcut("switch_tab_1", "switch_assistant_1")).toBe(true)
+    expect(canShareShortcut("cycle_assistant", "next_tab")).toBe(true)
+    expect(canShareShortcut("prev_tab", "prev_assistant")).toBe(true)
+    expect(canShareShortcut("switch_assistant_1", "toggle_search")).toBe(false)
+    expect(canShareShortcut("close_current_tab", "switch_assistant_2")).toBe(
+      false
+    )
+    expect(canShareShortcut("switch_assistant_1", "switch_assistant_2")).toBe(
+      false
+    )
+  })
+
+  it("raises no conflict for any default, as the settings page checks it", () => {
+    // The check the recorder makes (shortcut-settings.tsx), per default.
+    for (const recording of SHORTCUT_DEFINITIONS) {
+      const shortcut = DEFAULT_SHORTCUTS[recording.id]
+      if (!shortcut) continue
+      const conflict = SHORTCUT_DEFINITIONS.find(
+        (definition) =>
+          definition.id !== recording.id &&
+          !canShareShortcut(definition.id, recording.id) &&
+          shortcutsConflict(DEFAULT_SHORTCUTS[definition.id], shortcut)
+      )
+      expect(conflict?.id, recording.id).toBeUndefined()
+    }
+    // A chord another key owns still conflicts.
+    expect(
+      SHORTCUT_DEFINITIONS.find(
+        (definition) =>
+          definition.id !== "prev_assistant" &&
+          !canShareShortcut(definition.id, "prev_assistant") &&
+          shortcutsConflict(DEFAULT_SHORTCUTS[definition.id], "mod+k")
+      )?.id
+    ).toBe("toggle_search")
+  })
+
+  it("keeps their defaults over the tab keys a profile stored, not over others", () => {
+    localStorage.setItem(
+      SHORTCUTS_STORAGE_KEY,
+      JSON.stringify({
+        switch_tab_1: "mod+1",
+        next_tab: "mod+tab",
+        close_current_tab: "alt+arrowup",
+      })
+    )
+    const settings = readShortcutSettings()
+    expect(settings.switch_assistant_1).toBe("mod+1")
+    expect(settings.cycle_assistant).toBe("mod+tab")
+    // A chord the owner gave another key: that one keeps it.
+    expect(settings.prev_assistant).toBe("")
+    expect(settings.next_assistant).toBe("alt+arrowdown")
   })
 })

@@ -181,7 +181,11 @@ pub enum ResumeAssistant {
     /// relaunching on anything else (the per-agent defaults, or nothing) would
     /// run it on settings that were never the assistant's, and without its
     /// instructions.
-    Unrecoverable { id: i32, name: Option<String> },
+    Unrecoverable {
+        id: i32,
+        bot_uid: Option<String>,
+        name: Option<String>,
+    },
 }
 
 impl ResumeAssistant {
@@ -190,9 +194,10 @@ impl ResumeAssistant {
         match self {
             ResumeAssistant::None => None,
             ResumeAssistant::Snapshot(a) => Some(a.identity()),
-            ResumeAssistant::Unrecoverable { id, name } => Some(AssistantRef {
+            ResumeAssistant::Unrecoverable { id, bot_uid, name } => Some(AssistantRef {
                 id: *id,
                 name: name.clone().unwrap_or_default(),
+                bot_uid: bot_uid.clone(),
             }),
         }
     }
@@ -875,6 +880,7 @@ fn report_from_outcome(
         blocked_on: None,
         assistant_id: None,
         assistant_name: None,
+        bot: None,
         progress: None,
     }
 }
@@ -916,6 +922,7 @@ fn running_ack(
         blocked_on: None,
         assistant_id: None,
         assistant_name: None,
+        bot: None,
         progress: None,
     }
 }
@@ -1008,6 +1015,7 @@ fn resume_ack(
         blocked_on: None,
         assistant_id: None,
         assistant_name: None,
+        bot: None,
         progress: None,
     }
 }
@@ -1040,6 +1048,7 @@ fn not_resumable_report(
         blocked_on: None,
         assistant_id: None,
         assistant_name: None,
+        bot: None,
         progress: None,
     }
 }
@@ -1124,6 +1133,7 @@ fn running_report(task_id: &str, task: &RunningTask) -> DelegationTaskReport {
         blocked_on: None,
         assistant_id: None,
         assistant_name: None,
+        bot: None,
         progress: None,
     }
     .with_assistant(task.assistant.as_ref())
@@ -1143,6 +1153,7 @@ fn completed_report(task_id: &str, c: &CompletedTask) -> DelegationTaskReport {
         blocked_on: None,
         assistant_id: None,
         assistant_name: None,
+        bot: None,
         progress: c.progress.clone(),
     }
     .with_assistant(c.assistant.as_ref())
@@ -1167,6 +1178,7 @@ fn unknown_report(task_id: &str) -> DelegationTaskReport {
         blocked_on: None,
         assistant_id: None,
         assistant_name: None,
+        bot: None,
         progress: None,
     }
 }
@@ -1189,6 +1201,7 @@ fn db_report(task_id: &str, rec: &ChildStatusRecord) -> DelegationTaskReport {
         blocked_on: None,
         assistant_id: None,
         assistant_name: None,
+        bot: None,
         progress: None,
     }
     .with_assistant(rec.assistant.as_ref())
@@ -1629,10 +1642,22 @@ impl DelegationBroker {
     }
 
     /// The assistant a `delegate_to_agent` call may run as — with the agent
-    /// it runs on — read now, never frozen at session launch.
-    pub async fn resolve_assistant(&self, id: i32) -> Option<(AgentType, DelegationAssistant)> {
+    /// its work runs on — read now, never frozen at session launch: by its
+    /// uid (`bot`), or by the collaboration settings' assistant an old link
+    /// names (`assistant_id`).
+    pub async fn resolve_bot(&self, uid: &str) -> Option<(AgentType, DelegationAssistant)> {
         self.assistants
-            .delegatable(id)
+            .by_uid(uid)
+            .await
+            .map(|a| (a.agent_type, a.into()))
+    }
+
+    pub async fn resolve_legacy_assistant(
+        &self,
+        legacy_id: i32,
+    ) -> Option<(AgentType, DelegationAssistant)> {
+        self.assistants
+            .by_legacy_id(legacy_id)
             .await
             .map(|a| (a.agent_type, a.into()))
     }
@@ -2589,12 +2614,16 @@ impl DelegationBroker {
                 let mut raw_input = serde_json::Map::new();
                 raw_input.insert("task".into(), serde_json::Value::String(req.task.clone()));
                 // The target as the call named it: an assistant call's
-                // arguments carry its id, not the agent it resolved to.
-                match &req.assistant {
-                    Some(a) => {
-                        raw_input.insert("assistant_id".into(), serde_json::Value::from(a.id));
+                // arguments carry its uid (or an old link's id), not the
+                // agent it resolved to.
+                match req.target() {
+                    crate::acp::delegation::types::DelegationTarget::Bot(uid) => {
+                        raw_input.insert("bot".into(), serde_json::Value::String(uid));
                     }
-                    None => {
+                    crate::acp::delegation::types::DelegationTarget::Assistant(id) => {
+                        raw_input.insert("assistant_id".into(), serde_json::Value::from(id));
+                    }
+                    crate::acp::delegation::types::DelegationTarget::Agent(_) => {
                         if let Ok(at) = serde_json::to_value(req.agent_type) {
                             raw_input.insert("agent_type".into(), at);
                         }
@@ -2749,7 +2778,10 @@ impl DelegationBroker {
                 .assistant
                 .as_ref()
                 .map(|a| crate::acp::delegation::spawner::AssistantLink {
-                    id: a.id,
+                    // One of the owner's assistants is named by its uid;
+                    // `assistant_id` stays for children from before them.
+                    id: if a.bot_uid.is_some() { None } else { Some(a.id) },
+                    bot_uid: a.bot_uid.clone(),
                     snapshot: a.run_snapshot(),
                 }),
         };
@@ -3359,6 +3391,17 @@ impl DelegationBroker {
         self.event_emitter
             .emit_child_running(parent_connection_id, child_connection_id, false)
             .await;
+        // One of the owner's assistants ran it: a line in its own log, off
+        // this path (D4).
+        if let Some(uid) = assistant.and_then(|a| a.bot_uid.clone()) {
+            let assistants = self.assistants.clone();
+            let result = result.clone();
+            tokio::spawn(async move {
+                assistants
+                    .record_delegation(&uid, child_conversation_id, &result)
+                    .await;
+            });
+        }
         if is_synthetic_parent_tool_use_id(parent_tool_use_id) {
             return;
         }
@@ -4372,16 +4415,24 @@ impl DelegationBroker {
         let assistant = match &ctx.assistant {
             ResumeAssistant::None => None,
             ResumeAssistant::Snapshot(assistant) => Some(assistant),
-            ResumeAssistant::Unrecoverable { .. } => {
+            ResumeAssistant::Unrecoverable { bot_uid, .. } => {
                 self.drop_inflight(inflight_id).await;
+                // Named as a new call would name it: the owner's assistant
+                // by its uid, an old one by its id.
+                let how = match bot_uid {
+                    Some(uid) => format!("with bot \"{uid}\""),
+                    None => "with its assistant_id".to_string(),
+                };
                 return not_resumable_report(
                     &req.task_id,
                     ctx.status,
                     Some(ctx.child_conversation_id),
                     Some(ctx.agent_type),
-                    "the assistant settings this task ran with could not be read back, so \
-                     it cannot be resumed as that assistant. Start a new delegate_to_agent \
-                     call with its assistant_id instead.",
+                    &format!(
+                        "the assistant settings this task ran with could not be read back, so \
+                         it cannot be resumed as that assistant. Start a new delegate_to_agent \
+                         call {how} instead."
+                    ),
                 );
             }
         };
@@ -4918,7 +4969,12 @@ impl ConversationDepthLookup for DbDepthLookup {
             .one(&self.db.conn)
             .await
             .map_err(|e| DelegationError::SubagentRuntimeError(format!("db: {e}")))?;
-        Ok(row.and_then(|r| r.parent_id))
+        // Only a delegation counts toward the depth: an ask conversation hangs
+        // off the conversation it was asked from, but the user drives it, so
+        // it delegates from the top like any root.
+        Ok(row
+            .filter(|r| r.kind == crate::db::entities::conversation::ConversationKind::Delegate)
+            .and_then(|r| r.parent_id))
     }
 }
 
@@ -4941,6 +4997,38 @@ fn task_status_from_row(status: &str) -> TaskStatus {
     }
 }
 
+/// Who a delegation child ran as, off its row: one of the owner's
+/// assistants (`bot_uid`, its row's id read again — a deleted one's too), or
+/// a collaboration settings' assistant from before them (`assistant_id`).
+/// `None` for a plain agent child.
+async fn child_identity(
+    db: &crate::db::AppDatabase,
+    summary: &crate::models::DbConversationSummary,
+) -> Option<AssistantRef> {
+    let name = summary.assistant_name.clone().unwrap_or_default();
+    if let Some(uid) = summary.bot_uid.clone() {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        let id = crate::db::entities::personal_agent::Entity::find()
+            .filter(crate::db::entities::personal_agent::Column::Uid.eq(uid.clone()))
+            .one(&db.conn)
+            .await
+            .ok()
+            .flatten()
+            .map(|b| b.id)
+            .unwrap_or(0);
+        return Some(AssistantRef {
+            id,
+            name,
+            bot_uid: Some(uid),
+        });
+    }
+    summary.assistant_id.map(|id| AssistantRef {
+        id,
+        name,
+        bot_uid: None,
+    })
+}
+
 #[async_trait]
 impl ChildStatusLookup for DbChildStatusLookup {
     async fn find_by_call_id(&self, call_id: &str) -> Option<ChildStatusRecord> {
@@ -4956,10 +5044,7 @@ impl ChildStatusLookup for DbChildStatusLookup {
             status: task_status_from_row(&summary.status),
             agent_type: summary.agent_type,
             parent_id: summary.parent_id,
-            assistant: summary.assistant_id.map(|id| AssistantRef {
-                id,
-                name: summary.assistant_name.clone().unwrap_or_default(),
-            }),
+            assistant: child_identity(&self.db, &summary).await,
         })
     }
 
@@ -4984,22 +5069,25 @@ impl ChildStatusLookup for DbChildStatusLookup {
         // never the assistant's current configuration. Whether the child IS an
         // assistant child is the summary's say (`assistant_id`), so a failed or
         // unreadable snapshot read cannot pass one off as a plain agent child.
-        let assistant = match summary.assistant_id {
+        let assistant = match child_identity(&self.db, &summary).await {
             None => ResumeAssistant::None,
-            Some(id) => match crate::db::service::conversation_service::get_assistant_run(
+            Some(who) => match crate::db::service::conversation_service::get_assistant_run(
                 &self.db.conn,
                 summary.id,
             )
             .await
             {
-                Ok(Some((_, Some(snapshot)))) => ResumeAssistant::Snapshot(DelegationAssistant {
-                    id,
+                Ok(Some(Some(snapshot))) => ResumeAssistant::Snapshot(DelegationAssistant {
+                    id: who.id,
+                    bot_uid: who.bot_uid.clone(),
                     name: snapshot.name,
                     agent_options: snapshot.agent_options,
                     instructions: snapshot.instructions,
+                    avatar: snapshot.avatar,
                 }),
                 Ok(_) => ResumeAssistant::Unrecoverable {
-                    id,
+                    id: who.id,
+                    bot_uid: who.bot_uid.clone(),
                     name: summary.assistant_name.clone(),
                 },
                 Err(e) => {
@@ -5008,7 +5096,8 @@ impl ChildStatusLookup for DbChildStatusLookup {
                         summary.id
                     );
                     ResumeAssistant::Unrecoverable {
-                        id,
+                        id: who.id,
+                        bot_uid: who.bot_uid.clone(),
                         name: summary.assistant_name.clone(),
                     }
                 }
@@ -5064,6 +5153,7 @@ mod tests {
             requested_working_dir: None,
             external_handle: None,
             assistant: None,
+            asked: None,
         }
     }
 
@@ -10453,6 +10543,8 @@ mod tests {
     fn reviewer() -> DelegationAssistant {
         DelegationAssistant {
             id: 3,
+            bot_uid: None,
+            avatar: None,
             name: "Reviewer".into(),
             agent_options: AgentDelegationDefaults {
                 mode_id: Some("read-only".into()),
@@ -10526,7 +10618,7 @@ mod tests {
         let brief = send.brief.expect("the brief rides the first prompt");
         assert!(brief.contains(r#"{"name":"Reviewer","instructions":"Cite line numbers."}"#));
         let link = send.link.assistant.expect("the child row learns its assistant");
-        assert_eq!(link.id, 3);
+        assert_eq!(link.id, Some(3));
         assert_eq!(link.snapshot, reviewer().run_snapshot());
 
         let started = emitter.started_snapshot().await;
@@ -10682,6 +10774,7 @@ mod tests {
             agent_type: AgentType::Codex,
             assistant: ResumeAssistant::Unrecoverable {
                 id: 3,
+                bot_uid: None,
                 name: Some("Reviewer".into()),
             },
             ..resume_ctx(TaskStatus::Canceled)
@@ -10762,7 +10855,8 @@ mod tests {
             Some(link(
                 "call-a",
                 Some(AssistantLink {
-                    id: 3,
+                    id: Some(3),
+                    bot_uid: None,
                     snapshot: reviewer().run_snapshot(),
                 }),
             )),

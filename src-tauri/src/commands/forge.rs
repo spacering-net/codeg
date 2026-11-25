@@ -854,6 +854,25 @@ pub async fn forge_list_issues_core(
     })
 }
 
+/// Open pull requests whose review is requested of the signed-in account —
+/// codeg's own question (the personal agent's first thing to help with,
+/// 5.4), not one the workbench asks. A forge that cannot filter so says so.
+pub async fn forge_list_review_requested_core(
+    db: &AppDatabase,
+    folder_id: i32,
+    filters: ListFilters,
+) -> Result<ForgeIssueList, AppCommandError> {
+    let (remote, auth) = resolve_folder_repo(db, folder_id, filters.account_id.as_deref()).await?;
+    let mut request = ListIssuesRequest::new(remote.owner_repo, filters);
+    request.review_requested_me = true;
+    Ok(match remote.provider {
+        ForgeProvider::GitHub => forge::github::list_issues(&auth, &request).await?,
+        ForgeProvider::GitLab => forge::gitlab::list_issues(&auth, &request).await?,
+        ForgeProvider::Gitea => forge::gitea::list_issues(&auth, &request).await?,
+        ForgeProvider::Cnb => forge::cnb::list_issues(&auth, &request).await?,
+    })
+}
+
 /// One issue, read in full — for the description its list row does not carry.
 ///
 /// Only CNB needs this: its issue list omits `body` (its pull list carries
@@ -953,28 +972,38 @@ pub async fn forge_list_comments_core(
 ) -> Result<forge::ForgeCommentList, AppCommandError> {
     let (kind, number, page, per_page) = filters.resolve().map_err(AppCommandError::from)?;
     let (remote, auth) = resolve_folder_repo(db, folder_id, filters.account_id.as_deref()).await?;
-    Ok(match remote.provider {
+    Ok(comments_on(&auth, &remote.owner_repo, kind, number, page, per_page).await?)
+}
+
+/// One page of an item's discussion, from whichever forge `auth` talks to.
+async fn comments_on(
+    auth: &forge::ResolvedAuth,
+    owner_repo: &str,
+    kind: forge::ForgeItemKind,
+    number: i64,
+    page: u32,
+    per_page: u32,
+) -> Result<forge::ForgeCommentList, ForgeError> {
+    match auth.provider {
         // No kind: a pull request IS an issue at GitHub, and both are served
         // from `/issues/{n}/comments` (see `github::list_comments`).
         ForgeProvider::GitHub => {
-            forge::github::list_comments(&auth, &remote.owner_repo, number, page, per_page).await?
+            forge::github::list_comments(auth, owner_repo, number, page, per_page).await
         }
         ForgeProvider::GitLab => {
-            forge::gitlab::list_notes(&auth, &remote.owner_repo, kind, number, page, per_page)
-                .await?
+            forge::gitlab::list_notes(auth, owner_repo, kind, number, page, per_page).await
         }
         // Nor here, and for the same reason — Gitea models a pull request as an
         // issue exactly as GitHub does.
         ForgeProvider::Gitea => {
-            forge::gitea::list_comments(&auth, &remote.owner_repo, number, page, per_page).await?
+            forge::gitea::list_comments(auth, owner_repo, number, page, per_page).await
         }
         // CNB keeps issues and merge requests in separate collections, so the
         // kind picks the endpoint exactly as it does on GitLab.
         ForgeProvider::Cnb => {
-            forge::cnb::list_comments(&auth, &remote.owner_repo, kind, number, page, per_page)
-                .await?
+            forge::cnb::list_comments(auth, owner_repo, kind, number, page, per_page).await
         }
-    })
+    }
 }
 
 /// Post one comment on an item, and hand back the comment as the forge stored
@@ -997,23 +1026,32 @@ pub async fn forge_create_comment_core(
 ) -> Result<forge::ForgeComment, AppCommandError> {
     let (kind, number, body) = draft.resolve().map_err(AppCommandError::from)?;
     let (remote, auth) = resolve_folder_repo(db, folder_id, draft.account_id.as_deref()).await?;
-    Ok(match remote.provider {
+    Ok(comment_on(&auth, &remote.owner_repo, kind, number, &body).await?)
+}
+
+/// Post one comment, on whichever forge `auth` talks to.
+async fn comment_on(
+    auth: &forge::ResolvedAuth,
+    owner_repo: &str,
+    kind: forge::ForgeItemKind,
+    number: i64,
+    body: &str,
+) -> Result<forge::ForgeComment, ForgeError> {
+    match auth.provider {
         // No kind: a pull request IS an issue at GitHub, and one endpoint
         // serves both (`/pulls/{n}/comments` is the review-comment collection,
         // which is a different thing entirely).
         ForgeProvider::GitHub => {
-            forge::github::create_comment(&auth, &remote.owner_repo, number, &body).await?
+            forge::github::create_comment(auth, owner_repo, number, body).await
         }
         ForgeProvider::GitLab => {
-            forge::gitlab::create_note(&auth, &remote.owner_repo, kind, number, &body).await?
+            forge::gitlab::create_note(auth, owner_repo, kind, number, body).await
         }
-        ForgeProvider::Gitea => {
-            forge::gitea::create_comment(&auth, &remote.owner_repo, number, &body).await?
-        }
+        ForgeProvider::Gitea => forge::gitea::create_comment(auth, owner_repo, number, body).await,
         ForgeProvider::Cnb => {
-            forge::cnb::create_comment(&auth, &remote.owner_repo, kind, number, &body).await?
+            forge::cnb::create_comment(auth, owner_repo, kind, number, body).await
         }
-    })
+    }
 }
 
 /// Close or reopen one item, and hand back the row the forge now serves.
@@ -1030,20 +1068,31 @@ pub async fn forge_set_item_state_core(
 ) -> Result<forge::ForgeIssueRow, AppCommandError> {
     let (kind, number, action) = request.resolve().map_err(AppCommandError::from)?;
     let (remote, auth) = resolve_folder_repo(db, folder_id, request.account_id.as_deref()).await?;
-    Ok(match remote.provider {
+    Ok(state_on(&auth, &remote.owner_repo, kind, number, action).await?)
+}
+
+/// Close or reopen one item, on whichever forge `auth` talks to.
+async fn state_on(
+    auth: &forge::ResolvedAuth,
+    owner_repo: &str,
+    kind: forge::ForgeItemKind,
+    number: i64,
+    action: forge::ForgeStateAction,
+) -> Result<forge::ForgeIssueRow, ForgeError> {
+    match auth.provider {
         ForgeProvider::GitHub => {
-            forge::github::set_item_state(&auth, &remote.owner_repo, kind, number, action).await?
+            forge::github::set_item_state(auth, owner_repo, kind, number, action).await
         }
         ForgeProvider::GitLab => {
-            forge::gitlab::set_item_state(&auth, &remote.owner_repo, kind, number, action).await?
+            forge::gitlab::set_item_state(auth, owner_repo, kind, number, action).await
         }
         ForgeProvider::Gitea => {
-            forge::gitea::set_item_state(&auth, &remote.owner_repo, kind, number, action).await?
+            forge::gitea::set_item_state(auth, owner_repo, kind, number, action).await
         }
         ForgeProvider::Cnb => {
-            forge::cnb::set_item_state(&auth, &remote.owner_repo, kind, number, action).await?
+            forge::cnb::set_item_state(auth, owner_repo, kind, number, action).await
         }
-    })
+    }
 }
 
 /// Open a new issue on the folder's repository.
@@ -1088,20 +1137,37 @@ pub async fn forge_change_detail_core(
 ) -> Result<forge::ForgeChangeDetail, AppCommandError> {
     let number = query.resolve().map_err(AppCommandError::from)?;
     let (remote, auth) = resolve_folder_repo(db, folder_id, query.account_id.as_deref()).await?;
-    Ok(match remote.provider {
-        ForgeProvider::GitHub => {
-            forge::github::change_detail(&auth, &remote.owner_repo, number).await?
-        }
-        ForgeProvider::GitLab => {
-            forge::gitlab::change_detail(&auth, &remote.owner_repo, number).await?
-        }
-        ForgeProvider::Gitea => {
-            forge::gitea::change_detail(&auth, &remote.owner_repo, number).await?
-        }
-        ForgeProvider::Cnb => {
-            forge::cnb::change_detail(&auth, &remote.owner_repo, number).await?
-        }
-    })
+    Ok(detail_on(&auth, &remote.owner_repo, number).await?)
+}
+
+/// One proposed change's detail, from whichever forge `auth` talks to.
+async fn detail_on(
+    auth: &forge::ResolvedAuth,
+    owner_repo: &str,
+    number: i64,
+) -> Result<forge::ForgeChangeDetail, ForgeError> {
+    match auth.provider {
+        ForgeProvider::GitHub => forge::github::change_detail(auth, owner_repo, number).await,
+        ForgeProvider::GitLab => forge::gitlab::change_detail(auth, owner_repo, number).await,
+        ForgeProvider::Gitea => forge::gitea::change_detail(auth, owner_repo, number).await,
+        ForgeProvider::Cnb => forge::cnb::change_detail(auth, owner_repo, number).await,
+    }
+}
+
+/// One proposed change's detail at recorded coordinates — the repository a
+/// task delivered to, which the project's `origin` may no longer be (a fork
+/// switched for upstream): read there, with the account that delivered.
+pub async fn forge_change_detail_at_core(
+    db: &AppDatabase,
+    target: &forge::DeliveryTarget,
+    number: i64,
+) -> Result<forge::ForgeChangeDetail, AppCommandError> {
+    let query = forge::ChangeQuery {
+        number,
+        account_id: None,
+    };
+    let number = query.resolve().map_err(AppCommandError::from)?;
+    Ok(change_detail_at(db, target, number).await?)
 }
 
 /// CI summaries for one page of proposed changes — the list rows' marks.
@@ -1228,12 +1294,20 @@ pub async fn forge_merge_options_core(
     account_id: Option<String>,
 ) -> Result<forge::ForgeMergeOptions, AppCommandError> {
     let (remote, auth) = resolve_folder_repo(db, folder_id, account_id.as_deref()).await?;
-    Ok(match remote.provider {
-        ForgeProvider::GitHub => forge::github::merge_options(&auth, &remote.owner_repo).await?,
-        ForgeProvider::GitLab => forge::gitlab::merge_options(&auth, &remote.owner_repo).await?,
-        ForgeProvider::Gitea => forge::gitea::merge_options(&auth, &remote.owner_repo).await?,
-        ForgeProvider::Cnb => forge::cnb::merge_options(&auth, &remote.owner_repo).await?,
-    })
+    Ok(options_on(&auth, &remote.owner_repo).await?)
+}
+
+/// The merge methods a repository permits, on whichever forge `auth` talks to.
+async fn options_on(
+    auth: &forge::ResolvedAuth,
+    owner_repo: &str,
+) -> Result<forge::ForgeMergeOptions, ForgeError> {
+    match auth.provider {
+        ForgeProvider::GitHub => forge::github::merge_options(auth, owner_repo).await,
+        ForgeProvider::GitLab => forge::gitlab::merge_options(auth, owner_repo).await,
+        ForgeProvider::Gitea => forge::gitea::merge_options(auth, owner_repo).await,
+        ForgeProvider::Cnb => forge::cnb::merge_options(auth, owner_repo).await,
+    }
 }
 
 /// Land one proposed change, and hand back the row the forge now serves.
@@ -1255,21 +1329,168 @@ pub async fn forge_merge_change_core(
 ) -> Result<Option<forge::ForgeIssueRow>, AppCommandError> {
     let (number, method, head_sha) = request.resolve().map_err(AppCommandError::from)?;
     let (remote, auth) = resolve_folder_repo(db, folder_id, request.account_id.as_deref()).await?;
-    let head_sha = head_sha.as_deref();
-    Ok(match remote.provider {
+    Ok(merge_on(
+        &auth,
+        &remote.owner_repo,
+        number,
+        method,
+        head_sha.as_deref(),
+    )
+    .await?)
+}
+
+/// Land one proposed change, on whichever forge `auth` talks to.
+async fn merge_on(
+    auth: &forge::ResolvedAuth,
+    owner_repo: &str,
+    number: i64,
+    method: forge::ForgeMergeMethod,
+    head_sha: Option<&str>,
+) -> Result<Option<forge::ForgeIssueRow>, ForgeError> {
+    match auth.provider {
         ForgeProvider::GitHub => {
-            forge::github::merge_change(&auth, &remote.owner_repo, number, method, head_sha).await?
+            forge::github::merge_change(auth, owner_repo, number, method, head_sha).await
         }
         ForgeProvider::GitLab => {
-            forge::gitlab::merge_change(&auth, &remote.owner_repo, number, method, head_sha).await?
+            forge::gitlab::merge_change(auth, owner_repo, number, method, head_sha).await
         }
         ForgeProvider::Gitea => {
-            forge::gitea::merge_change(&auth, &remote.owner_repo, number, method, head_sha).await?
+            forge::gitea::merge_change(auth, owner_repo, number, method, head_sha).await
         }
         ForgeProvider::Cnb => {
-            forge::cnb::merge_change(&auth, &remote.owner_repo, number, method, head_sha).await?
+            forge::cnb::merge_change(auth, owner_repo, number, method, head_sha).await
         }
-    })
+    }
+}
+
+// ── at recorded coordinates ─────────────────────────────────────────────────
+//
+// What an assistant does on a forge names its item once (7.4): the
+// repository and account a task delivered with, or a project's as they were
+// when the owner first named it. Every read and write below goes THERE, never
+// by re-deriving a folder's `origin`, which may point elsewhere since. They
+// answer the forge's own error, so a caller can tell a refusal from a request
+// whose fate is unknown.
+
+/// The account to act as at `target`: the one recorded, else the host's
+/// default.
+pub async fn auth_at(
+    db: &AppDatabase,
+    target: &forge::DeliveryTarget,
+) -> Result<forge::ResolvedAuth, ForgeError> {
+    let account = Some(target.account_id.as_str()).filter(|a| !a.is_empty());
+    forge::resolve_forge_auth(&db.conn, target.provider, &target.server_host, account).await
+}
+
+pub async fn change_detail_at(
+    db: &AppDatabase,
+    target: &forge::DeliveryTarget,
+    number: i64,
+) -> Result<forge::ForgeChangeDetail, ForgeError> {
+    let auth = auth_at(db, target).await?;
+    detail_on(&auth, &target.owner_repo, number).await
+}
+
+pub async fn item_facts_at(
+    db: &AppDatabase,
+    target: &forge::DeliveryTarget,
+    kind: forge::ForgeItemKind,
+    number: i64,
+) -> Result<forge::ItemFacts, ForgeError> {
+    let auth = auth_at(db, target).await?;
+    match auth.provider {
+        ForgeProvider::GitHub => {
+            forge::github::item_facts(&auth, &target.owner_repo, kind, number).await
+        }
+        ForgeProvider::GitLab => {
+            forge::gitlab::item_facts(&auth, &target.owner_repo, kind, number).await
+        }
+        ForgeProvider::Gitea => {
+            forge::gitea::item_facts(&auth, &target.owner_repo, kind, number).await
+        }
+        ForgeProvider::Cnb => forge::cnb::item_facts(&auth, &target.owner_repo, kind, number).await,
+    }
+}
+
+/// Change `number` at recorded coordinates as a task on it needs it: its
+/// branches and head, read with the account recorded.
+pub async fn pull_at(
+    db: &AppDatabase,
+    target: &forge::DeliveryTarget,
+    number: i64,
+) -> Result<(forge::deliver::ForgePr, forge::ResolvedAuth), ForgeError> {
+    let auth = auth_at(db, target).await?;
+    let repo = &target.owner_repo;
+    let pull = match target.provider {
+        ForgeProvider::GitHub => forge::deliver::get_pull(&auth, repo, number).await?,
+        ForgeProvider::GitLab => forge::gitlab::get_merge_request(&auth, repo, number).await?,
+        ForgeProvider::Gitea => forge::gitea::get_pull(&auth, repo, number).await?,
+        ForgeProvider::Cnb => forge::cnb::get_pull(&auth, repo, number).await?,
+    };
+    Ok((pull, auth))
+}
+
+/// The review feedback on change `number` at recorded coordinates (7.4).
+pub async fn feedback_at(
+    db: &AppDatabase,
+    target: &forge::DeliveryTarget,
+    number: i64,
+    since: Option<&str>,
+) -> Result<forge::feedback::Feedback, ForgeError> {
+    let auth = auth_at(db, target).await?;
+    forge::feedback::change_feedback(&auth, &target.owner_repo, number, since).await
+}
+
+pub async fn comments_at(
+    db: &AppDatabase,
+    target: &forge::DeliveryTarget,
+    kind: forge::ForgeItemKind,
+    number: i64,
+    page: u32,
+    per_page: u32,
+) -> Result<forge::ForgeCommentList, ForgeError> {
+    let auth = auth_at(db, target).await?;
+    comments_on(&auth, &target.owner_repo, kind, number, page, per_page).await
+}
+
+/// Post `body` as is: the caller has checked it ([`forge::CommentDraft`]'s
+/// rules) and added what it needs to find it again.
+pub async fn comment_at(
+    auth: &forge::ResolvedAuth,
+    target: &forge::DeliveryTarget,
+    kind: forge::ForgeItemKind,
+    number: i64,
+    body: &str,
+) -> Result<forge::ForgeComment, ForgeError> {
+    comment_on(auth, &target.owner_repo, kind, number, body).await
+}
+
+pub async fn set_state_at(
+    auth: &forge::ResolvedAuth,
+    target: &forge::DeliveryTarget,
+    kind: forge::ForgeItemKind,
+    number: i64,
+    action: forge::ForgeStateAction,
+) -> Result<forge::ForgeIssueRow, ForgeError> {
+    state_on(auth, &target.owner_repo, kind, number, action).await
+}
+
+pub async fn merge_options_at(
+    db: &AppDatabase,
+    target: &forge::DeliveryTarget,
+) -> Result<forge::ForgeMergeOptions, ForgeError> {
+    let auth = auth_at(db, target).await?;
+    options_on(&auth, &target.owner_repo).await
+}
+
+pub async fn merge_at(
+    auth: &forge::ResolvedAuth,
+    target: &forge::DeliveryTarget,
+    number: i64,
+    method: forge::ForgeMergeMethod,
+    head_sha: Option<&str>,
+) -> Result<Option<forge::ForgeIssueRow>, ForgeError> {
+    merge_on(auth, &target.owner_repo, number, method, head_sha).await
 }
 
 /// The repository's label vocabulary, for the workbench's label filter. Its
@@ -1489,6 +1710,7 @@ pub async fn create_forge_task(
         // brings its own (the review's base ref), and an issue starts from the
         // project folder's checkout.
         base_branch: None,
+        executor_name: None,
         // Frozen by the service create path (an explicit agent verbatim, else
         // the folder's task settings as they are now).
         agent_config_frozen: false,
@@ -1793,6 +2015,7 @@ pub async fn create_forge_issues_task(
             .is_report()
             .then(|| crate::models::DELIVERABLE_REPORT.to_string()),
         base_branch: None,
+        executor_name: None,
         // Frozen by the service create path (an explicit agent verbatim, else
         // the folder's task settings as they are now).
         agent_config_frozen: false,

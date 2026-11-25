@@ -77,12 +77,14 @@ export function SidebarSectionOrderControl({
   }, [order])
 
   const label = (id: SidebarSectionId) =>
-    id === "folders"
-      ? t("sectionFolders")
-      : id === "chats"
-        ? t("sectionChats")
-        : id === "btw"
-          ? t("sectionBtw")
+    id === "assistants"
+      ? t("sectionAssistants")
+      : id === "folders"
+        ? t("sectionFolders")
+        : id === "chats"
+          ? t("sectionChats")
+          : id === "btw"
+            ? t("sectionBtw")
           : t("sectionRecent")
 
   const move = (id: SidebarSectionId, delta: number, viaKeyboard: boolean) => {

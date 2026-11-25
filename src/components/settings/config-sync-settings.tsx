@@ -149,12 +149,21 @@ export function ConfigSyncSettings() {
   )
   /** The note under an apply's toast: what to restart, and — when an
    *  assistant here already had a name the file used — that some were
-   *  renamed rather than overwritten. */
+   *  renamed rather than overwritten; when one's persona file here is its
+   *  own — that it was kept. */
   const appliedDescription = useCallback(
     (applied: ApplyReport) =>
-      applied.renamed
-        ? `${t("restartHint")} ${t("assistantsRenamed", { count: applied.renamed })}`
-        : t("restartHint"),
+      [
+        t("restartHint"),
+        applied.renamed
+          ? t("assistantsRenamed", { count: applied.renamed })
+          : null,
+        applied.personaKept
+          ? t("assistantsPersonaKept", { count: applied.personaKept })
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
     [t]
   )
 

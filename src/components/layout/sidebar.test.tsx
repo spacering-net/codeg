@@ -29,6 +29,7 @@ import {
   resetFolderTabsStore,
   useFolderTabsStore,
 } from "@/stores/folder-tabs-store"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 // Stable spies + mutable active-folder, referenced from the hoisted mock
 // factories below (vi.mock is hoisted above imports).
@@ -55,6 +56,12 @@ const spies = vi.hoisted(() => ({
 }))
 const mockState = vi.hoisted(() => ({
   activeFolder: { id: 7, path: "/x" } as { id: number; path: string } | null,
+  // The personal agent waits on the owner (a question or a permission).
+  personalAgentNeedsOwner: false,
+  // Messages from the assistants the owner has not seen.
+  personalAgentUnseen: 0,
+  // The roster as read (`null`: not yet).
+  roster: null as unknown[] | null,
   // The workbench route the sidebar is told it is on.
   routeId: "conversations",
 }))
@@ -116,6 +123,19 @@ vi.mock("@/contexts/tasks-view-context", () => ({
     attentionCount: 0,
     refetch: async () => {},
   }),
+}))
+vi.mock("@/contexts/personal-agent-context", () => ({
+  // The sidebar is about the primary, whichever assistant the page shows.
+  usePrimaryAgent: () => ({
+    needsOwner: mockState.personalAgentNeedsOwner,
+    snapshot: {
+      agent: null,
+      status: { unseen: mockState.personalAgentUnseen },
+    },
+  }),
+}))
+vi.mock("@/stores/personal-agent-roster-store", () => ({
+  useRoster: () => mockState.roster,
 }))
 vi.mock("@/contexts/workbench-route-context", () => ({
   useWorkbenchRoute: () => ({
@@ -185,12 +205,21 @@ describe("Sidebar — fixed nav region", () => {
     spies.setRoute.mockClear()
     spies.openConversations.mockClear()
     mockState.activeFolder = { id: 7, path: "/x" }
+    mockState.personalAgentNeedsOwner = false
+    mockState.personalAgentUnseen = 0
+    mockState.roster = null
+    usePersonalAgentUi.setState({ watching: false, viewBot: null })
   })
 
   it("Automations navigates to the automations route", () => {
     const { getByText } = renderSidebar()
     fireEvent.click(getByText("Automations"))
     expect(spies.setRoute).toHaveBeenCalledWith("automations")
+  })
+
+  it("has no Personal agent row — the assistants are a section of the list", () => {
+    renderSidebar()
+    expect(screen.queryByRole("button", { name: "Personal agent" })).toBeNull()
   })
 
   it("New chat returns to the conversation workspace", () => {
@@ -778,7 +807,7 @@ describe("Sidebar — Section order control", () => {
     mockState.activeFolder = { id: 7, path: "/x" }
   })
 
-  // The order rows are `menuitem`s labelled "<name> — position N of M"; the
+  // The order rows are `menuitem`s labelled "<name> — position N of 5"; the
   // move buttons inside them are labelled "<name> — Move up/down".
   const orderRowNames = () =>
     screen
@@ -786,18 +815,20 @@ describe("Sidebar — Section order control", () => {
       .map((el) => el.getAttribute("aria-label") ?? "")
       .filter((label) => label.includes("position"))
 
-  it("defaults to Folders → Chat → btw → Recent", async () => {
+  it("defaults to Personal assistants → Folders → Chat → Btw → Recent", async () => {
     const user = userEvent.setup()
     renderSidebar()
     await user.click(screen.getByRole("button", { name: "View options" }))
 
     expect(orderRowNames()).toEqual([
-      "Folders — position 1 of 4",
-      "Chat — position 2 of 4",
-      "Btw — position 3 of 4",
-      "Recent — position 4 of 4",
+      "Personal assistants — position 1 of 5",
+      "Folders — position 2 of 5",
+      "Chat — position 3 of 5",
+      "Btw — position 4 of 5",
+      "Recent — position 5 of 5",
     ])
     expect(spies.listProps?.sectionOrder).toEqual([
+      "assistants",
       "folders",
       "chats",
       "btw",
@@ -812,12 +843,14 @@ describe("Sidebar — Section order control", () => {
     await user.click(screen.getByRole("button", { name: "Recent — Move up" }))
 
     expect(orderRowNames()).toEqual([
-      "Folders — position 1 of 4",
-      "Chat — position 2 of 4",
-      "Recent — position 3 of 4",
-      "Btw — position 4 of 4",
+      "Personal assistants — position 1 of 5",
+      "Folders — position 2 of 5",
+      "Chat — position 3 of 5",
+      "Recent — position 4 of 5",
+      "Btw — position 5 of 5",
     ])
     expect(spies.listProps?.sectionOrder).toEqual([
+      "assistants",
       "folders",
       "chats",
       "recent",
@@ -825,7 +858,7 @@ describe("Sidebar — Section order control", () => {
     ])
     expect(
       JSON.parse(localStorage.getItem("workspace:sidebar-section-order") ?? "")
-    ).toEqual(["folders", "chats", "recent", "btw"])
+    ).toEqual(["assistants", "folders", "chats", "recent", "btw"])
   })
 
   it("disables the move buttons that would fall off an end", async () => {
@@ -834,13 +867,13 @@ describe("Sidebar — Section order control", () => {
     await user.click(screen.getByRole("button", { name: "View options" }))
 
     expect(
-      screen.getByRole("button", { name: "Folders — Move up" })
+      screen.getByRole("button", { name: "Personal assistants — Move up" })
     ).toBeDisabled()
     expect(
       screen.getByRole("button", { name: "Recent — Move down" })
     ).toBeDisabled()
     expect(
-      screen.getByRole("button", { name: "Folders — Move down" })
+      screen.getByRole("button", { name: "Folders — Move up" })
     ).not.toBeDisabled()
   })
 
@@ -853,7 +886,7 @@ describe("Sidebar — Section order control", () => {
     // and by the roving focus, so Alt+Arrow on the row is the ONLY keyboard
     // path — if this regresses, the control becomes mouse-only.
     const foldersRow = screen.getByRole("menuitem", {
-      name: "Folders — position 1 of 4",
+      name: "Folders — position 2 of 5",
     })
     // Focusing a menu item updates Radix's roving-focus state, so it has to run
     // inside act().
@@ -861,14 +894,15 @@ describe("Sidebar — Section order control", () => {
     await user.keyboard("{Alt>}{ArrowDown}{/Alt}")
 
     expect(orderRowNames()).toEqual([
-      "Chat — position 1 of 4",
-      "Folders — position 2 of 4",
-      "Btw — position 3 of 4",
-      "Recent — position 4 of 4",
+      "Personal assistants — position 1 of 5",
+      "Chat — position 2 of 5",
+      "Folders — position 3 of 5",
+      "Btw — position 4 of 5",
+      "Recent — position 5 of 5",
     ])
     // Focus follows the row it moved, so a second press keeps going.
     expect(document.activeElement?.getAttribute("aria-label")).toBe(
-      "Folders — position 2 of 4"
+      "Folders — position 3 of 5"
     )
   })
 
@@ -879,10 +913,11 @@ describe("Sidebar — Section order control", () => {
     await user.click(screen.getByRole("button", { name: "View options" }))
 
     expect(orderRowNames()).toEqual([
-      "Chat — position 1 of 4",
-      "Folders — position 2 of 4",
-      "Recent — position 3 of 4",
-      "Btw — position 4 of 4",
+      "Chat — position 1 of 5",
+      "Personal assistants — position 2 of 5",
+      "Folders — position 3 of 5",
+      "Recent — position 4 of 5",
+      "Btw — position 5 of 5",
     ])
   })
 
@@ -896,6 +931,7 @@ describe("Sidebar — Section order control", () => {
     // can park it where it will reappear.
     await user.click(screen.getByRole("button", { name: "Recent — Move up" }))
     expect(spies.listProps?.sectionOrder).toEqual([
+      "assistants",
       "folders",
       "chats",
       "recent",

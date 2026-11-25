@@ -32,6 +32,7 @@ import {
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { notify } from "@/lib/notify"
+import { isConnectionReady } from "@/lib/queue-flush"
 import { getAgentLabel } from "@/lib/custom-agents"
 import {
   extractUserImagesFromDraft,
@@ -117,6 +118,25 @@ interface CanvasConversationSurfaceProps {
    */
   onConversationCreated?: (conversationId: number, folderId: number) => void
   /**
+   * Replaces how a `kind: "folder"` draft creates its row on the first send
+   * (`createConversation` otherwise) — the ask drawer creates an ask
+   * conversation linked to its main one. Resolves to the new row and the folder
+   * it landed in.
+   */
+  createDraftConversation?: (
+    agentType: AgentType,
+    title: string | undefined
+  ) => Promise<{ conversationId: number; folderId: number }>
+  /**
+   * A message to send on its own as soon as the connection is ready — the
+   * first message of an ask written before this surface existed. Sent once;
+   * `onInitialSendConsumed` fires when it has been handed over (sent, or put
+   * back into the composer because the connection failed). MUST stay the same
+   * object until then.
+   */
+  initialSend?: { draft: PromptDraft; modeId: string | null } | null
+  onInitialSendConsumed?: () => void
+  /**
    * True while the first send is minting the conversation row. The draft card
    * hides its discard button for that window — the row and the prompt are
    * already in flight and cannot be recalled.
@@ -132,6 +152,10 @@ interface CanvasConversationSurfaceProps {
    * instead — every card showed that tab's folder and switching moved that tab.
    */
   folderPickerOverride?: ConversationFolderPickerOverride
+  /** The surface is the ask drawer's: a check's "how it was checked" opens
+   *  in that drawer too (`MessageListView.checksOpenInDrawer`). A canvas card
+   *  has no drawer beside it and opens a tab. */
+  checksOpenInDrawer?: boolean
   /** Focus/priority hint for the connection lifecycle and the transcript. */
   isActive?: boolean
   className?: string
@@ -185,9 +209,13 @@ export function CanvasConversationSurface({
   onAgentTypeChange,
   draftTarget,
   onConversationCreated,
+  createDraftConversation,
+  initialSend,
+  onInitialSendConsumed,
   onCreatingChange,
   onSaveSelectionAsNote,
   folderPickerOverride,
+  checksOpenInDrawer = false,
   isActive = true,
   className,
 }: CanvasConversationSurfaceProps) {
@@ -348,7 +376,11 @@ export function CanvasConversationSurface({
       ? (s.conversations.find((c) => c.id === dbConversationId) ?? null)
       : null
   )
-  const boundFolderId = summary?.folder_id ?? null
+  // A row the workspace list doesn't carry (an ask conversation) still knows
+  // its folder through `draftTarget`.
+  const boundFolderId =
+    summary?.folder_id ??
+    (draftTarget?.kind === "folder" ? draftTarget.folderId : null)
   const folderPath = useAppWorkspaceStore((s) => {
     const id =
       boundFolderId ??
@@ -730,6 +762,13 @@ export function CanvasConversationSurface({
             // Seed the hidden chat folder so the card's cwd resolves on the
             // next render without waiting for a workspace refresh.
             upsertFolder(res.folder)
+          } else if (createDraftConversation) {
+            const created = await createDraftConversation(
+              agentType,
+              title || undefined
+            )
+            newId = created.conversationId
+            sendFolderId = created.folderId
           } else {
             newId = await createConversation(
               draftTarget.folderId,
@@ -776,6 +815,12 @@ export function CanvasConversationSurface({
           // a notification, like every verdict on a click.
           removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
           setSyncState(effectiveConversationId, "idle")
+          // The composer cleared itself when the message went out; nothing was
+          // delivered, so hand it back rather than lose what the user wrote.
+          setComposerHandBacks((pending) => [
+            ...pending,
+            { handBack: draft.blocks },
+          ])
           notify({
             level: "error",
             key: `canvas-create-failed:${contextKey}`,
@@ -797,6 +842,7 @@ export function CanvasConversationSurface({
       connIsForOtherAgent,
       connSessionId,
       contextKey,
+      createDraftConversation,
       draftTarget,
       effectiveConversationId,
       lifecycleSend,
@@ -931,6 +977,45 @@ export function CanvasConversationSurface({
     return effectiveModes?.current_mode_id ?? connectionModes[0]?.id ?? null
   }, [effectiveModes, connectionModes, composerPick])
 
+  // The initial message goes out under the same readiness rule the tab view's
+  // queue flush uses: connected, to THIS agent, at THIS cwd — a connection still
+  // settling onto either would take the message to the wrong place. A
+  // connection that fails instead hands the message back to the composer, so
+  // it is never silently lost.
+  const initialSendRef = useRef(initialSend)
+  const initialSendDoneRef = useRef(false)
+  const connectionReady = isConnectionReady(
+    connStatus,
+    conn.connectedWorkingDir,
+    workingDir,
+    conn.agentType,
+    agentType
+  )
+  useEffect(() => {
+    const pending = initialSendRef.current
+    if (!pending || initialSendDoneRef.current) return
+    if (connStatus === "error") {
+      initialSendDoneRef.current = true
+      setComposerHandBacks((queued) => [
+        ...queued,
+        { handBack: pending.draft.blocks },
+      ])
+      onInitialSendConsumed?.()
+      return
+    }
+    if (!connectionReady || selectorsLoading) return
+    initialSendDoneRef.current = true
+    onInitialSendConsumed?.()
+    handleSend(pending.draft, pending.modeId ?? selectedModeId)
+  }, [
+    connStatus,
+    connectionReady,
+    handleSend,
+    onInitialSendConsumed,
+    selectedModeId,
+    selectorsLoading,
+  ])
+
   // Arrow-key history source, read lazily on the first Up/Down (see
   // `MessageInput.getSentHistory`) so streaming tokens cost nothing here.
   const getSentHistory = useCallback(
@@ -1027,6 +1112,7 @@ export function CanvasConversationSurface({
             acpLoadError={acpLoadError}
             hideEmptyState={isDraft}
             onSaveNoteSelection={onSaveSelectionAsNote}
+            checksOpenInDrawer={checksOpenInDrawer}
             liveRuns={liveRuns}
           />
         </ConversationShell>

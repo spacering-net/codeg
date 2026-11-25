@@ -144,9 +144,10 @@ function sameRoutes(
  * `llm-pi-ai.providers` in the bridge's own
  * `$DSH_HOME/deepseek-acp/settings.yaml`.
  *
- * deepseek-acp 0.10.0+ builds the official DeepSeek catalog into the agent and
- * no longer reads a model list from the harness settings document, so a route
- * here is the supported way to widen what the composer's model picker offers:
+ * deepseek-acp 0.10.0+ builds the official DeepSeek catalog into the agent
+ * (0.10.0 and 0.11.0 read no model list from the harness settings document;
+ * 0.12.0 does again, next to these routes), so a route here is the way to
+ * widen what the composer's model picker offers beyond DeepSeek's own models:
  * each pi-ai provider contributes its own catalog (OpenCode Go, Anthropic,
  * OpenRouter…), and every configured route becomes a group in that picker.
  *

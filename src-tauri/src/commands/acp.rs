@@ -8781,7 +8781,7 @@ async fn hermes_setup_argvs() -> (Vec<String>, Vec<String>) {
         // Unreachable: Hermes is always an Npx distribution. Fall through to
         // the npx guidance with the same pinned spec so a future match-arm
         // change can't resurrect a stale recipe.
-        _ => "hermes-agent@0.23.3",
+        _ => "hermes-agent@0.23.4",
     };
     (
         hermes_npx_argv(package, &["acp", "--setup"]),
@@ -12469,6 +12469,13 @@ async fn resolve_connect_selection_tx(
 
 /// [`resolve_connect_selection`] + spawn + bind: the connect path every
 /// user-facing entry point (Tauri, web, chat channel) shares.
+///
+/// A connection that ended before it could be bound — a resume the agent
+/// refused during its handshake, or a session it lost — is reported like a
+/// closed one (`ConnectionNotFound`): the web client's attach and the chat
+/// channel's routing need a live connection, and have no other way to learn
+/// it is gone. The desktop app reads such an ending from the connection's own
+/// events instead (see [`spawn_and_bind_conversation_selection`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn spawn_with_conversation_selection(
     manager: &ConnectionManager,
@@ -12483,6 +12490,54 @@ pub(crate) async fn spawn_with_conversation_selection(
     client_mode_id: Option<String>,
     client_config_values: BTreeMap<String, String>,
 ) -> Result<String, AcpError> {
+    let spawned = spawn_and_bind_conversation_selection(
+        manager,
+        db,
+        agent_type,
+        working_dir,
+        session_id,
+        runtime_env,
+        owner_window_label,
+        emitter,
+        conversation_id,
+        client_mode_id,
+        client_config_values,
+    )
+    .await?;
+    spawned.bound?;
+    Ok(spawned.connection_id)
+}
+
+/// A spawned connection, and whether binding it to its conversation's row
+/// worked (`Err` only when the connection had already ended).
+pub(crate) struct SpawnedConversationConnection {
+    pub connection_id: String,
+    pub bound: Result<(), AcpError>,
+}
+
+/// [`spawn_with_conversation_selection`] that hands the connection back even
+/// when it ended before the bind, saying so in `bound`.
+///
+/// For the desktop app's `acp_connect`: its client buffers every event of a
+/// connection it has not routed yet and replays them once it has the id, so a
+/// resume that ended during its handshake still shows why — the error with its
+/// code, or `SessionLoadFailed` and its banner (a codex session another
+/// process holds is `session_busy`, with Reload). Refusing the id instead
+/// showed every such ending as a bare "connection not found".
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn spawn_and_bind_conversation_selection(
+    manager: &ConnectionManager,
+    db: &sea_orm::DatabaseConnection,
+    agent_type: AgentType,
+    working_dir: Option<String>,
+    session_id: Option<String>,
+    runtime_env: BTreeMap<String, String>,
+    owner_window_label: String,
+    emitter: EventEmitter,
+    conversation_id: Option<i32>,
+    client_mode_id: Option<String>,
+    client_config_values: BTreeMap<String, String>,
+) -> Result<SpawnedConversationConnection, AcpError> {
     let selection = resolve_connect_selection(
         db,
         manager,
@@ -12505,14 +12560,19 @@ pub(crate) async fn spawn_with_conversation_selection(
             selection.config_values.clone(),
         )
         .await?;
-    if let Some(row_id) = selection.row_id {
-        // Before returning, so a setter right after connect finds the binding.
-        // A connection that already ended is reported like a closed one.
-        manager
-            .bind_selection_conversation(&connection_id, row_id, selection.composer_mode_id)
-            .await?;
-    }
-    Ok(connection_id)
+    // Before returning, so a setter right after connect finds the binding.
+    let bound = match selection.row_id {
+        Some(row_id) => {
+            manager
+                .bind_selection_conversation(&connection_id, row_id, selection.composer_mode_id)
+                .await
+        }
+        None => Ok(()),
+    };
+    Ok(SpawnedConversationConnection {
+        connection_id,
+        bound,
+    })
 }
 
 #[cfg(test)]
@@ -12683,7 +12743,7 @@ pub async fn acp_connect(
     verify_agent_installed(agent_type).await?;
 
     let emitter = EventEmitter::from_app(&app_handle);
-    spawn_with_conversation_selection(
+    let spawned = spawn_and_bind_conversation_selection(
         &manager,
         &db.conn,
         agent_type,
@@ -12696,7 +12756,16 @@ pub async fn acp_connect(
         preferred_mode_id,
         preferred_config_values.unwrap_or_default(),
     )
-    .await
+    .await?;
+    if let Err(e) = spawned.bound {
+        // Ended during its handshake: the webview replays the connection's
+        // buffered events once it routes this id, which say why.
+        tracing::info!(
+            "[ACP] connection {} ended before its conversation could be bound: {e}",
+            spawned.connection_id
+        );
+    }
+    Ok(spawned.connection_id)
 }
 
 /// Record the composer's pending mode pick on a connection (never sent to the
@@ -12717,27 +12786,51 @@ pub async fn acp_set_composer_mode(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[allow(clippy::too_many_arguments)]
 pub async fn acp_prompt(
     connection_id: String,
     blocks: Vec<PromptInputBlock>,
     folder_id: Option<i32>,
     conversation_id: Option<i32>,
     client_message_id: Option<String>,
+    // An edited message: cut the session back to just before the message it
+    // replaces, in the same step (see `crate::acp::rewind`).
+    rewind: Option<crate::acp::rewind::RewindTarget>,
     db: State<'_, crate::db::AppDatabase>,
     manager: State<'_, ConnectionManager>,
 ) -> Result<(), AcpError> {
-    manager
-        .send_prompt_linked_with_message_id(
-            &db,
-            &connection_id,
-            blocks,
-            folder_id,
-            conversation_id,
-            None,
-            client_message_id,
-        )
-        .await
-        .map(|_| ())
+    match rewind {
+        Some(rewind) => {
+            manager
+                .send_prompt_linked_rewinding(
+                    &db,
+                    &connection_id,
+                    blocks,
+                    folder_id,
+                    conversation_id,
+                    client_message_id,
+                    rewind,
+                )
+                .await?
+        }
+        None => {
+            manager
+                .send_prompt_linked_with_message_id(
+                    &db,
+                    &connection_id,
+                    blocks,
+                    folder_id,
+                    conversation_id,
+                    None,
+                    client_message_id,
+                )
+                .await?
+        }
+    };
+    // A person typed this in a codeg window: a dispatch they write in is
+    // theirs from now on.
+    crate::personal_agent::note_owner_prompt(&connection_id, conversation_id);
+    Ok(())
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -21776,7 +21869,7 @@ wire_api = "chat"
     // version is also the recorded fallback when detection comes up empty.
     #[test]
     fn hermes_custom_version_spec_keeps_lifecycle_scripts_and_records_its_version() {
-        let spec = build_npm_install_spec("hermes-agent@0.23.3", Some("0.24.0")).unwrap();
+        let spec = build_npm_install_spec("hermes-agent@0.23.4", Some("0.24.0")).unwrap();
         assert_eq!(spec, "hermes-agent@0.24.0");
         assert!(npm_package_requires_scripts(&spec));
         assert!(npm_package_bootstraps_runtime(&spec));
@@ -23607,7 +23700,7 @@ wire_api = "chat"
     fn installs_name_the_packages_whose_scripts_npm_must_run() {
         for (specs, name) in [
             (
-                &["hermes-agent@0.23.3", "hermes-agent@0.24.0", "hermes-agent"][..],
+                &["hermes-agent@0.23.4", "hermes-agent@0.24.0", "hermes-agent"][..],
                 "hermes-agent",
             ),
             (
@@ -23638,14 +23731,14 @@ wire_api = "chat"
         // Grok's postinstall downloads nothing and leaves no runtime to check.
         assert!(!npm_package_bootstraps_runtime("@xai-official/grok@1.0.92"));
         assert_eq!(
-            hermes_npx_argv("hermes-agent@0.23.3", &["acp", "--setup"]),
+            hermes_npx_argv("hermes-agent@0.23.4", &["acp", "--setup"]),
             [
                 "npx",
                 "-y",
                 "--ignore-scripts=false",
                 "--allow-scripts=hermes-agent",
                 "--package",
-                "hermes-agent@0.23.3",
+                "hermes-agent@0.23.4",
                 "hermes",
                 "acp",
                 "--setup",
@@ -23672,7 +23765,7 @@ wire_api = "chat"
                     .expect("npx recipe must pin via --package");
                 assert_eq!(
                     argv.get(pkg_idx + 1).map(String::as_str),
-                    Some("hermes-agent@0.23.3")
+                    Some("hermes-agent@0.23.4")
                 );
                 assert_eq!(argv.get(pkg_idx + 2).map(String::as_str), Some("hermes"));
             } else {
@@ -24284,7 +24377,7 @@ model = "gpt"
             )
         };
 
-        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.23.3", download());
+        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.23.4", download());
         let text = annotated.to_string();
         assert!(text.contains("fetch failed"), "keeps the original error");
         assert!(text.contains("HTTP(S)_PROXY"), "adds the proxy hint");
@@ -24302,7 +24395,7 @@ model = "gpt"
 
         // A hermes failure that isn't a download stays untouched.
         let permissions = annotate_npm_bootstrap_failure(
-            "hermes-agent@0.23.3",
+            "hermes-agent@0.23.4",
             AcpError::Protocol("failed to install npm package globally: EACCES".to_string()),
         );
         assert!(!permissions.to_string().contains("HTTP(S)_PROXY"));

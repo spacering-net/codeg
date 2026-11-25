@@ -8,11 +8,14 @@
  *
  * An assistant shows its own avatar with a small badge of the agent it ran on,
  * and its name followed by a muted "· Agent"; a bare agent shows the agent's
- * icon and name, as before. The name follows one fallback order everywhere:
- * the assistants store's row (a deleted one included, marked so), then the
- * name snapshot the delegation carried, then "Assistant #id". Until the backend
- * says which agent an assistant ran on there is no agent badge and no
- * "· Agent" — never a guess from the call's own `agent_type`.
+ * icon and name, as before. The assistant is the owner's one on the roster:
+ * by its uid, or — a task from before them — the one converted from the
+ * collaboration settings' assistant it ran as, else that assistant as the
+ * assistants store has it. The name follows one fallback order everywhere:
+ * that row (a deleted one marked so), then the name snapshot the delegation
+ * carried, then "Assistant #id". Until the backend says which agent an
+ * assistant ran on there is no agent badge and no "· Agent" — never a guess
+ * from the call's own `agent_type`.
  *
  * `identity` is required on both pieces so a surface cannot quietly fall back
  * to drawing the bare agent.
@@ -21,11 +24,66 @@
 import { useTranslations } from "next-intl"
 
 import { AgentIcon } from "@/components/agent-icon"
-import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
+import { BotAvatar } from "@/components/personal-agent/bot-avatar"
 import type { DelegationIdentity } from "@/hooks/use-delegation-card-model"
 import { getAgentLabel } from "@/lib/custom-agents"
+import type { AssistantAvatar, BotAvatar as BotAvatarValue } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useAssistant } from "@/stores/assistants-store"
+import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
+
+/** The assistant a delegation ran as, as this window has it. */
+export interface IdentityAssistant {
+  avatar: BotAvatarValue | AssistantAvatar | null
+  /** Its name now; null when nothing here knows it. */
+  name: string | null
+  /** Deleted (or not on this device's roster any more). */
+  deleted: boolean
+  primary: boolean
+}
+
+/** Who ran a delegation, by the order the file's comment gives; `null` for a
+ *  plain agent delegation. */
+export function useIdentityAssistant(
+  identity: Pick<DelegationIdentity, "assistantId" | "botUid">
+): IdentityAssistant | null {
+  const t = useTranslations("PersonalAgent")
+  // Read, not held: the workspace holds the roster (its sidebar, the open
+  // bridge); a card anywhere must not start reading it.
+  const roster = usePersonalAgentRoster((s) => s.entries)
+  const legacyId = identity.botUid ? null : (identity.assistantId ?? null)
+  const legacy = useAssistant(legacyId)
+  if (!identity.botUid && identity.assistantId == null) return null
+  const bot = identity.botUid
+    ? roster?.find((e) => e.uid === identity.botUid)
+    : roster?.find((e) => e.legacy_assistant_id === legacyId)
+  if (bot) {
+    return {
+      avatar: bot.avatar,
+      // As its page names it: the primary with no name of its own by its
+      // role, a work assistant with none by its number.
+      name:
+        bot.name.trim() || (bot.kind === "primary" ? t("title") : `#${bot.id}`),
+      deleted: false,
+      primary: bot.kind === "primary",
+    }
+  }
+  if (identity.botUid) {
+    return { avatar: null, name: null, deleted: roster != null, primary: false }
+  }
+  return {
+    avatar: legacy?.avatar ?? null,
+    name: legacy?.name || null,
+    deleted: legacy?.deleted_at != null,
+    primary: false,
+  }
+}
+
+/** Whether an identity is an assistant's (else a bare agent's). */
+function isAssistantIdentity(identity: DelegationIdentity): boolean {
+  // Loosely: an identity built before `botUid` existed has none at all.
+  return identity.botUid != null || identity.assistantId != null
+}
 
 export type DelegationIdentitySize = "header" | "overlay"
 
@@ -70,16 +128,17 @@ export function DelegationIdentityAvatar({
   size,
 }: DelegationIdentityAvatarProps) {
   const shape = AVATAR[size]
-  const assistant = useAssistant(identity.assistantId)
-  const isAssistant = identity.assistantId !== null
+  const assistant = useIdentityAssistant(identity)
+  const isAssistant = isAssistantIdentity(identity)
   return (
     <span className="relative inline-flex shrink-0">
       {isAssistant ? (
         <>
-          <AssistantAvatar
+          <BotAvatar
             avatar={assistant?.avatar ?? null}
             name={assistant?.name ?? identity.assistantName ?? ""}
             size={shape.px}
+            star={assistant?.primary}
             className={size === "header" ? "rounded-md" : undefined}
           />
           {identity.agentType ? (
@@ -130,10 +189,10 @@ export function DelegationIdentityGlyph({
 }: {
   identity: DelegationIdentity
 }) {
-  const assistant = useAssistant(identity.assistantId)
-  if (identity.assistantId !== null) {
+  const assistant = useIdentityAssistant(identity)
+  if (isAssistantIdentity(identity)) {
     return (
-      <AssistantAvatar
+      <BotAvatar
         avatar={assistant?.avatar ?? null}
         name={assistant?.name ?? identity.assistantName ?? ""}
         size={14}
@@ -154,8 +213,8 @@ export function useDelegationIdentityLabel(identity: DelegationIdentity): {
   deleted: boolean
 } {
   const t = useTranslations("Folder.chat.delegation")
-  const assistant = useAssistant(identity.assistantId)
-  if (identity.assistantId === null) {
+  const assistant = useIdentityAssistant(identity)
+  if (!isAssistantIdentity(identity)) {
     return {
       name: identity.agentType
         ? getAgentLabel(identity.agentType)
@@ -167,8 +226,10 @@ export function useDelegationIdentityLabel(identity: DelegationIdentity): {
     name:
       assistant?.name ||
       identity.assistantName ||
-      t("unknownAssistant", { id: identity.assistantId }),
-    deleted: assistant?.deleted_at != null,
+      t("unknownAssistant", {
+        id: identity.assistantId ?? identity.botUid ?? "",
+      }),
+    deleted: assistant?.deleted ?? false,
   }
 }
 
@@ -187,7 +248,7 @@ export function DelegationIdentityName({
 }: DelegationIdentityNameProps) {
   const t = useTranslations("Folder.chat.delegation")
   const { name, deleted } = useDelegationIdentityLabel(identity)
-  if (identity.assistantId === null) {
+  if (!isAssistantIdentity(identity)) {
     return <span className={className}>{name}</span>
   }
   return (
