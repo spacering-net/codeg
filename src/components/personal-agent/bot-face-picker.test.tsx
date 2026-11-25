@@ -84,12 +84,12 @@ describe("the face editor's bubble", () => {
   it("has its three pages and [Reset] in a row, open on the page its face is from", () => {
     editor(BLOB)
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
-      "Bot",
+      "Models",
       "Text",
       "Upload",
     ])
     expect(
-      screen.getByRole("tab", { name: "Bot" }).getAttribute("aria-selected")
+      screen.getByRole("tab", { name: "Models" }).getAttribute("aria-selected")
     ).toBe("true")
     cleanup()
     editor({ kind: "monogram", color: "red" })
