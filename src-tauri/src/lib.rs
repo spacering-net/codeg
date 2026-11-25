@@ -2163,6 +2163,8 @@ mod tauri_app {
                 windows::open_pet_window,
                 windows::close_pet_window,
                 windows::pet_window_record_position,
+                windows::pet_start_drag,
+                windows::pet_end_drag,
                 windows::pet_show_context_menu,
                 windows::toggle_pet_panel,
                 windows::close_pet_panel,

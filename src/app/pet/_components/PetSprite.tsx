@@ -58,7 +58,7 @@ export function PetSprite({
         backgroundRepeat: "no-repeat",
         backgroundSize: spriteBackgroundSize(rows),
         backgroundPosition: backgroundPositionFor(row, col, rows),
-        imageRendering: "pixelated",
+        imageRendering: Number.isInteger(scale) ? "pixelated" : "auto",
       }}
     />
   )

@@ -47,6 +47,7 @@ describe("PetSprite", () => {
     expect(sprite.style.flexShrink).toBe("0")
     expect(sprite.style.backgroundSize).toBe("800% 900%")
     expect(sprite.style.backgroundPosition).toBe("0% 62.5%")
+    expect(sprite.style.imageRendering).toBe("auto")
   })
 
   it("adapts background grid height and position for v2 11-row sheets", () => {
@@ -65,5 +66,6 @@ describe("PetSprite", () => {
     expectViewportClampedWidth(sprite.style.width, 192)
     expect(sprite.style.backgroundSize).toBe("800% 1100%")
     expect(sprite.style.backgroundPosition).toBe("0% 50%")
+    expect(sprite.style.imageRendering).toBe("pixelated")
   })
 })

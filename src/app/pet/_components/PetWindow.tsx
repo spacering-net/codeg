@@ -134,10 +134,12 @@ export function PetWindow({ petId }: PetWindowProps) {
     window.addEventListener("pointerdown", onDown)
     window.addEventListener("pointerup", onUp)
     window.addEventListener("pointercancel", onUp)
+    window.addEventListener("lostpointercapture", onUp)
     return () => {
       window.removeEventListener("pointerdown", onDown)
       window.removeEventListener("pointerup", onUp)
       window.removeEventListener("pointercancel", onUp)
+      window.removeEventListener("lostpointercapture", onUp)
     }
   }, [])
 
