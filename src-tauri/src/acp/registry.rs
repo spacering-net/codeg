@@ -6360,7 +6360,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // Two behaviours around a Stop, the same in 2.171.0, 2.177.0, 2.177.1,
             // 2.179.0, 2.179.2, 2.179.3, 2.180.0, 2.181.0, 2.182.0, 2.183.0,
-            // 2.184.0 and 2.185.0, need codeg's help.
+            // 2.184.0, 2.185.0 and 2.186.0, need codeg's help.
             // CodeBuddy answers a `session/prompt` that starts within 500 ms of a
             // `session/cancel` it took mid-turn with `cancelled`, without running
             // the prompt or keeping it in its history, so codeg holds the first
@@ -6668,9 +6668,43 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // during a sub-agent, the cancelled prompt was answered after 60 ms,
             // 65 ms and, behind the background summary request, 12.1 s. An
             // install without optional dependencies still runs whole turns.
+            //
+            // 2.186.0 keeps `bin/codebuddy` byte for byte and the inlined ACP
+            // SDK module (transport included); `package.json` changes its
+            // version and the sandbox-cli pins (5.13.0-beta.2 to beta.14).
+            // `initialize` and the unauthenticated `session/new` answer exactly
+            // as 2.185.0 does (`protocolVersion: 1`), the models (default
+            // `default-model`), modes, `thought_level`, `sandbox` and
+            // `multitask` keep their values, and no `sessionUpdate` kind,
+            // `session/*` method or `_codebuddy.ai/*` notification came or
+            // went. A Read result still ends with the same tool-hint line, live,
+            // in the `session/load` replay and in the transcript, and
+            // `strip_read_range_hint` still removes it. The compaction divider
+            // (two `agent_message_chunk`s flagged
+            // `_meta["codebuddy.ai/isCompactInternal"]`, sent on `/compact` and
+            // on automatic compaction) now carries one content block instead of
+            // an array, so it parses and would have reached the chat as reply
+            // text; `codebuddy_compaction_divider` in `acp::connection` turns it
+            // into the compaction card and drops the rest of the compaction. A
+            // manual `/compact` now answers with only that divider and writes
+            // `/compact` plus a `<cb_summary>` boundary record, which the
+            // history parser draws as the same card. A prompt answered
+            // `cancelled` inside the 500 ms barrier is now kept in the history
+            // with an "Interrupted by user" reply and gets a `userMessageId`;
+            // codeg's hold keeps its prompts out of the barrier (a prompt sent
+            // 600 ms after the cancelled prompt's answer ran). After a Stop that
+            // caught a permission request, the next prompt still answers
+            // `cancelled` with `codebuddy.ai/finishReason: "stop"`. A stdio
+            // server handed over on `session/new` is started and its tool
+            // reaches the model, and one named `codeg-mcp` still asks once per
+            // call, for `DeferExecuteTool`. Of three Stops during a sub-agent,
+            // the cancelled prompt was answered after 40 ms, 39 ms and, behind
+            // the background summary request, 12.1 s. 2.186.0 loads a 2.185.0
+            // session on `default-model`, and an install without optional
+            // dependencies still runs whole turns.
             distribution: AgentDistribution::Npx {
-                version: "2.185.0",
-                package: "@tencent-ai/codebuddy-code@2.185.0",
+                version: "2.186.0",
+                package: "@tencent-ai/codebuddy-code@2.186.0",
                 cmd: "codebuddy",
                 args: &["--acp"],
                 env: &[],
@@ -8406,9 +8440,46 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // official CLI starts a forwarded stdio MCP server (no ZCode install
             // here); the bridge forwards `mcpServers` to `session/create`
             // unchanged.
+            //
+            // Bridge 0.93.1, after 0.93.0 (both 2026-11-24), changes
+            // `package.json` only in its version. Installed fresh on
+            // 2026-11-25, 0.92.0 and 0.93.1 resolve the same dependencies (ACP
+            // SDK 1.9.0), and `dist/cli.js` is byte-identical. Against the
+            // stand-in backend given codeg's env and capabilities,
+            // `initialize` (`protocolVersion: 1`), `session/new` (same mode,
+            // thought and model values), the mode gate, stdio MCP forwarding,
+            // text, tool and permission turns, completed, retried, failed and
+            // cancelled prompts, backend steering, `/rename` and
+            // `session/load` give the client the same frames as 0.92.0, with
+            // two exceptions. When the bridge cannot fetch ZCode's client
+            // config (as in the stand-in runs), the dynamic-workflow gate now
+            // reads `onDemand` instead of off: the backend gets a workflow
+            // policy and `dynamicWorkflowEnabled` on `session/create`, and the
+            // command list gains `workflow` and `workflows`, which codeg lists.
+            // And when a turn leaves a background sub-agent task running,
+            // `session/prompt` now stays open until the task ends and takes the
+            // backend's follow-up turn into the same prompt, where 0.92.0
+            // answered at the end of the first turn and sent the follow-up text
+            // outside any prompt. Such a prompt ends with one
+            // `_zcode/turnState` end whose `usage` sums both turns and whose
+            // `turnMs` spans them, which `zcode_turn` records as one window. A
+            // Stop while the prompt waits answers `cancelled`, and a failed
+            // follow-up ends `end_turn` after a "[A background follow-up turn
+            // failed; …]" text, both without usage. By the bridge's account
+            // ZCode 4.0 runs every Agent call in the background by default, so
+            // with a 4.0 desktop app such prompts hold whenever the model
+            // starts a sub-agent (the bridge config's
+            // `subagents.alwaysBackground: false` turns that off). Read in the
+            // source: the catalog probe also accepts the desktop's 4.0.0
+            // `zcode.cjs`; the backend's `session/readReplyLanguage` ask is
+            // answered from `~/.zcode/v2/setting.json`; and the Node that runs
+            // the backend must also load `node:sea`, so a `ZCODE_NODE` that
+            // cannot is skipped for the next Node the bridge finds. Not
+            // measured: whether the official CLI starts a forwarded stdio MCP
+            // server; the bridge still forwards `mcpServers` unchanged.
             distribution: AgentDistribution::Npx {
-                version: "0.92.0",
-                package: "zcode-acp-server@0.92.0",
+                version: "0.93.1",
+                package: "zcode-acp-server@0.93.1",
                 cmd: "zcode-acp-server",
                 args: &["server"],
                 env: &[],
@@ -10335,8 +10406,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::CodeBuddy,
-            "2.185.0",
-            "@tencent-ai/codebuddy-code@2.185.0",
+            "2.186.0",
+            "@tencent-ai/codebuddy-code@2.186.0",
             Some("22.0.0"),
         );
         // Kimi Code must never land on 0.37.0–0.38.0: every session in that
