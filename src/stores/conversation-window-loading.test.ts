@@ -11,9 +11,7 @@
  *   into nothingness);
  * - `syncTurnMetadata` anchors at the captured batch boundary and refuses to
  *   patch when the boundary fingerprint mismatches (metadata absence is
- *   recoverable, a mis-patch is not) — falling back to ONE full read of the
- *   transcript, where the baseline locates the batch, when a window that can
- *   never verify would otherwise leave the newest reply's stats empty for good.
+ *   recoverable, a mis-patch is not).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type {
@@ -1174,24 +1172,6 @@ describe("syncTurnMetadata transcript-lag polling", () => {
     })
   }
 
-  /** The legacy (unwindowed) response the last-resort read gets: the whole
-   *  transcript, history included, with no window fields — what a server
-   *  answers `getFolderConversation(id)` with. */
-  function fullDetail(
-    overrides: Partial<DbConversationDetail> = {}
-  ): DbConversationDetail {
-    return windowedDetail(0, {
-      turns: [...FULL, ...parsed],
-      turns_offset: null,
-      turns_total: null,
-      assistant_turns_before_offset: null,
-      user_turns_before_offset: null,
-      prefix_hash: null,
-      uncovered_prefix_max_ts: null,
-      ...overrides,
-    })
-  }
-
   function seedBatch(overrides: Partial<ConversationRuntimeSession> = {}) {
     seed({
       localTurns: liveTurns,
@@ -1276,33 +1256,24 @@ describe("syncTurnMetadata transcript-lag polling", () => {
     expect(session()?.localTurns[3]?.usage?.input_tokens).toBe(10)
   })
 
-  it("repairs an unverifiable window from ONE full read, and keeps trying one that is merely behind", async () => {
+  it("stops on a window that can never verify, keeps trying one that is merely behind", async () => {
     vi.useFakeTimers()
-    // Same offset, rewritten prefix: compaction moved history under us, so every
-    // windowed round is pinned to [] for this batch however long we poll. The
-    // repair reads the whole transcript once, where the batch is found by the
-    // captured baseline instead of the fingerprint.
+    // Same offset, rewritten prefix: compaction moved history under us, so
+    // patches are pinned to [] for this batch however long we poll.
     seedBatch()
-    mockGet
-      .mockResolvedValueOnce(
-        windowedDetail(BOUNDARY, {
-          turns: parsed,
-          turns_total: BOUNDARY + parsed.length,
-          prefix_hash: "00000000000000ff",
-        })
-      )
-      .mockResolvedValue(fullDetail())
+    mockGet.mockResolvedValue(
+      windowedDetail(BOUNDARY, {
+        turns: parsed,
+        turns_total: BOUNDARY + parsed.length,
+        prefix_hash: "00000000000000ff",
+      })
+    )
     actions().syncTurnMetadata(CID)
     await vi.advanceTimersByTimeAsync(40_000)
-    expect(mockGet).toHaveBeenCalledTimes(2)
-    // The second read asks for NO window — that is what makes it immune.
-    expect(mockGet.mock.calls[1]).toEqual([CID])
-    expect(session()?.localTurns[3]?.usage?.input_tokens).toBe(10)
-    expect(session()?.localTurns[3]?.completed_at).toBe(ts(9))
+    expect(mockGet).toHaveBeenCalledTimes(1)
 
     // An offset SHORT of the boundary is the transcript being behind
-    // (`fromIndex` clamps to the total) — that one resolves itself, so it never
-    // reaches the full read.
+    // (`fromIndex` clamps to the total) — that one resolves itself.
     mockGet.mockReset()
     seedBatch()
     mockGet
@@ -1313,7 +1284,6 @@ describe("syncTurnMetadata transcript-lag polling", () => {
     actions().syncTurnMetadata(CID)
     await vi.advanceTimersByTimeAsync(40_000)
     expect(mockGet).toHaveBeenCalledTimes(2)
-    expect(mockGet.mock.calls.every((call) => call.length === 2)).toBe(true)
     expect(session()?.localTurns[3]?.usage?.input_tokens).toBe(10)
   })
 
@@ -1344,44 +1314,13 @@ describe("syncTurnMetadata transcript-lag polling", () => {
     expect(session()?.detailError).toBeNull()
   })
 
-  it("gives up after the last delay, ending on one full read rather than polling forever", async () => {
+  it("gives up after the last delay rather than polling forever", async () => {
     vi.useFakeTimers()
     seedBatch()
-    // The transcript never catches up: five windowed rounds, then the repair —
-    // which answers with a WINDOWED body here, so it must refuse it (an
-    // unwindowed request is the whole transcript, and its indices are the only
-    // ones the boundary cut means anything against).
     mockGet.mockResolvedValue(parseWindow(3))
     actions().syncTurnMetadata(CID)
     await vi.advanceTimersByTimeAsync(120_000)
-    expect(mockGet).toHaveBeenCalledTimes(6)
-    expect(mockGet.mock.calls[5]).toEqual([CID])
-    expect(session()?.localTurns[3]?.usage).toBeUndefined()
-    expect(session()?.localTurns[3]?.completed_at).toBeUndefined()
-  })
-
-  it("repairs a batch that holds no prompt of its own from one full read", async () => {
-    vi.useFakeTimers()
-    // A viewer that attached mid-turn (or the sub-agent adopt path): round 0
-    // here is the reply, round 0 of the window is the prompt, so the windowed
-    // rounds pair with nothing however often they verify.
-    seed({
-      localTurns: [liveTurns[3]],
-      historyAssistantBaseline: 3,
-      batchBoundaryIndex: BOUNDARY,
-      batchBoundaryPrefixHash: hashPrefix(BOUNDARY),
-    })
-    mockGet.mockImplementation((_id, options) =>
-      Promise.resolve(options ? parseWindow(4) : fullDetail())
-    )
-    actions().syncTurnMetadata(CID)
-    await vi.advanceTimersByTimeAsync(120_000)
-    // End-anchored inside the repair: the newest local reply takes the
-    // transcript's last assistant turn, with the batch's leading sub-turns
-    // folded in (20 = the two rounds the fold spans, 10 each — the documented
-    // surplus aggregation, now bounded to the batch).
-    expect(session()?.localTurns[0]?.completed_at).toBe(ts(9))
-    expect(session()?.localTurns[0]?.usage?.input_tokens).toBe(20)
+    expect(mockGet).toHaveBeenCalledTimes(5)
   })
 
   it("keeps polling for a completion clock the read did not carry", async () => {

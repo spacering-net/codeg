@@ -447,6 +447,9 @@ impl CodexParser {
         let mut first_timestamp: Option<DateTime<Utc>> = None;
         let mut last_timestamp: Option<DateTime<Utc>> = None;
         let mut message_count: u32 = 0;
+        // The `/compact` prompts the detail parser restores (see
+        // `CompactPromptTasks`), counted the same way.
+        let mut compact_prompts = CompactPromptTasks::default();
         // Mirror the detail parser's leading-`/goal` fallback in the lightweight
         // list path: newer codex records `/goal` only as `thread_goal_updated` (no
         // `user_message`), so without this the sidebar/import entry is titleless
@@ -501,6 +504,7 @@ impl CodexParser {
 
             let record_ordinal =
                 promotion.note_record(msg_type, promotion_payload_type(msg_type, &value));
+            compact_prompts.note_record(msg_type, &value);
 
             if let Some(ts_str) = value.get("timestamp").and_then(|t| t.as_str()) {
                 if let Ok(ts) = ts_str.parse::<DateTime<Utc>>() {
@@ -838,6 +842,7 @@ impl CodexParser {
         if goal_opens_session {
             message_count += 1;
         }
+        message_count += compact_prompts.into_prompts().len() as u32;
 
         let id = conversation_id.unwrap_or_else(|| {
             path.file_stem()
@@ -3499,6 +3504,7 @@ impl CodexParser {
         // Index in `messages` of the compaction divider the next
         // `item_completed.ContextCompaction` names (see the `compacted` arm).
         let mut unnamed_compaction_divider: Option<usize> = None;
+        let mut compact_prompts = CompactPromptTasks::default();
         let mut completed_agent = None;
         // By-reference forks replay ancestor headers before the child's own records.
         let mut source_threads = HashSet::from([conversation_id.to_owned()]);
@@ -3522,6 +3528,7 @@ impl CodexParser {
             // are all positional properties of the raw stream.
             let record_ordinal =
                 promotion.note_record(msg_type, promotion_payload_type(msg_type, &value));
+            compact_prompts.note_record(msg_type, &value);
 
             if let Some(ts_str) = value.get("timestamp").and_then(|t| t.as_str()) {
                 if let Ok(ts) = ts_str.parse::<DateTime<Utc>>() {
@@ -5380,6 +5387,9 @@ impl CodexParser {
                         timestamp,
                     ));
                     unnamed_compaction_divider = Some(messages.len() - 1);
+                    if let Some(divider) = messages.last() {
+                        compact_prompts.note_divider(&divider.id);
+                    }
                 }
                 _ => {}
             }
@@ -5539,6 +5549,38 @@ impl CodexParser {
                 })
                 .collect();
             messages.splice(insert_at..insert_at, group);
+        }
+
+        // The `/compact` a compaction-only task answered (see
+        // `CompactPromptTasks`). By id, after the splice above, which moves
+        // every index past its insertion points.
+        for (divider_id, asked_at) in compact_prompts.into_prompts() {
+            let Some(divider_id) = divider_id else {
+                continue;
+            };
+            let Some(at) = messages
+                .iter()
+                .position(|m| m.id == divider_id && is_codex_compaction_divider(&m.content))
+            else {
+                continue;
+            };
+            let timestamp = asked_at.unwrap_or(messages[at].timestamp);
+            messages.insert(
+                at,
+                UnifiedMessage {
+                    id: format!("codex-compact-prompt-{divider_id}"),
+                    role: MessageRole::User,
+                    content: vec![ContentBlock::Text {
+                        text: CODEX_COMPACT_COMMAND.to_string(),
+                    }],
+                    timestamp,
+                    usage: None,
+                    duration_ms: None,
+                    model: None,
+                    completed_at: Some(timestamp),
+                    agent_message_id: None,
+                },
+            );
         }
 
         // A promoted user that PRECEDES the goal means the goal did not open the
@@ -7121,6 +7163,112 @@ fn codex_compaction_divider(
         model: None,
         completed_at: Some(timestamp),
         agent_message_id: None,
+    }
+}
+
+/// The slash command a compaction-only task answered. codex records the task
+/// without the prompt, and nothing else in it names the command.
+const CODEX_COMPACT_COMMAND: &str = "/compact";
+
+/// The `/compact` prompts codex leaves out of its rollout.
+///
+/// A `/compact` runs as a task of its own, and codex writes that task with no
+/// user record at all: `task_started`, the compaction's handoff and the
+/// `compacted` record, then `task_complete`. Live, the prompt that asked for it
+/// IS a user turn — the composer's own send, or codeg's (the work-task and
+/// personal-assistant engines send one before resuming a session whose context
+/// is filling up), broadcast to every open tab as a user message. Read back
+/// without it, the history has one round fewer than the tab that watched it,
+/// so every reply after it in that tab pairs with the round before its own:
+/// the newest one with nothing, which left its footer empty and its fork point
+/// unnamed until the conversation was reopened (`computeTurnMetadataPatches`
+/// pairs rounds from the start). The Claude parser places the echo of its
+/// `/compact` at the divider for the same reason.
+///
+/// Only a task that CLOSES with a compaction and no user record qualifies.
+/// codex also compacts at the start of an ordinary turn, before writing that
+/// turn's prompt, and the prompt then follows within milliseconds in the same
+/// task; that compaction belongs to the prompt's round. A task still open when
+/// the file ends is left alone for the same reason.
+#[derive(Default)]
+struct CompactPromptTasks {
+    open: Option<CompactPromptTask>,
+    /// Per qualifying task: the divider the detail parser drew for its
+    /// compaction (`None` where nothing draws one — the summary pass), and
+    /// when the task started.
+    found: Vec<(Option<String>, Option<DateTime<Utc>>)>,
+}
+
+struct CompactPromptTask {
+    started_at: Option<DateTime<Utc>>,
+    has_user_record: bool,
+    compacted: bool,
+    divider: Option<String>,
+}
+
+impl CompactPromptTasks {
+    /// Fed every record, before the parser's own handling of it.
+    fn note_record(&mut self, msg_type: &str, value: &serde_json::Value) {
+        let payload = value.get("payload");
+        let payload_type = payload
+            .and_then(|p| p.get("type"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        match (msg_type, payload_type) {
+            ("event_msg", "task_started") => {
+                self.close();
+                self.open = Some(CompactPromptTask {
+                    started_at: parse_codex_timestamp(value),
+                    has_user_record: false,
+                    compacted: false,
+                    divider: None,
+                });
+            }
+            ("event_msg", "task_complete" | "turn_aborted") => self.close(),
+            ("event_msg", "user_message") => self.saw_user_record(),
+            ("response_item", "message")
+                if payload
+                    .and_then(|p| p.get("role"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("user") =>
+            {
+                self.saw_user_record()
+            }
+            ("compacted", _) => {
+                if let Some(task) = self.open.as_mut() {
+                    task.compacted = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn saw_user_record(&mut self) {
+        if let Some(task) = self.open.as_mut() {
+            task.has_user_record = true;
+        }
+    }
+
+    /// The divider the detail parser just drew for the open task's
+    /// `compacted` record. Its first one is where the prompt goes.
+    fn note_divider(&mut self, id: &str) {
+        if let Some(task) = self.open.as_mut() {
+            if task.divider.is_none() {
+                task.divider = Some(id.to_string());
+            }
+        }
+    }
+
+    fn close(&mut self) {
+        if let Some(task) = self.open.take() {
+            if task.compacted && !task.has_user_record {
+                self.found.push((task.divider, task.started_at));
+            }
+        }
+    }
+
+    fn into_prompts(self) -> Vec<(Option<String>, Option<DateTime<Utc>>)> {
+        self.found
     }
 }
 
@@ -16903,9 +17051,11 @@ mod tests {
             vec![
                 ("user", Some("look at /private/tmp".into())),
                 ("assistant", Some("It holds 40 stale folders.".into())),
+                ("user", Some("/compact".into())),
                 ("assistant", None),
             ],
-            "the handoff is no reply; the divider stands where live drew it"
+            "the handoff is no reply; the divider stands where live drew it, \
+             under the `/compact` that asked for it"
         );
         // Named by the item codex-acp names the live divider by, and opening
         // onto the handoff without the framing codex addressed to its model.
@@ -16915,9 +17065,9 @@ mod tests {
         );
         // Every token the rollout reported is still billed to a reply.
         assert_eq!(turn_usage_total(&detail), 2580);
-        // The sidebar entry counts what the conversation renders: the prompt
-        // and the reply, not the handoff.
-        assert_eq!(summary_of("compaction-handoff-sum", &content).message_count, 2);
+        // The sidebar entry counts what the conversation renders: the prompt,
+        // the reply and the `/compact`, not the handoff.
+        assert_eq!(summary_of("compaction-handoff-sum", &content).message_count, 3);
     }
 
     /// An automatic compaction mid-turn. The compaction's own model call thinks
@@ -17789,6 +17939,129 @@ mod tests {
             .collect();
         assert!(rendered.contains(directive), "{rendered}");
         assert!(!rendered.contains("[a.txt]("), "{rendered}");
+    }
+
+    /// The records codex 0.171 (codex-acp 2.10.0) writes for one round,
+    /// recorded live: its task, the prompt, the reply and the task's close.
+    fn prompted_task(at: &str, turn: &str, prompt: &str, reply: &str) -> Vec<serde_json::Value> {
+        let ts = |ms: &str| format!("2026-11-25T08:{at}.{ms}Z");
+        vec![
+            record(&ts("100"), "event_msg", serde_json::json!({"type": "task_started", "turn_id": turn})),
+            record(&ts("110"), "turn_context", serde_json::json!({"turn_id": turn, "cwd": "/w", "model": "gpt-5.5"})),
+            record(
+                &ts("120"),
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": prompt}]}),
+            ),
+            assistant_item(&ts("300"), reply),
+            token_count(&ts("310"), 1000, 10),
+            record(
+                &ts("320"),
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": turn, "last_agent_message": reply}),
+            ),
+        ]
+    }
+
+    /// The task codex 0.171 writes for a `/compact` (codex-acp 2.10.0,
+    /// recorded live): no user record at all, the compaction's handoff, the
+    /// `compacted` record and the task's close.
+    fn compact_task(at: &str, turn: &str, closed: bool) -> Vec<serde_json::Value> {
+        let ts = |ms: &str| format!("2026-11-25T08:{at}.{ms}Z");
+        let mut records = vec![
+            record(&ts("700"), "event_msg", serde_json::json!({"type": "task_started", "turn_id": turn})),
+            token_count(&ts("871"), 1000, 10),
+            assistant_item(&ts("937"), "Handoff: the user said hello."),
+            compacted(&ts("950"), "Handoff: the user said hello."),
+            record(&ts("952"), "turn_context", serde_json::json!({"turn_id": turn, "cwd": "/w", "model": "gpt-5.5"})),
+            record(
+                &ts("978"),
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": turn, "item": {"type": "ContextCompaction", "id": format!("cc-{turn}")}}),
+            ),
+        ];
+        if closed {
+            records.push(record(
+                &ts("990"),
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": turn, "last_agent_message": null}),
+            ));
+        }
+        records
+    }
+
+    /// A `/compact` reads back as the prompt the user (or codeg's task engine)
+    /// sent, above its divider — the round the live tab drew for it. codex
+    /// writes the task without it, and history one round short paired every
+    /// later reply in an open tab with the round before its own: the newest
+    /// reply's footer stayed empty and its fork point unnamed.
+    #[test]
+    fn a_compact_task_reads_back_with_the_prompt_that_asked_for_it() {
+        let mut records = vec![record(
+            "2026-11-25T08:52:13.000Z",
+            "session_meta",
+            serde_json::json!({"id": "compact-1", "cwd": "/w", "cli_version": "0.171.0"}),
+        )];
+        records.extend(prompted_task("52:13", "t1", "hello one", "Reply 1: done."));
+        records.extend(compact_task("58:00", "t2", true));
+        records.extend(prompted_task("58:47", "t3", "hello five", "Reply 10: done."));
+        let detail = parse_rollout("compact-task", &jsonl(&records), "compact-1");
+
+        let shape: Vec<(&str, Option<String>)> = turn_texts(&detail);
+        assert_eq!(
+            shape,
+            vec![
+                ("user", Some("hello one".into())),
+                ("assistant", Some("Reply 1: done.".into())),
+                ("user", Some("/compact".into())),
+                ("assistant", None),
+                ("user", Some("hello five".into())),
+                ("assistant", Some("Reply 10: done.".into())),
+            ],
+            "{shape:?}"
+        );
+        // Above its divider, stamped when codex began the task.
+        assert!(super::is_codex_compaction_divider(&detail.turns[3].blocks));
+        assert_eq!(
+            detail.turns[2].timestamp,
+            "2026-11-25T08:58:00.700Z".parse::<DateTime<Utc>>().unwrap()
+        );
+    }
+
+    /// codex also compacts at the START of an ordinary turn, before writing
+    /// that turn's prompt; the prompt follows within milliseconds in the same
+    /// task. That compaction belongs to the prompt's round and asks for no
+    /// prompt of its own. Nor does a compaction-only task the file ends
+    /// inside: it has not shown yet whether a prompt follows.
+    #[test]
+    fn a_compaction_with_its_own_prompt_or_still_open_gets_no_compact_prompt() {
+        let header = record(
+            "2026-11-25T08:52:13.000Z",
+            "session_meta",
+            serde_json::json!({"id": "compact-2", "cwd": "/w", "cli_version": "0.171.0"}),
+        );
+        let mut pre_turn = vec![header.clone()];
+        pre_turn.extend(prompted_task("52:13", "t1", "hello one", "Reply 1: done."));
+        let mut second = compact_task("58:00", "t2", false);
+        second.extend(prompted_task("58:01", "t2", "hello two", "Reply 2: done.").into_iter().skip(1));
+        pre_turn.extend(second);
+        let detail = parse_rollout("pre-turn-compaction", &jsonl(&pre_turn), "compact-2");
+        let shape = turn_texts(&detail);
+        assert!(
+            !shape.iter().any(|(_, text)| text.as_deref() == Some("/compact")),
+            "{shape:?}"
+        );
+        assert_eq!(shape.iter().filter(|(role, _)| *role == "user").count(), 2, "{shape:?}");
+
+        let mut open = vec![header];
+        open.extend(prompted_task("52:13", "t1", "hello one", "Reply 1: done."));
+        open.extend(compact_task("58:00", "t2", false));
+        let detail = parse_rollout("open-compaction", &jsonl(&open), "compact-2");
+        let shape = turn_texts(&detail);
+        assert!(
+            !shape.iter().any(|(_, text)| text.as_deref() == Some("/compact")),
+            "{shape:?}"
+        );
     }
 
     /// A note steered into a running codex turn (codex-acp 2.4.0 + codex
