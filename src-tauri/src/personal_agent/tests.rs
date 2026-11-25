@@ -9902,6 +9902,17 @@ async fn a_failure_reaches_the_owner_only_if_it_is_still_news_after_its_assistan
     role_assistant(&engine, "Coder", true).await;
     let conn = &engine.db.conn;
     let me = engine.bot().await;
+    // The one slot taken, so the work that takes a failure over stays
+    // queued: started, it would fail on its own wherever its agent is not
+    // installed (on CI) and be one more failure held, whenever that is.
+    engine
+        .save(PersonalAgentDraft {
+            settings: Some(PersonalAgentSettings { dispatch_concurrency: 1, ..Default::default() }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    session_dispatch(&engine, DispatchState::Running, "c-busy").await;
     let fail = |name: &'static str| {
         let engine = engine.clone();
         async move {
