@@ -1602,6 +1602,58 @@ function sameSelectEntry(
   )
 }
 
+/**
+ * The session modes once they follow the agent's mode selector (a `select`
+ * under the `mode` category or id), when that selector names one of the
+ * session's own modes — the live twin of the backend's `SessionState`
+ * handling of `SessionConfigOptions`. Antigravity 1.5.2 answers a mode pick
+ * made through the selector without a `current_mode_update` (#1309). Grok's
+ * effort list shares the category, but its values are no mode, so it never
+ * moves one. Returns `modes` itself when nothing changes.
+ */
+function isModeOption(option: SessionConfigOptionInfo): boolean {
+  return option.category === "mode" || option.id === "mode"
+}
+
+/**
+ * The options with every mode selector that lists `modeId` pointed at it —
+ * the live twin of `SessionState`'s handling of `ModeChanged`: Antigravity
+ * 1.5.2 answers `session/set_mode` with `{}` and pushes no option list
+ * (#1309). Returns `options` itself when nothing changes.
+ */
+export function modeOptionsPointedAt(
+  options: SessionConfigOptionInfo[],
+  modeId: string
+): SessionConfigOptionInfo[] {
+  let next: SessionConfigOptionInfo[] | null = null
+  options.forEach((option, i) => {
+    if (!isModeOption(option) || option.kind.type !== "select") return
+    const kind = option.kind
+    const listed =
+      kind.options.some((o) => o.value === modeId) ||
+      kind.groups.some((g) => g.options.some((o) => o.value === modeId))
+    if (!listed || kind.current_value === modeId) return
+    next ??= [...options]
+    next[i] = { ...option, kind: { ...kind, current_value: modeId } }
+  })
+  return next ?? options
+}
+
+export function modesFollowingModeOption(
+  modes: SessionModeStateInfo | null,
+  options: SessionConfigOptionInfo[]
+): SessionModeStateInfo | null {
+  if (!modes) return modes
+  for (const option of options) {
+    if (!isModeOption(option) || option.kind.type !== "select") continue
+    const value = option.kind.current_value
+    if (!modes.available_modes.some((mode) => mode.id === value)) continue
+    if (value === modes.current_mode_id) return modes
+    return { ...modes, current_mode_id: value }
+  }
+  return modes
+}
+
 function sameConfigOptions(
   a: SessionConfigOptionInfo[] | null,
   b: SessionConfigOptionInfo[]
@@ -3098,12 +3150,17 @@ function connectionsReducer(
     case "SESSION_CONFIG_OPTIONS": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
-      if (sameConfigOptions(conn.configOptions, action.configOptions)) {
+      const modes = modesFollowingModeOption(conn.modes, action.configOptions)
+      if (
+        modes === conn.modes &&
+        sameConfigOptions(conn.configOptions, action.configOptions)
+      ) {
         return state
       }
       const next = new Map(state)
       next.set(action.contextKey, {
         ...conn,
+        modes,
         configOptions: action.configOptions,
       })
       return next
@@ -3219,7 +3276,15 @@ function connectionsReducer(
     case "MODE_CHANGED": {
       const conn = state.get(action.contextKey)
       if (!conn?.modes) return state
-      if (conn.modes.current_mode_id === action.modeId) return state
+      const configOptions = conn.configOptions
+        ? modeOptionsPointedAt(conn.configOptions, action.modeId)
+        : conn.configOptions
+      if (
+        conn.modes.current_mode_id === action.modeId &&
+        configOptions === conn.configOptions
+      ) {
+        return state
+      }
       const next = new Map(state)
       next.set(action.contextKey, {
         ...conn,
@@ -3227,6 +3292,7 @@ function connectionsReducer(
           ...conn.modes,
           current_mode_id: action.modeId,
         },
+        configOptions,
       })
       return next
     }

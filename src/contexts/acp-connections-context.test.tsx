@@ -12,6 +12,8 @@ import {
 } from "vitest"
 import {
   AcpConnectionsProvider,
+  modeOptionsPointedAt,
+  modesFollowingModeOption,
   STREAM_FLUSH_FRAME_MS,
   STREAM_FLUSH_MAX_MS,
   useAcpActions,
@@ -10544,5 +10546,76 @@ describe("a dispatching assistant answers for the owner (personal agent 7.3.1)",
       plan_markdown: "# Plan",
     })
     expect(h.requestWindowAttention).toHaveBeenCalledWith("permission_request")
+  })
+})
+
+describe("modesFollowingModeOption (#1309)", () => {
+  const modes = {
+    current_mode_id: "default",
+    available_modes: ["default", "auto_edit", "yolo"].map((id) => ({
+      id,
+      name: id,
+      description: null,
+    })),
+  }
+  const select = (id: string, category: string | null, value: string) => ({
+    id,
+    name: id,
+    category,
+    kind: {
+      type: "select" as const,
+      current_value: value,
+      options: [],
+      groups: [],
+    },
+  })
+
+  it("moves the session mode to the mode selector's value", () => {
+    expect(
+      modesFollowingModeOption(modes, [select("mode", "mode", "yolo")])
+        ?.current_mode_id
+    ).toBe("yolo")
+  })
+
+  it("leaves modes alone for a mode-category value that is no mode", () => {
+    expect(
+      modesFollowingModeOption(modes, [
+        select("reasoning_effort", "mode", "high"),
+      ])
+    ).toBe(modes)
+    expect(
+      modesFollowingModeOption(modes, [select("mode", "mode", "default")])
+    ).toBe(modes)
+    expect(
+      modesFollowingModeOption(null, [select("mode", "mode", "yolo")])
+    ).toBeNull()
+  })
+})
+
+describe("modeOptionsPointedAt (#1309)", () => {
+  const listing = (id: string, current: string, values: string[]) => ({
+    id,
+    name: id,
+    category: "mode",
+    kind: {
+      type: "select" as const,
+      current_value: current,
+      options: values.map((value) => ({ value, name: value })),
+      groups: [],
+    },
+  })
+
+  it("points the mode selector at a mode it lists, and nothing else", () => {
+    const options = [
+      listing("mode", "default", ["default", "yolo"]),
+      listing("reasoning_effort", "high", ["low", "high"]),
+    ]
+    const next = modeOptionsPointedAt(options, "yolo")
+    expect(
+      next.map((o) => (o.kind.type === "select" ? o.kind.current_value : null))
+    ).toEqual(["yolo", "high"])
+    expect(next[1]).toBe(options[1])
+    expect(modeOptionsPointedAt(options, "default")).toBe(options)
+    expect(modeOptionsPointedAt(options, "plan")).toBe(options)
   })
 })
