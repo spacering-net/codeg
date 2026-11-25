@@ -1255,12 +1255,18 @@ fn build_historical_delegation_meta(child: &DbConversationSummary) -> serde_json
         );
     }
     // The assistant the child ran as, off its row: the reloaded card draws it
-    // even when no live binding or tool result remains.
+    // even when no live binding or tool result remains — the owner's
+    // assistant by its uid, else the collaboration settings' by its id.
     if let Some(assistant_id) = child.assistant_id {
         obj.insert(
             "assistant_id".into(),
             serde_json::Value::Number(assistant_id.into()),
         );
+    }
+    if let Some(uid) = child.bot_uid.as_deref() {
+        obj.insert("bot_uid".into(), serde_json::Value::String(uid.into()));
+    }
+    if child.assistant_id.is_some() || child.bot_uid.is_some() {
         if let Some(name) = child.assistant_name.as_deref() {
             obj.insert(
                 "assistant_name".into(),
@@ -2493,6 +2499,35 @@ pub async fn create_conversation_core(
     Ok(model.id)
 }
 
+/// [`create_conversation_core`] for the conversation a check of a message
+/// ("is this right?") runs in: the row is created nested under
+/// `checked_conversation_id` (see [`conversation_service::create_check`]).
+pub async fn create_check_conversation_core(
+    conn: &sea_orm::DatabaseConnection,
+    checked_conversation_id: i32,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+) -> Result<conversation::Model, AppCommandError> {
+    let git_branch = match folder_service::get_folder_by_id(conn, folder_id)
+        .await
+        .map_err(AppCommandError::from)?
+    {
+        Some(folder) => detect_git_branch(&folder.path).await,
+        None => None,
+    };
+    conversation_service::create_check(
+        conn,
+        checked_conversation_id,
+        folder_id,
+        agent_type,
+        title,
+        git_branch,
+    )
+    .await
+    .map_err(AppCommandError::from)
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn create_conversation(
@@ -2505,6 +2540,154 @@ pub async fn create_conversation(
     let id = create_conversation_core(&db.conn, folder_id, agent_type, title).await?;
     emit_conversation_upsert(&EventEmitter::from_app(&app), &db.conn, id).await;
     Ok(id)
+}
+
+/// Core of "ask about this selection": create an ask conversation under
+/// `parent_conversation_id` (see [`conversation_service::create_ask`]) in
+/// `folder_id` — the folder the ask's agent is running in — with that folder's
+/// current git branch, and tell every client: the new row, then the
+/// conversation it hangs off, whose `child_count` (its sidebar chevron) just
+/// grew. Returns the new row's id and the folder it landed in.
+pub async fn create_ask_conversation_core(
+    emitter: &EventEmitter,
+    conn: &sea_orm::DatabaseConnection,
+    parent_conversation_id: i32,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+) -> Result<AskConversationCreated, AppCommandError> {
+    let git_branch = match folder_service::get_folder_by_id(conn, folder_id)
+        .await
+        .map_err(AppCommandError::from)?
+    {
+        Some(folder) => detect_git_branch(&folder.path).await,
+        None => None,
+    };
+    let model = conversation_service::create_ask(
+        conn,
+        parent_conversation_id,
+        folder_id,
+        agent_type,
+        title,
+        git_branch,
+    )
+    .await
+    .map_err(AppCommandError::from)?;
+    emit_conversation_upsert(emitter, conn, model.id).await;
+    if let Some(parent_id) = model.parent_id {
+        emit_conversation_upsert(emitter, conn, parent_id).await;
+    }
+    Ok(AskConversationCreated {
+        conversation_id: model.id,
+        folder_id: model.folder_id,
+        parent_conversation_id: model.parent_id.unwrap_or(parent_conversation_id),
+    })
+}
+
+/// Result of [`create_ask_conversation_core`].
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskConversationCreated {
+    pub conversation_id: i32,
+    pub folder_id: i32,
+    /// The conversation the ask was filed under — not always the one it was
+    /// asked from: asking from an ask files the new one under that ask's own
+    /// main conversation.
+    pub parent_conversation_id: i32,
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn create_ask_conversation(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    parent_conversation_id: i32,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+) -> Result<AskConversationCreated, AppCommandError> {
+    create_ask_conversation_core(
+        &EventEmitter::from_app(&app),
+        &db.conn,
+        parent_conversation_id,
+        folder_id,
+        agent_type,
+        title,
+    )
+    .await
+}
+
+/// The ask conversations listed under `parent_conversation_id`'s Session
+/// Details, newest first.
+pub async fn list_ask_conversations_core(
+    conn: &sea_orm::DatabaseConnection,
+    parent_conversation_id: i32,
+) -> Result<Vec<DbConversationSummary>, AppCommandError> {
+    conversation_service::list_ask_children(conn, parent_conversation_id)
+        .await
+        .map_err(AppCommandError::from)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn list_ask_conversations(
+    db: tauri::State<'_, AppDatabase>,
+    parent_conversation_id: i32,
+) -> Result<Vec<DbConversationSummary>, AppCommandError> {
+    list_ask_conversations_core(&db.conn, parent_conversation_id).await
+}
+
+/// The check conversations ("is this right?" run on a message of it) listed
+/// under `parent_conversation_id`'s Session Details, newest first.
+pub async fn list_check_conversations_core(
+    conn: &sea_orm::DatabaseConnection,
+    parent_conversation_id: i32,
+) -> Result<Vec<DbConversationSummary>, AppCommandError> {
+    conversation_service::list_check_children(conn, parent_conversation_id)
+        .await
+        .map_err(AppCommandError::from)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn list_check_conversations(
+    db: tauri::State<'_, AppDatabase>,
+    parent_conversation_id: i32,
+) -> Result<Vec<DbConversationSummary>, AppCommandError> {
+    list_check_conversations_core(&db.conn, parent_conversation_id).await
+}
+
+/// Turn an ask (or check) conversation into an ordinary one, and tell every
+/// client: the upsert carries no `parent_id` any more, so sidebars move the
+/// row from under the main conversation to the root list and the main
+/// conversation's ask (or check) list drops it; the main conversation's own
+/// upsert brings its `child_count` down. Unlinking a row that is not (or no
+/// longer) an ask or a check is a quiet no-op.
+pub async fn detach_ask_conversation_core(
+    emitter: &EventEmitter,
+    conn: &sea_orm::DatabaseConnection,
+    conversation_id: i32,
+) -> Result<(), AppCommandError> {
+    let detached = conversation_service::detach_ask(conn, conversation_id)
+        .await
+        .map_err(AppCommandError::from)?;
+    if let Some(detached) = detached {
+        emit_conversation_upsert(emitter, conn, conversation_id).await;
+        if let Some(parent_id) = detached.former_parent_id {
+            emit_conversation_upsert(emitter, conn, parent_id).await;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn detach_ask_conversation(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    conversation_id: i32,
+) -> Result<(), AppCommandError> {
+    detach_ask_conversation_core(&EventEmitter::from_app(&app), &db.conn, conversation_id).await
 }
 
 /// Result of [`create_chat_conversation_core`]: the new conversation id plus the
@@ -2720,6 +2903,39 @@ pub async fn create_chat_conversation_core(
     title: Option<String>,
     existing_dir: Option<&str>,
 ) -> Result<CreateChatConversationResult, AppCommandError> {
+    create_chat_conversation_inner(conn, data_dir, agent_type, title, existing_dir, None).await
+}
+
+/// [`create_chat_conversation_core`] for the conversation a check of a
+/// message ("is this right?") of a chat runs in: its own hidden chat folder,
+/// the row nested under `checked_conversation_id` (see
+/// [`conversation_service::create_check`]).
+pub async fn create_chat_check_conversation_core(
+    conn: &sea_orm::DatabaseConnection,
+    data_dir: &std::path::Path,
+    checked_conversation_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+) -> Result<CreateChatConversationResult, AppCommandError> {
+    create_chat_conversation_inner(
+        conn,
+        data_dir,
+        agent_type,
+        title,
+        None,
+        Some(checked_conversation_id),
+    )
+    .await
+}
+
+async fn create_chat_conversation_inner(
+    conn: &sea_orm::DatabaseConnection,
+    data_dir: &std::path::Path,
+    agent_type: AgentType,
+    title: Option<String>,
+    existing_dir: Option<&str>,
+    check_of: Option<i32>,
+) -> Result<CreateChatConversationResult, AppCommandError> {
     let path = match existing_dir {
         Some(dir) => {
             std::fs::create_dir_all(dir).map_err(AppCommandError::io)?;
@@ -2739,8 +2955,15 @@ pub async fn create_chat_conversation_core(
     // soft-deleting the just-created hidden folder — otherwise it would linger as
     // an orphan (active, conversation-less, never reached by the delete path) and
     // pollute the active-folder scope.
+    let created = match check_of {
+        Some(checked) => {
+            conversation_service::create_check(conn, checked, folder.id, agent_type, title, None)
+                .await
+        }
+        None => conversation_service::create_chat(conn, folder.id, agent_type, title, None).await,
+    };
     let model =
-        match conversation_service::create_chat(conn, folder.id, agent_type, title, None).await {
+        match created {
             Ok(model) => model,
             Err(create_err) => {
                 if let Err(cleanup_err) = folder_service::remove_folder(conn, &folder.path).await {
@@ -2940,22 +3163,14 @@ pub async fn retire_chat_folder_if_unused(conn: &sea_orm::DatabaseConnection, fo
         Ok(Some(folder)) if folder.kind == FolderKind::Chat => {
             // Only retire the hidden folder once it backs no remaining
             // (non-deleted) conversations, so deleting one chat conversation can
-            // never hide another that happens to share the folder. (Normally a
-            // chat folder backs exactly one conversation, but this keeps the
-            // delete path safe regardless.)
-            match conversation_service::list_by_folder(conn, folder_id, None, None, None, None).await
-            {
-                Ok(remaining) if remaining.is_empty() => {
-                    if let Err(e) = folder_service::remove_folder(conn, &folder.path).await {
-                        tracing::error!(
-                            "[conversations] chat folder cleanup failed (folder {folder_id}): {e}"
-                        );
-                    }
-                }
-                Ok(_) => {}
-                Err(e) => tracing::error!(
-                    "[conversations] chat folder conversation check failed (folder {folder_id}): {e}"
-                ),
+            // never hide another that happens to share the folder — its ask
+            // conversations included. The check and the soft-delete are one
+            // statement, so an ask created there concurrently can't slip in
+            // between them (see `conversation_service::create_ask`).
+            if let Err(e) = folder_service::retire_folder_if_unused(conn, folder.id).await {
+                tracing::error!(
+                    "[conversations] chat folder cleanup failed (folder {folder_id}): {e}"
+                );
             }
         }
         Ok(_) => {}
@@ -3370,6 +3585,7 @@ mod tests {
             assistant_id: None,
             source: None,
             assistant_name: None,
+            bot_uid: None,
             tag_ids: Vec::new(),
         }
     }
@@ -4018,6 +4234,22 @@ mod tests {
             .unwrap();
         assert!(inner.get("assistant_id").is_none());
         assert!(inner.get("assistant_name").is_none());
+
+        // One run as an owner's assistant: by its uid, its name with it.
+        let mut turns = vec![tool_use_turn(
+            Some("tu-c"),
+            "mcp__codeg-mcp__delegate_to_agent",
+        )];
+        let mut child = summary_child(45, "tu-c", "completed");
+        child.bot_uid = Some("0123456789abcdef0123456789abcdef".into());
+        child.assistant_name = Some("研发".into());
+        inject_delegation_meta(&mut turns, &[child]);
+        let inner = first_block_meta(&turns[0])
+            .and_then(|m| m.get("codeg.delegation").cloned())
+            .unwrap();
+        assert!(inner.get("assistant_id").is_none());
+        assert_eq!(inner["bot_uid"], "0123456789abcdef0123456789abcdef");
+        assert_eq!(inner["assistant_name"], "研发");
     }
 
     fn tool_result_turn(tool_use_id: &str, output: &str) -> MessageTurn {
@@ -6552,6 +6784,121 @@ mod tests {
         );
     }
 
+    /// The `conversation://changed` payloads broadcast so far, in order.
+    fn drain_conversation_changes(
+        rx: &mut tokio::sync::broadcast::Receiver<crate::web::event_bridge::WebEvent>,
+    ) -> Vec<serde_json::Value> {
+        let mut out = Vec::new();
+        while let Ok(evt) = rx.try_recv() {
+            if evt.channel == CONVERSATION_CHANGED_EVENT {
+                out.push((*evt.payload).clone());
+            }
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn ask_conversation_is_created_under_its_main_one_and_converts_with_a_broadcast() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-ask-conversation").await;
+        let main = create_conversation_core(&db.conn, folder_id, AgentType::ClaudeCode, None)
+            .await
+            .expect("main");
+        let (broadcaster, emitter) = sync_test_emitter();
+        let mut rx = broadcaster.subscribe();
+        let created = create_ask_conversation_core(
+            &emitter,
+            &db.conn,
+            main,
+            folder_id,
+            AgentType::ClaudeCode,
+            Some("why?".into()),
+        )
+        .await
+        .expect("ask");
+        assert_eq!(created.folder_id, folder_id);
+        assert_eq!(created.parent_conversation_id, main);
+        // The new row, then its main conversation with the grown chevron.
+        let changes = drain_conversation_changes(&mut rx);
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        assert_eq!(changes[0]["summary"]["id"], created.conversation_id);
+        assert_eq!(changes[0]["summary"]["kind"], "ask");
+        assert_eq!(changes[0]["summary"]["parent_id"], main);
+        assert_eq!(changes[1]["summary"]["id"], main);
+        assert_eq!(changes[1]["summary"]["child_count"], 1);
+
+        let asks = list_ask_conversations_core(&db.conn, main)
+            .await
+            .expect("list asks");
+        assert_eq!(
+            asks.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![created.conversation_id]
+        );
+
+        detach_ask_conversation_core(&emitter, &db.conn, created.conversation_id)
+            .await
+            .expect("detach");
+        let changes = drain_conversation_changes(&mut rx);
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        assert_eq!(changes[0]["kind"], "upsert");
+        assert_eq!(changes[0]["summary"]["id"], created.conversation_id);
+        assert_eq!(changes[0]["summary"]["kind"], "regular");
+        assert!(
+            changes[0]["summary"].get("parent_id").is_none(),
+            "the converted row is a root"
+        );
+        assert_eq!(changes[1]["summary"]["id"], main);
+        assert_eq!(changes[1]["summary"]["child_count"], 0);
+        assert!(list_ask_conversations_core(&db.conn, main)
+            .await
+            .expect("list asks")
+            .is_empty());
+
+        // A second unlink is a quiet no-op.
+        detach_ask_conversation_core(&emitter, &db.conn, created.conversation_id)
+            .await
+            .expect("detach again");
+        assert!(rx.try_recv().is_err(), "nothing changed, nothing broadcast");
+    }
+
+    #[tokio::test]
+    async fn deleting_a_main_conversation_leaves_its_asks_as_they_are() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-ask-delete-main").await;
+        let main = create_conversation_core(&db.conn, folder_id, AgentType::ClaudeCode, None)
+            .await
+            .expect("main");
+        let (broadcaster, emitter) = sync_test_emitter();
+        let ask = create_ask_conversation_core(
+            &emitter,
+            &db.conn,
+            main,
+            folder_id,
+            AgentType::ClaudeCode,
+            None,
+        )
+        .await
+        .expect("ask")
+        .conversation_id;
+        let mut rx = broadcaster.subscribe();
+        let manager = crate::acp::manager::ConnectionManager::new();
+        delete_conversation_with_cleanup_core(&emitter, &db.conn, &manager, main)
+            .await
+            .expect("delete main");
+        let changes = drain_conversation_changes(&mut rx);
+        assert!(
+            changes
+                .iter()
+                .all(|p| p["kind"] != "upsert" || p["summary"]["id"] != ask),
+            "the ask is not touched: {changes:?}"
+        );
+        let row = conversation_service::get_by_id(&db.conn, ask)
+            .await
+            .expect("ask survives");
+        assert_eq!(row.kind, conversation::ConversationKind::Ask);
+        assert_eq!(row.parent_id, Some(main));
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // Import-picker scan reconciliation (`build_scan_result`) and batch
     // import (`import_selected_from_summaries`).
@@ -7728,6 +8075,7 @@ mod tests {
                 assistant_id: None,
                 source: None,
                 assistant_name: None,
+                bot_uid: None,
                 tag_ids: Vec::new(),
             },
             turns,
