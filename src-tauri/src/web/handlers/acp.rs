@@ -202,41 +202,62 @@ pub struct AcpPromptParams {
     pub conversation_id: Option<i32>,
     #[serde(default)]
     pub client_message_id: Option<String>,
+    /// An edited message's rewind (see the Tauri command of the same name).
+    #[serde(default)]
+    pub rewind: Option<crate::acp::rewind::RewindTarget>,
 }
 
 pub async fn acp_prompt(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpPromptParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    state
-        .connection_manager
-        .send_prompt_linked_with_message_id(
-            &state.db,
-            &params.connection_id,
-            params.blocks,
-            params.folder_id,
-            params.conversation_id,
-            None,
-            params.client_message_id,
-        )
-        .await
-        .map_err(|e| {
-            let message = e.to_string();
-            // A concurrent send while a turn is in flight is an expected,
-            // recoverable condition (409), not a server fault (500). The
-            // frontend re-queues the draft. Other errors stay 500.
-            match e {
-                AcpError::TurnInProgress => {
-                    AppCommandError::new(AppErrorCode::TurnInProgress, message)
-                }
-                // The conversation was moved to another folder: expected, and
-                // the client recovers by re-pointing its tab — not a fault.
-                AcpError::ConversationMoved { .. } => {
-                    AppCommandError::new(AppErrorCode::InvalidInput, message)
-                }
-                _ => AppCommandError::task_execution_failed(message),
+    let manager = &state.connection_manager;
+    let sent = match params.rewind {
+        Some(rewind) => {
+            manager
+                .send_prompt_linked_rewinding(
+                    &state.db,
+                    &params.connection_id,
+                    params.blocks,
+                    params.folder_id,
+                    params.conversation_id,
+                    params.client_message_id,
+                    rewind,
+                )
+                .await
+        }
+        None => {
+            manager
+                .send_prompt_linked_with_message_id(
+                    &state.db,
+                    &params.connection_id,
+                    params.blocks,
+                    params.folder_id,
+                    params.conversation_id,
+                    None,
+                    params.client_message_id,
+                )
+                .await
+        }
+    };
+    sent.map_err(|e| {
+        let message = e.to_string();
+        // A concurrent send while a turn is in flight is an expected,
+        // recoverable condition (409), not a server fault (500). The
+        // frontend re-queues the draft. Other errors stay 500.
+        match e {
+            AcpError::TurnInProgress => AppCommandError::new(AppErrorCode::TurnInProgress, message),
+            // An edited message's rewind was declined: expected, nothing
+            // changed, and the client keeps its editor open.
+            AcpError::RewindRefused(_) => AppCommandError::new(AppErrorCode::InvalidInput, message),
+            // The conversation was moved to another folder: expected, and
+            // the client recovers by re-pointing its tab — not a fault.
+            AcpError::ConversationMoved { .. } => {
+                AppCommandError::new(AppErrorCode::InvalidInput, message)
             }
-        })?;
+            _ => AppCommandError::task_execution_failed(message),
+        }
+    })?;
     // A person typed this in a codeg window: a dispatch they write in is
     // theirs from now on.
     crate::personal_agent::note_owner_prompt(&params.connection_id, params.conversation_id);

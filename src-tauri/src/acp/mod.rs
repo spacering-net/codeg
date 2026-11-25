@@ -56,6 +56,7 @@ pub mod reply_turn;
 pub mod remote_registry;
 pub(crate) mod reported_usage;
 pub mod result_tool;
+pub mod rewind;
 pub mod scratch_dir;
 pub mod selection;
 pub mod service_error;

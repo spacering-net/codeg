@@ -2,6 +2,7 @@ pub mod acp_native;
 mod agent_env;
 pub mod antigravity;
 pub mod claude;
+mod claude_rewind;
 pub mod cline;
 pub mod codebuddy;
 pub mod codex;
