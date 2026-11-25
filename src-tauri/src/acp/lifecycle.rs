@@ -4120,7 +4120,7 @@ mod tests {
             .await
             .unwrap();
         let input = queue::queued(&db.conn).await.unwrap().remove(0);
-        queue::claim(&db.conn, &input).await.unwrap();
+        queue::claim(&db.conn, &input, true).await.unwrap();
         let turn = delivery::begin(&db.conn, child, Some(&input_id), None)
             .await
             .unwrap();
