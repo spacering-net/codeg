@@ -229,6 +229,12 @@ interface MessageListViewProps {
    */
   renderAskComposer?: (selection: string, close: () => void) => ReactNode
   /**
+   * This surface sits beside the ask conversation drawer (the conversation
+   * page mounts it): a check's "how it was checked" opens the check's
+   * conversation there. Elsewhere it opens in a tab of its own.
+   */
+  checksOpenInDrawer?: boolean
+  /**
    * Keep a text selection from this transcript as a note next to it. Only the
    * canvas has a board to put one on, so every other surface omits it and the
    * action isn't offered. MUST be referentially stable.
@@ -1599,6 +1605,7 @@ export function MessageListView({
   userTurnHeader = null,
   onQuoteSelection,
   renderAskComposer,
+  checksOpenInDrawer = false,
   onSaveNoteSelection,
   onForkFromTurn,
   liveRuns = null,
@@ -2635,7 +2642,10 @@ export function MessageListView({
     <MarkdownImageProvider rootPath={resolvedImageRoot}>
       <ModelLabelProvider value={modelLabel}>
         <DelegationStatusIndexProvider value={delegationStatusIndex}>
-          <MessageChecksProvider conversationId={conversationId}>
+          <MessageChecksProvider
+            conversationId={conversationId}
+            openInDrawer={checksOpenInDrawer}
+          >
             <KnownInvocationsProvider value={knownInvocations}>
               {thread}
             </KnownInvocationsProvider>

@@ -364,16 +364,68 @@ function externalIdHead(value: string): string {
   return value.split("-")[0] || value
 }
 
+/** The head of `SessionDetailsCard` for a sub-session run as an assistant:
+ *  the assistant's avatar where the agent icon goes, as the conversation list
+ *  draws that row. No primary's star — its corner holds the status dot. */
+function SessionAssistantAvatar({
+  id,
+  botUid,
+  snapshotName,
+}: {
+  id: number | null
+  botUid: string | null
+  snapshotName: string | null
+}) {
+  const assistant = useIdentityAssistant({ assistantId: id, botUid })
+  return (
+    <BotAvatar
+      avatar={assistant?.avatar ?? null}
+      name={assistant?.name ?? snapshotName ?? ""}
+      size={36}
+    />
+  )
+}
+
+/** The assistant's name, leading `SessionDetailsCard`'s agent line. */
+function SessionAssistantName({
+  id,
+  botUid,
+  snapshotName,
+}: {
+  id: number | null
+  botUid: string | null
+  snapshotName: string | null
+}) {
+  const t = useTranslations("Folder.chat.delegation")
+  const { name, deleted } = useDelegationIdentityLabel({
+    agentType: null,
+    assistantId: id,
+    assistantName: snapshotName,
+    botUid,
+  })
+  const label = deleted ? `${name} ${t("deletedAssistant")}` : name
+  return (
+    <span
+      data-testid="session-assistant-name"
+      title={label}
+      className="max-w-[40%] shrink-0 truncate"
+    >
+      {label}
+    </span>
+  )
+}
+
 /**
  * The Session Details side panel's summary of the active conversation, as a
- * card. Its head: the agent's icon, the status a dot on its corner as the
- * conversation list draws it; beside it the title, and under the title the
- * agent's name and the model. Under a hairline its properties, label over
- * value, a column each, centred: the branch, the conversation's id and its
- * session index — the agent's own id for it — (both copyable); then the
- * parent conversation and the assistant when it has them. The panel's room goes to the plan and the message
- * navigator under it; the dialog (`SessionDetailsContent`) is the full view,
- * with token usage and timestamps.
+ * card. Its head: the agent's icon — the assistant's avatar when it ran as
+ * one — the status a dot on its corner as the conversation list draws it;
+ * beside it the title, and under the title the assistant's name when it has
+ * one, the agent's name and the model. Under a hairline its properties, label
+ * over value, a column each, centred: the branch, the conversation's id and
+ * its session index — the agent's own id for it — (both copyable); then the
+ * parent conversation when it has one. The panel's room goes to the plan and
+ * the message navigator under it; the dialog (`SessionDetailsContent`) is the
+ * full view, with token usage and timestamps.
  *
  * `model` is the raw id the transcript recorded (the tab resolves it the way
  * the detail panel does); it is shown by the name the agent's picker uses.
@@ -394,20 +446,27 @@ export function SessionDetailsCard({
   const statusLabel = knownStatus ? tStatus(knownStatus) : summary.status
   const agentLabel = getAgentLabel(summary.agent_type)
   const ranAs = summary.assistant_id != null || summary.bot_uid != null
-  const hasExtraLine = summary.parent_id != null || ranAs
 
   return (
     <section className="min-w-0 rounded-xl border border-border/70 bg-muted/40 p-3">
       <div className="flex min-w-0 items-start gap-3">
-        {/* Decorative: the name under the title says which agent it is, the
-            icon's SVG carries a <title> of its own that would repeat it, and
-            the status is said in words beside the name. */}
+        {/* Decorative: the line under the title says which agent (and which
+            assistant) it is, the icon's SVG carries a <title> of its own that
+            would repeat it, and the status is said in words beside the name. */}
         <span
           data-testid="session-agent-avatar"
           aria-hidden="true"
           className="relative mt-0.5 flex shrink-0"
         >
-          <AgentIcon agentType={summary.agent_type} className="size-9" />
+          {ranAs ? (
+            <SessionAssistantAvatar
+              id={summary.assistant_id ?? null}
+              botUid={summary.bot_uid ?? null}
+              snapshotName={summary.assistant_name ?? null}
+            />
+          ) : (
+            <AgentIcon agentType={summary.agent_type} className="size-9" />
+          )}
           <ConversationStatusDot
             status={knownStatus}
             className={cn(
@@ -427,6 +486,16 @@ export function SessionDetailsCard({
             data-testid="session-agent-line"
             className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
           >
+            {ranAs && (
+              <>
+                <SessionAssistantName
+                  id={summary.assistant_id ?? null}
+                  botUid={summary.bot_uid ?? null}
+                  snapshotName={summary.assistant_name ?? null}
+                />
+                <span aria-hidden="true">·</span>
+              </>
+            )}
             <span className="max-w-[50%] shrink-0 truncate">{agentLabel}</span>
             {displayModel && (
               <>
@@ -486,22 +555,11 @@ export function SessionDetailsCard({
             )}
           </PropertyCell>
         </div>
-        {hasExtraLine && (
+        {summary.parent_id != null && (
           <div className={PROPERTY_LINE}>
-            {summary.parent_id != null && (
-              <PropertyCell label={t("parentId")}>
-                <span className="tabular-nums">{summary.parent_id}</span>
-              </PropertyCell>
-            )}
-            {ranAs && (
-              <PropertyCell label={t("assistant")}>
-                <AssistantInline
-                  id={summary.assistant_id ?? null}
-                  botUid={summary.bot_uid ?? null}
-                  snapshotName={summary.assistant_name ?? null}
-                />
-              </PropertyCell>
-            )}
+            <PropertyCell label={t("parentId")}>
+              <span className="tabular-nums">{summary.parent_id}</span>
+            </PropertyCell>
           </div>
         )}
       </dl>

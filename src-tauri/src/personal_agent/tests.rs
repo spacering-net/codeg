@@ -4295,7 +4295,7 @@ async fn a_message_folds_into_a_turn_carrying_an_earlier_one_when_the_agent_take
     // The connection loop's part: take the steer.
     let taken = tokio::spawn(async move {
         match rx.recv().await {
-            Some(ConnectionCommand::Steer { blocks, reply }) => {
+            Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
                 let _ = reply.send(Ok(SteerOutcome::Injected));
                 (blocks, rx)
             }
@@ -4395,7 +4395,7 @@ async fn a_folded_message_with_attachments_leads_with_its_text() {
     engine.set_turn_owner_rows_for_test(vec![first.id]).await;
     let taken = tokio::spawn(async move {
         match rx.recv().await {
-            Some(ConnectionCommand::Steer { blocks, reply }) => {
+            Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
                 let _ = reply.send(Ok(SteerOutcome::Injected));
                 blocks
             }
@@ -6587,7 +6587,13 @@ async fn an_inherited_model_is_read_again_for_the_options_that_hang_off_it() {
         sel.current_value = "max".into();
         sel.options = ["max", "xhigh"]
             .iter()
-            .map(|v| crate::acp::types::SessionConfigSelectOptionInfo { value: v.to_string(), name: v.to_uppercase(), description: None, reasoning_efforts: None })
+            .map(|v| crate::acp::types::SessionConfigSelectOptionInfo {
+                value: v.to_string(),
+                name: v.to_uppercase(),
+                description: None,
+                reasoning_efforts: None,
+                context_window: None,
+            })
             .collect();
     }
     super::options::TEST_SNAPSHOTS.with(|m| {
@@ -6653,7 +6659,13 @@ async fn an_option_only_the_inherited_model_offers_can_be_named() {
         sel.current_value = "max".into();
         sel.options = ["max", "xhigh"]
             .iter()
-            .map(|v| crate::acp::types::SessionConfigSelectOptionInfo { value: v.to_string(), name: v.to_uppercase(), description: None, reasoning_efforts: None })
+            .map(|v| crate::acp::types::SessionConfigSelectOptionInfo {
+                value: v.to_string(),
+                name: v.to_uppercase(),
+                description: None,
+                reasoning_efforts: None,
+                context_window: None,
+            })
             .collect();
     }
     super::options::TEST_SNAPSHOTS.with(|m| {
@@ -9902,6 +9914,17 @@ async fn a_failure_reaches_the_owner_only_if_it_is_still_news_after_its_assistan
     role_assistant(&engine, "Coder", true).await;
     let conn = &engine.db.conn;
     let me = engine.bot().await;
+    // The one slot taken, so the work that takes a failure over stays
+    // queued: started, it would fail on its own wherever its agent is not
+    // installed (on CI) and be one more failure held, whenever that is.
+    engine
+        .save(PersonalAgentDraft {
+            settings: Some(PersonalAgentSettings { dispatch_concurrency: 1, ..Default::default() }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    session_dispatch(&engine, DispatchState::Running, "c-busy").await;
     let fail = |name: &'static str| {
         let engine = engine.clone();
         async move {
@@ -9920,7 +9943,11 @@ async fn a_failure_reaches_the_owner_only_if_it_is_still_news_after_its_assistan
         }
     };
     let now = super::clock::now();
-    let later = now + chrono::Duration::seconds(super::dispatch::FAILED_HOLD_SECS + 1);
+    // Each failure is due its hold after the real moment it failed, not
+    // after `now`: leave the rest of the test an hour to get there, or on a
+    // loaded runner a failure made a second after `now` is not yet due here
+    // and lingers on the later list.
+    let later = now + chrono::Duration::seconds(super::dispatch::FAILED_HOLD_SECS + 3600);
     // Nobody picks it up: told once its time is up, not before.
     fail("c-1").await;
     assert_eq!(host.reach.later_count(), 1);

@@ -6200,10 +6200,11 @@ const HERMES_MODE_OPTION_ID: &str = "mode";
 const HERMES_SYNTHESIZED_OPTION_IDS: &[&str] = &[HERMES_MODEL_OPTION_ID, HERMES_MODE_OPTION_ID];
 
 /// Hermes lists its models in the session reply's legacy `models` (verified
-/// against 0.21.6, 0.22.2, 0.22.6, 0.22.7, 0.23.0, 0.23.1 and 0.23.3): every
-/// signed-in provider's models and every named endpoint's (`providers:` in
-/// config.yaml, codeg's own `custom:codeg` among them), with `provider:model`
-/// ids — `openrouter:anthropic/claude-opus-5.5`, `custom:codeg:glm-5.2`. Through
+/// against 0.21.6, 0.22.2, 0.22.6, 0.22.7, 0.23.0, 0.23.1, 0.23.3 and
+/// 0.23.4): every signed-in provider's models and every named endpoint's
+/// (`providers:` in config.yaml, codeg's own `custom:codeg` among them), with
+/// `provider:model` ids — `openrouter:anthropic/claude-opus-5.5`,
+/// `custom:codeg:glm-5.2`. Through
 /// 0.22.2 that is the only place: it sends no `configOptions`, and takes a
 /// switch only as `session/set_model`, its `session/set_config_option` storing
 /// whatever it is sent and answering an empty list. From 0.22.6 (0.23.1 is the
@@ -14251,7 +14252,7 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
 /// How long after the answer to a prompt that a Stop cancelled codeg holds
 /// CodeBuddy's next prompt.
 ///
-/// CodeBuddy (2.171.0 through 2.185.0) answers a `session/prompt` that starts
+/// CodeBuddy (2.171.0 through 2.186.0) answers a `session/prompt` that starts
 /// within 500 ms of a `session/cancel` it took mid-turn with `cancelled`, and
 /// does not run the prompt or keep it in its history (`isCancelBarrierActive`
 /// in its ACP view). It arms that barrier while it handles the cancel, before
@@ -14337,7 +14338,7 @@ async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
 /// CodeBuddy's stop reason for a prompt codeg did not cancel.
 ///
 /// After a Stop that caught a permission request, CodeBuddy (2.171.0 through
-/// 2.185.0) answers the next prompt it runs `cancelled` even though that
+/// 2.186.0) answers the next prompt it runs `cancelled` even though that
 /// prompt ran to the end: its forwarding keeps the session's aborted signal
 /// from the Stop. Such an answer carries `_meta["codebuddy.ai/finishReason"]:
 /// "stop"`, which a cancelled run never has. A prompt codeg cancelled never
@@ -15542,6 +15543,9 @@ async fn run_conversation_loop(
                         emit_with_state(&st, &h, AcpEvent::SessionNotice { notice }).await;
                     } else if let Some(event) = session_compaction_event(&dispatch) {
                         emit_with_state(&st, &h, event).await;
+                    } else if codebuddy_compact_internal(&dispatch) {
+                        // The compaction's own work, not the conversation's
+                        // (see `codebuddy_compaction_divider`).
                     } else if let Some(completed) = grok_turn_completed(&dispatch, agent_type) {
                         // Grok's own end of a turn. Only the turn opened below
                         // ends here; one codeg started ended on its response.
@@ -16101,6 +16105,10 @@ async fn run_conversation_loop(
                                 // at all.
                                 probe.saw_agent_output = true;
                                 emit_with_state(&st, &h, event).await;
+                            } else if codebuddy_compact_internal(&dispatch) {
+                                // The compaction's own work, not this
+                                // turn's output; its divider above is
+                                // (see `codebuddy_compaction_divider`).
                             } else if let Err(e) = MatchDispatch::new(dispatch)
                                 .if_notification(
                                     async |notif: SessionNotification| {
@@ -26092,6 +26100,8 @@ enum ReplayedCompaction {
 /// rebuilt from this replay has no other copy of it.
 fn replayed_compaction(dispatch: &Dispatch, hydrating: bool) -> ReplayedCompaction {
     match session_compaction_event(dispatch) {
+        // The rest of a CodeBuddy compaction is never history.
+        None if codebuddy_compact_internal(dispatch) => ReplayedCompaction::Drop,
         None => ReplayedCompaction::NotCompaction,
         Some(event) if hydrating => ReplayedCompaction::Forward(Box::new(event)),
         Some(_) => ReplayedCompaction::Drop,
@@ -26148,6 +26158,9 @@ fn session_compaction_event(dispatch: &Dispatch) -> Option<AcpEvent> {
         return None;
     }
     let update = msg.params.get("update")?;
+    if codebuddy_update_is_compact_internal(update) {
+        return codebuddy_compaction_divider(update);
+    }
     let kind = update.get("sessionUpdate").and_then(|v| v.as_str())?;
     let compaction_id = air_task_str(update.get("compactionId"))?;
     match kind {
@@ -26229,6 +26242,108 @@ fn session_compaction_event(dispatch: &Dispatch) -> Option<AcpEvent> {
 /// Title the synthetic compaction call carries, matching the one the grok
 /// bridge and both adapters' legacy calls use.
 const CONTEXT_COMPACTION_TITLE: &str = "Context compaction";
+
+/// The `_meta` flag CodeBuddy sets on every `session/update` it sends while a
+/// session is compacting (its `AcpBroadcastService` / `AcpTeamBridge`), except
+/// the continuation that resumes the turn afterwards.
+const CODEBUDDY_COMPACT_INTERNAL_META_KEY: &str = "codebuddy.ai/isCompactInternal";
+/// `_meta` key naming which compaction it was: `user-command` (`/compact`),
+/// `pre-message-auto`, `emergency-auto` or `model-request`.
+const CODEBUDDY_COMPACT_TYPE_META_KEY: &str = "codebuddy.ai/compactType";
+const CODEBUDDY_COMPACT_DIVIDER_OPEN: &str = "<conversation_history_summary><summary>";
+const CODEBUDDY_COMPACT_DIVIDER_CLOSE: &str = "</summary></conversation_history_summary>";
+
+/// Whether a `session/update` payload is part of a CodeBuddy compaction.
+///
+/// The key is CodeBuddy's own namespace, so no other agent sends it.
+fn codebuddy_update_is_compact_internal(update: &serde_json::Value) -> bool {
+    update
+        .get("_meta")
+        .and_then(|meta| meta.get(CODEBUDDY_COMPACT_INTERNAL_META_KEY))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Whether a frame is part of a CodeBuddy compaction (see
+/// [`codebuddy_update_is_compact_internal`]).
+fn codebuddy_compact_internal(dispatch: &Dispatch) -> bool {
+    let Dispatch::Notification(msg) = dispatch else {
+        return false;
+    };
+    msg.method() == "session/update"
+        && msg
+            .params
+            .get("update")
+            .is_some_and(codebuddy_update_is_compact_internal)
+}
+
+/// The compaction card for CodeBuddy's compaction divider, or `None` for any
+/// other frame of the compaction, which codeg drops.
+///
+/// CodeBuddy marks a compaction with a pair of `agent_message_chunk`s that
+/// share a `messageId` (`compact-maxtoken-<session>-<ms>`):
+/// `broadcastCompactStarted` sends the bare
+/// `<conversation_history_summary><summary>`, and `broadcastCompactCompleted`
+/// sends the same tags around the summary (for an engineering-only `/compact`,
+/// a one-line "Engineering compact: N items → M estimated tokens"). Its own
+/// clients draw them as a divider. Up to 2.185.0 their `content` was an array,
+/// which the ACP schema rejects, so they never reached the chat; 2.186.0 sends
+/// a single text block, and without this the raw tags and summary would read
+/// as the agent's reply. A failed compaction sends no completed frame; its card
+/// stops running when the turn ends. Everything else flagged
+/// [`CODEBUDDY_COMPACT_INTERNAL_META_KEY`] (the summarizer's own stream) is the
+/// compaction's work, not the conversation's, and is dropped by the callers.
+fn codebuddy_compaction_divider(update: &serde_json::Value) -> Option<AcpEvent> {
+    if update.get("sessionUpdate").and_then(|v| v.as_str()) != Some("agent_message_chunk") {
+        return None;
+    }
+    let meta = update.get("_meta")?;
+    let id = air_task_str(update.get("messageId"))
+        .or_else(|| air_task_str(meta.get("codebuddy.ai").and_then(|m| m.get("messageId"))))?;
+    let text = compaction_summary_text(update.get("content"))?;
+    let rest = text.trim().strip_prefix(CODEBUDDY_COMPACT_DIVIDER_OPEN)?;
+    let (status, summary) = match rest.strip_suffix(CODEBUDDY_COMPACT_DIVIDER_CLOSE) {
+        Some(summary) => ("completed", Some(summary.trim()).filter(|s| !s.is_empty())),
+        None if rest.trim().is_empty() => ("in_progress", None),
+        None => return None,
+    };
+    let mut payload = serde_json::Map::new();
+    payload.insert("version".to_string(), 1.into());
+    let trigger = match meta
+        .get(CODEBUDDY_COMPACT_TYPE_META_KEY)
+        .and_then(|v| v.as_str())
+    {
+        Some("user-command") => Some("manual"),
+        Some("pre-message-auto" | "emergency-auto" | "model-request") => Some("auto"),
+        _ => None,
+    };
+    if let Some(trigger) = trigger {
+        payload.insert("trigger".to_string(), trigger.into());
+    }
+    let mut card_meta = serde_json::Map::new();
+    card_meta.insert(
+        "contextCompaction".to_string(),
+        serde_json::Value::Object(payload),
+    );
+    if summary.is_some() {
+        card_meta.insert(
+            COMPACTION_SUMMARY_META_KEY.to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+    Some(AcpEvent::ToolCallUpdate {
+        tool_call_id: id,
+        title: Some(CONTEXT_COMPACTION_TITLE.to_string()),
+        status: Some(status.to_string()),
+        content: None,
+        raw_input: None,
+        raw_output: summary.map(str::to_string),
+        raw_output_append: None,
+        locations: None,
+        meta: Some(serde_json::Value::Object(card_meta)),
+        images: None,
+    })
+}
 
 /// Flatten an ACP summary payload — a `ContentBlock` or an array of them — to
 /// its text. Non-text blocks (an image in a summary would be novel) are
@@ -36347,6 +36462,123 @@ mod tests {
                 ReplayedCompaction::NotCompaction
             ));
         }
+    }
+
+    /// CodeBuddy's compaction divider frames, as 2.186.0 sends them on
+    /// `/compact` (`user-command`) and on the emergency compaction after a
+    /// prompt-too-long reply (`emergency-auto`).
+    fn codebuddy_compact_chunk(text: &str, compact_type: &str) -> Dispatch {
+        let id = "compact-maxtoken-01a20eaa-46c5-7b65-b1dc-0994e3e388c4-1795542379487";
+        async_task_notif(serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "messageId": id,
+            "content": {"type": "text", "text": text},
+            "_meta": {
+                "codebuddy.ai/isCompactInternal": true,
+                "codebuddy.ai": {"messageId": id},
+                "codebuddy.ai/compactType": compact_type,
+                "timestamp": "2026-11-24T17:46:19.487Z",
+            },
+        }))
+    }
+
+    /// CodeBuddy 2.186.0's compaction divider is a pair of
+    /// `agent_message_chunk`s wrapping the summary in
+    /// `<conversation_history_summary><summary>`; they become the shared
+    /// compaction card instead of reply text.
+    #[test]
+    fn a_codebuddy_compaction_divider_becomes_the_compaction_card() {
+        let card = |dispatch: &Dispatch| {
+            let Some(AcpEvent::ToolCallUpdate {
+                tool_call_id,
+                title,
+                status,
+                raw_output,
+                meta,
+                ..
+            }) = session_compaction_event(dispatch)
+            else {
+                panic!("expected the compaction card");
+            };
+            (tool_call_id, title, status, raw_output, meta.unwrap())
+        };
+
+        let (id, title, status, raw_output, meta) = card(&codebuddy_compact_chunk(
+            "<conversation_history_summary><summary>",
+            "user-command",
+        ));
+        assert_eq!(
+            id,
+            "compact-maxtoken-01a20eaa-46c5-7b65-b1dc-0994e3e388c4-1795542379487"
+        );
+        assert_eq!(title.as_deref(), Some(CONTEXT_COMPACTION_TITLE));
+        assert_eq!(status.as_deref(), Some("in_progress"));
+        assert_eq!(raw_output, None);
+        assert_eq!(
+            meta["contextCompaction"],
+            serde_json::json!({"version": 1, "trigger": "manual"})
+        );
+        assert!(meta.get(COMPACTION_SUMMARY_META_KEY).is_none());
+
+        let (id_done, _, status, raw_output, meta) = card(&codebuddy_compact_chunk(
+            "<conversation_history_summary><summary>Engineering compact: 10 items \u{2192} 2672 estimated tokens</summary></conversation_history_summary>",
+            "user-command",
+        ));
+        assert_eq!(id_done, id, "both frames share one card");
+        assert_eq!(status.as_deref(), Some("completed"));
+        assert_eq!(
+            raw_output.as_deref(),
+            Some("Engineering compact: 10 items \u{2192} 2672 estimated tokens")
+        );
+        assert_eq!(meta[COMPACTION_SUMMARY_META_KEY], true);
+
+        let (_, _, status, raw_output, meta) = card(&codebuddy_compact_chunk(
+            "<conversation_history_summary><summary>hello from fake model</summary></conversation_history_summary>",
+            "emergency-auto",
+        ));
+        assert_eq!(status.as_deref(), Some("completed"));
+        assert_eq!(raw_output.as_deref(), Some("hello from fake model"));
+        assert_eq!(meta["contextCompaction"]["trigger"], "auto");
+
+        // Up to 2.185.0 the same frames carried `content` as an array.
+        let mut array = codebuddy_compact_chunk("", "emergency-auto");
+        if let Dispatch::Notification(msg) = &mut array {
+            msg.params["update"]["content"] = serde_json::json!([{
+                "type": "text",
+                "text": "<conversation_history_summary><summary>older</summary></conversation_history_summary>",
+            }]);
+        }
+        let (_, _, status, raw_output, _) = card(&array);
+        assert_eq!(status.as_deref(), Some("completed"));
+        assert_eq!(raw_output.as_deref(), Some("older"));
+    }
+
+    /// Anything else CodeBuddy flags as part of a compaction (the summarizer's
+    /// own stream) is neither a card nor chat text, live or replayed; the same
+    /// text without the flag is an ordinary reply.
+    #[test]
+    fn the_rest_of_a_codebuddy_compaction_is_dropped() {
+        let streamed = codebuddy_compact_chunk("The user asked to refactor", "pre-message-auto");
+        assert!(session_compaction_event(&streamed).is_none());
+        assert!(codebuddy_compact_internal(&streamed));
+        for hydrating in [false, true] {
+            assert!(matches!(
+                replayed_compaction(&streamed, hydrating),
+                ReplayedCompaction::Drop
+            ));
+        }
+
+        let reply = async_task_notif(serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "<conversation_history_summary><summary>"},
+            "_meta": {"codebuddy.ai/isCompactInternal": false},
+        }));
+        assert!(session_compaction_event(&reply).is_none());
+        assert!(!codebuddy_compact_internal(&reply));
+        assert!(matches!(
+            replayed_compaction(&reply, false),
+            ReplayedCompaction::NotCompaction
+        ));
     }
 
     /// The whole point of the translation: claude's reserved `_meta` block is

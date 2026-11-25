@@ -1520,16 +1520,44 @@ impl PersonalAgentEngine {
         };
         let work = work_of(&d);
         let agent_type = work.agent_type;
+        // A check of a message ("is this right?") runs in a conversation
+        // nested under the conversation the message is in, the way an ask is —
+        // not a root row of the owner's list. Nested as it is created, so no
+        // read of the list sees it as a root first. An acceptance check checks
+        // no message (it has no fact-check row): its row is an ordinary one.
+        let checked = if d.is_check {
+            crate::db::service::personal_agent_check_service::of_dispatch(&self.db.conn, d.id)
+                .await
+                .ok()
+                .flatten()
+                .map(|c| c.conversation_id)
+        } else {
+            None
+        };
         let (folder_id, cwd, conversation_id) = match d.mode {
             DispatchMode::Chat => {
-                let created = crate::commands::conversations::create_chat_conversation_core(
-                    &self.db.conn,
-                    &self.data_dir,
-                    agent_type,
-                    Some(d.title.clone()),
-                    None,
-                )
-                .await
+                let created = match checked {
+                    Some(checked) => {
+                        crate::commands::conversations::create_chat_check_conversation_core(
+                            &self.db.conn,
+                            &self.data_dir,
+                            checked,
+                            agent_type,
+                            Some(d.title.clone()),
+                        )
+                        .await
+                    }
+                    None => {
+                        crate::commands::conversations::create_chat_conversation_core(
+                            &self.db.conn,
+                            &self.data_dir,
+                            agent_type,
+                            Some(d.title.clone()),
+                            None,
+                        )
+                        .await
+                    }
+                }
                 .map_err(|e| e.to_string())?;
                 let path = created.folder.path.clone();
                 crate::commands::folders::emit_folder_upsert(&self.emitter, created.folder);
@@ -1540,13 +1568,28 @@ impl PersonalAgentEngine {
                 let folder = crate::commands::folders::get_folder_core(&self.db, folder_id)
                     .await
                     .map_err(|e| e.to_string())?;
-                let cid = crate::commands::conversations::create_conversation_core(
-                    &self.db.conn,
-                    folder_id,
-                    agent_type,
-                    Some(d.title.clone()),
-                )
-                .await
+                let cid = match checked {
+                    Some(checked) => {
+                        crate::commands::conversations::create_check_conversation_core(
+                            &self.db.conn,
+                            checked,
+                            folder_id,
+                            agent_type,
+                            Some(d.title.clone()),
+                        )
+                        .await
+                        .map(|row| row.id)
+                    }
+                    None => {
+                        crate::commands::conversations::create_conversation_core(
+                            &self.db.conn,
+                            folder_id,
+                            agent_type,
+                            Some(d.title.clone()),
+                        )
+                        .await
+                    }
+                }
                 .map_err(|e| e.to_string())?;
                 (folder_id, folder.path, cid)
             }
@@ -1581,6 +1624,16 @@ impl PersonalAgentEngine {
             conversation_id,
         )
         .await;
+        // The checked conversation's `child_count` (its sidebar chevron) just
+        // grew.
+        if let Some(parent_id) = checked {
+            crate::commands::conversations::emit_conversation_upsert(
+                &self.emitter,
+                &self.db.conn,
+                parent_id,
+            )
+            .await;
+        }
         let _ = svc::update_dispatch(
             &self.db.conn,
             d.id,
