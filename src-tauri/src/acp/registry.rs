@@ -8792,13 +8792,23 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   + codeg 的客户端能力）：文本、bash、`session/new` 交来的 stdio MCP 工具
             //   三种回合都正常结束，停止后立即再发也正常。
             //
+            // 0.13.0 只改了一处（#20）：`boot.ts` 挂上 `dsh-tool-call-timeout-policy`
+            // （新增依赖，同为 0.2.2-rc.5，其余依赖与 0.12.0 逐项相同），`grep` / `glob`
+            // 自己声明的 30 s `timeoutMs` 从此真的生效——到点中止并回一条
+            // `isError: true`、`code: TOOL_TIMEOUT` 的普通工具结果；shell、read/write/edit
+            // 不声明预算，不受影响。npm 包与 tag 只差 `boot.js` 与 README。实测（同一替身
+            // 端点 + codeg 的客户端能力）：`initialize`、`session/new` 除版本号与会话 id
+            // 外逐字段相同，文本、bash、stdio MCP 工具、停止后再发都正常结束，会话日志的
+            // 记录类型与字段形状与 0.12.0 逐条相同。超时结果走 `parsers::deepseek` 现有的
+            // `isError` 分支与实时的失败工具卡，代码不用动。
+            //
             // Keep `version` and `package` moving together: `version` is what
             // the agents list shows as the upgrade target beside the installed
             // version, so a drift leaves the Upgrade button installing one
             // version while the row keeps calling it stale.
             distribution: AgentDistribution::Npx {
-                version: "0.12.0",
-                package: "deepseek-acp@0.12.0",
+                version: "0.13.0",
+                package: "deepseek-acp@0.13.0",
                 cmd: "deepseek-acp",
                 args: &[],
                 env: &[],
@@ -10515,8 +10525,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::DeepSeek,
-            "0.12.0",
-            "deepseek-acp@0.12.0",
+            "0.13.0",
+            "deepseek-acp@0.13.0",
             Some("22.19.0"),
         );
         assert_npx_version(
