@@ -415,9 +415,11 @@ export function isSnapping(look: BotLook, t: number): boolean {
   )
 }
 
-/** How far off the pointer is (in the face's sizes) for the face to turn
- *  to it all the way. */
-const PTR_FULL = 1.8
+/** How quickly the face turns to the pointer as it moves off its middle (in
+ *  the face's sizes): how far it turns is `tanh(d / PTR_NEAR)`, steepest
+ *  close by — where the pointer mostly is, a small move there turns it
+ *  plainly — and all but full a face's size off, no further. */
+const PTR_NEAR = 0.4
 /** How far it turns to the pointer: what is added to its facing. */
 const PTR_TURN = 0.56
 /** How far its eyes go ahead of the turn, across and up (ring units). */
@@ -459,7 +461,7 @@ export function poseAt(
   }
   if (ptr && look !== "sleeping") {
     const d = Math.hypot(ptr[0], ptr[1]) || 1
-    const reach = Math.min(1, d / PTR_FULL)
+    const reach = Math.tanh(d / PTR_NEAR)
     const ux = (ptr[0] / d) * reach
     const uy = (ptr[1] / d) * reach
     n = norm(add(n, [ux * PTR_TURN, uy * PTR_TURN, 0]))
