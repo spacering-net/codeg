@@ -7699,6 +7699,14 @@
       "discoverOff": "이 Codeg에서는 “탐색”이 꺼져 있어 여기서 {ref} 항목을 열 수 없습니다."
     },
     "discover": {
+      "translation": {
+        "translate": "번역 (Google)",
+        "showOriginal": "원문 보기",
+        "providerHint": "공개 카탈로그의 제목, 요약 및 설명을 Google 번역으로 전송합니다. 코드와 링크 주소는 전송하지 않습니다.",
+        "loading": "번역 중…",
+        "translated": "기계 번역 · 게시자의 번역 우선",
+        "retry": "번역 재시도"
+      },
       "search": {
         "label": "SRN Harness 검색",
         "placeholder": "스킬, MCP 서버, 어시스턴트 검색…",

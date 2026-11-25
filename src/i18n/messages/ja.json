@@ -7699,6 +7699,14 @@
       "discoverOff": "この Codeg では「見つける」がオフになっているため、ここでは {ref} を開けません。"
     },
     "discover": {
+      "translation": {
+        "translate": "翻訳（Google）",
+        "showOriginal": "原文を表示",
+        "providerHint": "公開カタログのタイトル、概要、説明文を Google 翻訳に送信します。コードとリンク先は送信しません。",
+        "loading": "翻訳中…",
+        "translated": "機械翻訳 · 作者による翻訳を優先",
+        "retry": "翻訳を再試行"
+      },
       "search": {
         "label": "SRN Harness を検索",
         "placeholder": "スキル、MCP サーバー、アシスタントを検索…",

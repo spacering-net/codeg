@@ -18,8 +18,6 @@ import { useTranslations } from "next-intl"
 
 import {
   formatCompact,
-  itemSummary,
-  itemTitle,
   knownKind,
   knownRisk,
   showsRuntime,
@@ -31,6 +29,7 @@ import type {
 } from "@/lib/harness/types"
 import { cn } from "@/lib/utils"
 import { useDiscoverLabels } from "./use-discover-labels"
+import { useCatalogItemText } from "./catalog-translation"
 
 /** A kind's glyph — the Skills and MCP ones are the section nav's. */
 const KIND_ICONS: Record<HarnessKnownKind | "unknown", LucideIcon> = {
@@ -215,14 +214,15 @@ export const DiscoverCard = memo(function DiscoverCard({
 }: DiscoverCardProps) {
   const t = useTranslations("Harness.discover.card")
   const labels = useDiscoverLabels()
-  const title = itemTitle(item, labels.lang)
-  const summary = itemSummary(item, labels.lang)
+  const { title, summary, originalTitle, originalSummary } =
+    useCatalogItemText(item)
   const stars = item.repoStars ?? 0
 
   const titleButton = (
     <button
       type="button"
       data-harness-item={item.ref}
+      title={title !== originalTitle ? originalTitle : undefined}
       // The title is in the item's language, not necessarily the
       // interface's: it takes its direction from its own text, so a long
       // English title is cut at its end in an Arabic interface too.
@@ -279,6 +279,7 @@ export const DiscoverCard = memo(function DiscoverCard({
           </div>
           <p
             dir="auto"
+            title={summary !== originalSummary ? originalSummary : undefined}
             className="mt-0.5 truncate text-[0.8125rem] text-muted-foreground"
           >
             {summary}
@@ -313,6 +314,7 @@ export const DiscoverCard = memo(function DiscoverCard({
       </div>
       <p
         dir="auto"
+        title={summary !== originalSummary ? originalSummary : undefined}
         className="mt-3 line-clamp-2 min-h-10 text-[0.8125rem] leading-5 text-muted-foreground"
       >
         {summary}

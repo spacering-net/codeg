@@ -26,6 +26,7 @@ import { HARNESS_UPDATES, remoteFor, updatesById } from "@/lib/harness/updates"
 import { DiscoverBrowse } from "./discover-browse"
 import { DiscoverDetail } from "./discover-detail"
 import { DiscoverFailure } from "./discover-failure"
+import { CatalogTranslationProvider } from "./catalog-translation"
 
 /**
  * What the workspace's host has installed from the catalog, by item id — the
@@ -152,25 +153,27 @@ export function DiscoverSection() {
   useHistoryBackDismiss(backTo !== null, close)
 
   return (
-    <div className="@container/discover h-full min-h-0 min-w-0">
-      {status.support === "unsupported" ? (
-        // An older Codeg at the other end. Nothing below could load, so the
-        // section says what to do about it instead of failing piece by piece.
-        <DiscoverFailure
-          failure={{ kind: "unsupported", detail: "" }}
-          className="h-full"
-        />
-      ) : shown ? (
-        <DiscoverDetail
-          detail={shown}
-          onBack={close}
-          onBackToList={closeAll}
-          backTo={backTo}
-          installed={shownInstalled}
-        />
-      ) : (
-        <DiscoverBrowse installed={installed} />
-      )}
-    </div>
+    <CatalogTranslationProvider>
+      <div className="@container/discover h-full min-h-0 min-w-0">
+        {status.support === "unsupported" ? (
+          // An older Codeg at the other end. Nothing below could load, so the
+          // section says what to do about it instead of failing piece by piece.
+          <DiscoverFailure
+            failure={{ kind: "unsupported", detail: "" }}
+            className="h-full"
+          />
+        ) : shown ? (
+          <DiscoverDetail
+            detail={shown}
+            onBack={close}
+            onBackToList={closeAll}
+            backTo={backTo}
+            installed={shownInstalled}
+          />
+        ) : (
+          <DiscoverBrowse installed={installed} />
+        )}
+      </div>
+    </CatalogTranslationProvider>
   )
 }

@@ -19,9 +19,7 @@ import {
   formatCompact,
   formatDate,
   harnessItemUrl,
-  itemSummary,
   itemTitle,
-  pickLocalized,
   showsRuntime,
 } from "@/lib/harness/display"
 import { isItemRef } from "@/lib/harness/item-ref"
@@ -48,6 +46,10 @@ import {
 import { DiscoverFailure } from "./discover-failure"
 import { PublisherAvatar } from "./publisher-avatar"
 import { useDiscoverLabels } from "./use-discover-labels"
+import {
+  CatalogTranslationControls,
+  useCatalogItemText,
+} from "./catalog-translation"
 
 /** A step of the breadcrumb that leads back. */
 const CRUMB_CLASS =
@@ -135,14 +137,11 @@ export function DiscoverDetail({
 
   const { item, preview } = detail
   const known = item ?? preview
-  const title = known ? itemTitle(known, labels.lang) : detail.ref
+  const copy = useCatalogItemText(known, known?.kind === "prompt")
+  const title = copy.title ?? detail.ref
   // A prompt's card stands in its start for a summary; here the whole text
   // is just below, and saying its start twice says nothing.
-  const summary = !known
-    ? undefined
-    : known.kind === "prompt"
-      ? pickLocalized(known.summary, labels.lang)
-      : itemSummary(known, labels.lang)
+  const summary = copy.summary
   const backKnown = backTo ? (backTo.item ?? backTo.preview) : null
   const backTitle = backTo
     ? backKnown
@@ -256,6 +255,9 @@ export function DiscoverDetail({
 
           <div className="grid min-w-0 gap-6 @4xl/discover:grid-cols-[minmax(0,1fr)_20rem] @4xl/discover:gap-x-10">
             <header className="min-w-0 @4xl/discover:col-start-1 @4xl/discover:row-start-1">
+              <div className="mb-3">
+                <CatalogTranslationControls />
+              </div>
               <div className="flex min-w-0 items-start gap-4">
                 {known && (
                   <KindTile

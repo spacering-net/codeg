@@ -108,6 +108,7 @@ const STRUCTURAL = new Set(["ol", "ul", "table", "thead", "tbody", "tr"])
 /** How deep the walk goes before the rest is taken as plain text. The parser
  *  caps nesting itself; this is so the walk never depends on that. */
 const MAX_DEPTH = 64
+const CODE = new Set(["pre", "code", "kbd", "samp"])
 
 const CLASSES: ReadonlyMap<string, string> = new Map([
   ["p", "my-2 leading-relaxed"],
@@ -139,6 +140,8 @@ interface Walk {
   depth: number
   /** Inside a `<pre>`: its code is a block, not a chip in a sentence. */
   inPre: boolean
+  inCode: boolean
+  translations?: ReadonlyMap<string, string>
 }
 
 function childrenOf(node: Node, walk: Walk, parentTag: string): ReactNode[] {
@@ -147,7 +150,13 @@ function childrenOf(node: Node, walk: Walk, parentTag: string): ReactNode[] {
   node.childNodes.forEach((child, index) => {
     if (child.nodeType === Node.TEXT_NODE) {
       const text = child.textContent ?? ""
-      if (text && !(structural && !text.trim())) out.push(text)
+      if (text && !(structural && !text.trim())) {
+        out.push(
+          walk.inCode || walk.inPre
+            ? text
+            : (walk.translations?.get(text) ?? text)
+        )
+      }
       return
     }
     if (child.nodeType !== Node.ELEMENT_NODE) return
@@ -162,7 +171,11 @@ function elementOf(element: Element, walk: Walk, key: number): ReactNode {
   if (DROPPED.has(source)) return null
   if (walk.depth >= MAX_DEPTH) return element.textContent ?? ""
   const tag = ALIASES.get(source) ?? source
-  const inner: Walk = { depth: walk.depth + 1, inPre: walk.inPre }
+  const inner: Walk = {
+    ...walk,
+    depth: walk.depth + 1,
+    inCode: walk.inCode || CODE.has(tag),
+  }
 
   if (tag === "a") {
     const children = childrenOf(element, inner, tag)
@@ -247,7 +260,8 @@ function sameText(a: string, b: string): boolean {
  */
 export function readmeNodes(
   fragment: string,
-  omitHeading: readonly string[] = []
+  omitHeading: readonly string[] = [],
+  translations?: ReadonlyMap<string, string>
 ): ReactNode[] {
   if (typeof DOMParser === "undefined") return []
   // A document built by the parser has no browsing context: its scripts are
@@ -261,9 +275,40 @@ export function readmeNodes(
     first.remove()
   }
   // Loose text between blocks is the line breaks of the fragment's source.
-  return childrenOf(body, { depth: 0, inPre: false }, "body").filter(
-    (node) => typeof node !== "string" || node.trim() !== ""
+  return childrenOf(
+    body,
+    { depth: 0, inPre: false, inCode: false, translations },
+    "body"
+  ).filter((node) => typeof node !== "string" || node.trim() !== "")
+}
+
+/** Only prose the renderer can show. Dropped elements, code and attributes
+ * never become translation requests, even when the catalog sends bad markup. */
+export function readmeProse(
+  fragment: string,
+  omitHeading: readonly string[] = []
+): string[] {
+  if (typeof DOMParser === "undefined") return []
+  const body = new DOMParser().parseFromString(fragment, "text/html").body
+  const first = body.firstElementChild
+  if (
+    first?.localName === "h1" &&
+    omitHeading.some((text) => sameText(text, first.textContent ?? ""))
   )
+    first.remove()
+  const texts: string[] = []
+  const visit = (node: Node, depth: number) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (node.textContent?.trim()) texts.push(node.textContent)
+      return
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE || depth >= MAX_DEPTH) return
+    const tag = (node as Element).localName.toLowerCase()
+    if (DROPPED.has(tag) || CODE.has(tag)) return
+    node.childNodes.forEach((child) => visit(child, depth + 1))
+  }
+  body.childNodes.forEach((node) => visit(node, 0))
+  return texts
 }
 
 interface ReadmeContentProps {
@@ -272,16 +317,19 @@ interface ReadmeContentProps {
   /** See {@link readmeNodes}. */
   omitHeading?: readonly string[]
   className?: string
+  /** Display strings only; code, attributes and installation content stay original. */
+  translations?: ReadonlyMap<string, string>
 }
 
 export function ReadmeContent({
   fragment,
   omitHeading,
   className,
+  translations,
 }: ReadmeContentProps) {
   const nodes = useMemo(
-    () => readmeNodes(fragment, omitHeading),
-    [fragment, omitHeading]
+    () => readmeNodes(fragment, omitHeading, translations),
+    [fragment, omitHeading, translations]
   )
   return (
     <div

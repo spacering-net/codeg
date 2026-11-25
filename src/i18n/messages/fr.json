@@ -7699,6 +7699,14 @@
       "discoverOff": "« Découvrir » est désactivé sur ce Codeg, donc {ref} ne peut pas être ouvert ici."
     },
     "discover": {
+      "translation": {
+        "translate": "Traduire (Google)",
+        "showOriginal": "Afficher l’original",
+        "providerHint": "Envoie les titres, résumés et descriptions du catalogue public à Google Traduction. Le code et les adresses des liens ne sont pas envoyés.",
+        "loading": "Traduction…",
+        "translated": "Traduction automatique · les traductions de l’auteur sont prioritaires",
+        "retry": "Réessayer la traduction"
+      },
       "search": {
         "label": "Rechercher dans SRN Harness",
         "placeholder": "Rechercher des compétences, serveurs MCP, assistants…",

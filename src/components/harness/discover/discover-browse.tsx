@@ -38,6 +38,7 @@ import { cn } from "@/lib/utils"
 import { HarnessScroller } from "../harness-scroller"
 import { DiscoverCard } from "./discover-card"
 import { DiscoverFailure } from "./discover-failure"
+import { CatalogTranslationControls } from "./catalog-translation"
 import {
   DiscoverFilters,
   DiscoverKindSwitch,
@@ -365,6 +366,7 @@ export function DiscoverBrowse({ installed }: DiscoverBrowseProps) {
           <div role="search" className="min-w-0">
             <div className="mx-auto flex w-full max-w-2xl min-w-0 flex-col items-stretch gap-4">
               <DiscoverSearchBox apply={apply} inputRef={searchRef} />
+              <CatalogTranslationControls />
               <DiscoverKindSwitch apply={apply} totals={totals.value} />
             </div>
             <div
