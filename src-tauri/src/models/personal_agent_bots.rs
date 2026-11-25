@@ -128,18 +128,21 @@ impl BotAvatar {
     }
 
     /// The collaboration settings' avatar that stands for this one: itself
-    /// when it is one, else a monogram in the nearest of their colours.
+    /// when it is one, else a monogram in the nearest of their colours. A
+    /// monogram or an emoji takes a face's colour as well as one of theirs
+    /// (the face editor offers the faces' colours for both): the nearest of
+    /// theirs, then.
     pub fn as_assistant(&self) -> AssistantAvatar {
         match self {
             BotAvatar::Face { color, .. } => AssistantAvatar::Monogram {
                 color: assistant_color(color).to_string(),
             },
             BotAvatar::Monogram { color } => AssistantAvatar::Monogram {
-                color: color.clone(),
+                color: text_color(color),
             },
             BotAvatar::Emoji { emoji, color } => AssistantAvatar::Emoji {
                 emoji: emoji.clone(),
-                color: color.clone(),
+                color: text_color(color),
             },
             BotAvatar::Image { data_url } => AssistantAvatar::Image {
                 data_url: data_url.clone(),
@@ -155,6 +158,17 @@ impl From<AssistantAvatar> for BotAvatar {
             AssistantAvatar::Emoji { emoji, color } => BotAvatar::Emoji { emoji, color },
             AssistantAvatar::Image { data_url } => BotAvatar::Image { data_url },
         }
+    }
+}
+
+/// A text avatar's colour as the collaboration settings' avatars name
+/// theirs: a face's, the nearest of theirs; one of theirs (or anything
+/// else, which their check refuses) as it is.
+fn text_color(color: &str) -> String {
+    if BOT_COLORS.contains(&color) {
+        assistant_color(color).to_string()
+    } else {
+        color.to_string()
     }
 }
 
@@ -307,6 +321,48 @@ mod tests {
             }
         }
         assert!(seen >= 4, "no tool offers a shape and a colour");
+    }
+
+    /// A monogram or an emoji takes any face colour (the face editor offers
+    /// them for both), and still the collaboration settings' colours the
+    /// ones made before carry; nothing else.
+    #[test]
+    fn a_text_avatar_takes_the_faces_colours_and_the_old_ones() {
+        for color in BOT_COLORS.iter().chain(super::super::assistant::ASSISTANT_AVATAR_COLORS) {
+            let mono = BotAvatar::Monogram {
+                color: (*color).into(),
+            };
+            assert!(mono.validate().is_ok(), "monogram in {color}");
+            let emoji = BotAvatar::Emoji {
+                emoji: "🦉".into(),
+                color: (*color).into(),
+            };
+            assert!(emoji.validate().is_ok(), "emoji in {color}");
+        }
+        for color in ["#ff0000", "crimson", ""] {
+            assert!(BotAvatar::Monogram { color: color.into() }.validate().is_err());
+            assert!(BotAvatar::Emoji {
+                emoji: "🦉".into(),
+                color: color.into()
+            }
+            .validate()
+            .is_err());
+        }
+        assert_eq!(
+            BotAvatar::Emoji {
+                emoji: "🦉".into(),
+                color: "magenta".into()
+            }
+            .as_assistant(),
+            AssistantAvatar::Emoji {
+                emoji: "🦉".into(),
+                color: "pink".into()
+            }
+        );
+        assert_eq!(
+            BotAvatar::Monogram { color: "sky".into() }.as_assistant(),
+            AssistantAvatar::Monogram { color: "sky".into() }
+        );
     }
 
     #[test]

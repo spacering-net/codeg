@@ -103,6 +103,11 @@ const BASE: Readonly<Record<BotColor, readonly [string, string]>> = {
 
 export const FACE_COLORS = Object.keys(BASE) as BotColor[]
 
+/** Whether a name is one of the colours codeg draws faces in. */
+export function isFaceColor(name: string): name is BotColor {
+  return has(BASE, name)
+}
+
 /** A colour codeg draws: itself, or blue for one it does not. */
 export function colorOf(name: string): BotColor {
   return has(BASE, name) ? (name as BotColor) : "blue"

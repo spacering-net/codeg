@@ -93,7 +93,7 @@ import {
   usePersonalAgentUi,
 } from "@/stores/personal-agent-ui-store"
 
-import { BotAvatar } from "./bot-avatar"
+import { BotAvatar, faceColorOf } from "./bot-avatar"
 import {
   HistorySearchButton,
   PersonalAgentHistorySearch,
@@ -429,11 +429,11 @@ export function PersonalAgentPage() {
   // owner keeps it shown (the title's capsule lists them either way).
   useRosterUpkeep(readOnly)
   const agentName = agent?.name?.trim() || t("title")
-  // Its face's colour, which the owner's bubbles take; with "follow the
-  // assistant's colour" on, the theme's colour in its conversation too
-  // (10.7).
+  // Its face's colour (a text avatar's, as one), which the owner's bubbles
+  // take; with "follow the assistant's colour" on, the theme's colour in
+  // its conversation too (10.7).
   const [accent] = usePaAccent()
-  const faceColor = agent?.avatar?.kind === "face" ? agent.avatar.color : null
+  const faceColor = faceColorOf(agent?.avatar)
   const liveRowId = liveRowOf(rows, status?.live_reply?.row_id ?? null)
   const rowsById = useMemo(() => {
     const m = new Map<number, TimelineRow>()

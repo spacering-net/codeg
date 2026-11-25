@@ -1996,12 +1996,22 @@ export type BotColor =
   | "magenta"
   | "gray"
 
+/** A text avatar's colour on an assistant: one of the faces' colours (what
+ *  the face editor offers), or one of the ten the collaboration settings'
+ *  assistants had, which the avatars made before carry. */
+export type AvatarTextColor = BotColor | AssistantAvatarColor
+
 /** An assistant's avatar: a face (shape and colour), or one of the avatars
  *  the collaboration settings' assistants had, which the assistants made
- *  before 1.6 carry. */
+ *  before 1.6 carry — a monogram or an emoji now in a face's colour. */
 export type BotAvatar =
   | { kind: "face"; shape: BotShape; color: BotColor }
-  | AssistantAvatar
+  | { kind: "monogram"; color: AvatarTextColor }
+  | { kind: "emoji"; emoji: string; color: AvatarTextColor }
+  | { kind: "image"; data_url: string }
+
+/** Any avatar but a face: what `AssistantAvatar` draws. */
+export type DiscAvatar = Exclude<BotAvatar, { kind: "face" }>
 
 export interface PersonalAgentInfo {
   id: number

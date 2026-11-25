@@ -53,9 +53,11 @@ import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import { useReducedMotion } from "@/hooks/use-chat-motion"
 import type {
   AssistantAvatar as AssistantAvatarValue,
+  AvatarTextColor,
   BotAvatar as BotAvatarValue,
   BotColor,
   BotLook,
+  DiscAvatar,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -66,6 +68,7 @@ import {
   DEFAULT_SHAPES,
   SMALL_FACE_BELOW,
   colorOf,
+  isFaceColor,
   restFace,
   shapeOf,
 } from "./bot-shapes"
@@ -86,6 +89,37 @@ export const BOT_COLORS: readonly BotColor[] = [
   "magenta",
   "gray",
 ]
+
+/** The ten colours the collaboration settings' assistants had, each as
+ *  the face colour nearest it — what a text avatar made before the face
+ *  editor offered the faces' colours reads as. */
+const LEGACY_TEXT_COLOR: Record<string, BotColor> = {
+  slate: "gray",
+  amber: "yellow",
+  sky: "blue",
+  violet: "purple",
+  pink: "magenta",
+}
+
+/** A text avatar's colour as a face colour: itself, or the nearest one for
+ *  one made before (gray for a colour codeg never offered). */
+export function textColorOf(color: AvatarTextColor | string): BotColor {
+  if (isFaceColor(color)) return color
+  return LEGACY_TEXT_COLOR[color] ?? "gray"
+}
+
+/** The colour an assistant's conversation is painted in (`data-pa-face`):
+ *  its face's, or its monogram's or emoji's; none for a picture. */
+export function faceColorOf(
+  avatar: BotAvatarValue | AssistantAvatarValue | null | undefined
+): BotColor | null {
+  if (!avatar) return null
+  if (avatar.kind === "face") return avatar.color
+  if (avatar.kind === "monogram" || avatar.kind === "emoji") {
+    return textColorOf(avatar.color)
+  }
+  return null
+}
 
 /** The colours a new assistant is given by default (as the backend's
  *  `DEFAULT_COLORS`): all but black, the primary's. */
@@ -280,7 +314,7 @@ function PictureAvatar({
 }: BotAvatarProps) {
   const plain = (
     <AssistantAvatar
-      avatar={avatar as AssistantAvatarValue | null | undefined}
+      avatar={avatar as DiscAvatar | null | undefined}
       name={name}
       size={size}
       className={look || dot ? undefined : className}

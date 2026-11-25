@@ -9,7 +9,7 @@ vi.mock("@/hooks/use-chat-motion", () => ({
 import { syncedDelay } from "@/lib/motion/synced-spin"
 import type { BotAvatar as BotAvatarValue } from "@/lib/types"
 
-import { BotAvatar } from "./bot-avatar"
+import { BotAvatar, faceColorOf } from "./bot-avatar"
 import {
   __activeFacesForTests,
   __resetFaceMotionForTests,
@@ -538,6 +538,29 @@ describe("a picture or a monogram for a face", () => {
     expect(
       container.querySelector("[data-slot='assistant-avatar']")
     ).not.toBeNull()
+  })
+})
+
+describe("the colour an assistant's conversation takes", () => {
+  it("is its face's, or its text avatar's — the nearest face colour for an old one", () => {
+    expect(faceColorOf(face)).toBe("teal")
+    expect(faceColorOf({ kind: "monogram", color: "magenta" })).toBe("magenta")
+    expect(faceColorOf({ kind: "emoji", emoji: "🦊", color: "yellow" })).toBe(
+      "yellow"
+    )
+    expect(faceColorOf({ kind: "monogram", color: "red" })).toBe("red")
+    expect(faceColorOf({ kind: "monogram", color: "violet" })).toBe("purple")
+    expect(faceColorOf({ kind: "emoji", emoji: "🦊", color: "sky" })).toBe(
+      "blue"
+    )
+    expect(faceColorOf({ kind: "monogram", color: "slate" })).toBe("gray")
+  })
+
+  it("is none for a picture or no avatar", () => {
+    expect(
+      faceColorOf({ kind: "image", data_url: "data:image/png;base64,AA" })
+    ).toBeNull()
+    expect(faceColorOf(null)).toBeNull()
   })
 })
 

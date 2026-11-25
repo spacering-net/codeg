@@ -1735,7 +1735,7 @@ describe("the stats tab's data", () => {
     window.localStorage.removeItem("codeg:personal-agent:stats-days")
   })
 
-  it("keeps the dashboard's colours for an assistant with no face", async () => {
+  it("takes a text avatar's colour as a face's — the nearest one for an old colour", async () => {
     usePersonalAgentUi.setState({ auxTab: "stats" })
     api.personalAgentStats.mockResolvedValue({
       days: [],
@@ -1743,7 +1743,35 @@ describe("the stats tab's data", () => {
       usage: [],
       tokens_synced_at: null,
     } satisfies PersonalAgentStats)
+    // The fixture's emoji is in the collaboration settings' violet.
     draw()
+    await screen.findByText("Last 14 days")
+    const viz = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>(".tu-viz")
+      expect(el).toBeTruthy()
+      return el!
+    })
+    expect(viz.getAttribute("data-pa-face")).toBe("purple")
+    expect(viz.style.getPropertyValue("--tu-accent")).toBe("var(--pa-body)")
+  })
+
+  it("keeps the dashboard's colours for an assistant with a picture", async () => {
+    usePersonalAgentUi.setState({ auxTab: "stats" })
+    api.personalAgentStats.mockResolvedValue({
+      days: [],
+      agents: [],
+      usage: [],
+      tokens_synced_at: null,
+    } satisfies PersonalAgentStats)
+    const pictured: PersonalAgentSnapshot = {
+      ...snapshot(),
+      agent: {
+        ...snapshot().agent!,
+        avatar: { kind: "image", data_url: "data:image/png;base64,AA" },
+      },
+    }
+    pa.snapshot = pictured
+    draw({ snap: pictured })
     await screen.findByText("Last 14 days")
     const viz = await waitFor(() => {
       const el = document.querySelector<HTMLElement>(".tu-viz")
