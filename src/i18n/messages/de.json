@@ -11268,6 +11268,7 @@
       "own": {
         "dispatch": "Vergibt Arbeit",
         "dispatch_followup": "Hakt bei einer Arbeit nach",
+        "dispatch_wait": "Wartet auf das Ergebnis der Arbeit",
         "items": "Aktualisiert die offenen Punkte",
         "timeline_read": "Liest das Gespräch nach",
         "project_list": "Prüft die Projekte"
@@ -11553,7 +11554,7 @@
         "edit": "Avatar bearbeiten",
         "reset": "Zurücksetzen",
         "pages": {
-          "bot": "Bot",
+          "bot": "Modelle",
           "make": "Text",
           "upload": "Hochladen"
         },

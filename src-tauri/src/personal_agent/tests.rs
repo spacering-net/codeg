@@ -1986,6 +1986,150 @@ async fn a_reply_reports_the_cards_its_body_names_or_the_one_it_was_given() {
     assert!(covers.is_null() || covers == json!([]), "{:?}", reply4.data);
 }
 
+/// The owner asks for work's result in this reply: the assistant hands it
+/// out and waits within its turn (`dispatch_wait`). News that comes in
+/// meanwhile is handed to the turn numbered, stays pending while it runs,
+/// and is settled with it only when the reply said in full it reported it
+/// (its marker) — no second turn tells it again. A reply that does not mark
+/// it, or a turn that does not finish, leaves it to go out as an event.
+#[tokio::test]
+async fn news_waited_for_within_a_turn_is_settled_with_the_reply_that_reports_it() {
+    use std::time::Duration;
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let bot = engine.bot().await;
+    let event_of = |id: i32| {
+        let engine = engine.clone();
+        async move {
+            svc::latest_event_of_coalesce(&engine.db.conn, &format!("dispatch:{id}"))
+                .await
+                .unwrap()
+                .unwrap()
+        }
+    };
+
+    // No turn running: nothing to wait in.
+    let early = session_dispatch(&engine, DispatchState::Running, "conn-w0").await;
+    let out = engine.dispatch_wait(early, Some(Duration::ZERO)).await;
+    assert!(!out.ok, "{}", out.text);
+
+    // 1. Waited for, reported with its marker: settled with the turn.
+    let (mut rx, state) = live_connection(&engine, seg, "pa-w1").await;
+    engine
+        .send_owner_message("have it checked, then tell me".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let id = session_dispatch(&engine, DispatchState::Running, "conn-w1").await;
+    // Still running: the wait ends with how it stands.
+    let out = engine.dispatch_wait(id, Some(Duration::ZERO)).await;
+    assert!(out.ok && out.data["waiting"] == "timed_out", "{}", out.text);
+    // Another assistant's work is not this one's to wait for.
+    let out = engine.dispatch_wait(id + 1000, Some(Duration::ZERO)).await;
+    assert!(!out.ok, "{}", out.text);
+    svc::update_dispatch(
+        &engine.db.conn,
+        id,
+        None,
+        DispatchWrite { state: Some(DispatchState::Completed), ..Default::default() },
+    )
+    .await
+    .unwrap();
+    let d = dispatch_state(&engine, id).await;
+    engine.record_progress(&d, Some("The title was never changed.".into()), None, "turn").await;
+    let card = svc::latest_result_row(&engine.db.conn, id).await.unwrap().unwrap();
+    let out = engine.dispatch_wait(id, Some(Duration::from_secs(5))).await;
+    assert!(out.ok && out.data["waiting"] == "news", "{}", out.text);
+    assert!(out.text.contains(&format!("[#{}] Dispatch #{id}", card.id)), "{}", out.text);
+    assert!(out.text.contains(&format!("[[quote:#{}]]", card.id)), "{}", out.text);
+    // Handed, not taken: pending while the turn runs.
+    assert_eq!(event_of(id).await.state, EventState::Pending);
+    emit(
+        &engine,
+        &state,
+        "pa-w1",
+        text(&format!("[[quote:#{}]] Not accepted: nothing was changed.", card.id)),
+        true,
+    )
+    .await;
+    emit(&engine, &state, "pa-w1", turn_complete("end_turn"), true).await;
+    let reply = svc::page(&engine.db.conn, bot, None, 100)
+        .await
+        .unwrap()
+        .0
+        .into_iter()
+        .rfind(|r| r.kind == TimelineKind::Reply)
+        .unwrap();
+    assert_eq!(data_of(&reply)["covers"], json!([card.id]));
+    assert_eq!(reply.reply_to, None, "news newer than the reply is not its quote");
+    let e = event_of(id).await;
+    assert_eq!(e.state, EventState::Done);
+    assert_eq!(e.batch_id, reply.batch_id, "settled with the turn that reported it");
+    let card_now = svc::get_row(&engine.db.conn, card.id).await.unwrap().unwrap();
+    assert!(card_now.read_at.is_some());
+    // Nothing left to tell: no second turn.
+    engine.pump().await;
+    assert!(rx.try_recv().is_err(), "the reported news is not delivered again");
+    // Its news reached the assistant: waiting again says so at once.
+    let (mut rx, state) = live_connection(&engine, seg, "pa-w1b").await;
+    engine.send_owner_message("and?".into(), Vec::new(), None).await.unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let out = engine.dispatch_wait(id, Some(Duration::ZERO)).await;
+    assert!(out.ok && out.data["waiting"] == "told", "{}", out.text);
+    emit(&engine, &state, "pa-w1b", text("Told you."), true).await;
+    emit(&engine, &state, "pa-w1b", turn_complete("end_turn"), true).await;
+
+    // 2. Handed but not marked: it goes out as an event.
+    let (mut rx, state) = live_connection(&engine, seg, "pa-w2").await;
+    engine.send_owner_message("check another".into(), Vec::new(), None).await.unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let id2 = session_dispatch(&engine, DispatchState::Completed, "conn-w2").await;
+    let d2 = dispatch_state(&engine, id2).await;
+    engine.record_progress(&d2, Some("Done.".into()), None, "turn").await;
+    let card2 = svc::latest_result_row(&engine.db.conn, id2).await.unwrap().unwrap();
+    let out = engine.dispatch_wait(id2, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "news", "{}", out.text);
+    emit(&engine, &state, "pa-w2", text("It is done."), true).await;
+    emit(&engine, &state, "pa-w2", turn_complete("end_turn"), true).await;
+    assert_eq!(event_of(id2).await.state, EventState::Pending);
+    engine.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    assert!(prompt.contains(&format!("[#{}]", card2.id)), "{prompt}");
+    start_prompt(&state, Some(&token)).await;
+    emit(&engine, &state, "pa-w2", text("Done."), true).await;
+    emit(&engine, &state, "pa-w2", turn_complete("end_turn"), true).await;
+
+    // 3. Marked, but the turn was stopped: nothing settled, it goes out.
+    let (mut rx, state) = live_connection(&engine, seg, "pa-w3").await;
+    engine.send_owner_message("one more".into(), Vec::new(), None).await.unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let id3 = session_dispatch(&engine, DispatchState::Completed, "conn-w3").await;
+    let d3 = dispatch_state(&engine, id3).await;
+    engine.record_progress(&d3, Some("Done.".into()), None, "turn").await;
+    let card3 = svc::latest_result_row(&engine.db.conn, id3).await.unwrap().unwrap();
+    let out = engine.dispatch_wait(id3, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "news", "{}", out.text);
+    emit(&engine, &state, "pa-w3", text(&format!("[[quote:#{}]] Half", card3.id)), true).await;
+    emit(&engine, &state, "pa-w3", turn_complete("cancelled"), true).await;
+    let e3 = event_of(id3).await;
+    assert_eq!(e3.state, EventState::Pending, "a stopped turn settles nothing it waited for");
+    assert_eq!(e3.batch_id, None);
+    let card3_now = svc::get_row(&engine.db.conn, card3.id).await.unwrap().unwrap();
+    assert!(card3_now.read_at.is_none(), "unread until a delivery takes it");
+
+    // The turn over, the wait is too.
+    let out = engine.dispatch_wait(id3, Some(Duration::ZERO)).await;
+    assert!(!out.ok, "{}", out.text);
+}
+
 /// Interrupted: a put-back event's card is unread again; one put back once
 /// already is settled and stays read. The reply keeps its last checkpoint.
 #[tokio::test]
@@ -11547,6 +11691,27 @@ async fn bump_run(engine: &PersonalAgentEngine, task: i32) {
     let mut am: work_task_entity::ActiveModel = t.into();
     am.run_seq = Set(seq + 1);
     am.update(&engine.db.conn).await.unwrap();
+}
+
+/// Code work in review that codeg checks first: `dispatch_wait` does not
+/// hand its "being checked" news as a result, nor wait for the check — the
+/// verdict comes as an acceptance after the turn — and leaves that news to
+/// go out with it.
+#[tokio::test]
+async fn waiting_on_code_work_under_acceptance_says_it_is_being_checked() {
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    let conn = &engine.db.conn;
+    owner_turn(&engine, "pa-wa").await;
+    engine.record_progress(&w.d, None, None, "task").await;
+    let out = engine.dispatch_wait(w.d.id, Some(std::time::Duration::ZERO)).await;
+    assert!(out.ok, "{}", out.text);
+    assert_eq!(out.data["waiting"], "checking", "{}", out.text);
+    let review = svc::latest_event_of_coalesce(conn, &format!("dispatch:{}", w.d.id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(review.state, EventState::Pending, "left to go out with the verdict");
 }
 
 #[tokio::test]

@@ -483,7 +483,7 @@ pub(super) fn mode_label(mode: DispatchMode) -> &'static str {
     }
 }
 
-fn state_sentence(state: DispatchState) -> &'static str {
+pub(super) fn state_sentence(state: DispatchState) -> &'static str {
     match state {
         DispatchState::Queued => "is queued",
         DispatchState::Running => "is running",

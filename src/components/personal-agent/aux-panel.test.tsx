@@ -578,14 +578,14 @@ describe("the panel", () => {
       within(bubble)
         .getAllByRole("tab")
         .map((tab) => tab.textContent)
-    ).toEqual(["Bot", "Text", "Upload"])
+    ).toEqual(["Models", "Text", "Upload"])
     // Open on the page its face is from: an emoji's, "Text".
     expect(
       within(bubble)
         .getByRole("tab", { name: "Text" })
         .getAttribute("aria-selected")
     ).toBe("true")
-    fireEvent.mouseDown(within(bubble).getByRole("tab", { name: "Bot" }), {
+    fireEvent.mouseDown(within(bubble).getByRole("tab", { name: "Models" }), {
       button: 0,
     })
     fireEvent.click(await within(bubble).findByRole("button", { name: "Bug" }))
