@@ -37,3 +37,10 @@ When Codeg updates a conversation title, Codeg attempts to rename the bound Tele
 - Topic mode is Telegram-only in this release. Lark/Feishu and Weixin behavior is unchanged.
 - Codeg does not automatically cancel a session when a Telegram topic is closed or deleted.
 - Historical sessions are not automatically migrated into Telegram topics.
+
+## Optional standalone bot
+
+The [Telegram sidecar example](../../examples/telegram-sidecar/README.md) uses
+Codeg's HTTP API and WebSocket events to provide private-chat topics, session
+menus, and interactive permission, question, and plan approvals. Its setup,
+configuration, tests, and source-license acknowledgments are documented there.

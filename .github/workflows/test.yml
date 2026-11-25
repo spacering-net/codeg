@@ -71,6 +71,22 @@ jobs:
       - name: Static export build
         run: pnpm build
 
+  telegram-sidecar:
+    name: Telegram sidecar (Node ${{ matrix.node }} on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+        node: ["22.13.0", "24"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Sidecar regression tests (no external dependencies)
+        run: npm --prefix examples/telegram-sidecar test
+
   rust:
     name: Rust ${{ matrix.mode }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
