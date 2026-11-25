@@ -243,7 +243,11 @@ function FileFacts({ info }: { info: McpAgentInfo }) {
         )}
         {config.related.map((file) => (
           <div key={file.path} className="min-w-0 space-y-0.5 border-t pt-2">
-            <p className="text-muted-foreground">{t("pluginGate")}</p>
+            <p className="text-muted-foreground">
+              {file.role === "account_servers"
+                ? t("accountConfig")
+                : t("pluginGate")}
+            </p>
             <PathText path={file.path} />
             {file.reason && (
               <p className="text-tone-warning">

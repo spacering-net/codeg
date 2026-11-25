@@ -310,6 +310,7 @@ impl Sandbox {
             })
             .collect();
         let engine = EngineCtx {
+            family_paths: Default::default(),
             paths,
             lock_path: dir.path().join("locks").join("mcp.lock"),
             backup_root: dir.path().join("backups"),
@@ -2033,4 +2034,27 @@ async fn the_command_layer_refuses_when_switched_off_before_touching_anything() 
     .unwrap_err();
     assert_eq!(error.i18n_key.as_deref(), Some("Harness.errors.disabled"));
     assert_eq!(sandbox.site.requests(), 0);
+}
+
+#[tokio::test]
+async fn a_family_install_uses_the_account_in_its_provenance_check() {
+    let mut sandbox = Sandbox::new().await;
+    let app = McpAppType::Codex;
+    let other = sandbox._dir.path().join("work").join("config.toml");
+    std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+    let toml = "[mcp_servers.notes]\ncommand = \"read-notes\"\n";
+    sandbox.write(app, toml);
+    std::fs::write(&other, toml).unwrap();
+    let engine = &mut sandbox.local.engine;
+    engine.add_family_path(
+        app,
+        AgentPaths {
+            servers: other.clone(),
+            plugin_gate: None,
+        },
+    );
+    let (config, _) = inventory::read_family(engine, app);
+    assert!(super::written_fingerprint(engine, app, "notes", config.basis.as_deref()).is_some());
+    std::fs::write(other, format!("{toml}# changed by the account\n")).unwrap();
+    assert!(super::written_fingerprint(engine, app, "notes", config.basis.as_deref()).is_none());
 }

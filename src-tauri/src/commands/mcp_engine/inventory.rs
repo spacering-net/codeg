@@ -158,14 +158,39 @@ pub(crate) fn read_agent(app: McpAppType, paths: &AgentPaths) -> (McpConfigFile,
     (config, entries)
 }
 
-fn scan_agent(ctx: &EngineCtx, app: McpAppType, installed: Option<bool>) -> McpAgentInventory {
-    let spec = spec(app);
-    let agent_type = agent_type_of(app);
+/// Read the configuration and the revision that an edit to this family checks.
+pub(crate) fn read_family(ctx: &EngineCtx, app: McpAppType) -> (McpConfigFile, Vec<McpEntry>) {
     let empty = AgentPaths {
         servers: Default::default(),
         plugin_gate: None,
     };
-    let (config, entries) = read_agent(app, ctx.paths_of(app).unwrap_or(&empty));
+    let (mut config, entries) = read_agent(app, ctx.paths_of(app).unwrap_or(&empty));
+    let mut mirrors = Vec::new();
+    for paths in ctx.family_paths.get(&app).into_iter().flatten() {
+        let (account, _) = read_agent(app, paths);
+        if matches!(config.status, McpFileStatus::Ok | McpFileStatus::Missing)
+            && !matches!(account.status, McpFileStatus::Ok | McpFileStatus::Missing)
+        {
+            config.status = account.status;
+            config.reason =
+                Some(McpIssue::new(codes::RELATED_FILE_UNREADABLE).detail(&account.path));
+        }
+        mirrors.push((account.path.clone(), account.basis));
+        config.related.push(McpRelatedFile {
+            role: "account_servers".into(),
+            path: account.path,
+            reason: account.reason,
+        });
+        config.related.extend(account.related);
+    }
+    config.basis = super::fsio::family_basis(config.basis, &mirrors);
+    (config, entries)
+}
+
+fn scan_agent(ctx: &EngineCtx, app: McpAppType, installed: Option<bool>) -> McpAgentInventory {
+    let spec = spec(app);
+    let agent_type = agent_type_of(app);
+    let (config, entries) = read_family(ctx, app);
     let writable =
         !spec.scan_only && matches!(config.status, McpFileStatus::Ok | McpFileStatus::Missing);
     McpAgentInventory {
