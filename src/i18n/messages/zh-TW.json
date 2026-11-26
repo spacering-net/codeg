@@ -1131,31 +1131,31 @@
       "saveRawConfig": "儲存檔案"
     },
     "antigravity": {
-      "configDescription": "Antigravity 必须先选定认证方式才能开始会话。所选方式会写入 $GEMINI_HOME/antigravity-acp/settings.json 的 auth.type —— 这是 ACP 服务端唯一读取的位置，不写就每次新建会话都会报 “Authentication required”。模型与会话模式不在这里：Antigravity 通过 ACP 上报它们，由输入框的选择器按会话管理。",
-      "methodLabel": "认证方式",
+      "configDescription": "Antigravity 必須先選定認證方式才能開始工作階段。所選方式會寫入 $GEMINI_HOME/antigravity-acp/settings.json 的 auth.type —— 這是 ACP 伺服器唯一讀取的位置，沒寫入的話每次建立工作階段都會出現「Authentication required」錯誤。模型與工作階段模式不在這裡設定：Antigravity 會透過 ACP 回報它們，由輸入框的選擇器依工作階段管理。",
+      "methodLabel": "認證方式",
       "methods": {
-        "oauth-personal": "使用 Google 账号登录",
+        "oauth-personal": "使用 Google 帳號登入",
         "oauth-business": "Gemini Enterprise",
         "gemini-api-key": "Gemini API Key",
         "agent-platform": "Gemini Enterprise Agent Platform"
       },
       "methodHints": {
-        "oauth-personal": "你的 Google 账号，任意 Antigravity 套餐（含免费版）均可。首次新建会话会自动打开浏览器完成登录，之后令牌会被缓存复用。本機沒有瀏覽器？用下面的免瀏覽器登入。",
-        "oauth-business": "你的 Gemini Enterprise 账号。需要填 GCP 项目与区域，首次新建会话会打开浏览器。本機沒有瀏覽器？用下面的免瀏覽器登入。",
-        "gemini-api-key": "Gemini Developer API 的密钥，以 GEMINI_API_KEY 传给智能体。",
-        "agent-platform": "即原 Vertex AI。可用 API Key，或用项目 + 区域配合应用默认凭据（gcloud auth application-default login）。"
+        "oauth-personal": "你的 Google 帳號，任何 Antigravity 方案（含免費版）皆可。首次建立工作階段會自動開啟瀏覽器完成登入，之後權杖會快取並重複使用。本機沒有瀏覽器？用下面的免瀏覽器登入。",
+        "oauth-business": "你的 Gemini Enterprise 帳號。需要填寫 GCP 專案與區域，首次建立工作階段會開啟瀏覽器。本機沒有瀏覽器？用下面的免瀏覽器登入。",
+        "gemini-api-key": "Gemini Developer API 的金鑰，以 GEMINI_API_KEY 傳給智慧代理。",
+        "agent-platform": "即原 Vertex AI。可用 API Key，或用專案 + 區域搭配應用程式預設憑證（gcloud auth application-default login）。"
       },
       "geminiApiKeyLabel": "Gemini API Key",
       "googleApiKeyLabel": "Google API Key",
-      "googleApiKeyHint": "可选。填了就单独使用它，下面的项目与区域会被忽略；留空则改用应用默认凭据认证。",
-      "gcpProjectLabel": "GCP 项目",
-      "gcpLocationLabel": "GCP 区域",
-      "missingGeminiApiKey": "请填写 Gemini API Key，或改用其他认证方式 —— 否则会话无法启动。",
-      "missingAgentPlatformConfig": "请填写 API Key，或同时填写项目与区域 —— 二者缺一不可，否则会话无法启动。",
-      "missingEnterpriseConfig": "Gemini Enterprise 需要同时填写项目与区域。",
-      "settingsFileHint": "auth.type 会保存到该文件；你自己写在里面的其他键会原样保留。",
-      "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
-      "save": "保存",
+      "googleApiKeyHint": "選填。填了就單獨使用它，下面的專案與區域會被忽略；留空則改用應用程式預設憑證認證。",
+      "gcpProjectLabel": "GCP 專案",
+      "gcpLocationLabel": "GCP 區域",
+      "missingGeminiApiKey": "請填寫 Gemini API Key，或改用其他認證方式 —— 否則工作階段無法啟動。",
+      "missingAgentPlatformConfig": "請填寫 API Key，或同時填寫專案與區域 —— 兩者缺一不可，否則工作階段無法啟動。",
+      "missingEnterpriseConfig": "Gemini Enterprise 需要同時填寫專案與區域。",
+      "settingsFileHint": "auth.type 會儲存到這個檔案；你自己寫在裡面的其他鍵會原樣保留。",
+      "syncSkipped": "你的選擇已儲存，但 codeg 無法寫入 ACP 伺服器的 settings.json，所以 Antigravity 仍會依照該檔案的設定進行認證。請自行在檔案中設定 auth.type，或先把檔案移開再儲存一次。",
+      "save": "儲存",
       "headless": {
         "title": "在沒有瀏覽器的機器上登入",
         "description": "Antigravity 的 Google 登入由智慧代理自己發起，瀏覽器必須開在執行代理的那台機器上。部署在無桌面伺服器上的 codeg 沒有瀏覽器，首次建立工作階段會等待 5 分鐘後失敗。改從這裡登入：把連結拿到任意裝置上開啟，再把跳轉後的網址貼回來。",
@@ -1739,9 +1739,9 @@
       "savePiTrustFailed": "儲存工作區信任失敗",
       "qoderSaved": "Qoder 設定已儲存",
       "saveQoderConfigFailed": "儲存 Qoder 設定失敗",
-      "antigravitySaved": "已保存 Antigravity 配置",
-      "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
-      "saveAntigravityConfigFailed": "保存 Antigravity 配置失败",
+      "antigravitySaved": "Antigravity 設定已儲存",
+      "antigravitySyncSkipped": "已儲存，但未變更 Antigravity 的 settings.json",
+      "saveAntigravityConfigFailed": "儲存 Antigravity 設定失敗",
       "kiroSaved": "Kiro 設定已儲存",
       "saveKiroFailed": "儲存 Kiro 設定失敗",
       "traeSaved": "TRAE CLI 設定已儲存",
@@ -3343,8 +3343,8 @@
         "newFile": "新建檔案",
         "newDirectory": "新建目錄",
         "description": "輸入新{kind}的名稱。",
-        "placeholderFile": "file-name.ext",
-        "placeholderDirectory": "folder-name"
+        "placeholderFile": "檔案名稱.ext",
+        "placeholderDirectory": "資料夾名稱"
       },
       "renameDialog": {
         "renameDirectory": "重新命名目錄",
@@ -4493,21 +4493,21 @@
     "conversationContextBar": {
       "folderTitle": "工作資料夾",
       "branchTitle": "工作分支",
-      "searchFolder": "Search folder...",
-      "searchBranch": "Search branch...",
-      "noFolders": "No folders",
-      "noBranches": "No branches",
-      "noBranch": "(no branch)",
+      "searchFolder": "搜尋資料夾...",
+      "searchBranch": "搜尋分支...",
+      "noFolders": "沒有資料夾",
+      "noBranches": "沒有分支",
+      "noBranch": "（無分支）",
       "chatModeLabel": "聊天模式",
-      "commit": "Commit",
-      "push": "Push",
-      "merge": "Merge",
+      "commit": "提交",
+      "push": "推送",
+      "merge": "合併",
       "toasts": {
-        "folderChanged": "Switched to {name}",
-        "openFolderFailed": "Failed to open folder",
+        "folderChanged": "已切換到 {name}",
+        "openFolderFailed": "開啟資料夾失敗",
         "switchedToChatMode": "已切換到聊天模式",
-        "openStashFailed": "Failed to open stash window",
-        "openMergeFailed": "Failed to open merge window"
+        "openStashFailed": "開啟貯藏視窗失敗",
+        "openMergeFailed": "開啟合併視窗失敗"
       }
     },
     "cloneDialog": {
