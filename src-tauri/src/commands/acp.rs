@@ -12172,8 +12172,21 @@ pub(crate) fn fingerprint_config(
     agent_type: AgentType,
     runtime_env: &BTreeMap<String, String>,
 ) -> String {
+    fingerprint_config_at(
+        agent_type,
+        runtime_env,
+        &crate::commands::mcp_engine::agents::codeg_dir(),
+    )
+}
+
+fn fingerprint_config_at(
+    agent_type: AgentType,
+    runtime_env: &BTreeMap<String, String>,
+    data_dir: &Path,
+) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
+    let mcp_env = crate::parsers::AgentEnv::from_overrides(runtime_env.clone());
     // BTreeMap iterates in sorted key order → deterministic across calls.
     for (k, v) in runtime_env {
         if is_volatile_fingerprint_key(k) {
@@ -12186,7 +12199,7 @@ pub(crate) fn fingerprint_config(
     }
     hasher.update(b"\x01native\x01");
     if let Some(native) = load_agent_local_config_json(agent_type) {
-        hasher.update(native.as_bytes());
+        hasher.update(native_config_without_mcp(agent_type, &mcp_env, native).as_bytes());
     }
     // OpenCode 2 reads provider credentials from its database when a process
     // starts, and a running `opencode acp` never sees one changed after that.
@@ -12208,7 +12221,12 @@ pub(crate) fn fingerprint_config(
     if agent_type == AgentType::Grok {
         hasher.update(b"\x01grok_toml\x01");
         if let Some(toml) = load_grok_config_toml_raw() {
-            hasher.update(toml.as_bytes());
+            let path = crate::parsers::grok::resolve_grok_home_dir().join("config.toml");
+            if is_mcp_config_path(agent_type, &mcp_env, &path) {
+                hasher.update(grok_config_without_mcp(toml).as_bytes());
+            } else {
+                hasher.update(toml.as_bytes());
+            }
         }
     }
     // Same for Cursor's ~/.cursor/cli-config.json: permission rules and
@@ -12222,7 +12240,85 @@ pub(crate) fn fingerprint_config(
             hasher.update(json.as_bytes());
         }
     }
+    if let Some(mcp) =
+        crate::commands::mcp_engine::session::config_fingerprint(agent_type, &mcp_env, data_dir)
+    {
+        hasher.update(b"\x01mcp_config\x01");
+        hasher.update(mcp.as_bytes());
+    }
     format!("{:x}", hasher.finalize())
+}
+
+// MCP entries are hashed by the engine with their effective enable flags.
+// Exclude that same section from the native-settings digest so writing an
+// explicit default flag or leaving an empty container can still undo drift.
+fn native_config_without_mcp(
+    agent: AgentType,
+    env: &crate::parsers::AgentEnv,
+    raw: String,
+) -> String {
+    if !matches!(
+        agent,
+        AgentType::Gemini | AgentType::Qoder | AgentType::OpenCode | AgentType::ClaudeCode
+    ) {
+        return raw;
+    }
+    if agent != AgentType::ClaudeCode
+        && !agent_local_config_path(agent).is_some_and(|path| is_mcp_config_path(agent, env, &path))
+    {
+        return raw;
+    }
+    let Ok(serde_json::Value::Object(mut config)) = crate::acp::opencode_config::parse(&raw) else {
+        return raw;
+    };
+    match agent {
+        AgentType::Gemini | AgentType::Qoder => {
+            config.remove("mcpServers");
+        }
+        AgentType::OpenCode => {
+            if let Some(mcp) = config
+                .get_mut("mcp")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                mcp.retain(|key, value| {
+                    key != "servers"
+                        && (key == "timeout"
+                            || !crate::commands::mcp::is_opencode_direct_entry(value))
+                });
+                if mcp.is_empty() {
+                    config.remove("mcp");
+                }
+            }
+        }
+        AgentType::ClaudeCode
+            if config
+                .get("enabledPlugins")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|map| map.is_empty()) =>
+        {
+            config.remove("enabledPlugins");
+        }
+        _ => {}
+    }
+    if config.is_empty() {
+        String::new()
+    } else {
+        serde_json::Value::Object(config).to_string()
+    }
+}
+
+fn is_mcp_config_path(agent: AgentType, env: &crate::parsers::AgentEnv, path: &Path) -> bool {
+    use crate::commands::mcp_engine::agents::{app_of, resolve_paths};
+    app_of(agent).is_some_and(|app| resolve_paths(app, env).servers == path)
+}
+
+fn grok_config_without_mcp(raw: String) -> String {
+    let Ok(mut settings) = raw.parse::<toml::Table>() else {
+        return raw;
+    };
+    settings.remove("mcp_servers");
+    settings.remove("disabled_mcp_servers");
+    toml::to_string(&settings).unwrap_or(raw)
 }
 
 /// Recompute the canonical config fingerprint for `agent_type` from current
@@ -12237,7 +12333,7 @@ pub(crate) async fn compute_session_config_fingerprint(
     data_dir: &Path,
 ) -> Result<String, AcpError> {
     let runtime_env = build_session_runtime_env(db, agent_type, None, data_dir).await?;
-    Ok(fingerprint_config(agent_type, &runtime_env))
+    Ok(fingerprint_config_at(agent_type, &runtime_env, data_dir))
 }
 
 /// After a settings save, recompute the effective config fingerprint for each of
@@ -21385,6 +21481,62 @@ wire_api = "chat"
     }
 
     #[test]
+    fn mcp_fingerprint_tracks_native_entries_and_only_the_agents_paused_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("kiro");
+        let env = BTreeMap::from([("KIRO_HOME".to_string(), home.display().to_string())]);
+        let fingerprint = || fingerprint_config_at(AgentType::Kiro, &env, dir.path());
+        let baseline = fingerprint();
+        let paused = dir.path().join("mcp-paused.json");
+        let entry = serde_json::json!({
+            "definition": { "type": "stdio", "command": "example" },
+            "paused_at": "2026-11-26T00:00:00Z",
+        });
+        std::fs::write(
+            &paused,
+            serde_json::json!({
+                "version": 1, "entries": { "cursor": { "other": entry } }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(fingerprint(), baseline);
+        std::fs::write(
+            &paused,
+            serde_json::json!({
+                "version": 1, "entries": { "kiro": { "paused": entry } }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_ne!(fingerprint(), baseline);
+        std::fs::remove_file(paused).unwrap();
+        std::fs::create_dir_all(home.join("settings")).unwrap();
+        let native = home.join("settings/mcp.json");
+        std::fs::write(
+            &native,
+            r#"{"mcpServers":{"example":{"command":"example"}}}"#,
+        )
+        .unwrap();
+        let enabled = fingerprint();
+        assert_ne!(enabled, baseline);
+        std::fs::write(
+            &native,
+            r#"{"mcpServers":{"example":{"command":"example","disabled":true}}}"#,
+        )
+        .unwrap();
+        assert_ne!(fingerprint(), enabled);
+        std::fs::write(
+            &native,
+            r#"{"mcpServers":{"example":{"command":"example","disabled":false}}}"#,
+        )
+        .unwrap();
+        assert_eq!(fingerprint(), enabled);
+        std::fs::write(&native, r#"{"mcpServers":{}}"#).unwrap();
+        assert_eq!(fingerprint(), baseline);
+    }
+
+    #[test]
     fn grok_fingerprint_tracks_config_toml_changes() {
         // Grok's ~/.grok/config.toml is edited via the Grok settings panel but
         // is NOT in `agent_local_config_path`, so `fingerprint_config` must fold
@@ -21411,6 +21563,21 @@ wire_api = "chat"
                 low_fp, high_fp,
                 "changing default_reasoning_effort must change the fingerprint"
             );
+        });
+    }
+
+    #[test]
+    fn grok_mcp_drift_clears_when_only_an_empty_container_remains() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let env = BTreeMap::new();
+        temp_env::with_var("GROK_HOME", Some(dir.path()), || {
+            let fingerprint = || fingerprint_config_at(AgentType::Grok, &env, dir.path());
+            let baseline = fingerprint();
+            std::fs::write(&path, "[mcp_servers.docs]\ncommand = 'example'\n").unwrap();
+            assert_ne!(fingerprint(), baseline);
+            std::fs::write(&path, "disabled_mcp_servers = []\n[mcp_servers]\n").unwrap();
+            assert_eq!(fingerprint(), baseline);
         });
     }
 

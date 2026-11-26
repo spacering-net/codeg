@@ -661,21 +661,37 @@ pub async fn emit_with_state_built<F>(
 where
     F: FnOnce(&mut SessionState) -> Option<AcpEvent>,
 {
-    let (envelope_arc, stream, evicted, turn_file_jobs) = {
+    let (envelope_arc, mcp_envelope, stream, evicted, turn_file_jobs) = {
         let mut s = state.write().await;
         let Some(payload) = build(&mut s) else {
             return false;
         };
-        s.apply_event(&payload);
-        s.event_seq += 1;
-        let envelope = Arc::new(EventEnvelope {
-            seq: s.event_seq,
-            connection_id: s.connection_id.clone(),
-            payload,
+        let mcp_update = s.mcp_event(&payload);
+        let mut record = |payload| {
+            s.apply_event(&payload);
+            s.event_seq += 1;
+            let envelope = Arc::new(EventEnvelope {
+                seq: s.event_seq,
+                connection_id: s.connection_id.clone(),
+                payload,
+            });
+            let evicted = s.push_recent_event(Arc::clone(&envelope));
+            (envelope, evicted)
+        };
+        let (envelope, mut evicted) = record(payload);
+        let mcp_envelope = mcp_update.map(|payload| {
+            let (envelope, mcp_evicted) = record(payload);
+            evicted += mcp_evicted;
+            envelope
         });
-        let evicted = s.push_recent_event(Arc::clone(&envelope));
         let turn_file_jobs = std::mem::take(&mut s.turn_file_jobs);
-        (envelope, s.event_stream(), evicted, turn_file_jobs)
+        (
+            envelope,
+            mcp_envelope,
+            s.event_stream(),
+            evicted,
+            turn_file_jobs,
+        )
     };
 
     // Office auto-preview: confirm the files this turn's tool calls named.
@@ -696,39 +712,24 @@ where
         }
     }
 
-    // Per-connection broadcaster — primary delivery path for web/remote-
-    // desktop transports (they use Subscribe-with-Snapshot attach for ACP
-    // events).
-    stream.send(Arc::clone(&envelope_arc));
-
-    // In-process consumers (lifecycle, pet, chat-channel). Typed envelope —
-    // no JSON parse on the receiver side. Plus surface ring-buffer pressure
-    // and bus emit-rate via metrics so operators can see when things drift.
-    match emitter {
+    // Sequence the observation directly after the event that produced it.
+    // Both are already in the ring and included in the same state snapshot.
+    let bus = emitter.acp_event_bus();
+    for envelope in std::iter::once(&envelope_arc).chain(mcp_envelope.as_ref()) {
+        stream.send(Arc::clone(envelope));
         #[cfg(feature = "tauri-runtime")]
-        EventEmitter::Tauri(app) => {
-            use tauri::{Emitter, Manager};
-            // Tauri webview listener is the desktop frontend's only ACP path
-            // (it subscribes via `app.listen`, not the WS attach protocol).
-            let _ = app.emit("acp://event", envelope_arc.as_ref());
-            if let Some(bus) = app.try_state::<Arc<InternalEventBus>>() {
-                bus.send(Arc::clone(&envelope_arc));
-                if evicted > 0 {
-                    bus.metrics()
-                        .ring_buffer_evict_count
-                        .fetch_add(evicted as u64, Ordering::Relaxed);
-                }
-            }
+        if let EventEmitter::Tauri(app) = emitter {
+            use tauri::Emitter;
+            let _ = app.emit("acp://event", envelope.as_ref());
         }
-        EventEmitter::WebOnly { bus, .. } => {
-            bus.send(Arc::clone(&envelope_arc));
-            if evicted > 0 {
-                bus.metrics()
-                    .ring_buffer_evict_count
-                    .fetch_add(evicted as u64, Ordering::Relaxed);
-            }
+        if let Some(bus) = &bus {
+            bus.send(Arc::clone(envelope));
         }
-        EventEmitter::Noop => {}
+    }
+    if let Some(bus) = bus.filter(|_| evicted > 0) {
+        bus.metrics()
+            .ring_buffer_evict_count
+            .fetch_add(evicted as u64, Ordering::Relaxed);
     }
 
     // Bridge conversation status transitions onto the global

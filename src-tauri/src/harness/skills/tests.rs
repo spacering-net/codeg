@@ -2343,6 +2343,8 @@ async fn the_listing_answers_each_part_on_its_own() {
         .collect();
     let mcp_local = crate::harness::mcp::Local {
         engine: EngineCtx {
+            codeg_dir: sandbox.path("codeg"),
+            custom_agents: BTreeMap::new(),
             paths,
             lock_path: sandbox.path("locks/mcp.lock"),
             paused_path: sandbox.path("mcp-paused.json"),

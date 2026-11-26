@@ -50,6 +50,8 @@ impl Sandbox {
             })
             .collect();
         let ctx = EngineCtx {
+            codeg_dir: dir.path().to_path_buf(),
+            custom_agents: BTreeMap::new(),
             paths,
             lock_path: dir.path().join("locks").join("mcp.lock"),
             paused_path: dir.path().join("mcp-paused.json"),
@@ -86,7 +88,7 @@ impl Sandbox {
         inventory::inventory(&self.ctx, &BTreeMap::new())
             .agents
             .into_iter()
-            .find(|agent| agent.agent == app)
+            .find(|agent| agent.agent.builtin() == Some(app))
             .unwrap()
     }
 
@@ -103,7 +105,7 @@ impl Sandbox {
     fn request(&self, ops: Vec<McpOp>) -> McpApplyRequest {
         let basis = ops
             .iter()
-            .map(|op| (op.agent, self.basis(op.agent)))
+            .map(|op| (op.agent.clone(), self.basis(op.agent.builtin().unwrap())))
             .collect();
         McpApplyRequest {
             basis,
@@ -117,7 +119,7 @@ impl Sandbox {
     }
 
     fn backups(&self, app: McpAppType) -> Vec<PathBuf> {
-        let mut found: Vec<PathBuf> = std::fs::read_dir(self.ctx.backup_dir(app))
+        let mut found: Vec<PathBuf> = std::fs::read_dir(self.ctx.backup_dir(&app.into()))
             .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
             .unwrap_or_default();
         found.sort();
@@ -160,7 +162,7 @@ fn sse(url: &str) -> McpDefinition {
 
 fn set(agent: McpAppType, key: &str, definition: McpDefinition) -> McpOp {
     McpOp {
-        agent,
+        agent: agent.into(),
         key: key.to_string(),
         action: McpOpAction::Set { definition },
     }
@@ -168,7 +170,7 @@ fn set(agent: McpAppType, key: &str, definition: McpDefinition) -> McpOp {
 
 fn remove(agent: McpAppType, key: &str) -> McpOp {
     McpOp {
-        agent,
+        agent: agent.into(),
         key: key.to_string(),
         action: McpOpAction::Remove,
     }
@@ -176,7 +178,7 @@ fn remove(agent: McpAppType, key: &str) -> McpOp {
 
 fn enable(agent: McpAppType, key: &str, enabled: bool) -> McpOp {
     McpOp {
-        agent,
+        agent: agent.into(),
         key: key.to_string(),
         action: McpOpAction::SetEnabled { enabled },
     }
@@ -184,7 +186,7 @@ fn enable(agent: McpAppType, key: &str, enabled: bool) -> McpOp {
 
 fn rename(agent: McpAppType, key: &str, new_key: &str) -> McpOp {
     McpOp {
-        agent,
+        agent: agent.into(),
         key: key.to_string(),
         action: McpOpAction::Rename {
             new_key: new_key.to_string(),
@@ -196,7 +198,7 @@ fn result_of(result: &McpApplyResult, app: McpAppType) -> &McpAgentResult {
     result
         .agents
         .iter()
-        .find(|agent| agent.agent == app)
+        .find(|agent| agent.agent.builtin() == Some(app))
         .unwrap_or_else(|| panic!("no result for {app:?}"))
 }
 
@@ -317,7 +319,10 @@ fn every_agent_is_listed_with_its_file_and_its_ways() {
     sandbox.write(McpAppType::ClaudeCode, CLAUDE);
     let listed = inventory::inventory(
         &sandbox.ctx,
-        &BTreeMap::from([(McpAppType::ClaudeCode, true), (McpAppType::Codex, false)]),
+        &BTreeMap::from([
+            (McpAppType::ClaudeCode.into(), true),
+            (McpAppType::Codex.into(), false),
+        ]),
     );
     assert_eq!(listed.agents.len(), all_apps().len());
     assert_eq!(listed.reserved_keys, ["codeg-mcp"]);
@@ -349,7 +354,7 @@ fn every_agent_is_listed_with_its_file_and_its_ways() {
         listed
             .agents
             .iter()
-            .find(|agent| agent.agent == app)
+            .find(|agent| agent.agent.builtin() == Some(app))
             .unwrap()
             .installed
     };
@@ -1937,7 +1942,7 @@ async fn a_file_changed_since_it_was_seen_stops_the_whole_save() {
 
     // A file that appeared, or went away, since it was seen counts too.
     let mut request = sandbox.request(vec![set(McpAppType::Kiro, "x", stdio("x", &[], &[]))]);
-    assert_eq!(request.basis[&McpAppType::Kiro], BASIS_MISSING);
+    assert_eq!(request.basis[&McpAppType::Kiro.into()], BASIS_MISSING);
     sandbox.write(McpAppType::Kiro, "{}");
     assert_eq!(
         apply_in(&sandbox.ctx, &request).await.outcome,
@@ -2016,7 +2021,7 @@ async fn a_preflight_writes_nothing_and_hands_back_the_basis_to_commit_with() {
     let basis = preflight
         .agents
         .iter()
-        .map(|agent| (agent.agent, agent.basis.clone().unwrap()))
+        .map(|agent| (agent.agent.clone(), agent.basis.clone().unwrap()))
         .collect();
     let committed = apply_in(
         &sandbox.ctx,
@@ -2326,7 +2331,7 @@ async fn a_file_changed_again_before_the_undo_is_left_as_it_is() {
     );
     assert_eq!(
         super::apply::changed_agents(&result),
-        [McpAppType::ClaudeCode],
+        [McpAppType::ClaudeCode.into()],
         "the one file that is not what it was"
     );
 }
@@ -2939,7 +2944,7 @@ args = ["no command"]
     }
 
     #[test]
-    fn pi_and_custom_agents_are_sent_nothing_and_a_broken_file_is_an_error() {
+    fn pi_is_sent_nothing_and_a_broken_file_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let pi = dir.path().join("pi");
         write(
@@ -2952,11 +2957,6 @@ args = ["no command"]
         )
         .unwrap()
         .is_empty());
-        assert!(
-            servers_for_session(AgentType::Custom("some-agent"), &AgentEnv::inherited())
-                .unwrap()
-                .is_empty()
-        );
 
         let gemini_home = dir.path().join("gemini-home");
         write(
@@ -3030,10 +3030,10 @@ fn the_event_says_which_agents_changed_and_nothing_else() {
     let mut events = broadcaster.subscribe();
     let emitter = EventEmitter::test_web_only(broadcaster.clone());
 
-    super::announce_changed(&emitter, &[]);
+    super::announce_builtin_changed(&emitter, &[]);
     assert!(events.try_recv().is_err(), "nothing changed, nothing said");
 
-    super::announce_changed(
+    super::announce_builtin_changed(
         &emitter,
         &[McpAppType::Codex, McpAppType::ClaudeCode, McpAppType::Codex],
     );
@@ -3060,8 +3060,8 @@ fn a_request_reads_as_the_page_sends_it() {
     }"#;
     let expected = McpApplyRequest {
         basis: BTreeMap::from([
-            (McpAppType::ClaudeCode, "abc".to_string()),
-            (McpAppType::Codex, "missing".to_string()),
+            (McpAppType::ClaudeCode.into(), "abc".to_string()),
+            (McpAppType::Codex.into(), "missing".to_string()),
         ]),
         ops: vec![
             set(
@@ -3215,7 +3215,10 @@ async fn soft_pause_and_resume_move_two_agents_in_one_transaction() {
 
     let result = sandbox.apply(ops.clone()).await;
     assert!(result.ok, "{result:?}");
-    assert_eq!(apply::changed_agents(&result), [antigravity, claude]);
+    assert_eq!(
+        apply::changed_agents(&result),
+        [antigravity.into(), claude.into()]
+    );
     assert!(!sandbox.read(antigravity).unwrap().contains("demo"));
     assert!(!sandbox.read(claude).unwrap().contains("linear"));
     let gate = parse_json(&std::fs::read_to_string(sandbox.gate(claude)).unwrap());
@@ -3404,4 +3407,304 @@ async fn a_paused_file_write_failure_rolls_back_native_and_gate_files() {
     assert_eq!(sandbox.read(app).as_deref(), Some(CLAUDE));
     assert_eq!(std::fs::read_to_string(sandbox.gate(app)).unwrap(), gate);
     assert!(!sandbox.ctx.paused_path.exists());
+}
+
+pub(super) fn custom_def(
+    id: &str,
+    supports_mcp: bool,
+) -> crate::acp::custom_registry::CustomAgentDef {
+    serde_json::from_value(json!({
+        "registry_id": id,
+        "name": format!("Custom {id}"),
+        "version": "1.0.0",
+        "distribution_kind": "npx",
+        "spec": { "npx": { "package": "test-acp@1.0.0", "cmd": "test-acp" } },
+        "supports_mcp": supports_mcp,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn mcp_agent_ids_share_builtin_bytes_and_validate_custom_paths() {
+    for app in all_apps() {
+        let builtin = serde_json::to_string(app).unwrap();
+        assert_eq!(
+            serde_json::to_string(&McpAgentId::from(*app)).unwrap(),
+            builtin
+        );
+        assert_eq!(
+            serde_json::from_str::<McpAgentId>(&builtin)
+                .unwrap()
+                .builtin(),
+            Some(*app)
+        );
+    }
+    let id: McpAgentId = serde_json::from_str(r#""custom:team-agent.v2""#).unwrap();
+    assert_eq!(id, McpAgentId::Custom("team-agent.v2".into()));
+    assert_eq!(
+        serde_json::to_value(BTreeMap::from([(id, "missing")])).unwrap(),
+        json!({"custom:team-agent.v2": "missing"})
+    );
+    for bad in [
+        "custom:",
+        "custom:../other",
+        "custom:/tmp",
+        "custom:a\\b",
+        "custom:.hidden",
+        "custom:codex",
+        "custom:a:b",
+        "unknown",
+    ] {
+        assert!(
+            serde_json::from_value::<McpAgentId>(json!(bad)).is_err(),
+            "{bad}"
+        );
+    }
+    assert!(serde_json::from_value::<McpApplyRequest>(json!({
+        "basis": { "custom:../escape": "missing" }, "ops": []
+    }))
+    .is_err());
+}
+
+#[tokio::test]
+async fn inventory_lists_registered_custom_agents_and_the_settings_gate() {
+    use crate::db::{service::custom_agent_service, test_helpers::fresh_in_memory_db};
+
+    let db = fresh_in_memory_db().await;
+    for (id, supported) in [("mcp-inventory-on", true), ("mcp-inventory-off", false)] {
+        custom_agent_service::upsert(&db.conn, &custom_def(id, supported))
+            .await
+            .unwrap();
+    }
+    let mut sandbox = Sandbox::new();
+    super::load_custom_agents(&mut sandbox.ctx, &db)
+        .await
+        .unwrap();
+    let custom_type = AgentType::custom("mcp-inventory-on").unwrap();
+    super::session::record_declared_capabilities(custom_type, false, true);
+    let listing = inventory::inventory(&sandbox.ctx, &BTreeMap::new());
+    let wire = serde_json::to_value(&listing).unwrap();
+    let listed = wire["agents"].as_array().unwrap();
+    assert!(listed[0].get("display_name").is_none());
+    assert!(listed[0].get("custom").is_none());
+    let find = |id| listed.iter().find(|agent| agent["agent"] == id).unwrap();
+    let on = find("custom:mcp-inventory-on");
+    assert_eq!(on["display_name"], "Custom mcp-inventory-on");
+    assert_eq!(on["custom"], true);
+    assert_eq!(on["writable"], true);
+    assert_eq!(on["can_disable"], true);
+    assert_eq!(on["codeg_mcp"], true);
+    assert_eq!(on["disable_mode"], "native");
+    assert_eq!(on["delivery"], "codeg_session");
+    assert_eq!(on["transports"], json!(["stdio", "http", "sse"]));
+    assert_eq!(on["session_capabilities"]["sse"], true);
+    assert_eq!(on["config"]["basis"], BASIS_MISSING);
+    assert_eq!(
+        on["config"]["path"],
+        sandbox
+            .dir
+            .path()
+            .join("custom-agents/mcp-inventory-on/mcp.json")
+            .display()
+            .to_string()
+    );
+    let off = find("custom:mcp-inventory-off");
+    assert_eq!(off["writable"], false);
+    assert_eq!(off["can_disable"], false);
+    assert_eq!(off["codeg_mcp"], false);
+    assert_eq!(off["disable_mode"], "unsupported");
+    assert_eq!(off["config"]["status"], "read_only");
+    assert_eq!(
+        off["config"]["reason"]["code"],
+        codes::MCP_DISABLED_IN_AGENT_SETTINGS
+    );
+    assert!(off["config"]["reason"]["detail"].is_null());
+}
+
+#[tokio::test]
+async fn custom_apply_uses_the_shared_preflight_basis_and_native_disable() {
+    use crate::db::{service::custom_agent_service, test_helpers::fresh_in_memory_db};
+
+    let db = fresh_in_memory_db().await;
+    custom_agent_service::upsert(&db.conn, &custom_def("mcp-apply-on", true))
+        .await
+        .unwrap();
+    custom_agent_service::upsert(&db.conn, &custom_def("mcp-apply-off", false))
+        .await
+        .unwrap();
+    let mut sandbox = Sandbox::new();
+    super::load_custom_agents(&mut sandbox.ctx, &db)
+        .await
+        .unwrap();
+    let agent = McpAgentId::Custom("mcp-apply-on".into());
+    let file = sandbox.ctx.paths_for(&agent).unwrap().servers;
+    let mut request = McpApplyRequest {
+        basis: BTreeMap::from([(agent.clone(), BASIS_MISSING.to_owned())]),
+        ops: vec![McpOp {
+            agent: agent.clone(),
+            key: "docs".into(),
+            action: McpOpAction::Set {
+                definition: stdio("example", &[], &[]),
+            },
+        }],
+        preflight: true,
+    };
+    let checked = apply_in(&sandbox.ctx, &request).await;
+    assert!(checked.ok);
+    assert_eq!(checked.agents[0].status, McpAgentStatus::Ready);
+    assert!(!file.exists());
+    request.preflight = false;
+    let created = apply_in(&sandbox.ctx, &request).await;
+    assert_eq!(
+        apply::changed_agents(&created).as_slice(),
+        std::slice::from_ref(&agent)
+    );
+    let stored = || serde_json::from_slice::<Value>(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(stored()["mcpServers"]["docs"]["command"], "example");
+
+    request.ops[0].action = McpOpAction::Set {
+        definition: sse("https://example.test/sse"),
+    };
+    let stale = apply_in(&sandbox.ctx, &request).await;
+    assert_eq!(stale.outcome, McpApplyOutcome::ChangedElsewhere);
+    request
+        .basis
+        .insert(agent.clone(), created.agents[0].basis.clone().unwrap());
+    let updated = apply_in(&sandbox.ctx, &request).await;
+    assert!(updated.ok);
+    assert_eq!(stored()["mcpServers"]["docs"]["type"], "sse");
+
+    request
+        .basis
+        .insert(agent.clone(), updated.agents[0].basis.clone().unwrap());
+    request.ops[0].action = McpOpAction::SetEnabled { enabled: false };
+    let disabled = apply_in(&sandbox.ctx, &request).await;
+    assert!(disabled.ok);
+    assert_eq!(stored()["mcpServers"]["docs"]["disabled"], true);
+    assert!(!sandbox.ctx.paused_path.exists());
+
+    request
+        .basis
+        .insert(agent.clone(), disabled.agents[0].basis.clone().unwrap());
+    request.ops[0].action = McpOpAction::Rename {
+        new_key: "renamed".into(),
+    };
+    let renamed = apply_in(&sandbox.ctx, &request).await;
+    assert!(renamed.ok);
+    assert_eq!(stored()["mcpServers"]["renamed"]["disabled"], true);
+    request
+        .basis
+        .insert(agent, renamed.agents[0].basis.clone().unwrap());
+    request.ops[0].key = "renamed".into();
+    request.ops[0].action = McpOpAction::Remove;
+    assert!(apply_in(&sandbox.ctx, &request).await.ok);
+    assert_eq!(stored()["mcpServers"], json!({}));
+
+    for (id, code) in [
+        ("mcp-apply-off", codes::MCP_DISABLED_IN_AGENT_SETTINGS),
+        ("mcp-apply-unregistered", codes::AGENT_NOT_WRITABLE),
+    ] {
+        request.ops[0].agent = McpAgentId::Custom(id.to_string());
+        let rejected = apply_in(&sandbox.ctx, &request).await;
+        assert!(!rejected.ok);
+        assert_eq!(rejected.agents[0].issues[0].code, code);
+        assert!(!sandbox.dir.path().join("custom-agents").join(id).exists());
+    }
+}
+
+#[tokio::test]
+async fn apply_emits_mcp_config_stale_and_clears_it_when_config_is_restored() {
+    use crate::acp::{
+        manager::ConnectionManager,
+        types::{AcpEvent, ConfigStaleKind},
+    };
+    use crate::commands::acp::compute_session_config_fingerprint;
+    use crate::db::{service::custom_agent_service, test_helpers::fresh_in_memory_db};
+    use crate::web::event_bridge::{EventEmitter, WebEventBroadcaster};
+    use std::sync::Arc;
+
+    let db = fresh_in_memory_db().await;
+    let dir = tempfile::tempdir().unwrap();
+    let id = "mcp-staleness-test";
+    custom_agent_service::upsert(&db.conn, &custom_def(id, true))
+        .await
+        .unwrap();
+    let agent = AgentType::custom(id).unwrap();
+    let baseline = compute_session_config_fingerprint(&db, agent, dir.path())
+        .await
+        .unwrap();
+    let manager = ConnectionManager::new();
+    let broadcaster = Arc::new(WebEventBroadcaster::new());
+    let mut changes = broadcaster.subscribe();
+    let emitter = EventEmitter::test_web_only(broadcaster);
+    manager
+        .insert_test_connection("mcp-test", agent, None, emitter.clone())
+        .await;
+    manager
+        .insert_test_connection("other", AgentType::Codex, None, emitter.clone())
+        .await;
+    let state = {
+        let mut connections = manager.connections.lock().await;
+        let connection = connections.get_mut("mcp-test").unwrap();
+        connection.config_fingerprint = baseline.clone();
+        connection.last_observed_fingerprint = baseline;
+        Arc::clone(&connection.state)
+    };
+    let mut acp_events = state.read().await.event_stream().subscribe();
+    let mcp_agent = McpAgentId::Custom(id.into());
+    let mut request = McpApplyRequest {
+        basis: BTreeMap::from([(mcp_agent.clone(), BASIS_MISSING.into())]),
+        ops: vec![McpOp {
+            agent: mcp_agent.clone(),
+            key: "example".into(),
+            action: McpOpAction::Set {
+                definition: stdio("example", &[], &[]),
+            },
+        }],
+        preflight: true,
+    };
+    let apply = |request| super::mcp_apply_core(&db, &emitter, &manager, dir.path(), request);
+    assert!(apply(request.clone()).await.unwrap().ok);
+    assert!(acp_events.try_recv().is_err());
+    assert!(changes.try_recv().is_err());
+    request.preflight = false;
+    let saved = apply(request.clone()).await.unwrap();
+    assert!(saved.ok);
+    assert_eq!(
+        changes.try_recv().unwrap().payload.as_ref(),
+        &json!({"agents": ["custom:mcp-staleness-test"]})
+    );
+    assert!(matches!(
+        acp_events.try_recv().unwrap().payload,
+        AcpEvent::SessionConfigStale {
+            stale: true,
+            kind: ConfigStaleKind::McpConfig
+        }
+    ));
+    assert!(state.read().await.to_snapshot().config_stale);
+    request
+        .basis
+        .insert(mcp_agent, saved.agents[0].basis.clone().unwrap());
+    request.ops[0].action = McpOpAction::Remove;
+    assert!(apply(request).await.unwrap().ok);
+    assert!(matches!(
+        acp_events.try_recv().unwrap().payload,
+        AcpEvent::SessionConfigStale {
+            stale: false,
+            kind: ConfigStaleKind::McpConfig
+        }
+    ));
+    let snapshot = state.read().await.to_snapshot();
+    assert!(!snapshot.config_stale);
+    assert_eq!(snapshot.config_stale_kind, None);
+    assert_eq!(
+        manager
+            .get_state("other")
+            .await
+            .unwrap()
+            .read()
+            .await
+            .event_seq,
+        0
+    );
 }
