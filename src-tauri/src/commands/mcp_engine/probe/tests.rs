@@ -180,6 +180,66 @@ async fn reports_a_changed_session_id_without_returning_ids() {
 }
 
 #[tokio::test]
+async fn streamable_http_reports_a_404_after_session_negotiation_as_a_session_mismatch() {
+    for rejected_method in ["notifications/initialized", "tools/list"] {
+        let server = TestServer::start(Router::new().route(
+            "/mcp",
+            post(
+                move |headers: HeaderMap, Json(request): Json<Value>| async move {
+                    let method = request["method"].as_str().unwrap();
+                    if method == "initialize" {
+                        assert!(!headers.contains_key("mcp-session-id"));
+                        return (
+                            [("mcp-session-id", "negotiated-private-id")],
+                            Json(response(&request["id"], server_info(&request))),
+                        )
+                            .into_response();
+                    }
+                    assert_eq!(headers["mcp-session-id"], "negotiated-private-id");
+                    if method == rejected_method {
+                        return (StatusCode::NOT_FOUND, "private-response-body").into_response();
+                    }
+                    assert_eq!(method, "notifications/initialized");
+                    StatusCode::ACCEPTED.into_response()
+                },
+            ),
+        ))
+        .await;
+
+        let report = server.probe().await;
+        assert_eq!(
+            report.status,
+            McpProbeStatus::SessionIdMismatch,
+            "{rejected_method}: {report:?}"
+        );
+        assert_eq!(report.http_status, Some(404));
+        let wire = serde_json::to_string(&report).unwrap();
+        assert!(wire.contains("MCP session ID was rejected or expired by the server"));
+        assert!(!wire.contains("negotiated-private-id"));
+        assert!(!wire.contains("private-response-body"));
+    }
+}
+
+#[tokio::test]
+async fn streamable_http_reports_an_initialize_404_as_a_protocol_error() {
+    let server = TestServer::start(Router::new().route(
+        "/mcp",
+        post(
+            |headers: HeaderMap, Json(request): Json<Value>| async move {
+                assert_eq!(request["method"], "initialize");
+                assert!(!headers.contains_key("mcp-session-id"));
+                StatusCode::NOT_FOUND
+            },
+        ),
+    ))
+    .await;
+
+    let report = server.probe().await;
+    assert_eq!(report.status, McpProbeStatus::ProtocolError, "{report:?}");
+    assert_eq!(report.http_status, Some(404));
+}
+
+#[tokio::test]
 async fn legacy_sse_posts_to_the_endpoint_and_reads_frames_on_the_get() {
     let (events, stream) = mpsc::channel::<String>(8);
     let stream = Arc::new(tokio::sync::Mutex::new(Some(stream)));

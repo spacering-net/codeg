@@ -88,7 +88,8 @@ impl Remote {
             .send()
             .await
             .map_err(|_| network_error())?;
-        let response = check_status(response, redact)?;
+        let has_session_id = session.and_then(|session| session.id.as_ref()).is_some();
+        let response = check_status(response, has_session_id, redact)?;
         if let Some(session) = session {
             if let Some(id) = response.headers().get(SESSION_ID) {
                 if Some(id) != session.id.as_ref() {
@@ -161,7 +162,7 @@ impl Remote {
             .send()
             .await
             .map_err(|_| network_error())?;
-        let response = check_status(response, redact)?;
+        let response = check_status(response, false, redact)?;
         report.http_status = Some(response.status().as_u16());
         if !is_event_stream(&response) {
             return Err(ProbeError::protocol(
@@ -232,7 +233,11 @@ fn network_error() -> ProbeError {
     )
 }
 
-fn check_status(response: Response, redact: &Redact) -> ProbeResult<Response> {
+fn check_status(
+    response: Response,
+    has_session_id: bool,
+    redact: &Redact,
+) -> ProbeResult<Response> {
     let code = response.status();
     if code.is_success() {
         return Ok(response);
@@ -243,6 +248,10 @@ fn check_status(response: Response, redact: &Redact) -> ProbeResult<Response> {
             "MCP server requires authentication",
         ),
         StatusCode::FORBIDDEN => (McpProbeStatus::Forbidden, "MCP server refused access"),
+        StatusCode::NOT_FOUND if has_session_id => (
+            McpProbeStatus::SessionIdMismatch,
+            "MCP session ID was rejected or expired by the server",
+        ),
         _ => (McpProbeStatus::ProtocolError, "Unexpected MCP HTTP status"),
     };
     let mut error = ProbeError::new(status, detail);

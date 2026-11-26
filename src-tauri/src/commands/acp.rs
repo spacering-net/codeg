@@ -12467,15 +12467,10 @@ async fn resolve_connect_selection_tx(
     Ok(selection)
 }
 
-/// [`resolve_connect_selection`] + spawn + bind: the connect path every
-/// user-facing entry point (Tauri, web, chat channel) shares.
-///
-/// A connection that ended before it could be bound — a resume the agent
-/// refused during its handshake, or a session it lost — is reported like a
-/// closed one (`ConnectionNotFound`): the web client's attach and the chat
-/// channel's routing need a live connection, and have no other way to learn
-/// it is gone. The desktop app reads such an ending from the connection's own
-/// events instead (see [`spawn_and_bind_conversation_selection`]).
+/// [`resolve_connect_selection`] + spawn + bind for clients that need a live
+/// connection before attaching. If the driver already recorded a handshake
+/// error, return it even after cleanup removed the connection from the map.
+/// A closed connection without a recorded failure still uses the bind error.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn spawn_with_conversation_selection(
     manager: &ConnectionManager,
@@ -12508,8 +12503,8 @@ pub(crate) async fn spawn_with_conversation_selection(
     Ok(spawned.connection_id)
 }
 
-/// A spawned connection, and whether binding it to its conversation's row
-/// worked (`Err` only when the connection had already ended).
+/// A spawned connection and the result of binding it to its conversation.
+/// `bound` also carries a handshake failure already recorded by the driver.
 pub(crate) struct SpawnedConversationConnection {
     pub connection_id: String,
     pub bound: Result<(), AcpError>,
@@ -12548,8 +12543,8 @@ pub(crate) async fn spawn_and_bind_conversation_selection(
         client_config_values,
     )
     .await;
-    let connection_id = manager
-        .spawn_agent(
+    let attempt = manager
+        .spawn_agent_observed(
             agent_type,
             working_dir,
             session_id,
@@ -12560,6 +12555,7 @@ pub(crate) async fn spawn_and_bind_conversation_selection(
             selection.config_values.clone(),
         )
         .await?;
+    let connection_id = attempt.outcome.connection_id;
     // Before returning, so a setter right after connect finds the binding.
     let bound = match selection.row_id {
         Some(row_id) => {
@@ -12569,6 +12565,10 @@ pub(crate) async fn spawn_and_bind_conversation_selection(
         }
         None => Ok(()),
     };
+    let bound = attempt
+        .startup_failure
+        .and_then(|failure| failure.get().cloned())
+        .map_or(bound, Err);
     Ok(SpawnedConversationConnection {
         connection_id,
         bound,
@@ -12587,6 +12587,111 @@ mod connect_selection_tests {
         v.insert("model".to_string(), "default-model".to_string());
         v.insert("effort".to_string(), "high".to_string());
         (Some("default-mode".to_string()), v)
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn reconnect_preserves_a_handshake_error_after_the_connection_is_removed() {
+        use crate::acp::custom_registry::{
+            CustomAgentDef, CustomAgentSpec, CustomDistributionKind, NpxSpec,
+        };
+
+        const ID: &str = "qa-acp-reconnect-mcp-404";
+        const SESSION: &str = "existing-session";
+        const MESSAGE: &str = "MCP load failed for qa-mismatch-404: HTTP 404 session ID mismatch";
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("mock-acp");
+        crate::process::write_test_script(
+            &script,
+            r#"#!/bin/sh
+IFS= read -r request || exit 1
+case "$request" in *'"initialize"'*) ;; *) exit 1 ;; esac
+id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id"[[:space:]]*:[[:space:]]*([0-9]+|"[^"]+").*/\1/')
+printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":"%s"}}\n' "$id" "$1"
+while IFS= read -r request; do :; done
+"#,
+        );
+
+        let _registry = custom_registry::hydrate_test_guard();
+        assert!(custom_registry::hydrate(&[CustomAgentDef {
+            registry_id: ID.into(),
+            name: ID.into(),
+            description: String::new(),
+            version: "1.0.0".into(),
+            distribution_kind: CustomDistributionKind::Npx,
+            spec: CustomAgentSpec {
+                npx: Some(NpxSpec {
+                    package: ID.into(),
+                    args: vec![MESSAGE.into()],
+                    env: BTreeMap::new(),
+                    cmd: Some(script.to_str().unwrap().into()),
+                    node_required: None,
+                }),
+                ..Default::default()
+            },
+            icon_url: None,
+            skills_shared_store: false,
+            skills_dir: None,
+            source: Default::default(),
+            version_probe: None,
+            supports_mcp: true,
+        }])
+        .is_empty());
+        let agent = AgentType::custom(ID).unwrap();
+        let cwd = dir.path().to_str().unwrap();
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, cwd).await;
+        let conversation = conversation_service::create(&db.conn, folder, agent, None, None)
+            .await
+            .unwrap();
+        conversation_service::bind_external_id(&db.conn, conversation.id, SESSION, &[])
+            .await
+            .unwrap();
+
+        let manager = ConnectionManager::new();
+        let web = spawn_with_conversation_selection(
+            &manager,
+            &db.conn,
+            agent,
+            Some(cwd.into()),
+            Some(SESSION.into()),
+            BTreeMap::new(),
+            "web".into(),
+            EventEmitter::Noop,
+            Some(conversation.id),
+            None,
+            BTreeMap::new(),
+        )
+        .await;
+        assert!(manager.list_connections().await.is_empty());
+
+        let desktop = spawn_and_bind_conversation_selection(
+            &manager,
+            &db.conn,
+            agent,
+            Some(cwd.into()),
+            Some(SESSION.into()),
+            BTreeMap::new(),
+            "main".into(),
+            EventEmitter::Noop,
+            Some(conversation.id),
+            None,
+            BTreeMap::new(),
+        )
+        .await;
+        custom_registry::hydrate(&[]);
+
+        let web_error = web.unwrap_err();
+        assert!(matches!(web_error, AcpError::Protocol(_)), "{web_error}");
+        assert!(web_error.to_string().contains(MESSAGE), "{web_error}");
+        let desktop = desktop.unwrap();
+        assert!(!desktop.connection_id.is_empty());
+        assert_eq!(
+            desktop.bound.unwrap_err().to_string(),
+            web_error.to_string()
+        );
     }
 
     #[tokio::test]

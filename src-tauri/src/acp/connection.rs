@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use agent_client_protocol::schema::v1::{
     AuthMethod, AuthenticateRequest, BlobResourceContents, CancelNotification,
@@ -2929,6 +2929,12 @@ pub struct SpawnSeed {
     pub personal_agent: bool,
 }
 
+pub(crate) struct ConnectionHandshake {
+    pub session_started: oneshot::Receiver<()>,
+    /// Kept by the spawning caller so a failure can outlive the map entry.
+    pub failure: Arc<OnceLock<AcpError>>,
+}
+
 /// Spawn an ACP agent process and run the connection loop in a background task.
 ///
 /// On success, the newly created `AgentConnection` is inserted into
@@ -2937,7 +2943,7 @@ pub struct SpawnSeed {
 /// exits (timeout, error, or clean disconnect), so the manager never
 /// leaks stale entries after a connection tears down.
 #[allow(clippy::too_many_arguments)]
-pub async fn spawn_agent_connection(
+pub(crate) async fn spawn_agent_connection(
     connection_id: String,
     agent_type: AgentType,
     working_dir: Option<String>,
@@ -2952,7 +2958,7 @@ pub async fn spawn_agent_connection(
     terminal_shell_config: TerminalShellRuntimeConfig,
     seed: SpawnSeed,
     selection: Option<Arc<crate::acp::selection::SelectionPersister>>,
-) -> Result<tokio::sync::oneshot::Receiver<()>, AcpError> {
+) -> Result<ConnectionHandshake, AcpError> {
     // Use the same cwd for launch settings, the subprocess and session/new.
     let launch_cwd = resolve_working_dir(working_dir.as_deref());
     // Create the authoritative session state up front. Subsequent emit_with_state
@@ -2970,7 +2976,9 @@ pub async fn spawn_agent_connection(
     // first event (StatusChanged{Connecting} below) doesn't race with the
     // installer. The receiver is returned to `spawn_agent`, which holds the
     // per-session dedup lock until this rx fires (or times out / aborts).
-    let session_started_rx = initial_state.install_session_started_signal();
+    let session_started = initial_state.install_session_started_signal();
+    let failure = Arc::new(OnceLock::new());
+    let startup_failure = Arc::clone(&failure);
     // Record what this launch's environment freezes before the state is shared:
     // the emit path and the preference replay both read it, and both run after
     // this point.
@@ -3224,6 +3232,12 @@ pub async fn spawn_agent_connection(
         )
         .await;
 
+                if let Err(error) = &result {
+                    if state_clone.read().await.session_started_tx.is_some() {
+                        let _ = startup_failure.set(error.clone());
+                    }
+                }
+
         // The loop has ended and every command queued before the disconnect
         // was applied: close the selection admission barrier and flush the
         // conversation's final selection with the state this driver owns —
@@ -3312,7 +3326,10 @@ pub async fn spawn_agent_connection(
         )));
     }
 
-    Ok(session_started_rx)
+    Ok(ConnectionHandshake {
+        session_started,
+        failure,
+    })
 }
 
 /// The agent request a permission card answers. `Acp` is a real ACP
