@@ -39,6 +39,7 @@ pub enum Request {
     Save {
         kind: Kind,
         id: Option<Uuid>,
+        title: Option<String>,
         body: String,
         expected: Option<String>,
     },
@@ -139,8 +140,27 @@ fn execute(root: &Path, request: Request) -> std::io::Result<Value> {
         }
         Request::Read { id, .. } => entry(&file(id), kind, id),
         Request::Save {
-            id, body, expected, ..
+            id,
+            title: requested_title,
+            body,
+            expected,
+            ..
         } => {
+            let body = match requested_title {
+                Some(requested_title) => {
+                    let requested_title = requested_title.trim();
+                    if requested_title.is_empty()
+                        || requested_title.contains(['\r', '\n'])
+                        || requested_title.chars().count() > 160
+                    {
+                        return Err(invalid(
+                            "Title must be one non-empty line of at most 160 characters",
+                        ));
+                    }
+                    body_with_title(kind, requested_title, &body, expected.as_deref())
+                }
+                None => body,
+            };
             if body.trim().is_empty() || body.len() > 128 * 1024 {
                 return Err(invalid("Content must be non-empty and at most 128 KiB"));
             }
@@ -194,6 +214,31 @@ fn read(path: &Path) -> std::io::Result<(String, DateTime<Utc>)> {
     Ok((body, updated))
 }
 
+fn body_with_title(kind: Kind, title: &str, body: &str, expected: Option<&str>) -> String {
+    let prefix = if kind == Kind::Plan { "# " } else { "" };
+    let heading = format!("{prefix}{title}");
+    let (first, rest) = body
+        .trim_start()
+        .split_once('\n')
+        .unwrap_or((body.trim_start(), ""));
+    let has_previous_heading = expected.is_some_and(|previous| {
+        let previous_first = previous.trim_start().lines().next().unwrap_or("");
+        previous_first.trim() == first.trim() && previous_first.trim().starts_with(prefix)
+    });
+    let content = if first.trim() == heading || has_previous_heading {
+        rest.strip_prefix("\r\n")
+            .or_else(|| rest.strip_prefix('\n'))
+            .unwrap_or(rest)
+    } else {
+        body
+    };
+    if content.trim().is_empty() {
+        heading
+    } else {
+        format!("{heading}\n\n{content}")
+    }
+}
+
 fn title(body: &str, kind: Kind) -> &str {
     let first = body
         .lines()
@@ -227,6 +272,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn explicit_titles_are_shared_by_save_read_and_list() {
+        let directory = tempfile::tempdir().unwrap();
+        for (kind, initial_body, renamed_body) in [
+            (
+                "note",
+                "Recovery\n\nKeep the existing draft.",
+                "Recovery checks\n\nKeep the existing draft.",
+            ),
+            (
+                "plan",
+                "# Recovery\n\nKeep the existing draft.",
+                "# Recovery checks\n\nKeep the existing draft.",
+            ),
+        ] {
+            let save = |arguments| {
+                execute(directory.path(), serde_json::from_value(arguments).unwrap()).unwrap()
+            };
+            let entry = save(json!({
+                "action": "save", "kind": kind, "title": "Recovery",
+                "body": "Keep the existing draft."
+            }));
+            assert_eq!(entry["title"], "Recovery");
+            assert_eq!(entry["body"], initial_body);
+
+            let entry = save(json!({
+                "action": "save", "kind": kind, "id": entry["id"],
+                "title": "Recovery checks", "body": entry["body"], "expected": entry["body"]
+            }));
+            let read = save(json!({ "action": "read", "kind": kind, "id": entry["id"] }));
+            assert_eq!(read["title"], "Recovery checks");
+            assert_eq!(read["body"], renamed_body);
+
+            let list = save(json!({ "action": "list", "kind": kind, "query": "Recovery checks" }));
+            assert_eq!(list["entries"][0]["title"], "Recovery checks");
+        }
+    }
+
+    #[test]
     fn plan_is_a_markdown_file_and_stale_edits_are_rejected() {
         let directory = tempfile::tempdir().unwrap();
         let first = directory.path().join("1");
@@ -237,6 +320,7 @@ mod tests {
             Request::Save {
                 kind: Kind::Plan,
                 id: None,
+                title: None,
                 body: body.into(),
                 expected: None,
             },

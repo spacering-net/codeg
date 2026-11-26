@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, expect, it, vi } from "vitest"
 import en from "@/i18n/messages/en.json"
-import { APPEND_TEXT_TO_SESSION_EVENT } from "@/lib/session-attachment-events"
+import { ATTACH_REFERENCE_TO_SESSION_EVENT } from "@/lib/session-attachment-events"
 import { ProjectKnowledgeTab } from "./aux-panel-project-knowledge-tab"
 
 vi.mock("@/components/ai-elements/message", () => ({
@@ -57,7 +57,7 @@ vi.mock("@/lib/transport", () => ({
       }
       const body = request.body ?? ""
       const entry = {
-        id: request.id ?? String(items.length + 1),
+        id: request.id ?? "335dcbfe-278d-4ffd-affa-5ddc68fd6148",
         body,
         title: (body.split("\n")[0] ?? "").replace(/^# /, ""),
         updatedAt: new Date().toISOString(),
@@ -84,7 +84,9 @@ beforeEach(() => entries.clear())
 it("adds a saved note to the selected session draft", async () => {
   const user = userEvent.setup()
   const append = vi.fn()
-  window.addEventListener(APPEND_TEXT_TO_SESSION_EVENT, append, { once: true })
+  window.addEventListener(ATTACH_REFERENCE_TO_SESSION_EVENT, append, {
+    once: true,
+  })
   render(panel("1", "session-a"))
   await user.click(screen.getByRole("button", { name: "New note" }))
   await user.type(
@@ -95,7 +97,11 @@ it("adds a saved note to the selected session draft", async () => {
   await user.click(screen.getByRole("button", { name: "Add to Chat" }))
   expect(append).toHaveBeenCalledWith(
     expect.objectContaining({
-      detail: { tabId: "session-a", text: "Check recovery" },
+      detail: {
+        tabId: "session-a",
+        label: "Check recovery",
+        uri: "codeg://knowledge/note/335dcbfe-278d-4ffd-affa-5ddc68fd6148",
+      },
     })
   )
 })

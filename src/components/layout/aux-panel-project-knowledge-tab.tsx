@@ -1,11 +1,19 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { ArrowLeft, FileText, NotebookPen, Plus, Trash2 } from "lucide-react"
+import {
+  ArrowLeft,
+  FileText,
+  MessageSquarePlus,
+  NotebookPen,
+  Pencil,
+  Plus,
+  Trash2,
+} from "lucide-react"
 import { useFormatter, useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { getTransport } from "@/lib/transport"
-import { emitAppendTextToSession } from "@/lib/session-attachment-events"
+import { emitAttachReferenceToSession } from "@/lib/session-attachment-events"
 import { MessageResponse } from "@/components/ai-elements/message"
 import {
   AlertDialog,
@@ -153,24 +161,44 @@ function ProjectKnowledgePanel({
     )
   }
 
+  function addToSession(entry: Summary) {
+    if (!sessionTabId) return
+    const label = title(entry)
+    const referenceKind = kind === "notes" ? "note" : "plan"
+    const accepted = emitAttachReferenceToSession({
+      tabId: sessionTabId,
+      label,
+      uri: "codeg://knowledge/" + referenceKind + "/" + entry.id,
+    })
+    if (accepted) {
+      toast(tChat("addFileToChatDone", { label }))
+    } else {
+      toast.error(tSession("noActiveSession"))
+    }
+  }
+
   const newEntryLabel = t(kind === "notes" ? "newNote" : "newPlan")
 
   return (
-    <div className="flex h-full min-h-0 flex-col text-sm">
+    <div className="flex h-full w-full min-h-0 min-w-0 flex-col text-sm">
       {draft !== undefined || current ? (
         <>
-          <div className="flex min-h-11 items-center gap-2 border-b px-2">
+          <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border/50 px-2">
             <Button
               variant="ghost"
-              size="icon-sm"
+              size="icon"
+              className={GIT_TOOLBAR_ICON_BUTTON_CLASS}
               disabled={busy}
               onClick={closeEntry}
               aria-label={t("back")}
               title={t("back")}
             >
-              <ArrowLeft />
+              <ArrowLeft className="size-3.5" aria-hidden />
             </Button>
-            <h3 className="min-w-0 flex-1 truncate font-medium">
+            <h3
+              className="min-w-0 flex-1 truncate pe-1 text-[0.8125rem] font-medium"
+              title={current ? title(current) : undefined}
+            >
               {draft !== undefined
                 ? current
                   ? t("edit")
@@ -185,32 +213,51 @@ function ProjectKnowledgePanel({
               >
                 {t("save")}
               </Button>
-            ) : (
-              <div className="flex items-center gap-1">
+            ) : current ? (
+              <>
+                {sessionTabId && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={GIT_TOOLBAR_ICON_BUTTON_CLASS}
+                    title={tChat("addToChat")}
+                    aria-label={tChat("addToChat")}
+                    onClick={() => addToSession(current)}
+                    disabled={busy}
+                  >
+                    <MessageSquarePlus className="size-3.5" aria-hidden />
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
-                  size="sm"
+                  size="icon"
+                  className={GIT_TOOLBAR_ICON_BUTTON_CLASS}
+                  title={t("edit")}
+                  aria-label={t("edit")}
+                  disabled={busy}
                   onClick={() => {
-                    setDraft(current?.body)
+                    setDraft(current.body)
                     setEditorTab("markdown")
                   }}
                 >
-                  {t("edit")}
+                  <Pencil className="size-3.5" aria-hidden />
                 </Button>
                 <Button
                   variant="ghost"
-                  size="icon-sm"
-                  onClick={() => setDeleteOpen(true)}
-                  aria-label={t("delete")}
+                  size="icon"
+                  className={GIT_TOOLBAR_ICON_BUTTON_CLASS}
                   title={t("delete")}
+                  aria-label={t("delete")}
+                  disabled={busy}
+                  onClick={() => setDeleteOpen(true)}
                 >
-                  <Trash2 />
+                  <Trash2 className="size-3.5" aria-hidden />
                 </Button>
-              </div>
-            )}
+              </>
+            ) : null}
           </div>
           {draft !== undefined ? (
-            <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
+            <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
               {kind === "plans" ? (
                 <>
                   <Tabs
@@ -243,7 +290,12 @@ function ProjectKnowledgePanel({
                       value="preview"
                       className="overflow-auto select-text"
                     >
-                      <MessageResponse mode="static">{draft}</MessageResponse>
+                      <MessageResponse
+                        mode="static"
+                        className="plan-markdown [&_ol]:ps-5! [&_ul]:ps-5!"
+                      >
+                        {draft}
+                      </MessageResponse>
                     </TabsContent>
                   </Tabs>
                 </>
@@ -260,32 +312,16 @@ function ProjectKnowledgePanel({
             </div>
           ) : (
             current && (
-              <div className="min-h-0 flex-1 overflow-auto p-3 select-text">
-                {sessionTabId && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mb-3"
-                    onClick={() => {
-                      const accepted = emitAppendTextToSession({
-                        tabId: sessionTabId,
-                        text: current.body,
-                      })
-                      if (accepted) {
-                        toast(
-                          tChat("addFileToChatDone", { label: title(current) })
-                        )
-                      } else {
-                        toast.error(tSession("noActiveSession"))
-                      }
-                    }}
-                  >
-                    {tChat("addToChat")}
-                  </Button>
-                )}
+              <div className="min-h-0 flex-1 overflow-auto px-3 py-2 select-text [scrollbar-width:thin]">
                 {kind === "plans" ? (
-                  <MessageResponse mode="static">
-                    {current.body}
+                  <MessageResponse
+                    mode="static"
+                    className="plan-markdown [&_ol]:ps-5! [&_ul]:ps-5!"
+                  >
+                    {current.body.replace(
+                      /^(?:[ \t]*\r?\n)* {0,3}# [^\r\n]+(?:\r?\n|$)/,
+                      ""
+                    )}
                   </MessageResponse>
                 ) : (
                   <p className="whitespace-pre-wrap wrap-break-word">
@@ -304,7 +340,7 @@ function ProjectKnowledgePanel({
             setEntries([])
             setQuery("")
           }}
-          className="min-h-0 flex-1 gap-0"
+          className="min-h-0 min-w-0 flex-1 gap-0"
         >
           <AuxPanelSearchToolbar
             query={query}
@@ -347,7 +383,7 @@ function ProjectKnowledgePanel({
           <TabsContent
             key={kind}
             value={kind}
-            className="min-h-0 overflow-auto px-3 pb-3"
+            className="min-h-0 overflow-auto px-2 py-1"
           >
             {entries.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
@@ -361,9 +397,12 @@ function ProjectKnowledgePanel({
                 )}
               </div>
             ) : (
-              <ul className="space-y-1.5">
+              <ul className="divide-y divide-border/50">
                 {entries.map((entry) => (
-                  <li key={entry.id}>
+                  <li
+                    key={entry.id}
+                    className="flex min-w-0 items-center rounded-md hover:bg-accent/40"
+                  >
                     <button
                       type="button"
                       disabled={busy}
@@ -373,11 +412,17 @@ function ProjectKnowledgePanel({
                           setCurrent
                         )
                       }
-                      className="flex w-full min-w-0 items-start gap-2.5 rounded-lg border px-2.5 py-2 text-start hover:bg-accent/60 focus-visible:outline-2 focus-visible:outline-ring"
+                      className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-start focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
                     >
-                      <EntryIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                      <span className="flex min-w-0 flex-1 flex-col gap-1">
-                        <span className="truncate text-sm font-medium">
+                      <EntryIcon
+                        className="size-3.5 shrink-0 text-muted-foreground"
+                        aria-hidden
+                      />
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span
+                          className="truncate text-[0.8125rem] font-medium"
+                          title={title(entry)}
+                        >
                           {title(entry)}
                         </span>
                         <span className="text-xs text-muted-foreground">
@@ -388,6 +433,19 @@ function ProjectKnowledgePanel({
                         </span>
                       </span>
                     </button>
+                    {sessionTabId && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className={GIT_TOOLBAR_ICON_BUTTON_CLASS}
+                        title={tChat("addToChat")}
+                        aria-label={tChat("addToChat") + " · " + title(entry)}
+                        onClick={() => addToSession(entry)}
+                        disabled={busy}
+                      >
+                        <MessageSquarePlus className="size-3.5" aria-hidden />
+                      </Button>
+                    )}
                   </li>
                 ))}
               </ul>
