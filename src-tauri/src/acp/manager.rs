@@ -4279,6 +4279,23 @@ impl ConnectionManager {
         text: String,
         blocks: Option<Vec<PromptInputBlock>>,
     ) -> Result<FeedbackItem, AcpError> {
+        self.submit_feedback_for_turn(conn_id, text, blocks, None).await
+    }
+
+    /// [`Self::submit_feedback`] aimed at one turn: `expect_turns_completed`
+    /// is `SessionState.turns_completed` as the caller saw it while that
+    /// turn ran. Should another turn be running by the time the note goes
+    /// out — the one aimed at ended and the next began — it is answered
+    /// [`AcpError::NoActiveTurn`], the caller's reroute, at admission and
+    /// again where the connection takes the steer. Native channel only: the
+    /// pull path's note waits for whatever turn pulls it.
+    pub async fn submit_feedback_for_turn(
+        &self,
+        conn_id: &str,
+        text: String,
+        blocks: Option<Vec<PromptInputBlock>>,
+        expect_turns_completed: Option<u64>,
+    ) -> Result<FeedbackItem, AcpError> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return Err(AcpError::InvalidFeedback("empty note".into()));
@@ -4318,8 +4335,16 @@ impl ConnectionManager {
         }
 
         if native {
-            return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, blocks)
-                .await;
+            return Self::submit_feedback_native(
+                conn_id,
+                state,
+                cmd_tx,
+                emitter,
+                text,
+                blocks,
+                expect_turns_completed,
+            )
+            .await;
         }
 
         // The pull tool delivers plain text (`PendingFeedback`), so a draft
@@ -4394,6 +4419,7 @@ impl ConnectionManager {
         emitter: EventEmitter,
         text: String,
         blocks: Option<Vec<PromptInputBlock>>,
+        expect_turns_completed: Option<u64>,
     ) -> Result<FeedbackItem, AcpError> {
         // Cheap pre-flight, NOT the authoritative check (that's the loop's
         // idle arm replying `NoActiveTurn`): skip the round-trip when no turn
@@ -4412,6 +4438,10 @@ impl ConnectionManager {
             if s.pending_permission.is_some()
                 && crate::acp::registry::steering_waits_out_open_permission(s.agent_type)
             {
+                return Err(AcpError::NoActiveTurn);
+            }
+            // Not the turn the caller aimed at: it ended meanwhile.
+            if expect_turns_completed.is_some_and(|e| e != s.turns_completed) {
                 return Err(AcpError::NoActiveTurn);
             }
             s.turns_completed
@@ -4504,6 +4534,7 @@ impl ConnectionManager {
                 cmd_tx
                     .send(ConnectionCommand::Steer {
                         blocks: wire_blocks,
+                        expect_turns_completed,
                         reply: reply_tx,
                     })
                     .await
@@ -11447,13 +11478,49 @@ mod tests {
     ) -> tokio::task::JoinHandle<Vec<PromptInputBlock>> {
         tokio::spawn(async move {
             match rx.recv().await {
-                Some(ConnectionCommand::Steer { blocks, reply }) => {
+                Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
                     let _ = reply.send(outcome);
                     blocks
                 }
                 _ => panic!("expected a Steer command"),
             }
         })
+    }
+
+    /// A steer aimed at a turn that is over by the time it is admitted —
+    /// the next is running — is refused before anything goes to the loop,
+    /// and carries the turn it is aimed at to the loop when admitted.
+    #[tokio::test]
+    async fn a_steer_for_a_turn_that_ended_is_refused_at_admission() {
+        let mgr = ConnectionManager::new();
+        let mut rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        mgr.get_state("c1").await.unwrap().write().await.turns_completed = 4;
+        let err = mgr
+            .submit_feedback_for_turn("c1", "for the turn before".into(), None, Some(3))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AcpError::NoActiveTurn));
+        assert!(rx.try_recv().is_err(), "nothing went to the loop");
+        let taken = tokio::spawn(async move {
+            match rx.recv().await {
+                Some(ConnectionCommand::Steer {
+                    expect_turns_completed,
+                    reply,
+                    ..
+                }) => {
+                    let _ = reply.send(Ok(SteerOutcome::Injected));
+                    expect_turns_completed
+                }
+                _ => panic!("expected a Steer command"),
+            }
+        });
+        mgr.submit_feedback_for_turn("c1", "for this turn".into(), None, Some(4))
+            .await
+            .unwrap();
+        assert_eq!(taken.await.unwrap(), Some(4), "the loop checks it again");
     }
 
     /// [`answer_steer`] for a test that submits more than once: answers `n`

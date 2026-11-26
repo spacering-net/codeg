@@ -1375,6 +1375,53 @@ pub async fn insert_row(
     Ok(row.into_active(bot, Utc::now()).insert(conn).await?)
 }
 
+/// Mark owner row `from` as sent again as `copy`, inside `txn` — only
+/// when it was not already: of two sends again at once, one copy stands.
+/// Whether it was marked.
+pub async fn mark_resent(
+    txn: &impl ConnectionTrait,
+    from: i32,
+    copy: i32,
+) -> Result<bool, DbError> {
+    let res = timeline::Entity::update_many()
+        .col_expr(
+            timeline::Column::Data,
+            Expr::cust_with_values(
+                "json_set(CASE WHEN json_valid(data) THEN data ELSE '{}' END, '$.resent_as', ?)",
+                [sea_orm::Value::from(copy)],
+            ),
+        )
+        .col_expr(timeline::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(timeline::Column::Id.eq(from))
+        .filter(Expr::cust(
+            "(CASE WHEN json_valid(data) THEN json_extract(data, '$.resent_as') END) IS NULL",
+        ))
+        .exec(txn)
+        .await?;
+    Ok(res.rows_affected == 1)
+}
+
+/// Insert `row`, owner row `from` sent again, marking `from` so in the same
+/// transaction ([`mark_resent`]): `None`, nothing written, when it was sent
+/// again already.
+pub async fn insert_resent_row(
+    conn: &DatabaseConnection,
+    bot: i32,
+    row: NewRow,
+    from: i32,
+) -> Result<Option<timeline::Model>, DbError> {
+    use sea_orm::TransactionTrait;
+    require_bot(bot)?;
+    let txn = conn.begin().await?;
+    let inserted = row.into_active(bot, Utc::now()).insert(&txn).await?;
+    if !mark_resent(&txn, from, inserted.id).await? {
+        txn.rollback().await?;
+        return Ok(None);
+    }
+    txn.commit().await?;
+    Ok(Some(inserted))
+}
+
 /// Insert `row` and, in the same transaction, set row `other`'s data to
 /// `data` (the assistant's own rows only): both are written, or neither.
 /// Returns the new row and `other` as written.
@@ -3079,6 +3126,21 @@ pub async fn update_item_with(
         ),
         None => None,
     };
+    // Its time set by hand — moved, taken away, or dropped with it — while
+    // it waited on the owner's answer: the answer's row, as it was before
+    // this write (which may clear the link: a new time also sets what it
+    // waits for).
+    let sets_time = write.time.is_some() || write.status == Some(ItemStatus::Dropped);
+    let linked = |m: &item::Model| {
+        (m.answer_state.as_deref() == Some("linked")).then_some(m.answer_row_id).flatten()
+    };
+    // Read before the transaction, as the keys above are; read again in it
+    // after the write, for a link made in between.
+    let answered_before = if sets_time {
+        item::Entity::find_by_id(id).one(conn).await?.as_ref().and_then(linked)
+    } else {
+        None
+    };
     let now = Utc::now();
     let txn = conn.begin().await?;
     let mut withdrawn = None;
@@ -3178,6 +3240,21 @@ pub async fn update_item_with(
         txn.rollback().await?;
         return Ok(None);
     };
+    // Set by hand while it waited on the owner's answer: that time stands,
+    // not the one it had before the answer, should the answer's turn not
+    // finish. An undo of this act puts it back as the answer stands then.
+    let mut answer_prior = None;
+    if sets_time {
+        let row = undo
+            .as_ref()
+            .and_then(|u| linked(&u.before))
+            .or(answered_before)
+            .or_else(|| linked(&item));
+        if let Some(row_id) = row {
+            answer_prior =
+                super::personal_agent_matter_service::take_answer_prior(&txn, row_id).await?;
+        }
+    }
     let mut note_id = None;
     if let (Some(n), Some(key)) = (note, note_key) {
         let mut payload = n.payload;
@@ -3200,6 +3277,7 @@ pub async fn update_item_with(
                     "fired_at": item.fired_at,
                 },
                 "cards": cards,
+                "answer_prior": answer_prior,
             });
         }
         let made = event::ActiveModel {

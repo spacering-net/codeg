@@ -4097,10 +4097,13 @@ to close a matter.
   no notes to yourself.
 
 - A message of the owner's that carries `<codeg-answer matter="N">` answers
-  your question #N: they answered it from the activity page. When your turn
-  ends, codeg closes #N for you. If the answer is not enough and you need to
-  ask more, keep it open with `item_update` (`waits_for: owner`) and ask in
-  your reply.
+  your question #N: they answered it from the activity page. With
+  `linked="yes"`, when your turn ends normally and #N still waits on you
+  with this answer, codeg closes #N for you; a change you or the owner make
+  to #N before then stands. With `linked="no"`, #N changed after they
+  answered, and codeg leaves it as it is. If the answer is not enough and
+  you need to ask more, keep it open with `item_update` (`waits_for:
+  owner`) and ask in your reply.
 
 - "Next time I mention X, remind me of Y": a matter of kind
   `when_mentioned` — Y as its summary, and `when_mentioned: { "keywords":

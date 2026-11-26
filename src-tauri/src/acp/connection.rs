@@ -1407,8 +1407,15 @@ pub enum ConnectionCommand {
     /// in the manager's cancellation-shielded task, mirroring Fork's
     /// protocol/persistence split. The idle arm replies `Err(NoActiveTurn)`
     /// so the oneshot can never hang.
+    ///
+    /// `expect_turns_completed`, when set, names the turn the steer is for
+    /// (`SessionState.turns_completed` while it runs): a turn that ended and
+    /// gave way to the next while the command sat in the queue is answered
+    /// `Err(NoActiveTurn)` like an idle loop, so the steer never lands in a
+    /// turn its sender did not aim at.
     Steer {
         blocks: Vec<PromptInputBlock>,
+        expect_turns_completed: Option<u64>,
         reply: tokio::sync::oneshot::Sender<Result<SteerOutcome, AcpError>>,
     },
     /// Stop one AIR async task (`_session/async_task/stop`; claude-agent-acp
@@ -16712,7 +16719,21 @@ async fn run_conversation_loop(
                                         let _ = reply.send(landed);
                                     }
                                 }
-                                Some(ConnectionCommand::Steer { blocks, reply }) => {
+                                Some(ConnectionCommand::Steer {
+                                    blocks,
+                                    expect_turns_completed,
+                                    reply,
+                                }) => {
+                                    // Aimed at a turn that is over: the one
+                                    // running now is the next, which the
+                                    // sender never meant — the idle arm's
+                                    // answer, and the caller reroutes it.
+                                    if let Some(expect) = expect_turns_completed {
+                                        if state.read().await.turns_completed != expect {
+                                            let _ = reply.send(Err(AcpError::NoActiveTurn));
+                                            continue;
+                                        }
+                                    }
                                     // Protocol round-trip only — the manager's
                                     // cancellation-shielded task records the
                                     // note + broadcasts `FeedbackSubmitted`
@@ -17099,7 +17120,7 @@ async fn run_conversation_loop(
                     let _ = reply.send(landed);
                 }
             }
-            Some(ConnectionCommand::Steer { blocks: _, reply }) => {
+            Some(ConnectionCommand::Steer { reply, .. }) => {
                 // Steering only means something for a RUNNING turn. Reply —
                 // never drop — so the manager's shielded task can't hang on
                 // the oneshot; the caller falls back to a normal prompt (the
@@ -51147,6 +51168,7 @@ mod tests {
             self.cmd_tx
                 .send(ConnectionCommand::Steer {
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
+                    expect_turns_completed: None,
                     reply,
                 })
                 .await
@@ -52579,10 +52601,20 @@ mod tests {
 
         /// Steer the running turn the way `submit_feedback_native` does.
         async fn steer(&self, text: &str) -> Result<SteerOutcome, AcpError> {
+            self.steer_turn(text, None).await
+        }
+
+        /// [`Self::steer`], aimed at the turn `expect` names.
+        async fn steer_turn(
+            &self,
+            text: &str,
+            expect: Option<u64>,
+        ) -> Result<SteerOutcome, AcpError> {
             let (reply, outcome) = oneshot::channel();
             self.cmd_tx
                 .send(ConnectionCommand::Steer {
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
+                    expect_turns_completed: expect,
                     reply,
                 })
                 .await
@@ -53671,6 +53703,41 @@ mod tests {
         .get_conversation("s1")
         .expect("the session has a transcript")
         .turns
+    }
+
+    /// A steer aimed at a turn that ended while it sat in the queue is not
+    /// the running turn's: the loop answers it as an idle loop does, and the
+    /// agent never sees it. One aimed at the running turn goes through.
+    #[tokio::test]
+    async fn a_steer_aimed_at_an_ended_turn_is_refused_where_the_loop_takes_it() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let home_str = home.path().to_string_lossy().into_owned();
+        temp_env::async_with_vars([("CODEG_HOME", Some(home_str.as_str()))], async {
+            let mut lp = CustomLoop::start(vec![vec![custom_text("Working.")]]).await;
+            lp.steer_outcomes
+                .lock()
+                .unwrap()
+                .push_back(serde_json::json!({"outcome": "injected"}));
+            lp.open_turn("do it", "Working.").await;
+            let now = lp.state.read().await.turns_completed;
+            assert!(matches!(
+                lp.steer_turn("for the turn before", Some(now + 1)).await,
+                Err(AcpError::NoActiveTurn)
+            ));
+            assert_eq!(
+                lp.steer_outcomes.lock().unwrap().len(),
+                1,
+                "the agent was never asked"
+            );
+            assert!(matches!(
+                lp.steer_turn("for this turn", Some(now)).await,
+                Ok(SteerOutcome::Injected)
+            ));
+            assert!(lp.steer_outcomes.lock().unwrap().is_empty());
+            lp.close_turn().await;
+            lp.shutdown().await;
+        })
+        .await;
     }
 
     /// #892: a custom agent running claude-agent-acp steers natively now, and

@@ -60,6 +60,19 @@ fn refused(message: String) -> AppCommandError {
     AppCommandError::invalid_input(message)
 }
 
+/// Run the owner's act `work` on a task of its own and wait for it: a
+/// caller that goes away midway — in server mode a closed tab drops its
+/// request — does not cut it short between two of its writes (a message
+/// recorded but not handed over, a card pressed but not answered, a stop
+/// booked but its work still running).
+pub(crate) async fn on_own_task<T: Send + 'static>(
+    work: impl std::future::Future<Output = Result<T, AppCommandError>> + Send + 'static,
+) -> Result<T, AppCommandError> {
+    tokio::spawn(work)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?
+}
+
 /// A refusal the page words in the owner's language when it can.
 fn refusal(r: crate::personal_agent::refusal::Refusal) -> AppCommandError {
     let err = AppCommandError::invalid_input(r.message);
@@ -703,15 +716,18 @@ pub async fn personal_agent_item_act_core(
     from: Option<String>,
 ) -> Result<ItemActResult, AppCommandError> {
     let engine = engine(bot_id).await?;
-    let acted = engine
-        .settle_item_from(
-            item_id,
-            &act,
-            until.as_deref(),
-            crate::personal_agent::reminders::OpSource::from_page(from.as_deref()),
-        )
-        .await
-        .map_err(refusal)?;
+    let acted = on_own_task(async move {
+        engine
+            .settle_item_from(
+                item_id,
+                &act,
+                until.as_deref(),
+                crate::personal_agent::reminders::OpSource::from_page(from.as_deref()),
+            )
+            .await
+            .map_err(refusal)
+    })
+    .await?;
     Ok(ItemActResult {
         item: item_info_now(db, acted.item).await?,
         undo: acted.undo,
@@ -729,7 +745,8 @@ pub async fn personal_agent_item_undo_core(
     undo: i32,
 ) -> Result<ItemInfo, AppCommandError> {
     let engine = engine(bot_id).await?;
-    let item = engine.undo_item(item_id, undo).await.map_err(refusal)?;
+    let item =
+        on_own_task(async move { engine.undo_item(item_id, undo).await.map_err(refusal) }).await?;
     item_info_now(db, item).await
 }
 
@@ -1128,7 +1145,7 @@ pub async fn personal_agent_dispatch_stop_core(
     dispatch_id: i32,
 ) -> Result<bool, AppCommandError> {
     let engine = engine(bot_id).await?;
-    engine.stop_one(dispatch_id).await.map_err(refused)
+    on_own_task(async move { engine.stop_one(dispatch_id).await.map_err(refused) }).await
 }
 
 /// What the owner's answer on a question card came to (7.3.1).
@@ -1270,15 +1287,21 @@ pub async fn personal_agent_send_core(
         if blocks.is_some_and(|b| !b.is_empty()) {
             return Err(refused("a button's message carries no attachments".to_string()));
         }
-        return engine
-            .send_card_reply(text, row_id, card)
-            .await
-            .map_err(refused);
+        return on_own_task(async move {
+            engine
+                .send_card_reply(text, row_id, card)
+                .await
+                .map_err(refused)
+        })
+        .await;
     }
-    engine
-        .send_from_page(text, blocks.unwrap_or_default(), reply_to, answers_item)
-        .await
-        .map_err(refusal)
+    on_own_task(async move {
+        engine
+            .send_from_page(text, blocks.unwrap_or_default(), reply_to, answers_item)
+            .await
+            .map_err(refusal)
+    })
+    .await
 }
 
 /// The owner pressed a button on one of the assistant's cards that acts
@@ -1411,7 +1434,8 @@ pub async fn personal_agent_resend_core(
     bot_id: Option<i32>,
     row_id: i32,
 ) -> Result<TimelineRow, AppCommandError> {
-    engine(bot_id).await?.resend(row_id).await.map_err(refused)
+    let engine = engine(bot_id).await?;
+    on_own_task(async move { engine.resend(row_id).await.map_err(refused) }).await
 }
 
 /// The owner has seen the page up to row `up_to`. Not an act of the agent's,
@@ -1514,11 +1538,14 @@ pub async fn personal_agent_notice_act_core(
     action: String,
     text: Option<String>,
 ) -> Result<TimelineRow, AppCommandError> {
-    engine(bot_id)
-        .await?
-        .act_on_notice_worded(notice_id, &action, text)
-        .await
-        .map_err(refusal)
+    let engine = engine(bot_id).await?;
+    on_own_task(async move {
+        engine
+            .act_on_notice_worded(notice_id, &action, text)
+            .await
+            .map_err(refusal)
+    })
+    .await
 }
 
 pub async fn personal_agent_answer_question_core(
@@ -1723,17 +1750,20 @@ pub async fn personal_agent_choice_answer_core(
     project_id: Option<i32>,
     answers: Option<Vec<crate::personal_agent::meet::ChoicePick>>,
 ) -> Result<TimelineRow, AppCommandError> {
-    engine(bot_id)
-        .await?
-        .answer_choice(
-            notice_id,
-            key.as_deref(),
-            text.as_deref(),
-            project_id,
-            answers.as_deref(),
-        )
-        .await
-        .map_err(refused)
+    let engine = engine(bot_id).await?;
+    on_own_task(async move {
+        engine
+            .answer_choice(
+                notice_id,
+                key.as_deref(),
+                text.as_deref(),
+                project_id,
+                answers.as_deref(),
+            )
+            .await
+            .map_err(refused)
+    })
+    .await
 }
 
 /// The projects the assistants may keep an eye on (`prefs.projects`, 5.4):
@@ -2425,4 +2455,36 @@ pub async fn personal_agent_starter(
     notice_id: i32,
 ) -> Result<TimelineRow, AppCommandError> {
     personal_agent_starter_core(bot_id, notice_id).await
+}
+
+#[cfg(test)]
+mod own_task_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// The owner's act runs to its end though its caller went away midway
+    /// (a closed tab drops its request).
+    #[tokio::test]
+    async fn an_act_on_its_own_task_ends_though_its_caller_went_away() {
+        let (go, wait) = tokio::sync::oneshot::channel::<()>();
+        let done = Arc::new(AtomicBool::new(false));
+        let d = done.clone();
+        let call = on_own_task(async move {
+            let _ = wait.await;
+            d.store(true, Ordering::SeqCst);
+            Ok::<_, AppCommandError>(())
+        });
+        // The caller gives up before the act is through.
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(20), call)
+            .await
+            .is_err());
+        go.send(()).unwrap();
+        for _ in 0..200 {
+            if done.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(done.load(Ordering::SeqCst), "it ran to its end");
+    }
 }
