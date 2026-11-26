@@ -24,10 +24,12 @@ import {
   type McpAgentInventory,
   type McpAppType,
   type McpDefinition,
+  type McpDisableMode,
   type McpEntry,
   type McpInventory,
   type McpIssue,
   type McpTransport,
+  type Open,
 } from "./types"
 
 // ─── Agents ───────────────────────────────────────────────────────────
@@ -59,6 +61,16 @@ export interface McpAgentInfo {
   toggleBlock: McpAgentBlock | null
   /** The file could not be read: its entries are not known at all. */
   unreadable: boolean
+  /** How disabling works for this agent (`native`, `codeg_pause`, or `unsupported`). */
+  disableMode: Open<McpDisableMode>
+}
+
+export function disableModeOf(
+  inventory: McpAgentInventory
+): Open<McpDisableMode> {
+  return (
+    inventory.disable_mode ?? (inventory.can_disable ? "native" : "unsupported")
+  )
 }
 
 function fileBlock(inventory: McpAgentInventory): McpAgentBlock | null {
@@ -91,6 +103,7 @@ export function agentInfoOf(inventory: McpAgentInventory): McpAgentInfo {
     editBlock: unknown ?? file ?? related,
     toggleBlock: unknown ?? file,
     unreadable: inventory.config.status === "unreadable",
+    disableMode: disableModeOf(inventory),
   }
 }
 

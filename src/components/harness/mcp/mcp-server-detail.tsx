@@ -20,6 +20,7 @@ import {
   Lock,
   Package,
   PackageMinus,
+  PauseCircle,
   PencilLine,
   RotateCw,
   SearchX,
@@ -50,16 +51,23 @@ import {
   isAgentBusy,
   MCP_BUSY,
   MCP_DETAIL_SCROLL,
+  MCP_PROBES,
   MCP_ROW_WRITES,
   MCP_SHOW_ALL_AGENTS,
   openEditEditor,
   openRemoveDialog,
   openRenameDialog,
+  openServerBulkDisableDialog,
+  openServerBulkEnableDialog,
+  probeEntryKey,
+  probeGroupKey,
   requestSwitch,
   rowId,
+  runMcpProbe,
   writeRow,
   type McpRowWrite,
 } from "@/lib/harness/mcp-state"
+import { planServerBulkDisable, planServerBulkEnable } from "@/lib/mcp/bulk"
 import {
   agentServerState,
   holderAgentIds,
@@ -92,6 +100,7 @@ import {
   McpDefinitionRowsHead,
   McpDefinitionView,
 } from "./mcp-definition-view"
+import { McpProbeButton, McpProbePanel } from "./mcp-probe-panel"
 import { ServerGlyph } from "./mcp-server-list"
 import { useMcpLabels, type McpLabels } from "./use-mcp-labels"
 
@@ -362,7 +371,18 @@ function stateParts(
     return { chips, reasons }
   }
   const { holder, readOnly } = state
-  if (!holder.entry.enabled) chips.push({ label: t("agentState.off") })
+  if (!holder.entry.enabled) {
+    if (holder.entry.paused) {
+      chips.push({
+        label: t("agentState.paused"),
+        tone: "warning",
+        icon: <PauseCircle aria-hidden="true" />,
+      })
+      reasons.push(t("agentState.pausedNote"))
+    } else {
+      chips.push({ label: t("agentState.off") })
+    }
+  }
   if (server.groups.length > 1 && holder.group !== null) {
     chips.push({
       label: t("detail.definitionLetter", {
@@ -428,6 +448,7 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
   const { slots } = useHarnessView()
   const [writes] = useHarnessSlot(MCP_ROW_WRITES)
   const [busy] = useHarnessSlot(MCP_BUSY)
+  const [probes] = useHarnessSlot(MCP_PROBES)
   const stateId = useId()
   const chipsId = useId()
   const state = agentServerState(server, info, model.rules)
@@ -452,6 +473,12 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
   const name = labels.agent(info.id)
   const { chips, reasons } = stateParts(state, server, labels, t)
   if (skipped) reasons.push(t("agentState.skipped"))
+  const canProbe = Boolean(
+    holder && info.agent && holder.entry.definition && !holder.entry.reserved
+  )
+  const probeKey =
+    canProbe && info.agent ? probeEntryKey(info.agent, server.key) : null
+  const probeRecord = probeKey ? probes[probeKey] : undefined
 
   return (
     <li className="flex min-w-0 items-start gap-3 px-4 py-2.5">
@@ -547,6 +574,11 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
             </bdi>
           </p>
         )}
+        {probeRecord && (
+          <div className="mt-1.5">
+            <McpProbePanel record={probeRecord} compact />
+          </div>
+        )}
         {write && (
           <RowWriteNotice
             write={write}
@@ -568,6 +600,22 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
         )}
       </div>
       <div className="flex shrink-0 items-center gap-2 pt-0.5">
+        {canProbe && info.agent && probeKey && (
+          <McpProbeButton
+            size="xs"
+            variant="ghost"
+            loading={probeRecord?.phase === "loading"}
+            tested={probeRecord?.phase === "ready"}
+            onClick={() =>
+              void runMcpProbe(
+                slots,
+                probeKey,
+                { agent: info.agent!, key: server.key },
+                holder?.entry.fingerprint ?? null
+              )
+            }
+          />
+        )}
         {pending && (
           <Loader2
             aria-label={t("detail.saving")}
@@ -654,6 +702,8 @@ function DefinitionPart({
   explain: boolean
 }) {
   const t = useTranslations("Harness.mcp.detail")
+  const { slots } = useHarnessView()
+  const [probes] = useHarnessSlot(MCP_PROBES)
   const noteId = useId()
   const several = server.groups.length > 1
   const editableGroup = (group: McpDefinitionGroup) =>
@@ -678,21 +728,46 @@ function DefinitionPart({
   if (!several) {
     const group = server.groups[0]
     const editable = editableGroup(group)
+    const pKey = probeGroupKey(server.key, group.fingerprint)
+    const probeRecord = probes[pKey]
     return (
       <McpDetailPart
         title={t("definition")}
         aside={
-          <EditDefinitionButton
-            server={server}
-            group={group}
-            editable={editable}
-            describedBy={!editable && explain ? noteId : undefined}
-          />
+          <div className="flex items-center gap-1.5">
+            {!server.reserved && (
+              <McpProbeButton
+                size="xs"
+                variant="outline"
+                loading={probeRecord?.phase === "loading"}
+                tested={probeRecord?.phase === "ready"}
+                onClick={() =>
+                  void runMcpProbe(
+                    slots,
+                    pKey,
+                    { definition: group.definition },
+                    group.fingerprint
+                  )
+                }
+              />
+            )}
+            <EditDefinitionButton
+              server={server}
+              group={group}
+              editable={editable}
+              describedBy={!editable && explain ? noteId : undefined}
+            />
+          </div>
         }
       >
         <div className={HARNESS_CARD_CLASS}>
           {note(group, noteId)}
           <McpDefinitionView definition={group.definition} layout="rows" />
+          {probeRecord && (
+            <div className="border-t px-4 py-2.5">
+              <McpProbePanel record={probeRecord} />
+            </div>
+          )}
         </div>
       </McpDetailPart>
     )
@@ -704,6 +779,8 @@ function DefinitionPart({
         {server.groups.map((group) => {
           const editable = editableGroup(group)
           const id = `${noteId}-${group.letter}`
+          const pKey = probeGroupKey(server.key, group.fingerprint)
+          const probeRecord = probes[pKey]
           return (
             <div key={group.fingerprint} className={HARNESS_CARD_CLASS}>
               <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 py-1.5 ps-4 pe-2">
@@ -711,6 +788,22 @@ function DefinitionPart({
                 <span className="min-w-0 flex-1 text-sm font-semibold text-foreground">
                   {t("definitionLetter", { letter: group.letter })}
                 </span>
+                {!server.reserved && (
+                  <McpProbeButton
+                    size="xs"
+                    variant="ghost"
+                    loading={probeRecord?.phase === "loading"}
+                    tested={probeRecord?.phase === "ready"}
+                    onClick={() =>
+                      void runMcpProbe(
+                        slots,
+                        pKey,
+                        { definition: group.definition },
+                        group.fingerprint
+                      )
+                    }
+                  />
+                )}
                 <EditDefinitionButton
                   server={server}
                   group={group}
@@ -720,6 +813,11 @@ function DefinitionPart({
               </div>
               {note(group, id)}
               <McpDefinitionView definition={group.definition} layout="rows" />
+              {probeRecord && (
+                <div className="border-t px-4 py-2.5">
+                  <McpProbePanel record={probeRecord} />
+                </div>
+              )}
             </div>
           )
         })}
@@ -959,7 +1057,16 @@ function HarnessPart({
   const tDetail = useTranslations("Harness.mcp.detail")
   const tItem = useTranslations("Harness.install.item")
   const labels = useMcpLabels()
+  const { slots } = useHarnessView()
+  const [probes] = useHarnessSlot(MCP_PROBES)
   const noteId = useId()
+  const primaryGroup = server.groups[0] ?? null
+  const primaryProbeKey = primaryGroup
+    ? probeGroupKey(server.key, primaryGroup.fingerprint)
+    : null
+  const primaryProbeRecord = primaryProbeKey
+    ? probes[primaryProbeKey]
+    : undefined
   // The catalog's title as the record keeps it, in the reader's language;
   // the address stays under it.
   const title = pickLocalized(mark.title, harnessLang(labels.locale))
@@ -1052,6 +1159,11 @@ function HarnessPart({
             noteId={noteId}
           />
         </McpDefinitionRows>
+        {primaryProbeRecord && (
+          <div className="px-4 py-2.5">
+            <McpProbePanel record={primaryProbeRecord} />
+          </div>
+        )}
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 bg-muted/40 px-4 py-2">
           {harness.catalog && (
             <HarnessUpdateStatus
@@ -1061,6 +1173,22 @@ function HarnessPart({
             />
           )}
           <div className="ms-auto flex flex-wrap items-center gap-1.5">
+            {primaryGroup && primaryProbeKey && !server.reserved && (
+              <McpProbeButton
+                size="xs"
+                variant="outline"
+                loading={primaryProbeRecord?.phase === "loading"}
+                tested={primaryProbeRecord?.phase === "ready"}
+                onClick={() =>
+                  void runMcpProbe(
+                    slots,
+                    primaryProbeKey,
+                    { definition: primaryGroup.definition },
+                    primaryGroup.fingerprint
+                  )
+                }
+              />
+            )}
             {harness.catalog && (
               <Button
                 type="button"
@@ -1321,7 +1449,54 @@ export function McpServerDetail({
           />
         )}
 
-        <McpDetailPart title={t("detail.agents")}>
+        <McpDetailPart
+          title={t("detail.agents")}
+          aside={(() => {
+            if (server.reserved) return undefined
+            const primaryGroup = server.groups[0]
+            const enablePlan = primaryGroup
+              ? planServerBulkEnable(server, primaryGroup, model)
+              : null
+            const disablePlan = planServerBulkDisable(server, model)
+            const showEnable = Boolean(
+              primaryGroup && enablePlan && enablePlan.ops.length > 0
+            )
+            const showDisable = disablePlan.ops.length > 0
+            if (!showEnable && !showDisable) return undefined
+            return (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {showEnable && primaryGroup && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={() =>
+                      openServerBulkEnableDialog(
+                        slots,
+                        server.key,
+                        primaryGroup.fingerprint
+                      )
+                    }
+                  >
+                    {t("bulk.applyCompatible")}
+                  </Button>
+                )}
+                {showDisable && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={() =>
+                      openServerBulkDisableDialog(slots, server.key)
+                    }
+                  >
+                    {t("bulk.pauseAll")}
+                  </Button>
+                )}
+              </div>
+            )
+          })()}
+        >
           <ul className={cn("divide-y", HARNESS_CARD_CLASS)}>
             {visible.map((info) => (
               <AgentRow

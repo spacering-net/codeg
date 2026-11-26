@@ -4425,6 +4425,16 @@
         "dismiss": "忽略",
         "moreIncidents": "另 {count} 条"
       },
+      "mcpRecovery": {
+        "title": "MCP 服务“{server}”初始化失败",
+        "pauseAndReconnect": "暂停 {server} 并重连",
+        "pausing": "正在暂停…",
+        "openSettings": "打开 MCP 设置",
+        "pausedAndReconnecting": "已暂停 {server}，正在重新连接…",
+        "serverNotFound": "未在该智能体的 MCP 配置中找到“{server}”。",
+        "cannotPause": "无法为该智能体自动暂停“{server}”。",
+        "pauseFailed": "暂停“{server}”失败。"
+      },
       "backgroundTasks": {
         "settledFallback": "后台任务已结束（{status}）",
         "notifySettledOne": "{agent}：一个后台任务已结束",
@@ -8120,7 +8130,9 @@
         "reserved": "内置服务的名称，仅列出",
         "readOnly": "只读",
         "skipped": "会话里会被跳过",
-        "entryUnreadable": "Codeg 无法读取这个条目"
+        "entryUnreadable": "Codeg 无法读取这个条目",
+        "paused": "已暂停",
+        "pausedNote": "已由 Codeg 临时暂停；重新启用会完整恢复所有参数、环境变量和请求头。"
       },
       "agents": {
         "showAll": "显示全部智能体（{count, number} 个未安装）",
@@ -8165,7 +8177,8 @@
         "skipped": "会话里会被跳过",
         "builtIn": "<code>codeg-mcp</code>（内置）",
         "builtInNote": "Codeg 自己的协作服务。它不在这个文件里，在 设置 › 协作 中开启或关闭。",
-        "openCollaboration": "打开设置"
+        "openCollaboration": "打开设置",
+        "pauseReversible": "在这里关闭服务会由 Codeg 可逆地暂停，重新启用时完整恢复参数、环境变量和请求头。"
       },
       "blocks": {
         "unknownAgent": "这个 Codeg 不认识这个智能体；更新 Codeg 后才能管理它。",
@@ -8394,7 +8407,76 @@
         "disableTitle": "在 {agent} 中停用 <code>{key}</code>？",
         "enableAction": "启用",
         "disableAction": "停用",
+        "pauseTitle": "在 {agent} 中暂停 <code>{key}</code>？",
+        "pauseBody": "Codeg 会暂时将该条目从 {agent} 的配置中移出并保留完整副本，重新启用时会原样恢复所有参数、环境变量和请求头。",
+        "pauseAction": "暂停",
         "commentsLost": "这个文件里有注释，保存会去掉它们。"
+      },
+      "probe": {
+        "testConnection": "测试连接",
+        "retest": "重新测试",
+        "testing": "测试中…",
+        "checkAll": "全部检测",
+        "latency": "{ms} ms",
+        "unsupported": "当前 Codeg 版本过旧，不支持 MCP 探测，请更新。",
+        "rpcFailed": "无法联系 Codeg 执行测试。",
+        "authRequiredHint": "该服务需要交互式 OAuth 登录；若当前智能体不支持 OAuth，建议先暂停它。",
+        "sessionIdMismatchHint": "服务端拒绝或变更了 MCP 会话 ID（常见于反向代理或会话状态冲突）。",
+        "showTools": "展开 {count, number} 个工具",
+        "hideTools": "收起工具",
+        "showStderr": "查看 stderr",
+        "hideStderr": "隐藏 stderr",
+        "status": {
+          "ok": "正常 · {count, number} 个工具",
+          "auth_required": "需要 OAuth",
+          "forbidden": "403 拒绝访问",
+          "session_id_mismatch": "会话 ID 不匹配",
+          "spawn_failed": "进程启动失败",
+          "timeout": "连接超时",
+          "protocol_error": "协议错误",
+          "network_error": "网络错误",
+          "config_error": "配置错误",
+          "unknown": "探测失败（{status}）"
+        }
+      },
+      "bulk": {
+        "applyCompatible": "应用到兼容智能体",
+        "pauseAll": "全部暂停",
+        "enableAllCompatible": "启用全部兼容服务",
+        "enableServerTitle": "将 <code>{key}</code> 应用到兼容智能体",
+        "enableServerDescription": "在所有兼容、已安装且可写的智能体中添加或启用该服务。",
+        "disableServerTitle": "在所有智能体中暂停 <code>{key}</code>",
+        "disableServerDescription": "在所有支持停用的智能体中停用或暂停该服务，不会删除任何配置。",
+        "enableAgentTitle": "在 {agent} 中启用兼容服务",
+        "enableAgentDescription": "为 {agent} 添加或启用所有兼容的本地 MCP 服务。",
+        "unavailable": "当前配置下此批量操作已不可用。",
+        "nothingToDo": "没有可应用的变更。",
+        "sectionWillApply": "将应用（{count, number}）",
+        "sectionWillDisable": "将暂停 / 停用（{count, number}）",
+        "sectionAlreadyActive": "已启用（{count, number}）",
+        "sectionAlreadyOff": "已停用（{count, number}）",
+        "sectionSkipped": "已跳过（{count, number}）",
+        "effect": {
+          "add": "添加",
+          "enable": "启用",
+          "update": "更新",
+          "disable": "停用",
+          "pause": "暂停"
+        },
+        "skip": {
+          "notInstalled": "未安装",
+          "unknownAgent": "未知智能体",
+          "readOnly": "配置为只读",
+          "unreadable": "配置无法读取",
+          "unsupportedTransport": "不支持 {transport} 服务",
+          "reservedKey": "保留服务名",
+          "keyNotNew": "此名称无法用于新建条目",
+          "entryReadOnly": "条目为只读",
+          "duplicateKey": "配置中存在重复键",
+          "cannotDisable": "不支持停用（已保留原配置）",
+          "noDefinition": "无可读定义",
+          "differentDefinition": "正在使用不同的定义"
+        }
       },
       "paste": {
         "title": "粘贴配置",

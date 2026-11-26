@@ -4425,6 +4425,16 @@
         "dismiss": "Ignorer",
         "moreIncidents": "+{count} autre(s)"
       },
+      "mcpRecovery": {
+        "title": "Échec de l’initialisation du serveur MCP « {server} »",
+        "pauseAndReconnect": "Mettre en pause {server} et reconnecter",
+        "pausing": "Mise en pause…",
+        "openSettings": "Ouvrir les paramètres MCP",
+        "pausedAndReconnecting": "{server} mis en pause, reconnexion en cours…",
+        "serverNotFound": "Impossible de trouver « {server} » dans la configuration MCP de cet agent.",
+        "cannotPause": "Impossible de mettre en pause « {server} » automatiquement pour cet agent.",
+        "pauseFailed": "Impossible de mettre en pause « {server} »."
+      },
       "backgroundTasks": {
         "settledFallback": "Tâche en arrière-plan terminée ({status})",
         "notifySettledOne": "{agent} : une tâche en arrière-plan est terminée",
@@ -8120,7 +8130,9 @@
         "reserved": "nom du serveur intégré, seulement affiché",
         "readOnly": "lecture seule",
         "skipped": "ignoré dans ses sessions",
-        "entryUnreadable": "Codeg ne peut pas lire cette entrée"
+        "entryUnreadable": "Codeg ne peut pas lire cette entrée",
+        "paused": "En pause",
+        "pausedNote": "Mis temporairement en pause par Codeg ; le réactiver restaure toute sa configuration."
       },
       "agents": {
         "showAll": "Afficher tous les agents ({count, number} non installés)",
@@ -8165,7 +8177,8 @@
         "skipped": "Ignoré dans les sessions",
         "builtIn": "<code>codeg-mcp</code> (intégré)",
         "builtInNote": "Le serveur de collaboration de Codeg. Il ne figure pas dans ce fichier ; il s’active et se désactive dans Paramètres › Collaboration.",
-        "openCollaboration": "Ouvrir les Paramètres"
+        "openCollaboration": "Ouvrir les Paramètres",
+        "pauseReversible": "Désactiver un serveur ici le met en pause de manière réversible dans Codeg sans perdre ses arguments, variables d’environnement ni en-têtes."
       },
       "blocks": {
         "unknownAgent": "Ce Codeg ne connaît pas cet agent ; mettez Codeg à jour pour le gérer.",
@@ -8394,7 +8407,76 @@
         "disableTitle": "Désactiver <code>{key}</code> dans {agent} ?",
         "enableAction": "Activer",
         "disableAction": "Désactiver",
+        "pauseTitle": "Mettre en pause <code>{key}</code> dans {agent} ?",
+        "pauseBody": "Codeg retirera temporairement cette entrée de la configuration de {agent} et en conservera une copie afin que la réactivation restaure tous les arguments, variables d’environnement et en-têtes.",
+        "pauseAction": "Mettre en pause",
         "commentsLost": "Ce fichier contient des commentaires, et l’enregistrement les supprime."
+      },
+      "probe": {
+        "testConnection": "Tester la connexion",
+        "retest": "Tester à nouveau",
+        "testing": "Test en cours…",
+        "checkAll": "Tout vérifier",
+        "latency": "{ms} ms",
+        "unsupported": "Ce Codeg est trop ancien pour tester les serveurs MCP. Mettez-le à jour.",
+        "rpcFailed": "Impossible de joindre Codeg pour tester ce serveur.",
+        "authRequiredHint": "Ce serveur nécessite une connexion OAuth interactive. Mettez-le en pause si cet agent ne gère pas OAuth.",
+        "sessionIdMismatchHint": "Le serveur a refusé ou modifié l’identifiant de session MCP (par exemple derrière un proxy).",
+        "showTools": "{count, plural, one {Afficher # outil} other {Afficher # outils}}",
+        "hideTools": "Masquer les outils",
+        "showStderr": "Afficher stderr",
+        "hideStderr": "Masquer stderr",
+        "status": {
+          "ok": "{count, plural, one {Opérationnel · # outil} other {Opérationnel · # outils}}",
+          "auth_required": "OAuth requis",
+          "forbidden": "403 Interdit",
+          "session_id_mismatch": "ID de session incompatible",
+          "spawn_failed": "Échec du lancement",
+          "timeout": "Délai dépassé",
+          "protocol_error": "Erreur de protocole",
+          "network_error": "Erreur réseau",
+          "config_error": "Erreur de configuration",
+          "unknown": "Échec du test ({status})"
+        }
+      },
+      "bulk": {
+        "applyCompatible": "Appliquer aux agents compatibles",
+        "pauseAll": "Tout mettre en pause",
+        "enableAllCompatible": "Tout activer (compatibles)",
+        "enableServerTitle": "Appliquer <code>{key}</code> aux agents compatibles",
+        "enableServerDescription": "Ajoute ou active ce serveur sur chaque agent compatible, installé et modifiable.",
+        "disableServerTitle": "Mettre en pause <code>{key}</code> sur tous les agents",
+        "disableServerDescription": "Désactive ou met en pause ce serveur partout où c’est pris en charge, sans supprimer aucune configuration.",
+        "enableAgentTitle": "Activer les serveurs compatibles dans {agent}",
+        "enableAgentDescription": "Ajoute ou active tous les serveurs MCP locaux compatibles pour {agent}.",
+        "unavailable": "Cette action groupée n’est plus disponible pour la configuration actuelle.",
+        "nothingToDo": "Aucune modification éligible à appliquer.",
+        "sectionWillApply": "Sera appliqué ({count, number})",
+        "sectionWillDisable": "Sera mis en pause / désactivé ({count, number})",
+        "sectionAlreadyActive": "Déjà actif ({count, number})",
+        "sectionAlreadyOff": "Déjà désactivé ({count, number})",
+        "sectionSkipped": "Ignoré ({count, number})",
+        "effect": {
+          "add": "Ajouter",
+          "enable": "Activer",
+          "update": "Mettre à jour",
+          "disable": "Désactiver",
+          "pause": "Mettre en pause"
+        },
+        "skip": {
+          "notInstalled": "Non installé",
+          "unknownAgent": "Agent inconnu",
+          "readOnly": "Configuration en lecture seule",
+          "unreadable": "Configuration illisible",
+          "unsupportedTransport": "Ne prend pas en charge les serveurs {transport}",
+          "reservedKey": "Nom de serveur réservé",
+          "keyNotNew": "Ce nom ne peut pas être créé ici",
+          "entryReadOnly": "Entrée en lecture seule",
+          "duplicateKey": "Clé en double dans la configuration",
+          "cannotDisable": "Ne prend pas en charge la désactivation (conservé tel quel)",
+          "noDefinition": "Aucune définition lisible",
+          "differentDefinition": "Utilise une définition différente"
+        }
       },
       "paste": {
         "title": "Coller une configuration",

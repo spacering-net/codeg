@@ -29,6 +29,10 @@ import type {
   McpIssue,
   McpOpIssue,
   McpOpResult,
+  McpProbeAuthHint,
+  McpProbeResult,
+  McpProbeServerInfo,
+  McpProbeTool,
   McpRelatedFile,
   McpSessionCapabilities,
   McpSnippet,
@@ -162,6 +166,7 @@ function entry(value: unknown): McpEntry | null {
     definition: read.definition,
     extra: isRaw(value.extra) ? value.extra : {},
     enabled: bool(value.enabled, true),
+    paused: bool(value.paused),
     // Only meaningful beside a definition this build can read.
     fingerprint: read.definition ? strOrNull(value.fingerprint) : null,
     read_only: bool(value.read_only),
@@ -206,6 +211,13 @@ function capabilities(value: unknown): McpSessionCapabilities | null {
 
 function agent(value: unknown): McpAgentInventory | null {
   if (!isRaw(value) || typeof value.agent !== "string") return null
+  const canDisable = bool(value.can_disable)
+  const disableMode =
+    typeof value.disable_mode === "string" && value.disable_mode.length > 0
+      ? value.disable_mode
+      : canDisable
+        ? "native"
+        : "unsupported"
   return {
     agent: value.agent,
     installed: typeof value.installed === "boolean" ? value.installed : null,
@@ -213,7 +225,8 @@ function agent(value: unknown): McpAgentInventory | null {
     writable: bool(value.writable),
     transports: strings(value.transports),
     delivery: str(value.delivery),
-    can_disable: bool(value.can_disable),
+    can_disable: canDisable,
+    disable_mode: disableMode,
     codeg_mcp: bool(value.codeg_mcp),
     session_capabilities: capabilities(value.session_capabilities),
     entries: list(value.entries, entry),
@@ -312,4 +325,77 @@ export function normalizeSnippet(value: unknown): McpSnippet {
 
 export function normalizeChanged(value: unknown): McpChanged {
   return { agents: isRaw(value) ? strings(value.agents) : [] }
+}
+
+function probeServerInfo(value: unknown): McpProbeServerInfo | null {
+  if (!isRaw(value) || typeof value.name !== "string" || !value.name) {
+    return null
+  }
+  return {
+    name: value.name,
+    version: strOrNull(value.version),
+  }
+}
+
+function probeTool(value: unknown): McpProbeTool | null {
+  if (!isRaw(value) || typeof value.name !== "string" || !value.name) {
+    return null
+  }
+  return {
+    name: value.name,
+    description: strOrNull(value.description),
+  }
+}
+
+function probeAuthHint(value: unknown): McpProbeAuthHint | null {
+  if (!isRaw(value)) return null
+  const scheme = strOrNull(value.scheme)
+  const resourceMetadata = strOrNull(value.resource_metadata)
+  if (scheme === null && resourceMetadata === null) return null
+  return {
+    scheme,
+    resource_metadata: resourceMetadata,
+  }
+}
+
+export function normalizeProbeResult(value: unknown): McpProbeResult {
+  if (!isRaw(value) || typeof value.status !== "string" || !value.status) {
+    throw new McpClientError(
+      "invalidResponse",
+      "mcp_probe answered with something that is not a probe result"
+    )
+  }
+  const tools = list(value.tools, probeTool)
+  const toolsCount =
+    typeof value.tools_count === "number" &&
+    Number.isFinite(value.tools_count) &&
+    value.tools_count >= 0
+      ? Math.floor(value.tools_count)
+      : tools.length
+  const latencyMs =
+    typeof value.latency_ms === "number" &&
+    Number.isFinite(value.latency_ms) &&
+    value.latency_ms >= 0
+      ? Math.round(value.latency_ms)
+      : 0
+  const httpStatus =
+    typeof value.http_status === "number" && Number.isFinite(value.http_status)
+      ? Math.trunc(value.http_status)
+      : null
+  return {
+    status: value.status,
+    latency_ms: latencyMs,
+    server_info: probeServerInfo(value.server_info),
+    protocol_version: strOrNull(value.protocol_version),
+    tools,
+    tools_count: toolsCount,
+    http_status: httpStatus,
+    auth_hint: probeAuthHint(value.auth_hint),
+    detail: strOrNull(value.detail),
+    stderr_tail: strOrNull(value.stderr_tail),
+    checked_at:
+      typeof value.checked_at === "string" && value.checked_at.length > 0
+        ? value.checked_at
+        : new Date().toISOString(),
+  }
 }

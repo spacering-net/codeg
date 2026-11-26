@@ -4425,6 +4425,16 @@
         "dismiss": "閉じる",
         "moreIncidents": "他 {count} 件"
       },
+      "mcpRecovery": {
+        "title": "MCP サーバー「{server}」の初期化に失敗しました",
+        "pauseAndReconnect": "{server} を一時停止して再接続",
+        "pausing": "一時停止中…",
+        "openSettings": "MCP 設定を開く",
+        "pausedAndReconnecting": "{server} を一時停止し、再接続しています…",
+        "serverNotFound": "このエージェントの MCP 設定に「{server}」が見つかりません。",
+        "cannotPause": "このエージェントでは「{server}」を自動で一時停止できません。",
+        "pauseFailed": "「{server}」の一時停止に失敗しました。"
+      },
       "backgroundTasks": {
         "settledFallback": "バックグラウンドタスクが終了しました（{status}）",
         "notifySettledOne": "{agent}：バックグラウンドタスクが完了しました",
@@ -8120,7 +8130,9 @@
         "reserved": "組み込みサーバーの名前のため、表示のみ",
         "readOnly": "読み取り専用",
         "skipped": "セッションではスキップされます",
-        "entryUnreadable": "Codeg はこのエントリを読み取れません"
+        "entryUnreadable": "Codeg はこのエントリを読み取れません",
+        "paused": "一時停止中",
+        "pausedNote": "Codeg によって一時停止されています。再度有効にすると元の設定がすべて復元されます。"
       },
       "agents": {
         "showAll": "すべてのエージェントを表示（未インストール {count, number} 件）",
@@ -8165,7 +8177,8 @@
         "skipped": "セッションでスキップ",
         "builtIn": "<code>codeg-mcp</code>（組み込み）",
         "builtInNote": "Codeg 自身のコラボレーション用サーバーです。このファイルにはなく、オン・オフは 設定 › コラボレーション で切り替えます。",
-        "openCollaboration": "設定を開く"
+        "openCollaboration": "設定を開く",
+        "pauseReversible": "ここでオフにすると Codeg が設定を保持したまま一時停止し、再びオンにすると引数・環境変数・ヘッダーがそのまま復元されます。"
       },
       "blocks": {
         "unknownAgent": "この Codeg はこのエージェントを認識できません。管理するには Codeg を更新してください。",
@@ -8394,7 +8407,76 @@
         "disableTitle": "{agent} で <code>{key}</code> を無効にしますか？",
         "enableAction": "有効にする",
         "disableAction": "無効にする",
+        "pauseTitle": "{agent} の <code>{key}</code> を一時停止しますか？",
+        "pauseBody": "Codeg はこのエントリを {agent} の設定から一時的に除外しコピーを保持します。再度有効にすると引数・環境変数・ヘッダーがそのまま復元されます。",
+        "pauseAction": "一時停止",
         "commentsLost": "このファイルにはコメントがあり、保存すると削除されます。"
+      },
+      "probe": {
+        "testConnection": "接続テスト",
+        "retest": "再テスト",
+        "testing": "テスト中…",
+        "checkAll": "すべて確認",
+        "latency": "{ms} ms",
+        "unsupported": "この Codeg は古いため MCP サーバーをテストできません。更新してください。",
+        "rpcFailed": "テストを実行するために Codeg へ接続できませんでした。",
+        "authRequiredHint": "このサーバーは対話的な OAuth ログインが必要です。このエージェントが OAuth に非対応の場合は一時停止してください。",
+        "sessionIdMismatchHint": "サーバーが MCP セッション ID を拒否または変更しました（プロキシ経由など）。",
+        "showTools": "{count, number} 個のツールを表示",
+        "hideTools": "ツールを隠す",
+        "showStderr": "stderr を表示",
+        "hideStderr": "stderr を隠す",
+        "status": {
+          "ok": "正常 · {count, number} ツール",
+          "auth_required": "OAuth が必要",
+          "forbidden": "403 アクセス拒否",
+          "session_id_mismatch": "セッション ID 不一致",
+          "spawn_failed": "起動失敗",
+          "timeout": "タイムアウト",
+          "protocol_error": "プロトコルエラー",
+          "network_error": "ネットワークエラー",
+          "config_error": "設定エラー",
+          "unknown": "テスト失敗（{status}）"
+        }
+      },
+      "bulk": {
+        "applyCompatible": "互換エージェントに適用",
+        "pauseAll": "すべて一時停止",
+        "enableAllCompatible": "互換サーバーをすべて有効化",
+        "enableServerTitle": "<code>{key}</code> を互換エージェントに適用",
+        "enableServerDescription": "互換性がありインストール済み・書き込み可能なすべてのエージェントにこのサーバーを追加または有効化します。",
+        "disableServerTitle": "すべてのエージェントで <code>{key}</code> を一時停止",
+        "disableServerDescription": "設定を削除せずに、対応しているすべてのエージェントでこのサーバーを無効化または一時停止します。",
+        "enableAgentTitle": "{agent} で互換サーバーを有効化",
+        "enableAgentDescription": "{agent} に対して互換性のあるすべてのローカル MCP サーバーを追加または有効化します。",
+        "unavailable": "現在の設定ではこの一括操作は利用できません。",
+        "nothingToDo": "適用できる変更はありません。",
+        "sectionWillApply": "適用予定（{count, number}）",
+        "sectionWillDisable": "一時停止 / 無効化予定（{count, number}）",
+        "sectionAlreadyActive": "有効済み（{count, number}）",
+        "sectionAlreadyOff": "オフ済み（{count, number}）",
+        "sectionSkipped": "スキップ（{count, number}）",
+        "effect": {
+          "add": "追加",
+          "enable": "有効化",
+          "update": "更新",
+          "disable": "無効化",
+          "pause": "一時停止"
+        },
+        "skip": {
+          "notInstalled": "未インストール",
+          "unknownAgent": "不明なエージェント",
+          "readOnly": "読み取り専用の設定",
+          "unreadable": "設定を読み取れません",
+          "unsupportedTransport": "{transport} サーバーには非対応",
+          "reservedKey": "予約済みサーバー名",
+          "keyNotNew": "この名前は新規作成できません",
+          "entryReadOnly": "読み取り専用エントリ",
+          "duplicateKey": "設定内に重複キーがあります",
+          "cannotDisable": "無効化に非対応（設定を保持）",
+          "noDefinition": "読み取れる定義がありません",
+          "differentDefinition": "別の定義を使用中"
+        }
       },
       "paste": {
         "title": "設定を貼り付け",
