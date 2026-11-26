@@ -2406,6 +2406,10 @@
       "forkSessionSuccess": "會話分叉成功",
       "forkSessionFailed": "會話分叉失敗：{error}",
       "forkSessionBusy": "分叉失敗：目前有回合正在進行",
+      "editMessageRefused": "無法編輯這則訊息：{reason, select, busy {智慧體仍在工作} backgroundWork {仍有背景工作在執行} beforeCompaction {這則訊息在對話壓縮之前} clearedContext {這則訊息之後對話被清除過} unavailable {智慧體無法回到這則訊息} other {智慧體拒絕了}}",
+      "editMessageBusy": "無法編輯這則訊息：有回合正在執行",
+      "editMessageFailed": "無法編輯這則訊息：{error}",
+      "editMessageQueued": "無法編輯這則訊息：請先傳送或移除排隊中的訊息",
       "exportConversation": "匯出對話",
       "exportImage": "圖片",
       "exportMarkdown": "Markdown",
@@ -3905,6 +3909,11 @@
         "systemMessage": "系統訊息",
         "turnFailed": "本輪失敗：{message}",
         "copyMessage": "複製",
+        "editMessage": "編輯訊息",
+        "editMessageBusy": "等回覆結束後再編輯",
+        "editMessageHint": "這則訊息之後的內容會被取代",
+        "editMessageCancel": "取消",
+        "editMessageSend": "傳送",
         "forkFromHere": "從此處分叉",
         "forkBusy": "目前有回合正在進行，暫不可分叉",
         "forkNotReady": "這則回覆暫時還不能作為分叉點，請稍後再試",
@@ -10341,13 +10350,6 @@
     "items": {
       "waitingAnswer": "等 {name} 回覆：{text}",
       "wroteToYou": "{name} 傳來訊息：{text}",
-      "waits": {
-        "owner": "等你",
-        "agent": "等助手",
-        "external": "進行中",
-        "time": "稍後",
-        "none": "其他"
-      },
       "kind": {
         "dispatch": "派活",
         "reminder": "提醒",
@@ -11266,7 +11268,8 @@
       "jump": "跳到原訊息",
       "dismiss": "取消引用",
       "preview": "原訊息",
-      "previewHint": "被引用的訊息，時間太早，沒有載入到這裡。"
+      "previewHint": "被引用的訊息，時間太早，沒有載入到這裡。",
+      "reminder": "提醒：{summary}"
     },
     "step": {
       "awaiting": "等你確認：{title}",
@@ -11805,7 +11808,10 @@
       "loading": "正在讀取步驟…",
       "empty": "還沒有步驟",
       "fold": "收合步驟",
-      "openWork": "開啟這項工作"
+      "openWork": "開啟這項工作",
+      "replied": "回覆完成",
+      "workDone": "工作完成",
+      "notFinished": "沒能完成"
     },
     "sending": {
       "waking": "正在喚醒 {name}…",
@@ -11836,13 +11842,6 @@
       "notify": "通知我",
       "notifyHint": "做完事情或在等你時通知你",
       "item": {
-        "done": "完成",
-        "later": "稍後",
-        "drop": "放棄",
-        "in15m": "15 分鐘後",
-        "in1h": "1 小時後",
-        "tomorrow": "明天上午",
-        "untimed": "不定時（等時間）",
         "act": "到點去做"
       },
       "output": {
@@ -12009,8 +12008,8 @@
       "snooze15m": "15 分鐘後",
       "snooze1h": "1 小時後",
       "snoozeTomorrow": "明天上午",
-      "handOver": "交給助手",
-      "handOverText": "處理提醒 #{id}：{summary}",
+      "handOver": "交給{name}",
+      "handOverText": "幫我處理這個提醒：{summary}",
       "state": {
         "done": "已完成",
         "snoozed": "延到 {when}",
@@ -12036,7 +12035,6 @@
       "handed": "交給{name}了",
       "checking": "驗收中 · 第 {round} 輪",
       "queued": "已排隊合併",
-      "waitsAgent": "等{name}處理",
       "routineRunning": "在跑",
       "routineLast": "上次：{outcome}",
       "fold": "收起詳情",
@@ -13040,6 +13038,121 @@
       "title": "{name} 還沒有大腦",
       "body": "它是從協作設定遷移來的助手。初始化主助手後，它會照抄一份主助手的大腦，就可以和它對話了。在這之前，一般會話裡照樣可以 @ 它。",
       "setUp": "初始化主助手"
+    },
+    "matter": {
+      "act": {
+        "done": "完成",
+        "doneThis": "完成本次",
+        "doneEarly": "提前完成",
+        "skipThis": "跳過本次",
+        "merged": "已合併",
+        "ack": "知道了",
+        "snooze": "延後",
+        "setTime": "設時間",
+        "in15m": "15 分鐘後",
+        "in1h": "1 小時後",
+        "tomorrow": "明天上午",
+        "handOver": "交給{name}",
+        "answer": "去回答",
+        "drop": "不用了",
+        "stop": "不再提醒",
+        "undo": "復原"
+      },
+      "hint": {
+        "doneNext": "這次完成，之後照常：{rule}",
+        "skipNext": "這次跳過，之後照常：{rule}",
+        "snoozeNotify": "時間到再提醒你",
+        "snoozeAct": "時間到{name}再去做",
+        "setTimeNotify": "時間到提醒你",
+        "setTimeAct": "時間到{name}去做",
+        "handOver": "讓{name}去處理這件事",
+        "answer": "到{name}的對話裡回答",
+        "drop": "從清單裡移除，{name}不再跟進",
+        "dropQuestion": "這個問題不用回答了，會告訴{name}",
+        "dropMessage": "撤回這則訊息；撤不回的話，{name}就不再等{peer}回覆",
+        "stop": "以後都不再提醒",
+        "merged": "告訴{name}這個 PR 已經合併了",
+        "ack": "從清單裡移除"
+      },
+      "toast": {
+        "done": "已完成：{title}",
+        "doneNext": "這次已完成，下次 {when}",
+        "doneEnded": "已完成，這個提醒到此結束",
+        "skipNext": "已跳過這次，下次 {when}",
+        "skipEnded": "已跳過，這個提醒到此結束",
+        "snoozeNotify": "會在 {when} 提醒你",
+        "snoozeAct": "{name}會在 {when} 去做",
+        "dropped": "已移除：{title}",
+        "withdrawn": "已撤回傳給{peer}的訊息",
+        "notWithdrawn": "訊息沒有撤回，{name}不再等{peer}回覆",
+        "stopped": "以後不再提醒：{title}",
+        "handed": "已交給{name}",
+        "undone": "已復原"
+      },
+      "meta": {
+        "reminds": "{name}提醒你 · {when} 到點",
+        "remindsLate": "{name}提醒你 · {when} 到點，已過 {late}",
+        "willRemind": "{name}會在 {when} 提醒你",
+        "willDo": "{name}會在 {when} 去做",
+        "repeats": "{name}提醒你：{rule} · 下次 {when}",
+        "asks": "{name}想問你 · 已等 {wait}",
+        "asked": "{name}想問你",
+        "answered": "你已回答 · 等{name}看",
+        "interrupted": "{name}那一輪沒有完成，可能沒處理你的回答 · 需要的話再答一次",
+        "needsYou": "{name}需要你處理 · 已等 {wait}",
+        "following": "{name}在跟進 · {wait}",
+        "external": "{name}在等外部結果 · 已等 {wait}",
+        "message": "{name}在等{peer}回覆 · 已等 {wait}",
+        "setAside": "已擱置 · 沒定時間",
+        "mention": "你提到{words}時{name}會提醒你 · 已提醒 {times}/{max} 次 · 到 {until}",
+        "justNow": "剛剛",
+        "someone": "對方"
+      },
+      "closed": {
+        "done": "你完成了 · {time}",
+        "dropped": "你移除了 · {time}",
+        "withdrawn": "你撤回了傳給{peer}的訊息 · {time}",
+        "stoppedWaiting": "你不再等{peer}回覆 · {time}",
+        "agentDone": "{name}完成了 · {time}",
+        "agentDropped": "{name}不再跟進了 · {time}",
+        "answered": "{name}看到了你的回答 · {time}",
+        "replied": "{peer}回覆了 · {time}",
+        "gone": "{peer}已被刪除，不再等回覆 · {time}",
+        "planCanceled": "計畫取消了，{name}不再等{peer}回覆 · {time}",
+        "usedUp": "提到時提醒已用完 · {time}",
+        "expired": "提到時提醒已到期 · {time}",
+        "ended": "已結束 · {time}"
+      }
+    },
+    "matterErrors": {
+      "gone": "這件事已經不在了",
+      "settled": "這件事已經結束了",
+      "changed": "這件事剛有了新變化，請再看一眼",
+      "workRunning": "這件工作還在做，要停下請用任務條上的「停止」",
+      "workNoTime": "派出去的工作不能按時間延後",
+      "messageNoTime": "這則在等{peer}回覆，不能按時間延後",
+      "mentionNoTime": "這則會在你提到時出現，不按時間提醒",
+      "notEarlier": "這件事本來就定在 {when}，延後只能往後",
+      "hasTime": "這件事已經定在 {when} 了",
+      "inOtherHands": "這件事在{bot}手裡，不能按時間延後",
+      "badTime": "沒看懂這個時間",
+      "undoNone": "這次操作無法復原",
+      "undoExpired": "超過 10 分鐘了，無法復原",
+      "undoFired": "剛剛提醒過你了，無法復原",
+      "undoChanged": "這件事剛有了新變化，無法復原了",
+      "undoReplied": "{peer}已經回覆了，無法復原",
+      "undoPeerGone": "{peer}已被刪除，無法復原",
+      "undoAnswerRead": "{bot}已經處理過你的回答，無法復原",
+      "answerChanged": "這個問題剛有了變化，訊息沒有送出，內容還在輸入框裡",
+      "answerQueued": "這題已排隊交給{bot}處理。要補充的話，可以去掉「回答」後直接送出",
+      "reminderAnswered": "這個提醒已經處理過了"
+    },
+    "answer": {
+      "bar": "回答：{question}",
+      "dismiss": "不作為回答送出",
+      "label": "回答：{question}",
+      "ended": "這個問題已經結束了，不用再回答",
+      "alreadyAnswered": "這個問題已經在等{name}看了，不用再回答"
     }
   },
   "MessageCheck": {

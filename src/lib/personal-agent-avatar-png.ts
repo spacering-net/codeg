@@ -22,6 +22,7 @@ import {
   ART_BOX,
   faceMarkup,
   faceTones,
+  isFaceColor,
   restPose,
 } from "@/components/personal-agent/bot-shapes"
 import { personalAgentAvatarPng } from "@/lib/api"
@@ -29,6 +30,7 @@ import { monogramFor } from "@/lib/assistant-avatar"
 import { isDesktop } from "@/lib/transport"
 import type {
   AssistantAvatarColor,
+  AvatarTextColor,
   BotAvatar,
   BotColor,
   BotShape,
@@ -93,7 +95,8 @@ export function trayFaceSvg(
   )
 }
 
-/** The disc of an emoji or a monogram, solid (`SWATCH_CLASSES`). */
+/** The disc of an emoji or a monogram made in one of the collaboration
+ *  settings' colours, solid, with white words. */
 const DISC_HEX: Record<AssistantAvatarColor, string> = {
   slate: "#64748b",
   red: "#ef4444",
@@ -105,6 +108,16 @@ const DISC_HEX: Record<AssistantAvatarColor, string> = {
   blue: "#3b82f6",
   violet: "#8b5cf6",
   pink: "#ec4899",
+}
+
+/** The disc of an emoji or a monogram, and its words: in a face's colour,
+ *  that face's body and eyes (light theme); else the old solid swatch. */
+function discPaint(color: AvatarTextColor): { fill: string; ink: string } {
+  if (isFaceColor(color)) {
+    const t = faceTones(color, "light")
+    return { fill: t.body, ink: t.eyeBody }
+  }
+  return { fill: DISC_HEX[color] ?? DISC_HEX.slate, ink: "#ffffff" }
 }
 
 function svgUrl(svg: string): string {
@@ -201,11 +214,12 @@ async function drawTray(
   const glyph = avatar.kind === "emoji" ? avatar.emoji : monogramFor(name)
   if (!glyph) return null
   return strip(1, (ctx) => {
-    ctx.fillStyle = DISC_HEX[avatar.color] ?? DISC_HEX.slate
+    const paint = discPaint(avatar.color)
+    ctx.fillStyle = paint.fill
     ctx.beginPath()
     ctx.arc(size / 2, size / 2, size / 2 - 1, 0, Math.PI * 2)
     ctx.fill()
-    ctx.fillStyle = "#ffffff"
+    ctx.fillStyle = paint.ink
     ctx.textAlign = "center"
     ctx.textBaseline = "middle"
     ctx.font = `600 ${avatar.kind === "emoji" ? 22 : 18}px system-ui, sans-serif`

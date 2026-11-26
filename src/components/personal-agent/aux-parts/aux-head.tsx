@@ -29,9 +29,25 @@ import { useBotLook } from "../shared"
 
 /** The assistant's face at the head of the panel, in px at 100% zoom. */
 const HEAD_AVATAR_SIZE = 64
+/** The looks of a reply (under way, or just ended): the roster's face and
+ *  the pill's act them out, this one does not — it stays at rest. */
+const REPLY_LOOKS: ReadonlySet<BotLook> = new Set<BotLook>([
+  "thinking",
+  "working",
+  "done",
+  "failed",
+])
 
-/** Who the panel is about, over its tabs: its face — alive, as on the
- *  roster, its star on the primary's — and its name;
+/** What the face at the head shows for the look it has live: at rest
+ *  through a reply and after it, as it is otherwise (waiting, stuck,
+ *  asleep). It still follows the pointer. */
+function headLookOf(look: BotLook): BotLook {
+  return REPLY_LOOKS.has(look) ? "idle" : look
+}
+
+/** Who the panel is about, over its tabs: its face — alive, following
+ *  the pointer, its star on the primary's; not acting out a reply, which
+ *  the roster's and the pill's do (`headLookOf`) — and its name;
  *  in the top's corners,
  *  as far from either edge, whether it notifies the owner (the bell, at the
  *  start) and what acts on it (the "⋯", at the end — in the drawer left of
@@ -48,7 +64,7 @@ export function AuxHead({
   const t = useTranslations("PersonalAgent")
   const agent = snapshot.agent
   const name = agent?.name?.trim() || t("title")
-  const look = useBotLook(agent?.id ?? null)
+  const look = headLookOf(useBotLook(agent?.id ?? null))
   return (
     // The whole head is where its face follows the pointer: over its name,
     // its buttons and its tabs too, not only over the face.

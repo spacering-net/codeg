@@ -2406,6 +2406,10 @@
       "forkSessionSuccess": "Session dupliquée avec succès",
       "forkSessionFailed": "Échec de la duplication de la session : {error}",
       "forkSessionBusy": "Échec de la bifurcation : un tour est en cours",
+      "editMessageRefused": "Impossible de modifier le message : {reason, select, busy {l’agent travaille encore} backgroundWork {un travail en arrière-plan est encore en cours} beforeCompaction {le message précède la compaction de la conversation} clearedContext {la conversation a été effacée après lui} unavailable {l’agent ne peut pas revenir à ce message} other {l’agent a refusé}}",
+      "editMessageBusy": "Impossible de modifier le message : un tour est en cours",
+      "editMessageFailed": "Impossible de modifier le message : {error}",
+      "editMessageQueued": "Impossible de modifier le message : envoyez ou retirez d’abord les messages en file d’attente",
       "exportConversation": "Exporter la conversation",
       "exportImage": "Image",
       "exportMarkdown": "Markdown",
@@ -3905,6 +3909,11 @@
         "systemMessage": "Message système",
         "turnFailed": "Échec du tour : {message}",
         "copyMessage": "Copier",
+        "editMessage": "Modifier le message",
+        "editMessageBusy": "Attendez la fin de la réponse pour modifier",
+        "editMessageHint": "Tout ce qui suit ce message est remplacé",
+        "editMessageCancel": "Annuler",
+        "editMessageSend": "Envoyer",
         "forkFromHere": "Bifurquer d'ici",
         "forkBusy": "Impossible de bifurquer pendant qu'un tour est en cours",
         "forkNotReady": "Impossible de bifurquer depuis cette réponse pour le moment, réessayez dans un instant",
@@ -10341,13 +10350,6 @@
     "items": {
       "waitingAnswer": "En attente de la réponse de {name} : {text}",
       "wroteToYou": "{name} a écrit : {text}",
-      "waits": {
-        "owner": "Vous attend",
-        "agent": "Pour l'agent",
-        "external": "En cours",
-        "time": "Plus tard",
-        "none": "Autres"
-      },
       "kind": {
         "dispatch": "mission",
         "reminder": "rappel",
@@ -11266,7 +11268,8 @@
       "jump": "Aller au message d'origine",
       "dismiss": "Retirer la citation",
       "preview": "Message d'origine",
-      "previewHint": "Le message cité, trop ancien pour être chargé ici."
+      "previewHint": "Le message cité, trop ancien pour être chargé ici.",
+      "reminder": "Rappel : {summary}"
     },
     "step": {
       "awaiting": "Attend votre confirmation : {title}",
@@ -11805,7 +11808,10 @@
       "loading": "Chargement des étapes…",
       "empty": "Pas encore d’étapes",
       "fold": "Masquer les étapes",
-      "openWork": "Ouvrir le travail"
+      "openWork": "Ouvrir le travail",
+      "replied": "Réponse envoyée",
+      "workDone": "Travail terminé",
+      "notFinished": "Pas terminé"
     },
     "sending": {
       "waking": "Réveil de {name}…",
@@ -11836,13 +11842,6 @@
       "notify": "Me prévenir",
       "notifyHint": "Quand il termine quelque chose ou vous attend",
       "item": {
-        "done": "Fait",
-        "later": "Plus tard",
-        "drop": "Abandonner",
-        "in15m": "Dans 15 min",
-        "in1h": "Dans 1 heure",
-        "tomorrow": "Demain matin",
-        "untimed": "Sans heure fixe",
         "act": "S’en charge à l’heure"
       },
       "output": {
@@ -12009,8 +12008,8 @@
       "snooze15m": "Dans 15 min",
       "snooze1h": "Dans 1 heure",
       "snoozeTomorrow": "Demain matin",
-      "handOver": "Confier à l’assistant",
-      "handOverText": "Occupe-toi du rappel #{id} : {summary}",
+      "handOver": "Confier à {name}",
+      "handOverText": "Occupe-toi de ce rappel : {summary}",
       "state": {
         "done": "Fait",
         "snoozed": "Reporté à {when}",
@@ -12036,7 +12035,6 @@
       "handed": "Confié à {name}",
       "checking": "En vérification · tour {round}",
       "queued": "en file pour la fusion",
-      "waitsAgent": "En attente que {name} s’en occupe",
       "routineRunning": "En cours",
       "routineLast": "Dernière exécution : {outcome}",
       "fold": "Masquer les détails",
@@ -13040,6 +13038,121 @@
       "title": "{name} n'a pas encore de cerveau",
       "body": "Il vient des réglages de collaboration. Configurez l'assistant principal et il recevra une copie de son cerveau ; vous pourrez alors lui parler. D'ici là, vous pouvez toujours le @mentionner dans les conversations.",
       "setUp": "Configurer l'assistant principal"
+    },
+    "matter": {
+      "act": {
+        "done": "Fait",
+        "doneThis": "Fait pour cette fois",
+        "doneEarly": "Fait en avance",
+        "skipThis": "Passer cette fois",
+        "merged": "Fusionnée",
+        "ack": "Compris",
+        "snooze": "Reporter",
+        "setTime": "Fixer une heure",
+        "in15m": "Dans 15 min",
+        "in1h": "Dans 1 heure",
+        "tomorrow": "Demain matin",
+        "handOver": "Confier à {name}",
+        "answer": "Répondre",
+        "drop": "Plus besoin",
+        "stop": "Ne plus rappeler",
+        "undo": "Annuler"
+      },
+      "hint": {
+        "doneNext": "Fait cette fois ; la suite comme d’habitude : {rule}",
+        "skipNext": "Passé cette fois ; la suite comme d’habitude : {rule}",
+        "snoozeNotify": "Un nouveau rappel à ce moment-là",
+        "snoozeAct": "{name} s’en occupe à ce moment-là",
+        "setTimeNotify": "Un rappel à ce moment-là",
+        "setTimeAct": "{name} s’en occupe à ce moment-là",
+        "handOver": "{name} s’en occupe",
+        "answer": "Répondre dans la conversation avec {name}",
+        "drop": "Le retire de la liste ; {name} arrête de le suivre",
+        "dropQuestion": "Pas besoin de répondre ; {name} sera prévenu",
+        "dropMessage": "Retire le message ; s’il est trop tard, {name} n’attend plus la réponse de {peer}",
+        "stop": "Plus aucun rappel",
+        "merged": "Dit à {name} que la pull request est fusionnée",
+        "ack": "Le retire de la liste"
+      },
+      "toast": {
+        "done": "Fait : {title}",
+        "doneNext": "Fait pour cette fois — prochaine fois {when}",
+        "doneEnded": "Fait — c’était la dernière fois",
+        "skipNext": "Passé cette fois — prochaine fois {when}",
+        "skipEnded": "Passé — c’était la dernière fois",
+        "snoozeNotify": "Rappel {when}",
+        "snoozeAct": "{name} s’en occupe {when}",
+        "dropped": "Retiré : {title}",
+        "withdrawn": "Le message à {peer} a été retiré",
+        "notWithdrawn": "Le message n’a pas été retiré ; {name} n’attend plus la réponse de {peer}",
+        "stopped": "Plus aucun rappel : {title}",
+        "handed": "Confié à {name}",
+        "undone": "Annulé"
+      },
+      "meta": {
+        "reminds": "{name} te le rappelle · prévu {when}",
+        "remindsLate": "{name} te le rappelle · prévu {when}, il y a {late}",
+        "willRemind": "{name} te le rappelle {when}",
+        "willDo": "{name} s’en occupe {when}",
+        "repeats": "{name} te le rappelle : {rule} · prochaine fois {when}",
+        "asks": "{name} te pose une question · attend depuis {wait}",
+        "asked": "{name} te pose une question",
+        "answered": "Tu as répondu · en attente de lecture par {name}",
+        "interrupted": "Le tour de {name} ne s’est pas terminé et ta réponse n’a peut-être pas été lue · réponds encore si besoin",
+        "needsYou": "{name} a besoin de toi · attend depuis {wait}",
+        "following": "{name} suit l’affaire · {wait}",
+        "external": "{name} attend un résultat extérieur · {wait}",
+        "message": "{name} attend la réponse de {peer} · {wait}",
+        "setAside": "Mis de côté · pas d’heure",
+        "mention": "Quand tu mentionnes {words}, {name} te le rappelle · {times} sur {max} fois · jusqu’au {until}",
+        "justNow": "à l’instant",
+        "someone": "l’autre assistant"
+      },
+      "closed": {
+        "done": "Fait par toi · {time}",
+        "dropped": "Retiré par toi · {time}",
+        "withdrawn": "Tu as retiré le message à {peer} · {time}",
+        "stoppedWaiting": "Tu n’attends plus la réponse de {peer} · {time}",
+        "agentDone": "{name} l’a terminé · {time}",
+        "agentDropped": "{name} ne le suit plus · {time}",
+        "answered": "{name} a lu ta réponse · {time}",
+        "replied": "{peer} a répondu · {time}",
+        "gone": "{peer} a été supprimé ; aucune réponse ne viendra · {time}",
+        "planCanceled": "Le plan a été annulé ; {name} n’attend plus la réponse de {peer} · {time}",
+        "usedUp": "Le rappel sur mention est épuisé · {time}",
+        "expired": "Le rappel sur mention a expiré · {time}",
+        "ended": "Terminé · {time}"
+      }
+    },
+    "matterErrors": {
+      "gone": "Ceci n’existe plus",
+      "settled": "Ceci est déjà terminé",
+      "changed": "Ceci vient de changer — jette un nouveau coup d’œil",
+      "workRunning": "Ce travail est encore en cours ; arrête-le avec Arrêter dans sa barre de tâche",
+      "workNoTime": "Un travail confié ne peut pas être reporté à une heure",
+      "messageNoTime": "Ceci attend la réponse de {peer} et ne peut pas être reporté à une heure",
+      "mentionNoTime": "Ceci apparaît quand tu le mentionnes, pas à une heure",
+      "notEarlier": "Ceci est déjà prévu pour {when} ; reporter ne peut que le décaler plus tard",
+      "hasTime": "Ceci est déjà prévu pour {when}",
+      "inOtherHands": "Ceci est entre les mains de {bot} et ne peut pas être reporté à une heure",
+      "badTime": "Cette heure n’a pas été comprise",
+      "undoNone": "Ceci ne peut pas être annulé",
+      "undoExpired": "Plus de 10 minutes se sont écoulées ; impossible d’annuler",
+      "undoFired": "Le rappel vient d’arriver ; impossible d’annuler",
+      "undoChanged": "Ceci vient de changer ; impossible d’annuler",
+      "undoReplied": "{peer} a déjà répondu ; impossible d’annuler",
+      "undoPeerGone": "{peer} a été supprimé ; impossible d’annuler",
+      "undoAnswerRead": "{bot} a déjà lu ta réponse ; impossible d’annuler",
+      "answerChanged": "La question vient de changer. Le message n’a pas été envoyé ; ton texte est toujours dans la zone de saisie",
+      "answerQueued": "Cette question est en file d’attente pour {bot}. Pour la compléter, retire « Répondre » et envoie-le comme un message normal",
+      "reminderAnswered": "Ce rappel a déjà été traité"
+    },
+    "answer": {
+      "bar": "Réponse : {question}",
+      "dismiss": "Ne pas envoyer comme réponse",
+      "label": "Réponse : {question}",
+      "ended": "Cette question est terminée ; inutile de répondre",
+      "alreadyAnswered": "Cette question attend déjà que {name} lise ta réponse"
     }
   },
   "MessageCheck": {

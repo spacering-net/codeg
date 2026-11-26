@@ -63,6 +63,7 @@ mod m20261119_000001_session_message;
 mod m20261123_000001_conversation_selector_state;
 mod m20261124_000006_conversation_collaborator;
 mod m20261125_000001_personal_agent;
+mod m20261125_000002_personal_agent_item_closure;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -132,6 +133,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261123_000001_conversation_selector_state::Migration),
             Box::new(m20261124_000006_conversation_collaborator::Migration),
             Box::new(m20261125_000001_personal_agent::Migration),
+            Box::new(m20261125_000002_personal_agent_item_closure::Migration),
         ]
     }
 }

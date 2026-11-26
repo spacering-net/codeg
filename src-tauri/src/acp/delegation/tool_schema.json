@@ -1908,12 +1908,13 @@
             "agent",
             "time",
             "external"
-          ]
+          ],
+          "description": "Whose move it is: owner — the owner's; agent — yours, or another assistant's you wrote to; time — nobody's until its time comes; external — something outside codeg (CI, a person)."
         },
         "summary": {
           "type": "string",
           "maxLength": 500,
-          "description": "One or two sentences."
+          "description": "Shown to the owner as the matter's title on their activity page: in the owner's language, as what it is to them — a question as the question itself, a reminder as the thing to do. No ids, no notes to yourself."
         },
         "on_done": {
           "type": "string",

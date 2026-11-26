@@ -21,6 +21,7 @@ import {
   DEFAULT_FORGE_PAGE_SIZE,
 } from "./forge-list-prefs"
 import { TurnBusyError, isTurnInProgressRejection } from "./turn-busy"
+import { asRewindRefusedError } from "./rewind-refused"
 import { asConversationMovedError } from "./conversation-moved"
 import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
@@ -40,6 +41,7 @@ import type {
   ConversationTarget,
   DispatchInfo,
   DispatchMode,
+  ItemActResult,
   ItemInfo,
   PersonalAgentDraft,
   PersonalAgentFile,
@@ -393,12 +395,23 @@ export function stripUploadedImagePayloads(
   })
 }
 
+/** An edited message's rewind target, riding on its own prompt: the backend
+ *  cuts the agent's session back to just before the message it replaces and
+ *  admits the prompt in the same step ("edit and resend", claude-agent-acp
+ *  0.112.0 / codex-acp 2.12.0; see `crate::acp::rewind`). The message is
+ *  named by the agent's id for it and checked by its text. */
+export interface PromptRewindTarget {
+  agentMessageId: string
+  text: string
+}
+
 export async function acpPrompt(
   connectionId: string,
   blocks: PromptInputBlock[],
   folderId: number | null = null,
   conversationId: number | null = null,
-  clientMessageId: string | null = null
+  clientMessageId: string | null = null,
+  rewind: PromptRewindTarget | null = null
 ): Promise<void> {
   try {
     await getTransport().call("acp_prompt", {
@@ -412,10 +425,11 @@ export async function acpPrompt(
       folderId,
       conversationId,
       clientMessageId,
+      ...(rewind ? { rewind } : {}),
     })
   } catch (e) {
     if (isTurnInProgressRejection(e)) throw new TurnBusyError()
-    throw asConversationMovedError(e) ?? e
+    throw asConversationMovedError(e) ?? asRewindRefusedError(e) ?? e
   }
 }
 
@@ -2577,7 +2591,9 @@ export async function personalAgentSend(
   replyTo?: number | null,
   bot?: number | null,
   /** The button of the quoted reply's card it came from (9.2). */
-  card?: CardClick | null
+  card?: CardClick | null,
+  /** The assistant's question it answers (`ItemInfo.id`). */
+  answersItem?: number | null
 ): Promise<TimelineRow> {
   return getTransport().call("personal_agent_send", {
     text,
@@ -2585,6 +2601,7 @@ export async function personalAgentSend(
     replyTo: replyTo ?? null,
     botId: bot ?? null,
     card: card ?? null,
+    answersItem: answersItem ?? null,
   })
 }
 
@@ -2674,13 +2691,31 @@ export async function personalAgentItemAct(
   botId: number | null | undefined,
   itemId: number,
   act: "done" | "drop" | "later" | "snooze",
-  until?: "15m" | "1h" | "tomorrow" | (string & {})
-): Promise<ItemInfo> {
+  until?: "15m" | "1h" | "tomorrow" | (string & {}),
+  /** Where the owner did it: the activity panel (taken back with the
+   *  result's `undo`) or a card the assistant drew. */
+  from: "panel" | "card" = "panel"
+): Promise<ItemActResult> {
   return getTransport().call("personal_agent_item_act", {
     botId,
     itemId,
     act,
     until: until ?? null,
+    from,
+  })
+}
+
+/** Take back the owner's act on a matter from the panel (`undo`, the token
+ *  the act gave): within ten minutes, while nothing changed since. */
+export async function personalAgentItemUndo(
+  botId: number | null | undefined,
+  itemId: number,
+  undo: number
+): Promise<ItemInfo> {
+  return getTransport().call("personal_agent_item_undo", {
+    botId,
+    itemId,
+    undo,
   })
 }
 

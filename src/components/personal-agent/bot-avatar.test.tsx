@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
+
 import { act, cleanup, render } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -9,7 +12,7 @@ vi.mock("@/hooks/use-chat-motion", () => ({
 import { syncedDelay } from "@/lib/motion/synced-spin"
 import type { BotAvatar as BotAvatarValue } from "@/lib/types"
 
-import { BotAvatar } from "./bot-avatar"
+import { BotAvatar, faceColorOf } from "./bot-avatar"
 import {
   __activeFacesForTests,
   __resetFaceMotionForTests,
@@ -526,6 +529,24 @@ describe("a picture or a monogram for a face", () => {
     expect(el.querySelector("[data-bot-dot='unread']")).not.toBeNull()
   })
 
+  it("moves whole with its look, the ring and the dot staying put", () => {
+    const { container } = render(
+      <BotAvatar
+        avatar={{ kind: "monogram", text: "D", color: "blue" } as never}
+        name="Dev"
+        size={16}
+        look="thinking"
+        dot="unread"
+      />
+    )
+    const el = root(container)
+    expect(el.getAttribute("data-bot-look")).toBe("thinking")
+    const pic = el.querySelector(":scope > .pa-face-pic")!
+    expect(pic.querySelector("[data-slot='assistant-avatar']")).not.toBeNull()
+    expect(pic.querySelector(".pa-face-ring")).toBeNull()
+    expect(pic.querySelector("[data-bot-dot]")).toBeNull()
+  })
+
   it("is drawn as it always was when it has nothing to show", () => {
     const { container } = render(
       <BotAvatar
@@ -538,6 +559,68 @@ describe("a picture or a monogram for a face", () => {
     expect(
       container.querySelector("[data-slot='assistant-avatar']")
     ).not.toBeNull()
+  })
+})
+
+describe("the motion of a reply (globals.css)", () => {
+  const css = readFileSync(
+    resolve(process.cwd(), "src/app/globals.css"),
+    "utf8"
+  ).replace(/\/\*[\s\S]*?\*\//g, "")
+  const animated = (selector: string): string | null => {
+    const at = css.indexOf(`${selector} {`)
+    if (at < 0) return null
+    const body = css.slice(at, css.indexOf("}", at))
+    return /animation:\s*([\w-]+)/.exec(body)?.[1] ?? null
+  }
+
+  it("moves a face's body all the while it replies, thinking too", () => {
+    expect(animated('.pa-face[data-bot-look="thinking"] .pa-face-body')).toBe(
+      "pa-face-ponder"
+    )
+    expect(animated('.pa-face[data-bot-look="working"] .pa-face-body')).toBe(
+      "pa-face-bob"
+    )
+    expect(animated('.pa-face[data-bot-look="done"] .pa-face-body')).toBe(
+      "pa-face-hop"
+    )
+  })
+
+  it("moves a picture's too, and hops it once done", () => {
+    for (const [look, name] of [
+      ["thinking", "pa-pic-ponder"],
+      ["working", "pa-pic-bob"],
+      ["done", "pa-pic-hop"],
+      ["failed", "pa-pic-shake"],
+    ]) {
+      expect(animated(`.pa-face[data-bot-look="${look}"] > .pa-face-pic`)).toBe(
+        name
+      )
+      expect(css).toContain(`@keyframes ${name} {`)
+    }
+  })
+})
+
+describe("the colour an assistant's conversation takes", () => {
+  it("is its face's, or its text avatar's — the nearest face colour for an old one", () => {
+    expect(faceColorOf(face)).toBe("teal")
+    expect(faceColorOf({ kind: "monogram", color: "magenta" })).toBe("magenta")
+    expect(faceColorOf({ kind: "emoji", emoji: "🦊", color: "yellow" })).toBe(
+      "yellow"
+    )
+    expect(faceColorOf({ kind: "monogram", color: "red" })).toBe("red")
+    expect(faceColorOf({ kind: "monogram", color: "violet" })).toBe("purple")
+    expect(faceColorOf({ kind: "emoji", emoji: "🦊", color: "sky" })).toBe(
+      "blue"
+    )
+    expect(faceColorOf({ kind: "monogram", color: "slate" })).toBe("gray")
+  })
+
+  it("is none for a picture or no avatar", () => {
+    expect(
+      faceColorOf({ kind: "image", data_url: "data:image/png;base64,AA" })
+    ).toBeNull()
+    expect(faceColorOf(null)).toBeNull()
   })
 })
 

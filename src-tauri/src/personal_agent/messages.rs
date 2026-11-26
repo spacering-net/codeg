@@ -1417,7 +1417,8 @@ impl PersonalAgentEngine {
                     .unwrap_or(false)
             {
                 self.refresh_lines(m.id, "stopped").await;
-                self.drop_waiting(&m).await;
+                self.drop_waiting(&m, svc::Closing::new(svc::Closer::Owner, "withdrawn"))
+                    .await;
                 stopped_messages
                     .push(json!({ "id": m.id, "to": face, "excerpt": first_line(&m.body, 120) }));
                 self.emit_for(m.to_bot_id, PersonalAgentChange::Status);
@@ -1464,8 +1465,9 @@ impl PersonalAgentEngine {
         self.emit(PersonalAgentChange::Status);
     }
 
-    /// A stopped message's sender no longer waits for its answer.
-    pub(super) async fn drop_waiting(&self, m: &message_entity::Model) {
+    /// A stopped message's sender no longer waits for its answer (settled
+    /// so: the owner took it back, or its plan was canceled).
+    pub(super) async fn drop_waiting(&self, m: &message_entity::Model, closing: svc::Closing) {
         let Some(line) = msvc::lines_of_message(&self.db.conn, m.id)
             .await
             .unwrap_or_default()
@@ -1483,6 +1485,7 @@ impl PersonalAgentEngine {
                 ItemWrite {
                     status: Some(ItemStatus::Dropped),
                     waits_for: Some(None),
+                    closing: Some(closing),
                     ..Default::default()
                 },
             )

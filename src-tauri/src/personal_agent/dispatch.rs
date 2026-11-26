@@ -210,7 +210,7 @@ pub(super) const LIVE_STATES: &[DispatchState] = &[
 /// The round a dispatch's news was of, from its event's source key
 /// (`dispatch:<id>:<round>:<state>:<cause>`).
 /// A work assistant's keys are scoped (`bot<id>:` first).
-fn round_of_source_key(key: &str) -> Option<i32> {
+pub(super) fn round_of_source_key(key: &str) -> Option<i32> {
     let key = match key.split_once(':') {
         Some((scope, rest)) if scope.starts_with("bot") => rest,
         _ => key,
@@ -2208,6 +2208,7 @@ impl PersonalAgentEngine {
                         ItemWrite {
                             status: Some(ItemStatus::Done),
                             waits_for: Some(None),
+                            closing: Some(svc::Closing::new(svc::Closer::Owner, "dropped")),
                             ..Default::default()
                         },
                     )
@@ -2354,6 +2355,7 @@ impl PersonalAgentEngine {
                     ItemWrite {
                         status: Some(status),
                         waits_for: Some(waits_for),
+                        closing: Some(svc::Closing::new(svc::Closer::Codeg, "done")),
                         ..Default::default()
                     },
                 )

@@ -3321,6 +3321,24 @@ impl CodexParser {
         // rollouts old enough to predate `task_started`.
         let mut task_start_markers: Vec<DateTime<Utc>> = Vec::new();
         let mut turn_context_markers: Vec<DateTime<Utc>> = Vec::new();
+        // The id of the turn the latest `task_started` opened. The first user
+        // message of that turn carries it as the turn's rewind point:
+        // codex-acp 2.12.0 names the spot just before a turn `before:<turnId>`
+        // (`_session/rewind`, see `crate::acp::rewind`), and only a turn that
+        // opens with a visible user message has one. A steer later in the same
+        // turn, and a prompt in a rollout too old to write `task_started`, get
+        // none.
+        //
+        // Claimed once per CHANNEL, not once per turn: a prompt is recorded on
+        // the `event_msg` channel, as a `response_item`, or both (current codex
+        // writes text prompts as `response_item` + `item_completed` only), and
+        // `ResponseItemPromotion` decides per segment which channel's copy is
+        // kept. Each channel's first prompt of the turn names it; whichever
+        // copy survives carries the id, and a second prompt on either channel
+        // (a steer, an image record after the text) never does.
+        let mut current_turn_id: Option<String> = None;
+        let mut event_prompt_claimed = false;
+        let mut item_prompt_claimed = false;
         let mut context_window_used_tokens: Option<u64> = None;
         // Not every `token_count` reads the context: see
         // `crate::acp::codex_context`, which the live ring shares.
@@ -3690,6 +3708,14 @@ impl CodexParser {
                                     push_turn_start(&mut task_start_markers, ts);
                                 }
                                 context_readings.turn_started();
+                                current_turn_id = payload
+                                    .get("turn_id")
+                                    .and_then(|id| id.as_str())
+                                    .map(str::trim)
+                                    .filter(|id| !id.is_empty())
+                                    .map(str::to_owned);
+                                event_prompt_claimed = false;
+                                item_prompt_claimed = false;
                             }
                             "user_message" => {
                                 active_agent_count = 0;
@@ -3725,6 +3751,9 @@ impl CodexParser {
                                     && std::mem::take(&mut plan_rendered)
                                 {
                                     push_plan_review_marker(&mut messages, timestamp);
+                                    // The turn opens with a message codeg does
+                                    // not show, so it has no rewind point here.
+                                    event_prompt_claimed = true;
                                     continue;
                                 }
 
@@ -3740,6 +3769,7 @@ impl CodexParser {
                                             &async_question_calls,
                                             &calls,
                                         );
+                                        event_prompt_claimed = true;
                                         continue;
                                     }
                                 };
@@ -3775,6 +3805,15 @@ impl CodexParser {
                                     }
                                 }
 
+                                // Claimed by this record whether or not it is
+                                // shown: a turn that opens with a hidden message
+                                // has no rewind point, and the twin of a copy
+                                // the other channel already showed still opens
+                                // this channel's turn. Either way a later
+                                // prompt of the turn (a steer) must not take it.
+                                let turn_id =
+                                    claim_turn_id(&current_turn_id, &mut event_prompt_claimed);
+
                                 if blocks.is_empty() && contains_only_internal_frames(&text) {
                                     continue;
                                 }
@@ -3799,7 +3838,7 @@ impl CodexParser {
                                     duration_ms: None,
                                     model: None,
                                     completed_at: Some(timestamp),
-                                agent_message_id: None,
+                                    agent_message_id: turn_id,
                                 });
                             }
                             "agent_message" => {
@@ -5076,6 +5115,11 @@ impl CodexParser {
                                     if let Some(blocks) =
                                         extract_response_item_user_image_blocks(payload)
                                     {
+                                        // See the event channel's claim.
+                                        let turn_id = claim_turn_id(
+                                            &current_turn_id,
+                                            &mut item_prompt_claimed,
+                                        );
                                         if should_skip_duplicate_user_message(
                                             &messages, &blocks, timestamp,
                                         ) {
@@ -5103,7 +5147,7 @@ impl CodexParser {
                                             duration_ms: None,
                                             model: None,
                                             completed_at: Some(timestamp),
-                                        agent_message_id: None,
+                                            agent_message_id: turn_id,
                                         });
                                         continue;
                                     }
@@ -5163,6 +5207,7 @@ impl CodexParser {
                                                 &async_question_calls,
                                                 &calls,
                                             );
+                                            item_prompt_claimed = true;
                                             continue;
                                         }
                                     }
@@ -5234,6 +5279,14 @@ impl CodexParser {
                                     extract_codex_title_candidate(&text, true)
                                 } else {
                                     None
+                                };
+                                // A promoted prompt names its turn like the
+                                // event channel's copy does (see
+                                // `current_turn_id`).
+                                let source_id = if is_user {
+                                    claim_turn_id(&current_turn_id, &mut item_prompt_claimed)
+                                } else {
+                                    source_id
                                 };
                                 promotion.push_candidate(record_ordinal, is_user, &text);
                                 pending_promotions.push(PendingPromotedMessage {
@@ -6061,6 +6114,16 @@ fn codex_item_text(payload: &serde_json::Value) -> String {
             .filter_map(|part| part.get("text")?.as_str())
             .collect(),
         _ => String::new(),
+    }
+}
+
+/// The turn id for the first prompt a channel records in the turn, `None` for
+/// every later one (see `current_turn_id` in `parse_conversation_detail`).
+fn claim_turn_id(turn_id: &Option<String>, claimed: &mut bool) -> Option<String> {
+    if std::mem::replace(claimed, true) {
+        None
+    } else {
+        turn_id.clone()
     }
 }
 
@@ -7357,7 +7420,9 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-            agent_message_id: None,
+                // The id of the turn this message opens (see
+                // `current_turn_id`): what `_session/rewind` names it by.
+                agent_message_id: msg.agent_message_id.clone(),
             });
             i += 1;
         } else if matches!(msg.role, MessageRole::System) {
@@ -7783,6 +7848,139 @@ mod tests {
             "inherited turn once, the abandoned tail dropped, the continuation after it"
         );
         assert_eq!(detail.summary.id, thread_id);
+        // Each prompt carries the id of the turn it opens — the turn the
+        // continuation started after the revert, not the abandoned one — which
+        // is what `_session/rewind` names it by (`before:<turnId>`).
+        let user_turn_ids: Vec<Option<&str>> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .map(|t| t.agent_message_id.as_deref())
+            .collect();
+        assert_eq!(user_turn_ids, vec![Some("turn-1"), Some("turn-3")]);
+    }
+
+    /// A steer later in a turn is not the turn's opening message, so it does
+    /// not get the turn's rewind point: rewinding to it would drop the whole
+    /// turn, the message that opened it included.
+    #[test]
+    fn only_the_message_that_opens_a_turn_names_it() {
+        let lines = vec![
+            r#"{"timestamp":"2026-09-20T02:00:00.000Z","type":"session_meta","payload":{"id":"t-steer","cwd":"/tmp/work","originator":"codex_cli_rs","cli_version":"0.171.0"}}"#.to_string(),
+            r#"{"timestamp":"2026-09-20T02:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-a"}}"#.to_string(),
+            r#"{"timestamp":"2026-09-20T02:00:01.100Z","type":"event_msg","payload":{"type":"user_message","message":"first prompt"}}"#.to_string(),
+            r#"{"timestamp":"2026-09-20T02:00:02.000Z","type":"event_msg","payload":{"type":"agent_message","message":"working"}}"#.to_string(),
+            r#"{"timestamp":"2026-09-20T02:00:03.000Z","type":"event_msg","payload":{"type":"user_message","message":"a steer"}}"#.to_string(),
+            r#"{"timestamp":"2026-09-20T02:00:04.000Z","type":"event_msg","payload":{"type":"agent_message","message":"done"}}"#.to_string(),
+            r#"{"timestamp":"2026-09-20T02:00:05.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-a"}}"#.to_string(),
+            r#"{"timestamp":"2026-09-20T02:01:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-b"}}"#.to_string(),
+            r#"{"timestamp":"2026-09-20T02:01:00.100Z","type":"event_msg","payload":{"type":"user_message","message":"second prompt"}}"#.to_string(),
+        ];
+        let detail = parse_lines(&lines, "t605-steer");
+        let users: Vec<(String, Option<String>)> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .map(|t| {
+                (
+                    crate::acp::rewind::user_turn_text(t),
+                    t.agent_message_id.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            users,
+            vec![
+                ("first prompt".to_string(), Some("turn-a".to_string())),
+                ("a steer".to_string(), None),
+                ("second prompt".to_string(), Some("turn-b".to_string())),
+            ]
+        );
+    }
+
+    /// codex 0.171 writes a text prompt as a `response_item` (plus an
+    /// `item_completed`), with no `event_msg.user_message` at all (t605 live
+    /// capture, trimmed). The promoted copy is the only one, so it is the one
+    /// that has to name its turn; a second prompt in the turn does not.
+    #[test]
+    fn a_prompt_recorded_only_as_a_response_item_names_its_turn() {
+        let user_item = |ts: &str, turn: &str, text: &str| {
+            serde_json::json!({"timestamp": ts, "type": "response_item", "payload": {
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": text}],
+                "internal_chat_message_metadata_passthrough": {"turn_id": turn}}})
+            .to_string()
+        };
+        let agent_item = |ts: &str, id: &str, text: &str| {
+            serde_json::json!({"timestamp": ts, "type": "response_item", "payload": {
+                "type": "message", "role": "assistant", "id": id,
+                "content": [{"type": "output_text", "text": text}]}})
+            .to_string()
+        };
+        let event = |ts: &str, payload: serde_json::Value| {
+            serde_json::json!({"timestamp": ts, "type": "event_msg", "payload": payload}).to_string()
+        };
+        let lines = vec![
+            r#"{"timestamp":"2026-11-24T23:46:15.000Z","type":"session_meta","payload":{"id":"t-items","cwd":"/tmp/work","originator":"codeg","cli_version":"0.171.0","history_mode":"paginated"}}"#.to_string(),
+            event("2026-11-24T23:46:15.100Z", serde_json::json!({"type": "task_started", "turn_id": "turn-a"})),
+            user_item("2026-11-24T23:46:15.200Z", "turn-a", "<environment_context>\n  <cwd>/tmp/work</cwd>\n</environment_context>"),
+            user_item("2026-11-24T23:46:15.300Z", "turn-a", "PLAIN first question"),
+            agent_item("2026-11-24T23:46:15.400Z", "msg_1", "Plain answer."),
+            event("2026-11-24T23:46:15.500Z", serde_json::json!({"type": "task_complete", "turn_id": "turn-a"})),
+            event("2026-11-24T23:46:16.100Z", serde_json::json!({"type": "task_started", "turn_id": "turn-b"})),
+            user_item("2026-11-24T23:46:16.200Z", "turn-b", "PLAIN second question"),
+            agent_item("2026-11-24T23:46:16.300Z", "msg_2", "Working."),
+            user_item("2026-11-24T23:46:16.400Z", "turn-b", "a steer"),
+            agent_item("2026-11-24T23:46:16.500Z", "msg_3", "Done."),
+            event("2026-11-24T23:46:16.600Z", serde_json::json!({"type": "task_complete", "turn_id": "turn-b"})),
+        ];
+        let detail = parse_lines(&lines, "t605-items");
+        let users: Vec<(String, Option<String>)> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .map(|t| {
+                (
+                    crate::acp::rewind::user_turn_text(t),
+                    t.agent_message_id.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            users,
+            vec![
+                ("PLAIN first question".to_string(), Some("turn-a".to_string())),
+                ("PLAIN second question".to_string(), Some("turn-b".to_string())),
+                ("a steer".to_string(), None),
+            ]
+        );
+    }
+
+    /// A prompt with an image is written to both channels, the `response_item`
+    /// copy first; the event twin is dropped as a duplicate. It still opens the
+    /// event channel's turn, so a text-only steer later in the turn — even one
+    /// repeating the caption — does not take the turn's rewind point.
+    #[test]
+    fn a_deduped_event_twin_still_claims_its_turn() {
+        let image = "data:image/png;base64,AAAA";
+        let lines = vec![
+            r#"{"timestamp":"2026-03-01T10:00:00Z","type":"session_meta","payload":{"id":"t-twin","cwd":"/tmp/demo"}}"#.to_string(),
+            serde_json::json!({"timestamp": "2026-03-01T10:00:00.500Z", "type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-a"}}).to_string(),
+            serde_json::json!({"timestamp": "2026-03-01T10:00:01Z", "type": "response_item", "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "look at this"}, {"type": "input_image", "image_url": image}]}}).to_string(),
+            serde_json::json!({"timestamp": "2026-03-01T10:00:01Z", "type": "event_msg", "payload": {"type": "user_message", "message": "look at this", "images": [image]}}).to_string(),
+            serde_json::json!({"timestamp": "2026-03-01T10:00:02Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "working"}}).to_string(),
+            serde_json::json!({"timestamp": "2026-03-01T10:00:03Z", "type": "event_msg", "payload": {"type": "user_message", "message": "look at this"}}).to_string(),
+            serde_json::json!({"timestamp": "2026-03-01T10:00:04Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "done"}}).to_string(),
+        ];
+        let detail = parse_lines(&lines, "t605-twin");
+        let users: Vec<Option<String>> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .map(|t| t.agent_message_id.clone())
+            .collect();
+        assert_eq!(users, vec![Some("turn-a".to_string()), None]);
     }
 
     /// Both rollouts of a reverted thread carry its id, but only the current

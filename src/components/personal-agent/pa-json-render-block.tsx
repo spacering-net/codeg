@@ -136,6 +136,7 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { BotAvatar } from "./bot-avatar"
 import { ExchangeSheet } from "./exchange-sheet"
+import { useMatterError } from "./matter-text"
 import { usePaCardScope } from "./pa-card-scope"
 import {
   LIST_ROW,
@@ -636,6 +637,7 @@ function PaCard({
   streaming: boolean
 }) {
   const t = useTranslations("PersonalAgent.card")
+  const errorText = useMatterError()
   const scope = usePaCardScope()!
   const page = usePageScope()
   const { botId, itemVersion, dispatchById, snapshot } = usePersonalAgent()
@@ -796,7 +798,7 @@ function PaCard({
     inFlight.current.add(elementId)
     setBusy(new Set(inFlight.current))
     work()
-      .catch((e) => toast.error(toErrorMessage(e)))
+      .catch((e) => toast.error(errorText(e)))
       .finally(() => {
         inFlight.current.delete(elementId)
         setBusy(new Set(inFlight.current))
@@ -819,10 +821,11 @@ function PaCard({
   ) => {
     const { scope: s, botId: bot } = latest.current
     track(elementId, async () => {
+      // A card's press is kept on the card: not taken back with [Undo].
       if (op === "snooze" && until) {
-        await personalAgentItemAct(bot, item.id, "snooze", until)
+        await personalAgentItemAct(bot, item.id, "snooze", until, "card")
       } else {
-        await personalAgentItemAct(bot, item.id, op)
+        await personalAgentItemAct(bot, item.id, op, undefined, "card")
       }
       await personalAgentCardAct(bot, s.rowId, elementId, {
         action: PA_ITEM,

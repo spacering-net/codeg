@@ -2406,6 +2406,10 @@
       "forkSessionSuccess": "Sessão bifurcada com sucesso",
       "forkSessionFailed": "Falha ao bifurcar a sessão: {error}",
       "forkSessionBusy": "Falha ao bifurcar: há um turno em andamento",
+      "editMessageRefused": "Não foi possível editar a mensagem: {reason, select, busy {o agente ainda está trabalhando} backgroundWork {ainda há trabalho em segundo plano em execução} beforeCompaction {a mensagem é anterior à compactação da conversa} clearedContext {a conversa foi limpa depois dela} unavailable {o agente não consegue voltar a esta mensagem} other {o agente recusou}}",
+      "editMessageBusy": "Não foi possível editar a mensagem: há um turno em execução",
+      "editMessageFailed": "Não foi possível editar a mensagem: {error}",
+      "editMessageQueued": "Não foi possível editar a mensagem: envie ou remova primeiro as mensagens na fila",
       "exportConversation": "Exportar conversa",
       "exportImage": "Imagem",
       "exportMarkdown": "Markdown",
@@ -3905,6 +3909,11 @@
         "systemMessage": "Mensagem do sistema",
         "turnFailed": "O turno falhou: {message}",
         "copyMessage": "Copiar",
+        "editMessage": "Editar mensagem",
+        "editMessageBusy": "Aguarde o fim da resposta para editar",
+        "editMessageHint": "Tudo depois desta mensagem é substituído",
+        "editMessageCancel": "Cancelar",
+        "editMessageSend": "Enviar",
         "forkFromHere": "Bifurcar a partir daqui",
         "forkBusy": "Não é possível bifurcar enquanto há um turno em andamento",
         "forkNotReady": "Ainda não é possível bifurcar a partir desta resposta; tente novamente em instantes",
@@ -10341,13 +10350,6 @@
     "items": {
       "waitingAnswer": "Aguardando a resposta de {name}: {text}",
       "wroteToYou": "{name} escreveu: {text}",
-      "waits": {
-        "owner": "Aguardando você",
-        "agent": "Com o agente",
-        "external": "Em andamento",
-        "time": "Mais tarde",
-        "none": "Outras"
-      },
       "kind": {
         "dispatch": "atribuição",
         "reminder": "lembrete",
@@ -11266,7 +11268,8 @@
       "jump": "Ir para a mensagem original",
       "dismiss": "Remover a citação",
       "preview": "Mensagem original",
-      "previewHint": "A mensagem citada, antiga demais para ser carregada aqui."
+      "previewHint": "A mensagem citada, antiga demais para ser carregada aqui.",
+      "reminder": "Lembrete: {summary}"
     },
     "step": {
       "awaiting": "Aguardando sua confirmação: {title}",
@@ -11805,7 +11808,10 @@
       "loading": "Carregando os passos…",
       "empty": "Ainda sem passos",
       "fold": "Ocultar os passos",
-      "openWork": "Abrir o trabalho"
+      "openWork": "Abrir o trabalho",
+      "replied": "Respondido",
+      "workDone": "Trabalho concluído",
+      "notFinished": "Não terminou"
     },
     "sending": {
       "waking": "Acordando {name}…",
@@ -11836,13 +11842,6 @@
       "notify": "Avisar-me",
       "notifyHint": "Quando terminar algo ou estiver esperando você",
       "item": {
-        "done": "Concluído",
-        "later": "Mais tarde",
-        "drop": "Descartar",
-        "in15m": "Em 15 min",
-        "in1h": "Em 1 hora",
-        "tomorrow": "Amanhã de manhã",
-        "untimed": "Sem hora definida",
         "act": "Faz na hora"
       },
       "output": {
@@ -12009,8 +12008,8 @@
       "snooze15m": "Em 15 min",
       "snooze1h": "Em 1 hora",
       "snoozeTomorrow": "Amanhã de manhã",
-      "handOver": "Passar ao assistente",
-      "handOverText": "Cuide do lembrete #{id}: {summary}",
+      "handOver": "Passar para {name}",
+      "handOverText": "Cuide deste lembrete: {summary}",
       "state": {
         "done": "Concluído",
         "snoozed": "Adiado para {when}",
@@ -12036,7 +12035,6 @@
       "handed": "Entregue a {name}",
       "checking": "Em verificação · rodada {round}",
       "queued": "na fila para mesclar",
-      "waitsAgent": "Aguardando {name} cuidar disso",
       "routineRunning": "Em execução",
       "routineLast": "Última execução: {outcome}",
       "fold": "Ocultar detalhes",
@@ -13040,6 +13038,121 @@
       "title": "{name} ainda não tem cérebro",
       "body": "Ele veio das configurações de colaboração. Configure o assistente principal e ele recebe uma cópia do cérebro do principal; aí você pode conversar com ele. Até lá, ainda dá para @mencioná-lo nas conversas.",
       "setUp": "Configurar o assistente principal"
+    },
+    "matter": {
+      "act": {
+        "done": "Concluído",
+        "doneThis": "Concluído por agora",
+        "doneEarly": "Concluir antes",
+        "skipThis": "Pular desta vez",
+        "merged": "Mesclado",
+        "ack": "Entendi",
+        "snooze": "Adiar",
+        "setTime": "Definir horário",
+        "in15m": "Em 15 min",
+        "in1h": "Em 1 hora",
+        "tomorrow": "Amanhã de manhã",
+        "handOver": "Passar para {name}",
+        "answer": "Responder",
+        "drop": "Não precisa mais",
+        "stop": "Parar de lembrar",
+        "undo": "Desfazer"
+      },
+      "hint": {
+        "doneNext": "Concluído desta vez; depois segue igual: {rule}",
+        "skipNext": "Pulado desta vez; depois segue igual: {rule}",
+        "snoozeNotify": "Você é lembrado de novo nesse horário",
+        "snoozeAct": "{name} faz nesse horário",
+        "setTimeNotify": "Você é lembrado nesse horário",
+        "setTimeAct": "{name} faz nesse horário",
+        "handOver": "{name} cuida disso",
+        "answer": "Responder na conversa com {name}",
+        "drop": "Tira da lista; {name} para de acompanhar",
+        "dropQuestion": "Não precisa responder; {name} será avisado",
+        "dropMessage": "Retira a mensagem; se não der mais, {name} para de esperar a resposta de {peer}",
+        "stop": "Sem mais lembretes",
+        "merged": "Avisa {name} que o pull request foi mesclado",
+        "ack": "Tira da lista"
+      },
+      "toast": {
+        "done": "Concluído: {title}",
+        "doneNext": "Concluído desta vez — próxima {when}",
+        "doneEnded": "Concluído — era a última vez",
+        "skipNext": "Pulado desta vez — próxima {when}",
+        "skipEnded": "Pulado — era a última vez",
+        "snoozeNotify": "Você será lembrado {when}",
+        "snoozeAct": "{name} faz {when}",
+        "dropped": "Removido: {title}",
+        "withdrawn": "A mensagem para {peer} foi retirada",
+        "notWithdrawn": "A mensagem não foi retirada; {name} não espera mais a resposta de {peer}",
+        "stopped": "Sem mais lembretes: {title}",
+        "handed": "Passado para {name}",
+        "undone": "Desfeito"
+      },
+      "meta": {
+        "reminds": "{name} lembra você · para {when}",
+        "remindsLate": "{name} lembra você · para {when}, há {late}",
+        "willRemind": "{name} lembra você {when}",
+        "willDo": "{name} faz {when}",
+        "repeats": "{name} lembra você: {rule} · próxima {when}",
+        "asks": "{name} pergunta a você · esperando há {wait}",
+        "asked": "{name} pergunta a você",
+        "answered": "Você respondeu · esperando {name} ler",
+        "interrupted": "O turno de {name} não terminou e talvez sua resposta não tenha sido lida · responda de novo se precisar",
+        "needsYou": "{name} precisa de você · esperando há {wait}",
+        "following": "{name} está acompanhando · {wait}",
+        "external": "{name} espera algo externo · {wait}",
+        "message": "{name} espera a resposta de {peer} · {wait}",
+        "setAside": "Deixado de lado · sem horário",
+        "mention": "Quando você mencionar {words}, {name} lembra você · {times} de {max} vezes · até {until}",
+        "justNow": "agora mesmo",
+        "someone": "o outro assistente"
+      },
+      "closed": {
+        "done": "Você concluiu · {time}",
+        "dropped": "Você removeu · {time}",
+        "withdrawn": "Você retirou a mensagem para {peer} · {time}",
+        "stoppedWaiting": "Você parou de esperar a resposta de {peer} · {time}",
+        "agentDone": "{name} concluiu · {time}",
+        "agentDropped": "{name} parou de acompanhar · {time}",
+        "answered": "{name} leu sua resposta · {time}",
+        "replied": "{peer} respondeu · {time}",
+        "gone": "{peer} foi excluído; não virá resposta · {time}",
+        "planCanceled": "O plano foi cancelado; {name} não espera mais a resposta de {peer} · {time}",
+        "usedUp": "O lembrete por menção se esgotou · {time}",
+        "expired": "O lembrete por menção expirou · {time}",
+        "ended": "Encerrado · {time}"
+      }
+    },
+    "matterErrors": {
+      "gone": "Isto não existe mais",
+      "settled": "Isto já terminou",
+      "changed": "Isto acabou de mudar — dê outra olhada",
+      "workRunning": "Este trabalho ainda está em andamento; para pará-lo use Parar na barra da tarefa",
+      "workNoTime": "Trabalho repassado não pode ser adiado para um horário",
+      "messageNoTime": "Isto espera a resposta de {peer} e não pode ser adiado para um horário",
+      "mentionNoTime": "Isto aparece quando você menciona, não em um horário",
+      "notEarlier": "Isto já está marcado para {when}; adiar só move para mais tarde",
+      "hasTime": "Isto já está marcado para {when}",
+      "inOtherHands": "Isto está com {bot} e não pode ser adiado para um horário",
+      "badTime": "Esse horário não foi entendido",
+      "undoNone": "Isto não pode ser desfeito",
+      "undoExpired": "Passaram mais de 10 minutos; não dá mais para desfazer",
+      "undoFired": "O lembrete acabou de chegar; não dá mais para desfazer",
+      "undoChanged": "Isto acabou de mudar; não dá mais para desfazer",
+      "undoReplied": "{peer} já respondeu; não dá mais para desfazer",
+      "undoPeerGone": "{peer} foi excluído; não dá mais para desfazer",
+      "undoAnswerRead": "{bot} já leu sua resposta; não dá mais para desfazer",
+      "answerChanged": "A pergunta acabou de mudar. A mensagem não foi enviada; seu texto continua na caixa",
+      "answerQueued": "Esta pergunta está na fila para {bot} atender. Para complementar, remova “Responder” e envie como mensagem normal",
+      "reminderAnswered": "Este lembrete já foi atendido"
+    },
+    "answer": {
+      "bar": "Resposta: {question}",
+      "dismiss": "Não enviar como resposta",
+      "label": "Resposta: {question}",
+      "ended": "Esta pergunta já terminou; não precisa responder",
+      "alreadyAnswered": "Esta pergunta já está esperando {name} ler sua resposta"
     }
   },
   "MessageCheck": {

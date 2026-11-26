@@ -2406,6 +2406,10 @@
       "forkSessionSuccess": "セッションのフォークに成功しました",
       "forkSessionFailed": "セッションのフォークに失敗しました：{error}",
       "forkSessionBusy": "分岐に失敗しました: ターンの実行中です",
+      "editMessageRefused": "メッセージを編集できません：{reason, select, busy {エージェントがまだ作業中です} backgroundWork {バックグラウンド処理が実行中です} beforeCompaction {会話の圧縮より前のメッセージです} clearedContext {このメッセージの後に会話がクリアされています} unavailable {エージェントはこのメッセージに戻れません} other {エージェントが拒否しました}}",
+      "editMessageBusy": "メッセージを編集できません：ターンが実行中です",
+      "editMessageFailed": "メッセージを編集できません：{error}",
+      "editMessageQueued": "メッセージを編集できません：先にキュー内のメッセージを送信または削除してください",
       "exportConversation": "会話をエクスポート",
       "exportImage": "画像",
       "exportMarkdown": "Markdown",
@@ -3905,6 +3909,11 @@
         "systemMessage": "システムメッセージ",
         "turnFailed": "このターンは失敗しました：{message}",
         "copyMessage": "コピー",
+        "editMessage": "メッセージを編集",
+        "editMessageBusy": "返信が終わってから編集してください",
+        "editMessageHint": "このメッセージ以降の内容は置き換えられます",
+        "editMessageCancel": "キャンセル",
+        "editMessageSend": "送信",
         "forkFromHere": "ここから分岐",
         "forkBusy": "ターンの実行中は分岐できません",
         "forkNotReady": "この返信からはまだ分岐できません。少し待ってからお試しください",
@@ -10341,13 +10350,6 @@
     "items": {
       "waitingAnswer": "{name} の返事待ち：{text}",
       "wroteToYou": "{name} からのメッセージ：{text}",
-      "waits": {
-        "owner": "あなたの対応待ち",
-        "agent": "エージェント待ち",
-        "external": "進行中",
-        "time": "後で",
-        "none": "その他"
-      },
       "kind": {
         "dispatch": "依頼",
         "reminder": "リマインダー",
@@ -11266,7 +11268,8 @@
       "jump": "元のメッセージへ移動",
       "dismiss": "引用を外す",
       "preview": "元のメッセージ",
-      "previewHint": "引用されたメッセージ。古すぎるためここには読み込まれていません。"
+      "previewHint": "引用されたメッセージ。古すぎるためここには読み込まれていません。",
+      "reminder": "リマインダー：{summary}"
     },
     "step": {
       "awaiting": "確認待ち：{title}",
@@ -11805,7 +11808,10 @@
       "loading": "ステップを読み込み中…",
       "empty": "まだステップはありません",
       "fold": "ステップを折りたたむ",
-      "openWork": "この作業を開く"
+      "openWork": "この作業を開く",
+      "replied": "返信しました",
+      "workDone": "作業が完了しました",
+      "notFinished": "完了できませんでした"
     },
     "sending": {
       "waking": "{name} を起こしています…",
@@ -11836,13 +11842,6 @@
       "notify": "通知する",
       "notifyHint": "何かを終えたときや、あなたを待っているときに通知します",
       "item": {
-        "done": "完了",
-        "later": "後で",
-        "drop": "やめる",
-        "in15m": "15 分後",
-        "in1h": "1 時間後",
-        "tomorrow": "明日の午前",
-        "untimed": "時間を決めない",
         "act": "時間になったら実行"
       },
       "output": {
@@ -12009,8 +12008,8 @@
       "snooze15m": "15 分後",
       "snooze1h": "1 時間後",
       "snoozeTomorrow": "明日の午前",
-      "handOver": "アシスタントに任せる",
-      "handOverText": "リマインダー #{id} を処理して：{summary}",
+      "handOver": "{name}に任せる",
+      "handOverText": "このリマインダーを対応して：{summary}",
       "state": {
         "done": "完了しました",
         "snoozed": "{when} に延期",
@@ -12036,7 +12035,6 @@
       "handed": "{name}に任せました",
       "checking": "検収中 · 第 {round} ラウンド",
       "queued": "マージ待ち",
-      "waitsAgent": "{name}の対応待ち",
       "routineRunning": "実行中",
       "routineLast": "前回：{outcome}",
       "fold": "詳細を閉じる",
@@ -13040,6 +13038,121 @@
       "title": "{name} にはまだ頭脳がありません",
       "body": "コラボレーション設定から移行したアシスタントです。メインアシスタントを設定すると、メインの頭脳のコピーを受け取り、会話できるようになります。それまでも会話で @ することはできます。",
       "setUp": "メインアシスタントを設定"
+    },
+    "matter": {
+      "act": {
+        "done": "完了",
+        "doneThis": "今回は完了",
+        "doneEarly": "前倒しで完了",
+        "skipThis": "今回はスキップ",
+        "merged": "マージ済み",
+        "ack": "了解",
+        "snooze": "延期",
+        "setTime": "時間を設定",
+        "in15m": "15 分後",
+        "in1h": "1 時間後",
+        "tomorrow": "明日の午前",
+        "handOver": "{name}に任せる",
+        "answer": "回答する",
+        "drop": "不要",
+        "stop": "今後は知らせない",
+        "undo": "元に戻す"
+      },
+      "hint": {
+        "doneNext": "今回は完了、以降はいつもどおり：{rule}",
+        "skipNext": "今回はスキップ、以降はいつもどおり：{rule}",
+        "snoozeNotify": "その時間にもう一度知らせます",
+        "snoozeAct": "その時間に{name}が対応します",
+        "setTimeNotify": "その時間に知らせます",
+        "setTimeAct": "その時間に{name}が対応します",
+        "handOver": "{name}に対応してもらいます",
+        "answer": "{name}との会話で回答します",
+        "drop": "リストから外し、{name}は追わなくなります",
+        "dropQuestion": "この質問には答えなくて大丈夫です。{name}に伝えます",
+        "dropMessage": "メッセージを取り消します。間に合わない場合、{name}は{peer}の返事を待たなくなります",
+        "stop": "今後は知らせません",
+        "merged": "この PR がマージされたことを{name}に伝えます",
+        "ack": "リストから外します"
+      },
+      "toast": {
+        "done": "完了しました：{title}",
+        "doneNext": "今回は完了、次は {when}",
+        "doneEnded": "完了しました。このリマインダーはこれで終わりです",
+        "skipNext": "今回はスキップ、次は {when}",
+        "skipEnded": "スキップしました。このリマインダーはこれで終わりです",
+        "snoozeNotify": "{when} に知らせます",
+        "snoozeAct": "{name}が {when} に対応します",
+        "dropped": "外しました：{title}",
+        "withdrawn": "{peer}へのメッセージを取り消しました",
+        "notWithdrawn": "メッセージは取り消せませんでした。{name}は{peer}の返事を待たなくなりました",
+        "stopped": "今後は知らせません：{title}",
+        "handed": "{name}に任せました",
+        "undone": "元に戻しました"
+      },
+      "meta": {
+        "reminds": "{name}からのお知らせ · {when} の予定",
+        "remindsLate": "{name}からのお知らせ · {when} の予定、{late} 経過",
+        "willRemind": "{name}が {when} に知らせます",
+        "willDo": "{name}が {when} に対応します",
+        "repeats": "{name}からのお知らせ：{rule} · 次は {when}",
+        "asks": "{name}からの質問 · {wait} 待っています",
+        "asked": "{name}からの質問",
+        "answered": "回答済み · {name}が読むのを待っています",
+        "interrupted": "{name}のターンが終わらず、回答を読めていないかもしれません · 必要ならもう一度回答してください",
+        "needsYou": "{name}があなたの対応を待っています · {wait}",
+        "following": "{name}がフォロー中 · {wait}",
+        "external": "{name}が外部の結果を待っています · {wait}",
+        "message": "{name}が{peer}の返事を待っています · {wait}",
+        "setAside": "保留中 · 時間未設定",
+        "mention": "{words}と言ったときに{name}が知らせます · {times}/{max} 回 · {until} まで",
+        "justNow": "たった今",
+        "someone": "相手"
+      },
+      "closed": {
+        "done": "あなたが完了 · {time}",
+        "dropped": "あなたが外しました · {time}",
+        "withdrawn": "{peer}へのメッセージを取り消しました · {time}",
+        "stoppedWaiting": "{peer}の返事を待つのをやめました · {time}",
+        "agentDone": "{name}が完了 · {time}",
+        "agentDropped": "{name}が追うのをやめました · {time}",
+        "answered": "{name}があなたの回答を読みました · {time}",
+        "replied": "{peer}が返事をしました · {time}",
+        "gone": "{peer}は削除されたため、返事は来ません · {time}",
+        "planCanceled": "計画が取り消され、{name}は{peer}の返事を待たなくなりました · {time}",
+        "usedUp": "言及時のリマインダーを使い切りました · {time}",
+        "expired": "言及時のリマインダーの期限が切れました · {time}",
+        "ended": "終了 · {time}"
+      }
+    },
+    "matterErrors": {
+      "gone": "これはもうありません",
+      "settled": "これはもう終わっています",
+      "changed": "これはさっき変わりました。もう一度確認してください",
+      "workRunning": "この作業はまだ進行中です。止めるにはタスクバーの「停止」を使ってください",
+      "workNoTime": "任せた作業は時間で延期できません",
+      "messageNoTime": "これは{peer}の返事待ちなので、時間で延期できません",
+      "mentionNoTime": "これは言及したときに出てくるもので、時間では知らせません",
+      "notEarlier": "これはもともと {when} に設定されています。延期は後ろにしかできません",
+      "hasTime": "これはもう {when} に設定されています",
+      "inOtherHands": "これは{bot}が対応中なので、時間で延期できません",
+      "badTime": "その時間がわかりませんでした",
+      "undoNone": "この操作は元に戻せません",
+      "undoExpired": "10 分以上たったので、元に戻せません",
+      "undoFired": "さっき知らせたので、元に戻せません",
+      "undoChanged": "これはさっき変わったので、元に戻せません",
+      "undoReplied": "{peer}がもう返事をしたので、元に戻せません",
+      "undoPeerGone": "{peer}は削除されたので、元に戻せません",
+      "undoAnswerRead": "{bot}がもう回答を読んだので、元に戻せません",
+      "answerChanged": "この質問はさっき変わりました。メッセージは送られず、内容は入力欄に残っています",
+      "answerQueued": "この質問は{bot}の対応待ちに入りました。補足するには「回答」を外してそのまま送ってください",
+      "reminderAnswered": "このリマインダーはもう対応済みです"
+    },
+    "answer": {
+      "bar": "回答：{question}",
+      "dismiss": "回答として送らない",
+      "label": "回答：{question}",
+      "ended": "この質問はもう終わっています。回答は不要です",
+      "alreadyAnswered": "この質問はもう{name}が読むのを待っています。回答は不要です"
     }
   },
   "MessageCheck": {
