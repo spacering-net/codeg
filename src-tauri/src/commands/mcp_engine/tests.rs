@@ -52,6 +52,7 @@ impl Sandbox {
         let ctx = EngineCtx {
             paths,
             lock_path: dir.path().join("locks").join("mcp.lock"),
+            paused_path: dir.path().join("mcp-paused.json"),
             backup_root: dir.path().join("backups"),
             lock_wait: super::lock::LOCK_WAIT,
         };
@@ -75,7 +76,10 @@ impl Sandbox {
     }
 
     fn basis(&self, app: McpAppType) -> String {
-        fsio::basis_of(fsio::read_bytes(&self.path(app)).unwrap().as_deref())
+        let bytes = fsio::read_bytes(&self.path(app)).unwrap();
+        let native = fsio::basis_of(bytes.as_deref());
+        let paused = super::paused::PausedFile::read(&self.ctx.paused_path).ok();
+        super::paused::basis(&native, paused.as_ref().and_then(|file| file.entries(app)))
     }
 
     fn agent(&self, app: McpAppType) -> McpAgentInventory {
@@ -334,7 +338,8 @@ fn every_agent_is_listed_with_its_file_and_its_ways() {
     assert_eq!(claude.config.related[0].role, "plugin_gate");
     assert!(claude.writable);
     assert_eq!(claude.delivery, McpDelivery::CodegSession);
-    assert!(!claude.can_disable);
+    assert!(claude.can_disable);
+    assert_eq!(claude.disable_mode, McpDisableMode::CodegPause);
     assert!(claude.codeg_mcp);
     assert_eq!(
         claude.transports,
@@ -909,18 +914,17 @@ async fn an_entry_is_turned_off_with_the_agents_own_flag_and_kept() {
         McpAgentStatus::Unchanged
     );
 
-    // An agent with no flag of its own says so, and nothing is written.
-    sandbox.write(McpAppType::ClaudeCode, CLAUDE);
+    // A scan-only agent stops the transaction for every participant.
     let refused = sandbox
         .apply(vec![
-            enable(McpAppType::ClaudeCode, "linear", false),
+            enable(McpAppType::OpenClaw, "x", false),
             enable(McpAppType::Cline, "x", false),
         ])
         .await;
     assert_eq!(refused.outcome, McpApplyOutcome::Invalid);
     assert_eq!(
-        issue_codes(result_of(&refused, McpAppType::ClaudeCode)),
-        [codes::DISABLE_UNSUPPORTED]
+        issue_codes(result_of(&refused, McpAppType::OpenClaw)),
+        [codes::AGENT_READ_ONLY]
     );
     assert_eq!(
         result_of(&refused, McpAppType::Cline).status,
@@ -3128,6 +3132,7 @@ async fn results_and_the_inventory_are_shaped_for_the_page() {
             "transports": ["stdio", "http", "sse"],
             "delivery": "agent_file",
             "can_disable": true,
+            "disable_mode": "native",
             "codeg_mcp": false,
             "session_capabilities": null,
             "entries": [{
@@ -3173,4 +3178,230 @@ async fn results_and_the_inventory_are_shaped_for_the_page() {
             }]
         })
     );
+}
+
+#[tokio::test]
+async fn soft_pause_and_resume_move_two_agents_in_one_transaction() {
+    let sandbox = Sandbox::new();
+    let claude = McpAppType::ClaudeCode;
+    let antigravity = McpAppType::Antigravity;
+    sandbox.write(claude, CLAUDE);
+    write(
+        &sandbox.gate(claude),
+        r#"{"enabledPlugins":{"linear@local":true,"other@local":true}}"#,
+    );
+    let definition = stdio("npx", &["-y", "sample"], &[("TOKEN", "test-credential")]);
+    assert!(
+        sandbox
+            .apply(vec![set(antigravity, "demo", definition.clone())])
+            .await
+            .ok
+    );
+    for app in [antigravity, claude, McpAppType::Gemini, McpAppType::Cursor] {
+        let agent = sandbox.agent(app);
+        assert!(agent.can_disable);
+        assert_eq!(agent.disable_mode, McpDisableMode::CodegPause);
+    }
+    let ops = vec![
+        enable(antigravity, "demo", false),
+        enable(claude, "linear", false),
+    ];
+    let mut preflight = sandbox.request(ops.clone());
+    preflight.preflight = true;
+    let result = apply_in(&sandbox.ctx, &preflight).await;
+    assert!(result.ok, "{result:?}");
+    assert!(!sandbox.ctx.paused_path.exists());
+    assert!(sandbox.entry(claude, "linear").enabled);
+
+    let result = sandbox.apply(ops.clone()).await;
+    assert!(result.ok, "{result:?}");
+    assert_eq!(apply::changed_agents(&result), [antigravity, claude]);
+    assert!(!sandbox.read(antigravity).unwrap().contains("demo"));
+    assert!(!sandbox.read(claude).unwrap().contains("linear"));
+    let gate = parse_json(&std::fs::read_to_string(sandbox.gate(claude)).unwrap());
+    assert_eq!(gate["enabledPlugins"], json!({"other@local": true}));
+    let paused = sandbox.entry(antigravity, "demo");
+    assert!(
+        paused.paused && !paused.enabled && !paused.read_only && !paused.reserved && !paused.legacy
+    );
+    assert_eq!(paused.definition.as_ref(), Some(&definition));
+    assert_eq!(
+        paused.fingerprint.as_deref(),
+        Some(definition.fingerprint().as_str())
+    );
+    assert_eq!(
+        result_of(&result, antigravity).basis,
+        sandbox.agent(antigravity).config.basis
+    );
+    let raw = parse_json(&std::fs::read_to_string(&sandbox.ctx.paused_path).unwrap());
+    assert_eq!(raw["version"], 1);
+    assert_eq!(
+        raw["entries"]["antigravity"]["demo"]["definition"],
+        json!(definition)
+    );
+    assert!(chrono::DateTime::parse_from_rfc3339(
+        raw["entries"]["claude_code"]["linear"]["paused_at"]
+            .as_str()
+            .unwrap()
+    )
+    .is_ok());
+    assert!(sandbox
+        .apply(ops)
+        .await
+        .agents
+        .iter()
+        .all(|agent| agent.status == McpAgentStatus::Unchanged));
+
+    let ops = vec![
+        enable(antigravity, "demo", true),
+        enable(claude, "linear", true),
+    ];
+    let resumed = sandbox.apply(ops.clone()).await;
+    assert!(resumed.ok, "{resumed:?}");
+    assert!(resumed
+        .agents
+        .iter()
+        .all(|agent| agent.ops[0].effect == McpOpEffect::Enabled));
+    assert_eq!(
+        sandbox.entry(antigravity, "demo").definition,
+        Some(definition)
+    );
+    assert!(!sandbox.entry(claude, "linear").paused);
+    let gate = parse_json(&std::fs::read_to_string(sandbox.gate(claude)).unwrap());
+    assert_eq!(
+        gate["enabledPlugins"],
+        json!({"linear@local": true, "other@local": true})
+    );
+    let raw = parse_json(&std::fs::read_to_string(&sandbox.ctx.paused_path).unwrap());
+    assert_eq!(raw["entries"], json!({}));
+    assert!(sandbox
+        .apply(ops)
+        .await
+        .agents
+        .iter()
+        .all(|agent| agent.status == McpAgentStatus::Unchanged));
+}
+
+#[tokio::test]
+async fn paused_renames_check_both_stores_and_stale_basis() {
+    let sandbox = Sandbox::new();
+    let app = McpAppType::Cursor;
+    let definition = stdio("server", &[], &[]);
+    assert!(
+        sandbox
+            .apply(vec![
+                set(app, "first", definition.clone()),
+                set(app, "second", definition.clone()),
+                set(app, "live", definition),
+                enable(app, "first", false),
+                enable(app, "second", false),
+            ])
+            .await
+            .ok
+    );
+    for key in ["second", "live"] {
+        let result = sandbox.apply(vec![rename(app, "first", key)]).await;
+        assert_eq!(issue_codes(result_of(&result, app)), [codes::KEY_EXISTS]);
+    }
+    let stale = sandbox.request(vec![remove(app, "first")]);
+    let renamed = sandbox.apply(vec![rename(app, "first", "third")]).await;
+    assert_eq!(result_of(&renamed, app).status, McpAgentStatus::Written);
+    assert_eq!(result_of(&renamed, app).writes[0].role, "paused");
+    assert!(sandbox.entry(app, "third").paused);
+    assert_eq!(
+        apply_in(&sandbox.ctx, &stale).await.outcome,
+        McpApplyOutcome::ChangedElsewhere
+    );
+    let removed = sandbox.apply(vec![remove(app, "third")]).await;
+    assert_eq!(result_of(&removed, app).status, McpAgentStatus::Written);
+    assert!(!sandbox
+        .agent(app)
+        .entries
+        .iter()
+        .any(|entry| entry.key == "third"));
+}
+
+#[tokio::test]
+async fn out_of_band_live_entry_takes_priority_and_set_clears_its_old_pause() {
+    let sandbox = Sandbox::new();
+    let app = McpAppType::Cursor;
+    let definition = stdio("old", &[], &[]);
+    assert!(
+        sandbox
+            .apply(vec![
+                set(app, "demo", definition),
+                enable(app, "demo", false)
+            ])
+            .await
+            .ok
+    );
+    sandbox.write(app, r#"{"mcpServers":{"demo":{"command":"new"}}}"#);
+    let live = sandbox.entry(app, "demo");
+    assert!(live.enabled && !live.paused);
+    assert_eq!(live.definition, Some(stdio("new", &[], &[])));
+    assert_eq!(
+        sandbox.apply(vec![enable(app, "demo", true)]).await.agents[0].status,
+        McpAgentStatus::Unchanged
+    );
+    assert_eq!(
+        sandbox
+            .apply(vec![set(app, "demo", stdio("new", &[], &[]))])
+            .await
+            .agents[0]
+            .status,
+        McpAgentStatus::Written
+    );
+    sandbox.write(app, r#"{"mcpServers":{}}"#);
+    assert!(sandbox.agent(app).entries.is_empty());
+}
+
+#[tokio::test]
+async fn resume_preserves_agent_specific_settings() {
+    let sandbox = Sandbox::new();
+    let app = McpAppType::Cursor;
+    sandbox.write(
+        app,
+        r#"{"mcpServers":{"demo":{"command":"node","envFile":"/private/demo.env"}}}"#,
+    );
+    assert!(sandbox.apply(vec![enable(app, "demo", false)]).await.ok);
+    assert_eq!(
+        sandbox.entry(app, "demo").extra["envFile"],
+        "/private/demo.env"
+    );
+    assert!(sandbox.apply(vec![enable(app, "demo", true)]).await.ok);
+    assert_eq!(
+        sandbox.entry(app, "demo").extra["envFile"],
+        "/private/demo.env"
+    );
+}
+
+#[tokio::test]
+async fn cannot_pause_an_opaque_definition() {
+    let sandbox = Sandbox::new();
+    let app = McpAppType::ClaudeCode;
+    let original = r#"{"mcpServers":{"opaque":{"timeout":30}}}"#;
+    sandbox.write(app, original);
+    let result = sandbox.apply(vec![enable(app, "opaque", false)]).await;
+    assert_eq!(
+        issue_codes(result_of(&result, app)),
+        [codes::ENTRY_NOT_EDITABLE]
+    );
+    assert_eq!(sandbox.read(app).as_deref(), Some(original));
+    assert!(!sandbox.ctx.paused_path.exists());
+}
+
+#[tokio::test]
+async fn a_paused_file_write_failure_rolls_back_native_and_gate_files() {
+    let sandbox = Sandbox::new();
+    let app = McpAppType::ClaudeCode;
+    let gate = r#"{"enabledPlugins":{"linear@local":true}}"#;
+    sandbox.write(app, CLAUDE);
+    write(&sandbox.gate(app), gate);
+    let _hooks = HooksGuard;
+    hooks::fail_write_of(Some(sandbox.ctx.paused_path.clone()));
+    let result = sandbox.apply(vec![enable(app, "linear", false)]).await;
+    assert_eq!(result.outcome, McpApplyOutcome::WriteFailed);
+    assert_eq!(sandbox.read(app).as_deref(), Some(CLAUDE));
+    assert_eq!(std::fs::read_to_string(sandbox.gate(app)).unwrap(), gate);
+    assert!(!sandbox.ctx.paused_path.exists());
 }

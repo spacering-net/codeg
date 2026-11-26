@@ -16,9 +16,10 @@ use super::apply::entry_flag;
 use super::dialect;
 use super::fsio;
 use super::model::{
-    codes, McpAgentInventory, McpConfigFile, McpConfigFormat, McpDelivery, McpEntry, McpFileStatus,
-    McpInventory, McpIssue, McpRelatedFile, KEY_PATTERN, RESERVED_KEY,
+    codes, McpAgentInventory, McpConfigFile, McpConfigFormat, McpDelivery, McpDisableMode,
+    McpEntry, McpFileStatus, McpInventory, McpIssue, McpRelatedFile, KEY_PATTERN, RESERVED_KEY,
 };
+use super::paused::{self, PausedFile};
 use super::plugin_gate;
 use super::store::{decode, read_view_with_duplicates, DuplicateKey, RawEntry};
 use super::yaml_doc;
@@ -60,6 +61,7 @@ pub(crate) fn to_entry(
         definition: read.definition,
         extra: read.extra,
         enabled: read.enabled && !disabled_names.contains(&raw.key),
+        paused: false,
         read_only: reserved || spec.scan_only || raw.duplicate.is_some(),
         reserved,
         legacy: raw.legacy,
@@ -158,23 +160,93 @@ pub(crate) fn read_agent(app: McpAppType, paths: &AgentPaths) -> (McpConfigFile,
     (config, entries)
 }
 
-fn scan_agent(ctx: &EngineCtx, app: McpAppType, installed: Option<bool>) -> McpAgentInventory {
+fn with_paused(
+    ctx: &EngineCtx,
+    spec: &AgentSpec,
+    paths: &AgentPaths,
+    paused_file: &std::io::Result<PausedFile>,
+) -> (McpConfigFile, Vec<McpEntry>) {
+    let (mut config, mut entries) = read_agent(spec.app, paths);
+    if spec.disable_mode() != McpDisableMode::CodegPause {
+        return (config, entries);
+    }
+    match paused_file {
+        Ok(file) => {
+            let paused = file.entries(spec.app);
+            config.basis = config.basis.map(|native| paused::basis(&native, paused));
+            if let Some(paused) = paused {
+                let live: BTreeSet<_> = entries.iter().map(|entry| entry.key.clone()).collect();
+                entries.extend(paused.iter().filter_map(|(key, entry)| {
+                    if live.contains(key) {
+                        return None;
+                    }
+                    let definition = &entry.definition;
+                    let problems = if spec.supports(definition.transport()) {
+                        Vec::new()
+                    } else {
+                        vec![McpIssue::new(codes::UNSUPPORTED_TRANSPORT)
+                            .detail(definition.transport().as_str())]
+                    };
+                    Some(McpEntry {
+                        key: key.clone(),
+                        definition: Some(definition.clone()),
+                        extra: entry.extra.clone(),
+                        enabled: false,
+                        paused: true,
+                        fingerprint: Some(definition.fingerprint()),
+                        read_only: false,
+                        reserved: false,
+                        legacy: false,
+                        problems,
+                    })
+                }));
+            }
+        }
+        Err(error) => {
+            config.basis = None;
+            config.related.push(McpRelatedFile {
+                role: "paused".to_string(),
+                path: ctx.paused_path.display().to_string(),
+                reason: Some(paused::read_issue(&ctx.paused_path, error)),
+            });
+        }
+    }
+    (config, entries)
+}
+
+/// Read the effective configuration, including the basis returned by apply.
+pub(crate) fn read_agent_config(
+    ctx: &EngineCtx,
+    app: McpAppType,
+    paths: &AgentPaths,
+) -> (McpConfigFile, Vec<McpEntry>) {
+    with_paused(ctx, &spec(app), paths, &PausedFile::read(&ctx.paused_path))
+}
+
+fn scan_agent(
+    ctx: &EngineCtx,
+    app: McpAppType,
+    installed: Option<bool>,
+    paused_file: &std::io::Result<PausedFile>,
+) -> McpAgentInventory {
     let spec = spec(app);
     let agent_type = agent_type_of(app);
-    let empty = AgentPaths {
-        servers: Default::default(),
-        plugin_gate: None,
-    };
-    let (config, entries) = read_agent(app, ctx.paths_of(app).unwrap_or(&empty));
-    let writable =
-        !spec.scan_only && matches!(config.status, McpFileStatus::Ok | McpFileStatus::Missing);
+    let paths = ctx
+        .paths_of(app)
+        .expect("inventory only scans configured agents");
+    let (config, entries) = with_paused(ctx, &spec, paths, paused_file);
+    let disable_mode = spec.disable_mode();
+    let writable = !spec.scan_only
+        && config.basis.is_some()
+        && matches!(config.status, McpFileStatus::Ok | McpFileStatus::Missing);
     McpAgentInventory {
         agent: app,
         installed,
         writable,
         transports: spec.transports.to_vec(),
         delivery: spec.delivery,
-        can_disable: spec.disable.is_supported(),
+        can_disable: disable_mode != McpDisableMode::Unsupported,
+        disable_mode,
         codeg_mcp: crate::acp::connection::agent_takes_codeg_mcp(agent_type),
         session_capabilities: (spec.delivery == McpDelivery::CodegSession)
             .then(|| super::session::declared_capabilities(agent_type))
@@ -187,11 +259,12 @@ fn scan_agent(ctx: &EngineCtx, app: McpAppType, installed: Option<bool>) -> McpA
 /// The inventory of every agent in `ctx`. `installed` says which agents are
 /// on this machine, for the ones codeg could tell.
 pub(crate) fn inventory(ctx: &EngineCtx, installed: &BTreeMap<McpAppType, bool>) -> McpInventory {
+    let paused_file = PausedFile::read(&ctx.paused_path);
     McpInventory {
         agents: all_apps()
             .iter()
             .filter(|app| ctx.paths_of(**app).is_some())
-            .map(|app| scan_agent(ctx, *app, installed.get(app).copied()))
+            .map(|app| scan_agent(ctx, *app, installed.get(app).copied(), &paused_file))
             .collect(),
         reserved_keys: vec![RESERVED_KEY.to_string()],
         key_pattern: KEY_PATTERN.to_string(),

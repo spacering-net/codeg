@@ -14,7 +14,8 @@ use crate::commands::mcp::{
 };
 use crate::commands::mcp_engine;
 use crate::commands::mcp_engine::{
-    McpApplyRequest, McpApplyResult, McpInventory, McpOp, McpSnippet,
+    McpApplyRequest, McpApplyResult, McpInventory, McpOp, McpProbeRequest, McpProbeResult,
+    McpSnippet,
 };
 
 // ---------------------------------------------------------------------------
@@ -199,4 +200,11 @@ pub async fn mcp_parse_snippet(
     Json(params): Json<ParseSnippetParams>,
 ) -> Result<Json<McpSnippet>, AppCommandError> {
     Ok(Json(mcp_engine::mcp_parse_snippet_core(&params.text)))
+}
+
+pub async fn mcp_probe(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(request): Json<McpProbeRequest>,
+) -> Json<McpProbeResult> {
+    Json(mcp_engine::mcp_probe_core(&state.db, request).await)
 }

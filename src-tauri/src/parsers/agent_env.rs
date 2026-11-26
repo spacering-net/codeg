@@ -61,6 +61,11 @@ impl AgentEnv {
         )
     }
 
+    /// The agent-specific overrides applied when launching a child.
+    pub(crate) fn overrides(&self) -> &BTreeMap<String, String> {
+        &self.overrides
+    }
+
     /// `key` as the launched agent sees it — the `std::env::var_os` of an
     /// agent's own resolver. See the type docs for the three cases.
     pub fn var_os(&self, key: &str) -> Option<OsString> {
