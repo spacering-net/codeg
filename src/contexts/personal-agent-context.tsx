@@ -73,6 +73,9 @@ interface PersonalAgentContextValue {
   liveTexts?: ReadonlyMap<number, { n: number; text: string }>
   /** The dispatches the cards on the page point at, by id. */
   dispatchById: ReadonlyMap<number, DispatchInfo>
+  /** Read these dispatches again (a [Stop] that did not see its own write
+   *  come back). */
+  refetchDispatches: (ids: number[]) => Promise<void>
   /** Rows quoted from outside what is held, by id; `null` when it does not
    *  exist. */
   quoted: ReadonlyMap<number, TimelineRow | null>
@@ -666,6 +669,7 @@ function usePersonalAgentStore(
       liveReplies,
       liveTexts,
       dispatchById,
+      refetchDispatches: fetchDispatches,
       quoted,
       requestQuoted,
     }),
@@ -685,6 +689,7 @@ function usePersonalAgentStore(
       liveReplies,
       liveTexts,
       dispatchById,
+      fetchDispatches,
       quoted,
       requestQuoted,
     ]
@@ -727,6 +732,7 @@ function pendingStore(botId: number): PersonalAgentContextValue {
     needsOwner: false,
     liveReplies: new Map(),
     dispatchById: new Map(),
+    refetchDispatches: async () => {},
     quoted: new Map(),
     requestQuoted: () => {},
   }

@@ -11273,6 +11273,7 @@
         "dispatch": "Confie du travail",
         "dispatch_followup": "Relance un travail",
         "dispatch_wait": "Attend le résultat du travail",
+        "dispatch_stop": "Arrête un travail",
         "items": "Met à jour les sujets en cours",
         "timeline_read": "Relit la conversation",
         "project_list": "Consulte les projets"
@@ -11737,6 +11738,8 @@
       "dispatchSome": "Confie du travail",
       "followup": "Relance #{id}",
       "followupSome": "Fait une relance",
+      "stop": "Arrête #{id}",
+      "stopSome": "Arrête un travail",
       "message": "Pose une question à {target}",
       "messageSome": "Pose une question à un autre assistant",
       "awaitingReply": "Attend la réponse de {name}",
@@ -11771,6 +11774,8 @@
       "dispatchSome": "A confié du travail",
       "followup": "A relancé #{id}",
       "followupSome": "A fait une relance",
+      "stop": "A arrêté #{id}",
+      "stopSome": "A arrêté un travail",
       "message": "A envoyé un message à {target}",
       "messageSome": "A envoyé un message",
       "think": "A réfléchi",
@@ -11889,6 +11894,9 @@
       "prOpened": "PR ouverte",
       "prNotTracked": "codeg ne la surveille pas",
       "pastStopping": "Trop tard pour arrêter : terminée ou en cours de fusion",
+      "alreadyStopped": "Déjà arrêté — {who}",
+      "changed": "Cela vient de changer — actualisé",
+      "boardRefused": "Le tableau ne peut pas annuler sa tâche maintenant (fusion en cours ou terminée)",
       "prChecks": "Vérifications {passed}/{total} réussies",
       "prChecksFailed": "{n} en échec",
       "prChecksRunning": "{n} en cours",
@@ -13110,12 +13118,14 @@
       },
       "closed": {
         "done": "Fait par toi · {time}",
+        "stopped": "Tu as arrêté le travail · {time}",
         "skippedLast": "Tu as sauté la dernière fois · {time}",
         "dropped": "Retiré par toi · {time}",
         "withdrawn": "Tu as retiré le message à {peer} · {time}",
         "stoppedWaiting": "Tu n’attends plus la réponse de {peer} · {time}",
         "agentDone": "{name} l’a terminé · {time}",
         "agentDropped": "{name} ne le suit plus · {time}",
+        "agentStopped": "{name} a arrêté le travail · {time}",
         "answered": "{name} a lu ta réponse · {time}",
         "replied": "{peer} a répondu · {time}",
         "gone": "{peer} a été supprimé ; aucune réponse ne viendra · {time}",
@@ -13156,6 +13166,13 @@
       "label": "Réponse : {question}",
       "ended": "Cette question est terminée ; inutile de répondre",
       "alreadyAnswered": "Cette question attend déjà que {name} lise ta réponse"
+    },
+    "stopped": {
+      "owner": "Tu l’as arrêté",
+      "inSession": "Tu l’as arrêté dans sa session",
+      "onBoard": "Tu l’as arrêté sur le tableau",
+      "agent": "{name} l’a arrêté : {reason}",
+      "agentPlain": "{name} l’a arrêté"
     }
   },
   "MessageCheck": {

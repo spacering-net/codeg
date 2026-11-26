@@ -268,6 +268,7 @@ import type {
   OfficecliInfo,
   OfficecliSkill,
   SkillSyncReport,
+  StopReply,
   TokenUsageFacets,
   TokenUsageFilter,
   TokenUsageReport,
@@ -2896,15 +2897,25 @@ export async function personalAgentHistoryRebuild(): Promise<PersonalAgentHistor
   return getTransport().call("personal_agent_history_rebuild", {})
 }
 
-/** Stop one piece of handed-out work from its card (8.5). False when it
- *  is past stopping. */
+/** Stop one piece of handed-out work from its card (8.5), with what the
+ *  card read: the dispatch's version and, for a board task's, the task's
+ *  run and version — a card that read it before it changed is told
+ *  `changed`, and nothing is stopped. */
 export async function personalAgentDispatchStop(
   botId: number | null | undefined,
-  dispatchId: number
-): Promise<boolean> {
+  dispatchId: number,
+  expect: {
+    updatedAt?: string | null
+    runSeq?: number | null
+    taskUpdatedAt?: string | null
+  } = {}
+): Promise<StopReply> {
   return getTransport().call("personal_agent_dispatch_stop", {
     botId,
     dispatchId,
+    expectUpdatedAt: expect.updatedAt ?? null,
+    expectRunSeq: expect.runSeq ?? null,
+    expectTaskUpdatedAt: expect.taskUpdatedAt ?? null,
   })
 }
 

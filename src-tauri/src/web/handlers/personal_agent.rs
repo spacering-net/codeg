@@ -497,13 +497,28 @@ pub struct DispatchStopParams {
     #[serde(default)]
     pub bot_id: Option<i32>,
     pub dispatch_id: i32,
+    /// What the card read: the dispatch's version, its task's run and
+    /// version.
+    #[serde(default)]
+    pub expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub expect_run_seq: Option<i32>,
+    #[serde(default)]
+    pub expect_task_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub async fn personal_agent_dispatch_stop(
     Json(params): Json<DispatchStopParams>,
-) -> Result<Json<bool>, AppCommandError> {
+) -> Result<Json<crate::personal_agent::stop::StopReply>, AppCommandError> {
     Ok(Json(
-        pa::personal_agent_dispatch_stop_core(params.bot_id, params.dispatch_id).await?,
+        pa::personal_agent_dispatch_stop_core(
+            params.bot_id,
+            params.dispatch_id,
+            params.expect_updated_at,
+            params.expect_run_seq,
+            params.expect_task_updated_at,
+        )
+        .await?,
     ))
 }
 

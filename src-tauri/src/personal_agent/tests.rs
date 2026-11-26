@@ -7097,8 +7097,8 @@ async fn a_hand_over_and_a_round_opening_take_turns_on_the_route() {
     drop(held);
     opening.await.unwrap();
     deleting.await.unwrap().unwrap();
-    let route = primary.state.lock().await.dispatch_conns.get("c-race").copied();
-    assert!(route.is_some_and(|c| c.round_since.is_some()), "the primary routes it with its round open: {route:?}");
+    let route = primary.state.lock().await.dispatch_conns.get("c-race").cloned();
+    assert!(route.as_ref().is_some_and(|c| c.round_since.is_some()), "the primary routes it with its round open: {route:?}");
     assert!(!worker.owns_connection("c-race").await);
 }
 
@@ -7813,11 +7813,13 @@ async fn code_work_is_done_when_merged_and_a_pull_request_waits_for_its_merge() 
     // The owner stops one piece from its card: just that one.
     let one = session_dispatch(&engine, DispatchState::Running, "c-one").await;
     let other = session_dispatch(&engine, DispatchState::Running, "c-other").await;
-    assert!(engine.stop_one(one).await.unwrap());
+    use super::stop::{StopOutcome, StoppedBy};
+    let stop = |id| engine.stop_one(id, StoppedBy::Owner, Default::default());
+    assert!(matches!(stop(one).await.unwrap(), StopOutcome::Stopped { by: StoppedBy::Owner, .. }));
     assert_eq!(dispatch_state(&engine, one).await.state, DispatchState::Canceled);
     assert_eq!(dispatch_state(&engine, other).await.state, DispatchState::Running);
-    assert!(!engine.stop_one(one).await.unwrap(), "past stopping");
-    assert!(engine.stop_one(99_999).await.is_err());
+    assert_eq!(stop(one).await.unwrap(), StopOutcome::AlreadyStopped { by: StoppedBy::Owner }, "stopped already");
+    assert!(stop(99_999).await.is_err());
 }
 
 #[tokio::test]
@@ -23285,4 +23287,294 @@ async fn a_question_comes_from_the_reply_that_asks_it() {
     let q = a_question(&engine, None).await;
     assert_eq!(matter_of(&engine, q).await.origin_timeline_id, Some(reply));
     emit(&engine, &state, "pa-q9", turn_complete("end_turn"), true).await;
+}
+
+// ── stopping work (4.10, P5) ────────────────────────────────────────────────
+
+/// What a stop of dispatch `id` left: its stop card's data, its matter.
+async fn stop_card_of(engine: &PersonalAgentEngine, id: i32) -> Option<serde_json::Value> {
+    let rows = svc::rows_since(&engine.db.conn, engine.bot().await, chrono::Utc::now() - chrono::Duration::hours(1))
+        .await
+        .unwrap();
+    rows.iter()
+        .rfind(|r| r.kind == TimelineKind::Result && r.dispatch_id == Some(id))
+        .map(data_of)
+        .filter(|d| d["cause"] == "stopped")
+}
+
+/// Stopped by the assistant itself: canceled with its reason, its card and
+/// matter say who and why, its coding event carries it, nobody is woken —
+/// and a second stop finds it stopped.
+#[tokio::test]
+async fn the_assistant_stops_its_own_work_and_nobody_is_woken() {
+    use super::stop::{StopOutcome, StoppedBy};
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-own").await;
+    let item = svc::create_item(&engine.db.conn, bot, ItemKind::Dispatch, Some(id), ItemStatus::Open, None, "work".into(), None, None)
+        .await
+        .unwrap();
+    let woken_before = svc::pending_events(&engine.db.conn, bot).await.unwrap().iter().filter(|e| e.wake).count();
+    let out = call(&engine, "dispatch_stop", json!({ "dispatch_id": id, "reason": "the owner moved to plan B" })).await;
+    assert!(out.ok, "{}", out.text);
+    assert_eq!(out.data["stop"]["outcome"], "stopped");
+    let d = dispatch_state(&engine, id).await;
+    assert_eq!(d.state, DispatchState::Canceled);
+    assert_eq!(
+        super::stop::stopped_by_of(&d),
+        Some(StoppedBy::Agent { reason: "the owner moved to plan B".into() })
+    );
+    let card = stop_card_of(&engine, id).await.expect("a stop card");
+    assert_eq!((card["stopped_by"].as_str(), card["reason"].as_str()), (Some("agent"), Some("the owner moved to plan B")));
+    let m = svc::get_item(&engine.db.conn, item.id).await.unwrap().unwrap();
+    assert_eq!((m.status, m.closed_by.as_deref(), m.closed_how.as_deref()), (ItemStatus::Dropped, Some("agent"), Some("stopped")));
+    let woken = svc::pending_events(&engine.db.conn, bot).await.unwrap().iter().filter(|e| e.wake).count();
+    assert_eq!(woken, woken_before, "nobody woken");
+    let signals = crate::db::service::personal_agent_watch_service::signals_after(&engine.db.conn, 0, 100).await.unwrap();
+    let ended = signals.iter().find(|s| s.kind == "dispatch_ended").expect("its coding event");
+    assert!(ended.facts.contains("\"stopped_by\":\"agent\""), "{}", ended.facts);
+    // Again: stopped already, by itself.
+    let again = engine.stop_one(id, StoppedBy::Owner, Default::default()).await.unwrap();
+    assert_eq!(again, StopOutcome::AlreadyStopped { by: StoppedBy::Agent { reason: "the owner moved to plan B".into() } });
+    // `dispatch_wait` says so at once.
+    owner_turn(&engine, "pa-own-wait").await;
+    let wait = engine.dispatch_wait(id, Some(std::time::Duration::ZERO)).await;
+    assert_eq!(wait.data["waiting"], "work_stopped", "{}", wait.text);
+    // A reason is required; done work is past stopping; another's is theirs.
+    let e = call(&engine, "dispatch_stop", json!({ "dispatch_id": id, "reason": "  " })).await;
+    assert!(!e.ok);
+    let done = session_dispatch(&engine, DispatchState::Completed, "c-done").await;
+    let past = call(&engine, "dispatch_stop", json!({ "dispatch_id": done, "reason": "no" })).await;
+    assert!(!past.ok && past.data["stop"]["outcome"] == "past_stopping", "{}", past.text);
+    let queued = session_dispatch(&engine, DispatchState::Queued, "c-queued").await;
+    let q = call(&engine, "dispatch_stop", json!({ "dispatch_id": queued, "reason": "not needed" })).await;
+    assert!(q.ok, "{}", q.text);
+    assert_eq!(dispatch_state(&engine, queued).await.state, DispatchState::Canceled);
+}
+
+/// A card's [Stop] that read the work before it changed (another window
+/// followed it up meanwhile) stops nothing.
+#[tokio::test]
+async fn a_stale_card_stops_nothing_new() {
+    use super::stop::{StopExpect, StopOutcome, StoppedBy};
+    let (engine, _tmp) = configured().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-stale").await;
+    let seen = dispatch_state(&engine, id).await.updated_at;
+    // Written since (a follow-up's round, say).
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    svc::update_dispatch(&engine.db.conn, id, None, DispatchWrite { bump_turns: true, ..Default::default() })
+        .await
+        .unwrap();
+    let out = engine
+        .stop_one(id, StoppedBy::Owner, StopExpect { updated_at: Some(seen), ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(out, StopOutcome::Changed);
+    assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::Running);
+    let now = dispatch_state(&engine, id).await.updated_at;
+    let out = engine
+        .stop_one(id, StoppedBy::Owner, StopExpect { updated_at: Some(now), ..Default::default() })
+        .await
+        .unwrap();
+    assert!(matches!(out, StopOutcome::Stopped { .. }));
+}
+
+/// A follow-up queued and not sent yet when its work is stopped is never
+/// sent: its entry is taken back.
+#[tokio::test]
+async fn a_queued_follow_up_is_taken_back_by_the_stop() {
+    use super::stop::StoppedBy;
+    let (engine, tmp) = configured().await;
+    engine
+        .save(PersonalAgentDraft {
+            settings: Some(PersonalAgentSettings { dispatch_concurrency: 1, ..Default::default() }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (id, _rx, _st, _) = live_session_dispatch(&engine, &tmp, "x-stopq", DispatchState::Completed).await;
+    let _busy = session_dispatch(&engine, DispatchState::Running, "x-stopq-busy").await;
+    owner_turn(&engine, "pa-stopq").await;
+    let out = call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "and the footer" })).await;
+    assert!(out.text.contains("slots are busy"), "{}", out.text);
+    let op_id = round_op(&engine, id).await.op_id.unwrap();
+    engine.stop_one(id, StoppedBy::Owner, Default::default()).await.unwrap();
+    let op = svc::get_op(&engine.db.conn, &op_id).await.unwrap().unwrap();
+    assert_eq!(op.state, ActionState::NotExecuted);
+    let d = dispatch_state(&engine, id).await;
+    assert_eq!((d.state, d.followup.as_deref()), (DispatchState::Canceled, None));
+}
+
+/// The board will not cancel a merging task: nothing is written anywhere.
+/// The owner canceled it on the board first: the assistant's stop after
+/// says it was theirs, and so does everything else.
+#[tokio::test]
+async fn a_board_task_s_stop_follows_the_board() {
+    use super::stop::{StopOutcome, StoppedBy};
+    let (engine, tmp) = configured().await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let coder = 0;
+    let merging = board_task(&engine, project, "Land", WorkTaskStatus::Merging, |_| {}).await;
+    let d = task_dispatch(&engine, coder, project, merging.id, "Land", DispatchState::Running).await;
+    let out = engine.stop_one(d.id, StoppedBy::Owner, Default::default()).await.unwrap();
+    assert_eq!(out, StopOutcome::BoardRefused);
+    assert_eq!(dispatch_state(&engine, d.id).await.state, DispatchState::Running);
+    let t = crate::db::service::work_task_service::get_model(&engine.db.conn, merging.id).await.unwrap();
+    assert_eq!(t.status, WorkTaskStatus::Merging);
+    assert!(stop_card_of(&engine, d.id).await.is_none());
+    // On the board first.
+    let running = board_task(&engine, project, "Fix", WorkTaskStatus::Running, |_| {}).await;
+    let d2 = task_dispatch(&engine, coder, project, running.id, "Fix", DispatchState::Running).await;
+    assert!(crate::db::service::work_task_service::cancel(&engine.db.conn, running.id, None).await.unwrap());
+    let out = engine
+        .stop_one(d2.id, StoppedBy::Agent { reason: "done another way".into() }, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(out, StopOutcome::AlreadyStopped { by: StoppedBy::OwnerOnBoard });
+    let now = dispatch_state(&engine, d2.id).await;
+    assert_eq!(super::stop::stopped_by_of(&now), Some(StoppedBy::OwnerOnBoard));
+    assert_eq!(stop_card_of(&engine, d2.id).await.unwrap()["stopped_by"], "owner_on_board");
+}
+
+/// The owner cancels a task on the board — one that failed days ago too:
+/// their stop, booked by the sync, its matter given up, nobody woken. The
+/// board's scan says who stopped it in its event.
+#[tokio::test]
+async fn the_owner_canceling_on_the_board_is_their_stop() {
+    let (engine, tmp) = configured().await;
+    let bot = engine.bot().await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let failed = board_task(&engine, project, "Old", WorkTaskStatus::Failed, |_| {}).await;
+    let d = task_dispatch(&engine, 0, project, failed.id, "Old", DispatchState::Failed).await;
+    let item = svc::create_item(&engine.db.conn, bot, ItemKind::Dispatch, Some(d.id), ItemStatus::Open, None, "old".into(), None, None)
+        .await
+        .unwrap();
+    let woken_before = svc::pending_events(&engine.db.conn, bot).await.unwrap().iter().filter(|e| e.wake).count();
+    assert!(crate::db::service::work_task_service::cancel(&engine.db.conn, failed.id, None).await.unwrap());
+    engine.sync_task_dispatch(d.id).await;
+    let now = dispatch_state(&engine, d.id).await;
+    assert_eq!(
+        (now.state, super::stop::stopped_by_of(&now)),
+        (DispatchState::Canceled, Some(super::stop::StoppedBy::OwnerOnBoard))
+    );
+    let m = svc::get_item(&engine.db.conn, item.id).await.unwrap().unwrap();
+    assert_eq!((m.status, m.closed_how.as_deref()), (ItemStatus::Dropped, Some("stopped")));
+    let woken = svc::pending_events(&engine.db.conn, bot).await.unwrap().iter().filter(|e| e.wake).count();
+    assert_eq!(woken, woken_before, "nobody woken");
+    // Booked once: another look changes nothing.
+    engine.sync_task_dispatch(d.id).await;
+    let rows = svc::rows_since(&engine.db.conn, bot, chrono::Utc::now() - chrono::Duration::hours(1)).await.unwrap();
+    assert_eq!(rows.iter().filter(|r| r.kind == TimelineKind::Result && r.dispatch_id == Some(d.id)).count(), 1);
+}
+
+/// A board task made for work stopped before it was made is not made.
+#[tokio::test]
+async fn work_stopped_before_its_task_is_made_makes_none() {
+    let (engine, tmp) = configured().await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let t = board_task(&engine, project, "Seed", WorkTaskStatus::Todo, |_| {}).await;
+    let d = task_dispatch(&engine, 0, project, t.id, "Seed", DispatchState::Queued).await;
+    svc::update_dispatch(&engine.db.conn, d.id, None, DispatchWrite { state: Some(DispatchState::Canceled), ..Default::default() })
+        .await
+        .unwrap();
+    let draft = crate::models::WorkTaskDraft {
+        folder_id: project,
+        title: "Again".into(),
+        config: serde_json::json!({ "display_text": "x", "prompt_blocks": [{ "type": "text", "text": "x" }] }),
+    };
+    let made = crate::db::service::work_task_service::create_for_personal_agent(&engine.db.conn, draft, d.id)
+        .await
+        .unwrap();
+    assert!(matches!(made, crate::db::service::work_task_service::CreateForDispatch::Stopped));
+}
+
+/// The owner stops codeg's acceptance check: the call is theirs, on their
+/// acceptance card — no acceptance event wakes the assistant.
+#[tokio::test]
+async fn the_owner_stopping_an_acceptance_check_puts_it_to_them() {
+    use crate::db::entities::personal_agent_verification::{CheckVerdict, VerificationState};
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    let bot = engine.bot().await;
+    engine.record_progress(&w.d, None, None, "task").await;
+    engine.acceptance_tick().await;
+    let r = rounds_of(&engine, w.d.id).await;
+    assert_eq!(r[0].state, VerificationState::Checking);
+    let check = r[0].check_dispatch_id.unwrap();
+    let out = engine
+        .stop_one(check, super::stop::StoppedBy::Owner, Default::default())
+        .await
+        .unwrap();
+    assert!(matches!(out, super::stop::StopOutcome::Stopped { .. }), "{out:?}");
+    let r = rounds_of(&engine, w.d.id).await;
+    assert_eq!((r[0].state, r[0].check_verdict), (VerificationState::Asked, Some(CheckVerdict::Unverified)));
+    assert!(r[0].notice_id.is_some(), "the owner's acceptance card");
+    let ev = svc::pending_events(&engine.db.conn, bot).await.unwrap();
+    assert!(ev.iter().all(|e| e.kind != super::acceptance::ACCEPT_EVENT), "no acceptance event");
+}
+
+/// The board's scan reads past hundreds of tasks stamped with one time (a
+/// sort), on to an old failed task the owner canceled since: its work is
+/// their stop, and the scan's event says so.
+#[tokio::test]
+async fn the_board_scan_reads_past_one_time_on_to_a_cancel() {
+    use sea_orm::Set;
+    let (host, _w, tmp) = hosted().await;
+    let engine = host.primary();
+    let dir = tmp.path().join("proj");
+    std::fs::create_dir_all(&dir).unwrap();
+    let project = crate::db::service::folder_service::add_folder(&engine.db.conn, &dir.to_string_lossy())
+        .await
+        .unwrap()
+        .id;
+    let sorted = chrono::Utc::now() - chrono::Duration::hours(1);
+    for k in 0..501 {
+        board_task(&engine, project, &format!("Sorted {k}"), WorkTaskStatus::Todo, |t| {
+            t.updated_at = Set(sorted);
+        })
+        .await;
+    }
+    let failed = board_task(&engine, project, "Old failure", WorkTaskStatus::Failed, |t| {
+        t.updated_at = Set(chrono::Utc::now() - chrono::Duration::days(5));
+    })
+    .await;
+    let d = task_dispatch(&engine, 0, project, failed.id, "Old failure", DispatchState::Failed).await;
+    // The scan is where it was before the sort.
+    crate::db::service::app_metadata_service::upsert_value(
+        &engine.db.conn,
+        "personal_agent.board_scan_at",
+        &(sorted - chrono::Duration::seconds(10)).to_rfc3339(),
+    )
+    .await
+    .unwrap();
+    assert!(crate::db::service::work_task_service::cancel(&engine.db.conn, failed.id, None).await.unwrap());
+    host.board_tick().await;
+    let now = dispatch_state(&engine, d.id).await;
+    assert_eq!(super::stop::stopped_by_of(&now), Some(super::stop::StoppedBy::OwnerOnBoard));
+    let signals = crate::db::service::personal_agent_watch_service::signals_after(&engine.db.conn, 0, 1000).await.unwrap();
+    let canceled = signals
+        .iter()
+        .find(|s| s.kind == "task_status" && s.key.starts_with(&format!("task:{}:", failed.id)))
+        .expect("its event");
+    assert!(canceled.facts.contains("\"stopped_by\":\"owner_on_board\""), "{}", canceled.facts);
+}
+
+/// A question the executor asked as its work was stopped, handled only
+/// after the stop: no card, nothing woken — and the stopped work is not
+/// written back to waiting for input.
+#[tokio::test]
+async fn a_question_of_stopped_work_raises_no_card() {
+    let (engine, _tmp) = configured().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-late-q").await;
+    let (_rx, _st) = exec_conn(&engine, "c-late-q").await;
+    engine.open_round("c-late-q", id).await;
+    engine
+        .stop_one(id, super::stop::StoppedBy::Owner, Default::default())
+        .await
+        .unwrap();
+    let _reg = exec_asks(&engine, "c-late-q", vec![ask_spec("q1", "Approach", &["A", "B"])]).await;
+    assert!(ask_cards(&engine).await.is_empty(), "no card");
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert!(events.iter().all(|e| e.kind != svc::ASK_EVENT), "nothing woken");
+    assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::Canceled);
 }

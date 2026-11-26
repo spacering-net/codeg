@@ -442,7 +442,7 @@ pub struct NewSignal {
 }
 
 /// Record `s`; `false` when the same thing was recorded already.
-pub async fn record_signal(conn: &DatabaseConnection, s: NewSignal) -> Result<bool, DbError> {
+pub async fn record_signal(conn: &impl sea_orm::ConnectionTrait, s: NewSignal) -> Result<bool, DbError> {
     let inserted = signal::ActiveModel {
         id: NotSet,
         kind: Set(s.kind.to_string()),

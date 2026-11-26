@@ -54,6 +54,15 @@ impl ToolOutcome {
             data: Value::Null,
         }
     }
+
+    /// Refused, with what the structure says of it.
+    pub fn refused_with(text: impl Into<String>, data: Value) -> Self {
+        Self {
+            ok: false,
+            text: text.into(),
+            data,
+        }
+    }
 }
 
 fn int(args: &Value, key: &str) -> Option<i64> {
@@ -321,6 +330,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 .map(|ms| std::time::Duration::from_millis(ms.max(0) as u64));
             engine.dispatch_wait(id, wait).await
         }
+        "dispatch_stop" => engine.dispatch_stop_call(&args).await,
         "acceptance_decide" => engine.acceptance_decide_call(&args).await,
         "prefs_update" => engine.prefs_update_call(&args).await,
         "bot_create" => engine.bot_create_call(&args).await,

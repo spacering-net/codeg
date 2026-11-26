@@ -11273,6 +11273,7 @@
         "dispatch": "Encargando trabajo",
         "dispatch_followup": "Dando seguimiento a un trabajo",
         "dispatch_wait": "Esperando el resultado del trabajo",
+        "dispatch_stop": "Deteniendo un trabajo",
         "items": "Actualizando los asuntos abiertos",
         "timeline_read": "Repasando la conversación",
         "project_list": "Consultando los proyectos"
@@ -11737,6 +11738,8 @@
       "dispatchSome": "Encargando trabajo",
       "followup": "Dando seguimiento a #{id}",
       "followupSome": "Dando seguimiento",
+      "stop": "Deteniendo #{id}",
+      "stopSome": "Deteniendo un trabajo",
       "message": "Preguntando a {target}",
       "messageSome": "Preguntando a otro asistente",
       "awaitingReply": "Esperando la respuesta de {name}",
@@ -11771,6 +11774,8 @@
       "dispatchSome": "Encargó trabajo",
       "followup": "Dio seguimiento a #{id}",
       "followupSome": "Dio seguimiento",
+      "stop": "Detuvo #{id}",
+      "stopSome": "Detuvo un trabajo",
       "message": "Envió un mensaje a {target}",
       "messageSome": "Envió un mensaje",
       "think": "Lo pensó",
@@ -11889,6 +11894,9 @@
       "prOpened": "PR abierta",
       "prNotTracked": "codeg no la vigila",
       "pastStopping": "Ya no se puede detener: terminó o se está fusionando",
+      "alreadyStopped": "Ya estaba detenido: {who}",
+      "changed": "Acaba de cambiar; lo actualizamos",
+      "boardRefused": "El tablero no puede cancelar su tarea ahora (se está fusionando o ya terminó)",
       "prChecks": "Comprobaciones {passed}/{total} superadas",
       "prChecksFailed": "{n} fallidas",
       "prChecksRunning": "{n} en curso",
@@ -13110,12 +13118,14 @@
       },
       "closed": {
         "done": "Lo hiciste · {time}",
+        "stopped": "Detuviste su trabajo · {time}",
         "skippedLast": "Omitiste la última vez · {time}",
         "dropped": "Lo quitaste · {time}",
         "withdrawn": "Retiraste el mensaje a {peer} · {time}",
         "stoppedWaiting": "Dejaste de esperar la respuesta de {peer} · {time}",
         "agentDone": "{name} lo terminó · {time}",
         "agentDropped": "{name} dejó de seguirlo · {time}",
+        "agentStopped": "{name} detuvo su trabajo · {time}",
         "answered": "{name} leyó tu respuesta · {time}",
         "replied": "{peer} respondió · {time}",
         "gone": "{peer} fue eliminado; no llegará respuesta · {time}",
@@ -13156,6 +13166,13 @@
       "label": "Respuesta: {question}",
       "ended": "Esta pregunta ya terminó; no hace falta responder",
       "alreadyAnswered": "Esta pregunta ya espera a que {name} lea tu respuesta"
+    },
+    "stopped": {
+      "owner": "Lo detuviste",
+      "inSession": "Lo detuviste en su sesión",
+      "onBoard": "Lo detuviste en el tablero",
+      "agent": "{name} lo detuvo: {reason}",
+      "agentPlain": "{name} lo detuvo"
     }
   },
   "MessageCheck": {

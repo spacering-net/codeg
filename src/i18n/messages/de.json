@@ -11273,6 +11273,7 @@
         "dispatch": "Vergibt Arbeit",
         "dispatch_followup": "Hakt bei einer Arbeit nach",
         "dispatch_wait": "Wartet auf das Ergebnis der Arbeit",
+        "dispatch_stop": "Hält eine Arbeit an",
         "items": "Aktualisiert die offenen Punkte",
         "timeline_read": "Liest das Gespräch nach",
         "project_list": "Prüft die Projekte"
@@ -11737,6 +11738,8 @@
       "dispatchSome": "Vergibt Arbeit",
       "followup": "Hakt bei #{id} nach",
       "followupSome": "Hakt nach",
+      "stop": "Hält #{id} an",
+      "stopSome": "Hält eine Arbeit an",
       "message": "Fragt {target}",
       "messageSome": "Fragt einen anderen Assistenten",
       "awaitingReply": "Wartet auf die Antwort von {name}",
@@ -11771,6 +11774,8 @@
       "dispatchSome": "Arbeit vergeben",
       "followup": "Bei #{id} nachgehakt",
       "followupSome": "Nachgehakt",
+      "stop": "Hat #{id} angehalten",
+      "stopSome": "Hat eine Arbeit angehalten",
       "message": "Nachricht an {target} gesendet",
       "messageSome": "Eine Nachricht gesendet",
       "think": "Nachgedacht",
@@ -11889,6 +11894,9 @@
       "prOpened": "PR erstellt",
       "prNotTracked": "codeg beobachtet ihn nicht",
       "pastStopping": "Nicht mehr zu stoppen: fertig oder wird gemergt",
+      "alreadyStopped": "Schon angehalten – {who}",
+      "changed": "Das hat sich gerade geändert – neu geladen",
+      "boardRefused": "Das Board kann die Aufgabe jetzt nicht abbrechen (sie wird gemergt oder ist fertig)",
       "prChecks": "Checks {passed}/{total} bestanden",
       "prChecksFailed": "{n} fehlgeschlagen",
       "prChecksRunning": "{n} laufen",
@@ -13110,12 +13118,14 @@
       },
       "closed": {
         "done": "Von dir erledigt · {time}",
+        "stopped": "Du hast die Arbeit angehalten · {time}",
         "skippedLast": "Du hast das letzte Mal übersprungen · {time}",
         "dropped": "Von dir entfernt · {time}",
         "withdrawn": "Du hast die Nachricht an {peer} zurückgezogen · {time}",
         "stoppedWaiting": "Du wartest nicht mehr auf die Antwort von {peer} · {time}",
         "agentDone": "{name} hat es erledigt · {time}",
         "agentDropped": "{name} verfolgt es nicht mehr · {time}",
+        "agentStopped": "{name} hat die Arbeit angehalten · {time}",
         "answered": "{name} hat deine Antwort gelesen · {time}",
         "replied": "{peer} hat geantwortet · {time}",
         "gone": "{peer} wurde gelöscht; es kommt keine Antwort · {time}",
@@ -13156,6 +13166,13 @@
       "label": "Antwort: {question}",
       "ended": "Diese Frage ist beendet; keine Antwort nötig",
       "alreadyAnswered": "Diese Frage wartet schon darauf, dass {name} deine Antwort liest"
+    },
+    "stopped": {
+      "owner": "Du hast es angehalten",
+      "inSession": "Du hast es in seiner Sitzung angehalten",
+      "onBoard": "Du hast es auf dem Board angehalten",
+      "agent": "{name} hat es angehalten: {reason}",
+      "agentPlain": "{name} hat es angehalten"
     }
   },
   "MessageCheck": {

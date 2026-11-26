@@ -1568,6 +1568,27 @@
     }
   },
   {
+    "name": "dispatch_stop",
+    "description": "Stop one of your own dispatches where it is: when the owner asks you to, or when the work is no longer needed — its direction turned out wrong, or new work replaced it. Do not stop work only because it is slow. The work is canceled (a board task on the board too), its matter is given up, the owner sees who stopped it and why, and nobody is woken. The answer says how to go on with it if needed (a follow-up, or `dispatch` with `replaces`). Other assistants' work is theirs to stop.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "dispatch_id",
+        "reason"
+      ],
+      "properties": {
+        "dispatch_id": {
+          "type": "integer",
+          "description": "The dispatch to stop (one of yours, from dispatch)."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why, in a sentence the owner reads on its card (at most 200 characters)."
+        }
+      }
+    }
+  },
+  {
     "name": "dispatch_answer",
     "description": "Answer a question or a plan approval from the session of work you dispatched, for the owner — the <codeg-ask> blocks, by their `ask_id`. Answer from what the owner asked for, what they said and what you know of them, and say what the answer rests on in `reason` (quote their words when you can). When you cannot settle it — a trade-off nothing they said decides, something that changes the scope of the work, something hard to undo they never asked for — forward it with `forward: true` and say what you lean to in `suggestion`. The first answer wins: when the owner answered first, you are told theirs, and yours is not used. Questions asking for a secret are the owner's; so are the executor's other permission requests.",
     "inputSchema": {

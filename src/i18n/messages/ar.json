@@ -11273,6 +11273,7 @@
         "dispatch": "يُسند عملًا",
         "dispatch_followup": "يتابع عملًا",
         "dispatch_wait": "ينتظر نتيجة العمل",
+        "dispatch_stop": "يوقف عملًا",
         "items": "يحدّث الأمور المفتوحة",
         "timeline_read": "يراجع المحادثة",
         "project_list": "يراجع المشاريع"
@@ -11737,6 +11738,8 @@
       "dispatchSome": "يُسند عملًا",
       "followup": "يتابع ⁦#{id}⁩",
       "followupSome": "يتابع",
+      "stop": "يوقف #{id}",
+      "stopSome": "يوقف عملًا",
       "message": "يسأل {target}",
       "messageSome": "يسأل مساعدًا آخر",
       "awaitingReply": "ينتظر ردّ {name}",
@@ -11771,6 +11774,8 @@
       "dispatchSome": "أسند عملًا",
       "followup": "تابع ⁦#{id}⁩",
       "followupSome": "تابع",
+      "stop": "أوقف #{id}",
+      "stopSome": "أوقف عملًا",
       "message": "أرسل رسالة إلى {target}",
       "messageSome": "أرسل رسالة",
       "think": "فكّر في الأمر",
@@ -11889,6 +11894,9 @@
       "prOpened": "تم فتح PR",
       "prNotTracked": "لا يراقبه codeg",
       "pastStopping": "فات أوان الإيقاف: انتهت أو قيد الدمج",
+      "alreadyStopped": "متوقف بالفعل — {who}",
+      "changed": "تغيّر للتو — حدّثناه لك",
+      "boardRefused": "لا يمكن للوحة إلغاء مهمته الآن (قيد الدمج أو انتهت)",
       "prChecks": "نجح {passed} من {total} فحوصات",
       "prChecksFailed": "فشل {n}",
       "prChecksRunning": "{n} قيد التشغيل",
@@ -13110,12 +13118,14 @@
       },
       "closed": {
         "done": "أنجزته · {time}",
+        "stopped": "أوقفت العمل · {time}",
         "skippedLast": "تخطيت المرة الأخيرة · {time}",
         "dropped": "أزلته · {time}",
         "withdrawn": "سحبت الرسالة المرسلة إلى {peer} · {time}",
         "stoppedWaiting": "توقفت عن انتظار ردّ {peer} · {time}",
         "agentDone": "أنجزه {name} · {time}",
         "agentDropped": "توقف {name} عن متابعته · {time}",
+        "agentStopped": "أوقف {name} العمل · {time}",
         "answered": "قرأ {name} إجابتك · {time}",
         "replied": "ردّ {peer} · {time}",
         "gone": "حُذف {peer}؛ لن يصل ردّ · {time}",
@@ -13156,6 +13166,13 @@
       "label": "إجابة: {question}",
       "ended": "انتهى هذا السؤال؛ لا حاجة للإجابة",
       "alreadyAnswered": "هذا السؤال ينتظر بالفعل أن يقرأ {name} إجابتك"
+    },
+    "stopped": {
+      "owner": "أوقفته أنت",
+      "inSession": "أوقفته أنت في جلسته",
+      "onBoard": "أوقفته أنت من اللوحة",
+      "agent": "أوقفه {name}: {reason}",
+      "agentPlain": "أوقفه {name}"
     }
   },
   "MessageCheck": {

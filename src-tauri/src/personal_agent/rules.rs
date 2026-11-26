@@ -1839,7 +1839,7 @@ impl PersonalAgentEngine {
 
     /// Whether a conversation's dispatch has a session to go on in: a live
     /// connection, or one its conversation can resume.
-    async fn resumable(&self, d: &dispatch_entity::Model) -> bool {
+    pub(super) async fn resumable(&self, d: &dispatch_entity::Model) -> bool {
         let Some(conversation) = d.conversation_id else {
             return false;
         };

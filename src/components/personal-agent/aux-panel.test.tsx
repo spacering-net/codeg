@@ -30,7 +30,7 @@ const api = vi.hoisted(() => ({
   personalAgentStats: vi.fn(),
   personalAgentResumeAutoCompact: vi.fn(),
   personalAgentItemAct: vi.fn(async () => ({})),
-  personalAgentDispatchStop: vi.fn(async () => true),
+  personalAgentDispatchStop: vi.fn(async () => ({ outcome: "past_stopping" })),
   personalAgentOutputs: vi.fn(),
   personalAgentOutputRead: vi.fn(),
   personalAgentRosterAct: vi.fn(async () => {}),
@@ -1097,6 +1097,8 @@ describe("the activity", () => {
     const facts = {
       task_id: 7,
       status: "review" as const,
+      run_seq: 1,
+      updated_at: "2026-11-04T10:00:00Z",
       folder_id: 2,
       branch: "pa/fix-login",
       base_branch: "main",
@@ -1179,7 +1181,12 @@ describe("the activity", () => {
     )
     expect(within(review).queryByRole("button", { name: "Done" })).toBeNull()
     fireEvent.click(within(review).getByRole("button", { name: "Stop" }))
-    expect(api.personalAgentDispatchStop).toHaveBeenCalledWith(2, 1)
+    // With what the row read: the work's version and its task's run.
+    expect(api.personalAgentDispatchStop).toHaveBeenCalledWith(
+      2,
+      1,
+      expect.objectContaining({ runSeq: 1 })
+    )
     // What happens once handed-out work is done is its assistant's to know,
     // not said here (B5).
     fireEvent.click(
@@ -1231,6 +1238,8 @@ describe("the activity", () => {
 describe("an activity card of a task", () => {
   it("says where it stands once, its › in its head, [Stop] with its buttons, its details at its foot", async () => {
     const task = {
+      run_seq: 1,
+      updated_at: "2026-11-04T10:00:00Z",
       task_id: 14,
       status: "review" as const,
       folder_id: 2,

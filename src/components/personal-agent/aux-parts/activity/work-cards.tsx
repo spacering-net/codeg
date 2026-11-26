@@ -46,7 +46,12 @@ import {
 import { useActivityTranslate } from "../../activity-text"
 import { repeatText } from "../../due-text"
 import { AnsweredForYou } from "../../event-card"
-import { LadderChip, TaskStopButton, TaskStrip } from "../../task-strip"
+import {
+  LadderChip,
+  TaskStrip,
+  WorkStopButton,
+  workStoppable,
+} from "../../task-strip"
 import { useTodayRowProps, type Opener } from "../../today-section"
 import {
   messageWords,
@@ -370,6 +375,7 @@ function finish(
     unfold,
     flash,
     dispatch,
+    scope,
   }: {
     row: ActivityRow
     open: boolean
@@ -377,21 +383,42 @@ function finish(
     unfold: ReactNode
     flash: boolean
     dispatch: DispatchInfo | null
+    scope: RowScope
   }
 ): PanelItemProps {
   const buttons = props.actions != null
+  // [Stop] for any work while it moves — a chat or a session too: after the
+  // row's other buttons; on a task's strip when it has none; on its own
+  // otherwise.
+  const stoppable = workStoppable(dispatch, scope.readOnly)
   const strip = dispatch?.task ? (
-    <TaskStrip d={dispatch} compact bot={row.bot_id} stop={!buttons} />
+    <TaskStrip
+      d={dispatch}
+      compact
+      bot={row.bot_id}
+      stop={!buttons}
+      from="activity"
+    />
   ) : null
-  const actions =
-    buttons && dispatch?.task ? (
-      <>
-        {props.actions}
-        <TaskStopButton d={dispatch} bot={row.bot_id} className="ms-auto" />
-      </>
-    ) : (
-      props.actions
-    )
+  const stop =
+    dispatch && stoppable ? (
+      <WorkStopButton
+        d={dispatch}
+        bot={row.bot_id}
+        from="activity"
+        className="ms-auto"
+      />
+    ) : null
+  const actions = buttons ? (
+    <>
+      {props.actions}
+      {stop}
+    </>
+  ) : strip ? (
+    props.actions
+  ) : (
+    (stop ?? props.actions)
+  )
   return {
     ...props,
     actions,
@@ -660,6 +687,8 @@ function MatterClosedShell({ today, ...p }: ShellProps & { today: TodayRow }) {
   const by = today.closed_by
   const how = today.closed_how
   const key = ((): string => {
+    // Given up because its work was stopped.
+    if (how === "stopped") return by === "agent" ? "agentStopped" : "stopped"
     if (by === "owner") {
       if (how === "skipped") return "skippedLast"
       if (how === "withdrawn") return "withdrawn"

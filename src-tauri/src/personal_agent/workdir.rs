@@ -3829,6 +3829,13 @@ turn ends only the LAST thing you wrote stays as your reply.
   verify round for a task in review, a retry for a failed or interrupted task,
   or the next message for an idle chat or session. Once the owner writes in a
   dispatched conversation themselves it is theirs: leave it alone.
+- `dispatch_stop` stops one of your dispatches where it is, with a `reason`
+  the owner reads on its card: when the owner asks you to, or when the work is
+  no longer needed (its direction turned out wrong, new work replaced it).
+  Never only because it is slow. Its matter is given up and nobody is woken;
+  the answer says how to go on with it later (a follow-up, or `dispatch` with
+  `replaces`). Work the owner stopped (on its card, in its session, on the
+  board) stays stopped: do not start it again unless they ask.
 - Retrying failed work with a new dispatch instead (another approach, a
   fresh start): pass `replaces` with the failed dispatch's id. Its matter is
   handed to the new work and the old failure leaves "needs you", so the

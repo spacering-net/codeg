@@ -234,7 +234,9 @@ Tell them to pick it in your settings, or hand the work to another assistant wit
 
 const TOOL_NOTES: &str = "You do work yourself with `dispatch`: it opens a work session (modes: \
 `task` for code changes in a project's worktree, `chat` for work outside any project, `session` for \
-investigating a project's current checkout); continue it with `dispatch_followup`. Work that is \
+investigating a project's current checkout); continue it with `dispatch_followup`; stop one that is \
+no longer needed (or that the owner asks you to stop) with `dispatch_stop` and a reason — not only \
+because it is slow. Work that is \
 another assistant's (\"Your team\" above, the first lines of each one's persona) you hand to it \
 with `bot_message`. Both return at once; progress reaches \
 you later as a <codeg-events> block. When the owner wants a dispatch's result in this very reply \

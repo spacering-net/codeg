@@ -62,6 +62,9 @@ import {
   LadderChip,
   TaskActions,
   TaskStrip,
+  useStoppedWords,
+  useWorkStoppable,
+  WorkStopButton,
 } from "./task-strip"
 import { WorkRow } from "./work-card"
 
@@ -216,10 +219,20 @@ function weeklyDraft(info: DispatchInfo): RoutineDraft {
 
 /** The news's buttons, its card's last band: the task card's, then its
  *  own — none of it when there is no button to show. */
-function EventActions({ strip }: { strip: DispatchInfo }) {
+function EventActions({
+  strip,
+  live,
+}: {
+  strip: DispatchInfo | null
+  /** The work as it is now, on its latest news: [Stop] while it moves. */
+  live: DispatchInfo | null
+}) {
+  const stoppable = useWorkStoppable(live)
+  if (!(strip && hasTaskActions(strip)) && !stoppable) return null
   return (
     <SheetActions data-pa-event-actions>
-      <TaskActions d={strip} />
+      {strip ? <TaskActions d={strip} /> : null}
+      {live && stoppable ? <WorkStopButton d={live} /> : null}
     </SheetActions>
   )
 }
@@ -360,7 +373,7 @@ function ResultText({
 export function EventCard({ item }: { item: EventItem }) {
   const t = useTranslations("PersonalAgent")
   const { dispatchById, botId } = usePersonalAgent()
-  const { readOnly, jumpTo } = usePageScope()
+  const { readOnly, jumpTo, agentName } = usePageScope()
   const otherAssistant = useOtherAssistant()
   const openWork = useOpenWork()
   const meta = useWorkMeta()
@@ -377,10 +390,13 @@ export function EventCard({ item }: { item: EventItem }) {
   const excerpt = str(data, "excerpt")
   const cause = str(data, "cause")
   const rawNote = str(data, "note")
+  const stoppedWords = useStoppedWords()
   const note =
-    rawNote && cause && OWN_NOTES.has(cause)
-      ? t(`event.note.${cause}` as "event.note.boot")
-      : rawNote
+    cause === "stopped"
+      ? stoppedWords(str(data, "stopped_by"), str(data, "reason"), agentName)
+      : rawNote && cause && OWN_NOTES.has(cause)
+        ? t(`event.note.${cause}` as "event.note.boot")
+        : rawNote
   const title = info?.title ?? str(data, "title") ?? row.body
   const retry = useRetryLine()(data?.auto_retry)
   // Taken over by new work (B1): who, and a way to it.
@@ -550,10 +566,12 @@ export function EventCard({ item }: { item: EventItem }) {
           covered={item.covered || newsLadder === "merged"}
           whole={checkFor != null}
         />
-        {/* The task card's buttons. */}
-        {strip && hasTaskActions(strip, readOnly) ? (
-          <EventActions strip={strip} />
-        ) : null}
+        {/* The task card's buttons, and [Stop] for the work while it moves
+            — on its latest news only. */}
+        <EventActions
+          strip={strip}
+          live={item.latest ? (info ?? null) : null}
+        />
       </CardMessage>
     </MessageRow>
   )

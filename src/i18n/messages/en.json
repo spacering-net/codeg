@@ -11273,6 +11273,7 @@
         "dispatch": "Handing out work",
         "dispatch_followup": "Following up on work",
         "dispatch_wait": "Waiting for the work to come back",
+        "dispatch_stop": "Stopping a piece of work",
         "items": "Updating open matters",
         "timeline_read": "Reading back the conversation",
         "project_list": "Checking the projects"
@@ -11737,6 +11738,8 @@
       "dispatchSome": "Handing it out",
       "followup": "Following up #{id}",
       "followupSome": "Following up",
+      "stop": "Stopping #{id}",
+      "stopSome": "Stopping work",
       "message": "Asking {target}",
       "messageSome": "Asking another assistant",
       "awaitingReply": "Waiting for {name} to reply",
@@ -11771,6 +11774,8 @@
       "dispatchSome": "Handed it out",
       "followup": "Followed up #{id}",
       "followupSome": "Followed up",
+      "stop": "Stopped #{id}",
+      "stopSome": "Stopped work",
       "message": "Sent a message to {target}",
       "messageSome": "Sent a message",
       "think": "Thought it over",
@@ -11889,6 +11894,9 @@
       "prOpened": "PR opened",
       "prNotTracked": "codeg is not watching it",
       "pastStopping": "Too late to stop: it has finished or is merging",
+      "alreadyStopped": "Already stopped — {who}",
+      "changed": "This just changed — refreshed for you",
+      "boardRefused": "The board won't cancel its task now (it is merging or done)",
       "prChecks": "Checks {passed}/{total} passed",
       "prChecksFailed": "{n} failed",
       "prChecksRunning": "{n} running",
@@ -13110,12 +13118,14 @@
       },
       "closed": {
         "done": "You did it · {time}",
+        "stopped": "You stopped its work · {time}",
         "skippedLast": "You skipped the last time · {time}",
         "dropped": "You removed it · {time}",
         "withdrawn": "You took back the message to {peer} · {time}",
         "stoppedWaiting": "You stopped waiting for {peer}'s reply · {time}",
         "agentDone": "{name} finished it · {time}",
         "agentDropped": "{name} stopped following it · {time}",
+        "agentStopped": "{name} stopped its work · {time}",
         "answered": "{name} read your answer · {time}",
         "replied": "{peer} replied · {time}",
         "gone": "{peer} was deleted; no reply is coming · {time}",
@@ -13156,6 +13166,13 @@
       "label": "Answer: {question}",
       "ended": "This question has ended; no need to answer",
       "alreadyAnswered": "This question is already waiting for {name} to read your answer"
+    },
+    "stopped": {
+      "owner": "You stopped it",
+      "inSession": "You stopped it in its session",
+      "onBoard": "You stopped it on the board",
+      "agent": "{name} stopped it: {reason}",
+      "agentPlain": "{name} stopped it"
     }
   },
   "MessageCheck": {

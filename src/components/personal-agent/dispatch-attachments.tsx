@@ -39,9 +39,11 @@ import {
   str,
   useOpenWork,
   useOtherAssistant,
+  usePageScope,
   workTargetOf,
 } from "./shared"
 import { CheckLabel, DoneWhen } from "./acceptance-bits"
+import { useStoppedWords, useWorkStoppable, WorkStopButton } from "./task-strip"
 import { WorkPill } from "./work-card"
 
 /** Pills shown before the rest fold into "N more". */
@@ -101,6 +103,8 @@ function DispatchPill({
   const t = useTranslations("PersonalAgent.dispatchCard")
   const openWork = useOpenWork()
   const otherAssistant = useOtherAssistant()
+  const stoppedWords = useStoppedWords()
+  const { agentName } = usePageScope()
   const elapsedLabel = useElapsedLabel()
   const data = row.data
   // A follow-up that never went out says so, whatever the work is doing.
@@ -118,7 +122,11 @@ function DispatchPill({
   const checkRound = info?.check_round ?? num(data, "check_round")
   const doneWhen = info?.done_when ?? str(data, "done_when")
   const prFix = prFixOf(data?.pr_fix)
-  const pill = (
+  // [Stop] beside it while its work moves (5.7) — not on a follow-up that
+  // never went out: it reads the work's latest state, which a later
+  // follow-up that did go out may be running in.
+  const stoppable = useWorkStoppable(notSent ? null : (info ?? null))
+  const workPill = (
     <WorkPill
       rowId={row.id}
       state={state}
@@ -130,7 +138,21 @@ function DispatchPill({
       onOpen={canOpenWork(target) ? () => openWork(target) : null}
     />
   )
-  if (checkFor == null && !doneWhen && !prFix) return pill
+  const pill =
+    stoppable && info ? (
+      <div className="flex max-w-full min-w-0 items-center gap-1.5">
+        {workPill}
+        <WorkStopButton d={info} />
+      </div>
+    ) : (
+      workPill
+    )
+  // Stopped: who stopped it, as its stop card says.
+  const stopped =
+    info?.state === "canceled" && info.stopped_by
+      ? stoppedWords(info.stopped_by, info.stop_reason, agentName)
+      : null
+  if (checkFor == null && !doneWhen && !prFix && !stopped) return pill
   return (
     <div className="flex max-w-full min-w-0 flex-col items-start gap-1">
       {checkFor != null ? (
@@ -138,6 +160,14 @@ function DispatchPill({
       ) : null}
       {prFix ? <PrFixLabel fix={prFix} className="ps-1" /> : null}
       {pill}
+      {stopped ? (
+        <p
+          className="ps-1 text-xs break-words text-muted-foreground"
+          data-pa-stopped-by={info?.stopped_by}
+        >
+          {stopped}
+        </p>
+      ) : null}
       {doneWhen && data?.followup !== true ? (
         <DoneWhen text={doneWhen} className="ps-1" />
       ) : null}

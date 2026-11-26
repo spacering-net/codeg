@@ -532,6 +532,12 @@ pub struct DispatchInfo {
     pub check_round: Option<i32>,
     /// The routine whose run handed it out (6.9).
     pub routine_id: Option<i32>,
+    /// Stopped: who stopped it (`owner`, `owner_in_session`,
+    /// `owner_on_board`, `agent`), and the assistant's reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped_by: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
 }
 
 /// A round of acceptance, as a dispatch card shows it (7.5).

@@ -67,7 +67,9 @@ function clearWait(key: string, n: number) {
 export function waitForSettle(
   key: string,
   target: SettleTarget,
-  notRefreshed: string
+  notRefreshed: string,
+  /** What reads the row again (the activity, by default). */
+  reread: () => void = refreshActivity
 ) {
   const n = ++lastWait
   useSettling.setState((s) => ({
@@ -77,7 +79,7 @@ export function waitForSettle(
     if (useSettling.getState().waits[key]?.n !== n) return
     clearWait(key, n)
     if (!drawn.get(key)) return
-    refreshActivity()
+    reread()
     toast.message(notRefreshed)
   }, ACT_SETTLE_MS)
 }
@@ -94,7 +96,8 @@ function caughtUp(now: string, w: Waiting): boolean {
  */
 export function useActSettle(
   key: string,
-  now: string
+  now: string,
+  reread?: () => void
 ): {
   waiting: boolean
   waitFor: (target: SettleTarget) => void
@@ -115,6 +118,6 @@ export function useActSettle(
   }, [key, wait, done])
   return {
     waiting: wait != null && !done,
-    waitFor: (target) => waitForSettle(key, target, t("notRefreshed")),
+    waitFor: (target) => waitForSettle(key, target, t("notRefreshed"), reread),
   }
 }

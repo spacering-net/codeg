@@ -11273,6 +11273,7 @@
         "dispatch": "Encarregando um trabalho",
         "dispatch_followup": "Dando continuidade a um trabalho",
         "dispatch_wait": "Aguardando o resultado do trabalho",
+        "dispatch_stop": "Parando um trabalho",
         "items": "Atualizando os assuntos em aberto",
         "timeline_read": "Relendo a conversa",
         "project_list": "Consultando os projetos"
@@ -11737,6 +11738,8 @@
       "dispatchSome": "Encarregando um trabalho",
       "followup": "Acompanhando #{id}",
       "followupSome": "Acompanhando",
+      "stop": "Parando #{id}",
+      "stopSome": "Parando um trabalho",
       "message": "Perguntando a {target}",
       "messageSome": "Perguntando a outro assistente",
       "awaitingReply": "Aguardando a resposta de {name}",
@@ -11771,6 +11774,8 @@
       "dispatchSome": "Encarregou um trabalho",
       "followup": "Acompanhou #{id}",
       "followupSome": "Acompanhou",
+      "stop": "Parou #{id}",
+      "stopSome": "Parou um trabalho",
       "message": "Enviou uma mensagem para {target}",
       "messageSome": "Enviou uma mensagem",
       "think": "Pensou bem",
@@ -11889,6 +11894,9 @@
       "prOpened": "PR aberto",
       "prNotTracked": "O codeg não está acompanhando",
       "pastStopping": "Não dá mais para parar: terminou ou está sendo mesclada",
+      "alreadyStopped": "Já estava parado — {who}",
+      "changed": "Acabou de mudar — atualizado",
+      "boardRefused": "O quadro não pode cancelar a tarefa agora (está mesclando ou terminou)",
       "prChecks": "Verificações {passed}/{total} aprovadas",
       "prChecksFailed": "{n} falharam",
       "prChecksRunning": "{n} rodando",
@@ -13110,12 +13118,14 @@
       },
       "closed": {
         "done": "Você concluiu · {time}",
+        "stopped": "Você parou o trabalho · {time}",
         "skippedLast": "Você pulou a última vez · {time}",
         "dropped": "Você removeu · {time}",
         "withdrawn": "Você retirou a mensagem para {peer} · {time}",
         "stoppedWaiting": "Você parou de esperar a resposta de {peer} · {time}",
         "agentDone": "{name} concluiu · {time}",
         "agentDropped": "{name} parou de acompanhar · {time}",
+        "agentStopped": "{name} parou o trabalho · {time}",
         "answered": "{name} leu sua resposta · {time}",
         "replied": "{peer} respondeu · {time}",
         "gone": "{peer} foi excluído; não virá resposta · {time}",
@@ -13156,6 +13166,13 @@
       "label": "Resposta: {question}",
       "ended": "Esta pergunta já terminou; não precisa responder",
       "alreadyAnswered": "Esta pergunta já está esperando {name} ler sua resposta"
+    },
+    "stopped": {
+      "owner": "Você parou",
+      "inSession": "Você parou na sessão dele",
+      "onBoard": "Você parou no quadro",
+      "agent": "{name} parou: {reason}",
+      "agentPlain": "{name} parou"
     }
   },
   "MessageCheck": {

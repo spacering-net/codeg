@@ -158,6 +158,30 @@ impl PersonalAgentEngine {
         let Ok(Some(d)) = svc::get_dispatch_of(&self.db.conn, bot, id).await else {
             return Look::Done(ToolOutcome::refused(format!("dispatch #{id} does not exist")));
         };
+        // Stopped: said at once — a stop writes no event to wait for (4.10).
+        if let Some(by) = super::stop::stopped_by_of(&d) {
+            let hint = self.resume_hint(&d).await;
+            let why = by
+                .reason()
+                .filter(|r| !r.trim().is_empty())
+                .map(|r| format!(": {r}"))
+                .unwrap_or_default();
+            return Look::Done(ToolOutcome::ok(
+                format!(
+                    "Dispatch #{id} was stopped by {}{why}.{}",
+                    by.words(),
+                    hint.sentence(id)
+                ),
+                serde_json::json!({
+                    "dispatch_id": id,
+                    "state": d.state,
+                    "waiting": "work_stopped",
+                    "stopped_by": by.key(),
+                    "reason": by.reason(),
+                    "resume_hint": hint.key(),
+                }),
+            ));
+        }
         let task = match (d.mode, d.work_task_id) {
             (DispatchMode::Task, Some(tid)) => {
                 crate::db::service::work_task_service::get_model(&self.db.conn, tid)

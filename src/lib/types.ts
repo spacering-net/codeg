@@ -2318,6 +2318,9 @@ export interface DispatchInfo {
   check_round?: number | null
   /** The routine whose run handed it out (6.9). */
   routine_id?: number | null
+  /** Stopped: who stopped it, and the assistant's reason. */
+  stopped_by?: StoppedBy
+  stop_reason?: string
 }
 
 /** Where a round of acceptance stands (7.5). */
@@ -2733,6 +2736,9 @@ export interface PrFacts {
 export interface TaskFacts {
   task_id: number
   status: WorkTaskStatus
+  /** Its run and version, as a card's [Stop] read them. */
+  run_seq: number
+  updated_at: string
   /** The project it belongs to. */
   folder_id: number
   branch: string | null
@@ -2833,6 +2839,29 @@ export interface ItemInfo {
   direction?: "in" | "out"
 }
 
+/** Who stopped a piece of work: the owner on its card or in the
+ *  conversation, in its own session, on the board; or its assistant. */
+export type StoppedBy =
+  | "owner"
+  | "owner_in_session"
+  | "owner_on_board"
+  | "agent"
+
+/** What a [Stop] came to. */
+export interface StopReply {
+  outcome:
+    | "stopped"
+    | "already_stopped"
+    | "past_stopping"
+    | "board_refused"
+    | "changed"
+  by?: StoppedBy
+  reason?: string
+  state?: DispatchState
+  /** The dispatch as the stop wrote it. */
+  updated_at?: string
+}
+
 /** Who settled a matter. */
 export type ItemClosedBy = "owner" | "agent" | "codeg"
 
@@ -2840,6 +2869,7 @@ export type ItemClosedBy = "owner" | "agent" | "codeg"
 export type ItemClosedHow =
   | "done"
   | "skipped"
+  | "stopped"
   | "dropped"
   | "withdrawn"
   | "stopped_waiting"

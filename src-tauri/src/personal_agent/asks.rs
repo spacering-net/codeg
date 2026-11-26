@@ -125,6 +125,16 @@ pub struct AskCard {
     pub mirror_of: Option<Value>,
     /// On a card: its mirrors, `{bot_id, row_id}`.
     pub mirrors: Vec<Value>,
+    /// Withdrawn because its work was stopped: by whom
+    /// (`owner` / `owner_in_session` / `owner_on_board` / `agent`), and the
+    /// assistant's reason when it stopped it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    /// Feedback never sent: its work was stopped first (`stopped`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feedback_dropped: Option<String>,
 }
 
 impl AskCard {
@@ -141,7 +151,7 @@ impl AskCard {
         }
     }
 
-    fn read(raw: &str) -> Option<Self> {
+    pub(crate) fn read(raw: &str) -> Option<Self> {
         serde_json::from_str(raw).ok()
     }
 }
@@ -559,6 +569,22 @@ impl PersonalAgentEngine {
             if pending {
                 continue;
             }
+            // Its work stopped: closed saying who stopped it. A board task
+            // the owner canceled is booked as their stop first (that closes
+            // this card too), should this sweep come before any sync.
+            if let Ok(Some(d)) = svc::get_dispatch(&self.db.conn, card.dispatch_id).await {
+                if d.mode == DispatchMode::Task
+                    && self.book_board_cancel(&d).await
+                    && self.ask_card(n.id).await.is_some_and(|c| !c.is_open())
+                {
+                    continue;
+                }
+                let now = svc::get_dispatch(&self.db.conn, d.id).await.ok().flatten();
+                if let Some(by) = now.as_ref().and_then(super::stop::stopped_by_of) {
+                    self.close_ask_of_stopped(n.id, &card, &by).await;
+                    continue;
+                }
+            }
             let resolution = self
                 .manager
                 .resolution_of(&card.request_id)
@@ -770,6 +796,30 @@ impl PersonalAgentEngine {
         if d.state == DispatchState::HandedOver {
             return;
         }
+        // A conversation's question is of its open round: raised only while
+        // the dispatch is still on that round (checked again where the card
+        // is written) — not for work stopped meanwhile, nor written over a
+        // round followed up since. A board task's questions route by its
+        // task, not by a round.
+        let round = if d.mode == DispatchMode::Task {
+            None
+        } else {
+            let st = self.state.lock().await;
+            match st.dispatch_conns.get(conn) {
+                Some(c) if c.round_since.is_some() => Some(svc::RoundGuard {
+                    dispatch_id: d.id,
+                    connection_id: conn.to_string(),
+                    op: c.round_op.clone(),
+                }),
+                _ => {
+                    tracing::info!(
+                        "[personal_agent] dispatch #{}: a question of no open round, left alone",
+                        d.id
+                    );
+                    return;
+                }
+            }
+        };
         let subject = format!("ask:{conn}:{}", req.id());
         let _one = self.asks_lock.lock().await;
         if let Ok(Some(_)) = svc::ask_by_subject(&self.db.conn, &subject).await {
@@ -906,10 +956,18 @@ impl PersonalAgentEngine {
                     for_input: d.for_input.clone(),
                 },
             },
+            round,
         )
         .await;
         let (notice, row) = match made {
-            Ok((n, r, _)) => (n, r),
+            Ok(Some((n, r, _))) => (n, r),
+            Ok(None) => {
+                tracing::info!(
+                    "[personal_agent] dispatch #{}: its round is over (stopped, or followed up), no card",
+                    d.id
+                );
+                return;
+            }
             Err(e) => {
                 tracing::warn!("[personal_agent] dispatch #{}'s question not recorded: {e}", d.id);
                 return;
@@ -949,7 +1007,7 @@ impl PersonalAgentEngine {
 
     /// Write card `ask_id` as `card` — its notice, its row, its mirrors —
     /// and show it.
-    async fn write_ask(&self, ask_id: i32, card: &AskCard) -> Result<(), String> {
+    pub(super) async fn write_ask(&self, ask_id: i32, card: &AskCard) -> Result<(), String> {
         let notice = svc::get_notice(&self.db.conn, ask_id)
             .await
             .map_err(|e| e.to_string())?
@@ -1071,6 +1129,11 @@ impl PersonalAgentEngine {
                         card.feedback = feedback;
                     }
                 }
+                // Its work was stopped while this answer was on its way:
+                // the answer stands on the card, its feedback goes nowhere.
+                if let Some(by) = self.stopped_before_card(card.dispatch_id, notice.timeline_id).await {
+                    super::stop::drop_feedback(&mut card, &by);
+                }
                 let _ = svc::move_notice(&self.db.conn, notice.id, &[NoticeState::Open], NoticeState::Acted).await;
             }
             None => {
@@ -1138,6 +1201,11 @@ impl PersonalAgentEngine {
                 let rejected = option.as_ref().is_some_and(|o| o.kind.starts_with("reject"));
                 if !(ours && rejected) {
                     card.feedback = None;
+                }
+                // Its work was stopped while this answer was on its way:
+                // its feedback goes nowhere.
+                if let Some(by) = self.stopped_before_card(card.dispatch_id, notice.timeline_id).await {
+                    super::stop::drop_feedback(&mut card, &by);
                 }
                 let _ = svc::move_notice(&self.db.conn, notice.id, &[NoticeState::Open], NoticeState::Acted).await;
             }
@@ -1568,9 +1636,31 @@ impl PersonalAgentEngine {
             let Some(text) = card.feedback.clone() else {
                 continue;
             };
-            let Ok(Some(d)) = svc::get_dispatch(&self.db.conn, card.dispatch_id).await else {
+            let Ok(Some(mut d)) = svc::get_dispatch(&self.db.conn, card.dispatch_id).await else {
                 continue;
             };
+            // A board task the owner canceled, not seen by a sync yet: their
+            // stop is booked first (which drops this feedback) — only that;
+            // the task's other states are the sync's to follow, not this
+            // sender's, so feedback of a canceled run is never sent to a
+            // run queued again since.
+            if d.mode == DispatchMode::Task && self.book_board_cancel(&d).await {
+                if let Ok(Some(now)) = svc::get_dispatch(&self.db.conn, d.id).await {
+                    d = now;
+                }
+            }
+            // Its work was stopped before this card's feedback went: it goes
+            // nowhere, and nobody is told it could not go.
+            if let Some(by) = self.stopped_before_card(d.id, Some(r.id)).await {
+                let _one = self.asks_lock.lock().await;
+                if let Some(mut now) = self.ask_card(card.ask_id).await {
+                    if !now.feedback_sent {
+                        super::stop::drop_feedback(&mut now, &by);
+                        let _ = self.write_ask(card.ask_id, &now).await;
+                    }
+                }
+                continue;
+            }
             // How the work takes it, once its round is over: a task in
             // review is sent back with it, a failed one retried with it; a
             // conversation gets it as its next turn.

@@ -350,7 +350,10 @@ pub(crate) async fn dispatch_infos(
                 .map(|c| c.folder_id),
             None => None,
         };
+        let stopped = crate::personal_agent::stop::stopped_by_of(&d);
         out.push(DispatchInfo {
+            stopped_by: stopped.as_ref().map(|b| b.key()),
+            stop_reason: stopped.as_ref().and_then(|b| b.reason()).map(str::to_string),
             id: d.id,
             mode: d.mode,
             work: crate::personal_agent::dispatch::work_of(&d),
@@ -1145,12 +1148,32 @@ pub async fn personal_agent_history_rebuild_core(
 
 /// The owner's [Stop] on a task card (8.5, 4.10): this one piece of work,
 /// where it runs. False when it is past stopping (done, merging).
+/// The owner's [Stop] on a piece of work's card (5.7), with what the card
+/// read: the dispatch's version, and its board task's run and version. A
+/// card that read it before it changed (another window followed it up
+/// meanwhile) is told `changed`, and nothing is stopped.
 pub async fn personal_agent_dispatch_stop_core(
     bot_id: Option<i32>,
     dispatch_id: i32,
-) -> Result<bool, AppCommandError> {
+    expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    expect_run_seq: Option<i32>,
+    expect_task_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<crate::personal_agent::stop::StopReply, AppCommandError> {
+    use crate::personal_agent::stop::{StopExpect, StopReply, StoppedBy};
     let engine = engine(bot_id).await?;
-    on_own_task(async move { engine.stop_one(dispatch_id).await.map_err(refused) }).await
+    let expect = StopExpect {
+        updated_at: expect_updated_at,
+        run_seq: expect_run_seq,
+        task_updated_at: expect_task_updated_at,
+    };
+    on_own_task(async move {
+        engine
+            .stop_one(dispatch_id, StoppedBy::Owner, expect)
+            .await
+            .map(|o| StopReply::from(&o))
+            .map_err(refused)
+    })
+    .await
 }
 
 /// What the owner's answer on a question card came to (7.3.1).
@@ -1993,8 +2016,18 @@ pub async fn personal_agent_avatar_png(
 pub async fn personal_agent_dispatch_stop(
     bot_id: Option<i32>,
     dispatch_id: i32,
-) -> Result<bool, AppCommandError> {
-    personal_agent_dispatch_stop_core(bot_id, dispatch_id).await
+    expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    expect_run_seq: Option<i32>,
+    expect_task_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<crate::personal_agent::stop::StopReply, AppCommandError> {
+    personal_agent_dispatch_stop_core(
+        bot_id,
+        dispatch_id,
+        expect_updated_at,
+        expect_run_seq,
+        expect_task_updated_at,
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]

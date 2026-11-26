@@ -11273,6 +11273,7 @@
         "dispatch": "일을 맡기는 중",
         "dispatch_followup": "맡긴 일을 이어가는 중",
         "dispatch_wait": "맡긴 일의 결과를 기다리는 중",
+        "dispatch_stop": "맡긴 일을 멈추는 중",
         "items": "진행 중인 일 정리 중",
         "timeline_read": "대화 기록 확인 중",
         "project_list": "프로젝트 확인 중"
@@ -11737,6 +11738,8 @@
       "dispatchSome": "일을 맡기는 중",
       "followup": "#{id} 후속 확인 중",
       "followupSome": "후속 확인 중",
+      "stop": "#{id} 멈추는 중",
+      "stopSome": "일을 멈추는 중",
       "message": "{target}에게 묻는 중",
       "messageSome": "다른 어시스턴트에게 묻는 중",
       "awaitingReply": "{name}의 답장 기다리는 중",
@@ -11771,6 +11774,8 @@
       "dispatchSome": "일을 맡김",
       "followup": "#{id} 후속 확인함",
       "followupSome": "후속 확인함",
+      "stop": "#{id} 멈춤",
+      "stopSome": "일을 멈춤",
       "message": "{target}에게 메시지 보냄",
       "messageSome": "메시지 보냄",
       "think": "곰곰이 생각함",
@@ -11889,6 +11894,9 @@
       "prOpened": "PR 생성됨",
       "prNotTracked": "codeg가 지켜보고 있지 않아요",
       "pastStopping": "이미 끝났거나 병합 중이라 중지할 수 없습니다",
+      "alreadyStopped": "이미 멈췄어요 — {who}",
+      "changed": "방금 바뀌어서 새로 고쳤어요",
+      "boardRefused": "보드가 지금 그 작업을 취소할 수 없어요(병합 중이거나 완료됨)",
       "prChecks": "검사 {passed}/{total} 통과",
       "prChecksFailed": "{n}개 실패",
       "prChecksRunning": "{n}개 진행 중",
@@ -13110,12 +13118,14 @@
       },
       "closed": {
         "done": "내가 완료 · {time}",
+        "stopped": "작업을 멈췄어요 · {time}",
         "skippedLast": "마지막 회차를 건너뛰었어요 · {time}",
         "dropped": "내가 뺌 · {time}",
         "withdrawn": "{peer}에게 보낸 메시지를 회수함 · {time}",
         "stoppedWaiting": "{peer}의 답을 그만 기다림 · {time}",
         "agentDone": "{name}이(가) 완료 · {time}",
         "agentDropped": "{name}이(가) 더 챙기지 않음 · {time}",
+        "agentStopped": "{name}이(가) 작업을 멈췄어요 · {time}",
         "answered": "{name}이(가) 내 답을 읽음 · {time}",
         "replied": "{peer}이(가) 답함 · {time}",
         "gone": "{peer}이(가) 삭제되어 답이 오지 않음 · {time}",
@@ -13156,6 +13166,13 @@
       "label": "답: {question}",
       "ended": "이 질문은 이미 끝났어요. 답하지 않아도 돼요",
       "alreadyAnswered": "이 질문은 이미 {name}이(가) 읽기를 기다리고 있어요. 다시 답하지 않아도 돼요"
+    },
+    "stopped": {
+      "owner": "직접 멈췄어요",
+      "inSession": "그 대화에서 직접 멈췄어요",
+      "onBoard": "보드에서 직접 멈췄어요",
+      "agent": "{name}이(가) 멈췄어요: {reason}",
+      "agentPlain": "{name}이(가) 멈췄어요"
     }
   },
   "MessageCheck": {

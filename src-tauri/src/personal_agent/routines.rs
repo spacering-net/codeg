@@ -539,14 +539,23 @@ pub fn signal_matches(spec: &EventSpec, owned: bool, s: &signal_entity::Model) -
 pub fn event_words(s: &signal_entity::Model) -> String {
     let f: Value = serde_json::from_str(&s.facts).unwrap_or(Value::Null);
     let title = f["title"].as_str().unwrap_or("");
+    // Who stopped it, when it was a stop.
+    let stopped = f["stopped_by"]
+        .as_str()
+        .and_then(|k| super::stop::StoppedBy::from_key(k, f["reason"].as_str()))
+        .map(|by| match by {
+            super::stop::StoppedBy::Agent { .. } => " (stopped by the assistant)".to_string(),
+            _ => " (stopped by the owner)".to_string(),
+        })
+        .unwrap_or_default();
     match s.kind.as_str() {
         "dispatch_ended" => format!(
-            "dispatch #{} \"{title}\" ended: {}",
+            "dispatch #{} \"{title}\" ended: {}{stopped}",
             f["dispatch_id"],
             f["state"].as_str().unwrap_or("?")
         ),
         "task_status" => format!(
-            "board task #{} \"{title}\" is now {}",
+            "board task #{} \"{title}\" is now {}{stopped}",
             f["task_id"],
             f["status"].as_str().unwrap_or("?")
         ),

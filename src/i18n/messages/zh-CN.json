@@ -11273,6 +11273,7 @@
         "dispatch": "派出一件活",
         "dispatch_followup": "继续一件活",
         "dispatch_wait": "等派出的活回来",
+        "dispatch_stop": "停掉派出的工作",
         "items": "整理在途事项",
         "timeline_read": "翻看对话记录",
         "project_list": "查看项目"
@@ -11737,6 +11738,8 @@
       "dispatchSome": "正在派活",
       "followup": "正在跟进 #{id}",
       "followupSome": "正在跟进",
+      "stop": "停掉 #{id}",
+      "stopSome": "停掉工作",
       "message": "正在问 {target}",
       "messageSome": "正在问别的助手",
       "awaitingReply": "等 {name} 回复",
@@ -11771,6 +11774,8 @@
       "dispatchSome": "派出了活",
       "followup": "跟进了 #{id}",
       "followupSome": "跟进了",
+      "stop": "停掉了 #{id}",
+      "stopSome": "停掉了工作",
       "message": "已发消息给 {target}",
       "messageSome": "发了消息",
       "think": "想了想",
@@ -11889,6 +11894,9 @@
       "prOpened": "已提 PR",
       "prNotTracked": "codeg 没在看护它",
       "pastStopping": "已经做完或正在合并，停不了了",
+      "alreadyStopped": "已经停了——{who}",
+      "changed": "这一项刚有变化，已为你刷新",
+      "boardRefused": "看板现在不能取消它的任务（正在合并或已完成）",
       "prChecks": "检查 {passed}/{total} 通过",
       "prChecksFailed": "{n} 个没过",
       "prChecksRunning": "{n} 个在跑",
@@ -13110,12 +13118,14 @@
       },
       "closed": {
         "done": "你完成了 · {time}",
+        "stopped": "你停了这项工作 · {time}",
         "skippedLast": "你跳过了最后一次 · {time}",
         "dropped": "你移除了 · {time}",
         "withdrawn": "你撤回了发给{peer}的消息 · {time}",
         "stoppedWaiting": "你不再等{peer}回复 · {time}",
         "agentDone": "{name}完成了 · {time}",
         "agentDropped": "{name}不再跟进了 · {time}",
+        "agentStopped": "{name} 停了这项工作 · {time}",
         "answered": "{name}看到了你的回答 · {time}",
         "replied": "{peer}回复了 · {time}",
         "gone": "{peer}已被删除，不再等回复 · {time}",
@@ -13156,6 +13166,13 @@
       "label": "回答：{question}",
       "ended": "这个问题已经结束了，不用再回答",
       "alreadyAnswered": "这个问题已经在等{name}看了，不用再回答"
+    },
+    "stopped": {
+      "owner": "你停了它",
+      "inSession": "你在它的会话里停了它",
+      "onBoard": "你在看板上停了它",
+      "agent": "{name} 停了它：{reason}",
+      "agentPlain": "{name} 停了它"
     }
   },
   "MessageCheck": {
