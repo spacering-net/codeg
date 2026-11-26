@@ -135,6 +135,54 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe("PersonalAgentComposer", () => {
+  it("answers one of the assistant's questions, and keeps the words when it no longer can be", async () => {
+    const onClearAnswer = vi.fn()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <PersonalAgentComposer
+          agent={agent}
+          agentName="Aide"
+          status={status(null)}
+          quoting={null}
+          answering={{ itemId: 12, summary: "Move the release to Friday?" }}
+          onClearQuote={() => {}}
+          onClearAnswer={onClearAnswer}
+        />
+      </NextIntlClientProvider>
+    )
+    expect(screen.getByText("Answer: Move the release to Friday?")).toBeTruthy()
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Message to your personal agent" }),
+      { target: { value: "Yes" } }
+    )
+    // The question changed meanwhile: refused in the owner's words, the bar
+    // gone, what was typed still there.
+    api.personalAgentSend.mockRejectedValueOnce({
+      code: "invalid_input",
+      message: "the question changed meanwhile: the message was not sent",
+      i18n_key: "matterErrors.answerChanged",
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    })
+    expect(api.personalAgentSend).toHaveBeenCalledWith(
+      "Yes",
+      [],
+      null,
+      null,
+      null,
+      12
+    )
+    expect(onClearAnswer).toHaveBeenCalled()
+    expect(
+      (
+        screen.getByRole("textbox", {
+          name: "Message to your personal agent",
+        }) as HTMLTextAreaElement
+      ).value
+    ).toBe("Yes")
+  })
+
   it("keeps the send button while the agent works, with nothing to stop there", () => {
     draw(RUNNING)
     expect(screen.queryByRole("button", { name: /stop/i })).toBeNull()
@@ -155,6 +203,8 @@ describe("PersonalAgentComposer", () => {
     expect(api.personalAgentSend).toHaveBeenCalledWith(
       "one more thing",
       [],
+      null,
+      null,
       null,
       null
     )

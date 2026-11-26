@@ -1656,9 +1656,13 @@ export function GitChangesTab() {
           would only repeat what both already do. The circles match the commits
           tab's header, so the two tabs read as one panel. Hidden on a non-repo
           folder — there is nothing to commit to (the body shows the "not a
-          repo" hint). */}
+          repo" hint). Its single-line height is the other tabs' and the
+          conversation header's `h-10`, border included: `min-h-10` counts the
+          1px border-b, so the bottom padding gives that pixel back — with a
+          plain `py-1` the 2rem box plus padding filled the whole 2.5rem and the
+          border pushed the bar 1px taller than its neighbours. */}
       {workspaceState.isGitRepo && (
-        <div className="flex min-h-10 shrink-0 flex-wrap items-start gap-1 border-b border-border/50 px-2 py-1">
+        <div className="flex min-h-10 shrink-0 flex-wrap items-start gap-1 border-b border-border/50 px-2 pt-1 pb-[calc(0.25rem-1px)]">
           {/* Multi-line, because a message is: Enter commits, Shift+Enter
               starts a new line, and the box grows to about six lines before it
               scrolls. Read-only while a message is being written into it. */}

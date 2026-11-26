@@ -56,7 +56,7 @@ import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { useBotId } from "@/contexts/personal-agent-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { personalAgentSend } from "@/lib/api"
-import { toErrorMessage } from "@/lib/app-error"
+import { extractAppCommandError } from "@/lib/app-error"
 import type {
   PersonalAgentInfo,
   PersonalAgentStatus,
@@ -65,6 +65,8 @@ import type {
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { AnswerBar, type AnsweringQuestion } from "./answer-bar"
+import { useMatterError } from "./matter-text"
 import { QuoteBar } from "./quote-bar"
 
 /** What the agent is assumed to accept: the engine sends the blocks as
@@ -105,10 +107,14 @@ interface ComposerProps {
   status: PersonalAgentStatus
   /** The row the next message quotes. */
   quoting: number | null
+  /** The assistant's question the next message answers (never with a
+   *  quote). */
+  answering?: AnsweringQuestion | null
   /** Text to put in the box (a card's message the owner edits first); a
    *  new `n` puts it in again. */
   draft?: { text: string; n: number } | null
   onClearQuote: () => void
+  onClearAnswer?: () => void
   /** A message went out. */
   onSent?: () => void
 }
@@ -118,11 +124,14 @@ export function PersonalAgentComposer({
   agentName,
   status,
   quoting,
+  answering = null,
   draft,
   onClearQuote,
+  onClearAnswer,
   onSent,
 }: ComposerProps) {
   const t = useTranslations("PersonalAgent.composer")
+  const errorText = useMatterError()
   const tInput = useTranslations("Folder.chat.messageInput")
   const { shortcuts } = useShortcutSettings()
   const reduced = useReducedMotion()
@@ -195,7 +204,7 @@ export function PersonalAgentComposer({
   const [wrapped, setWrapped] = useState(false)
   // The editor mounts after the first render (`onReady`).
   const [editorReady, setEditorReady] = useState(false)
-  const open = wrapped || quoting != null || hasImages
+  const open = wrapped || quoting != null || answering != null || hasImages
 
   // The box is one assistant's (the page keys it by them): a send that
   // lands once it is gone — the owner switched assistants meanwhile — leaves
@@ -218,25 +227,46 @@ export function PersonalAgentComposer({
     const blocks = [...embeddedBlocks(), ...attach.imagePromptBlocks()]
     setSending(true)
     try {
-      await personalAgentSend(body, blocks, quoting, botId)
+      await personalAgentSend(
+        body,
+        blocks,
+        answering ? null : quoting,
+        botId,
+        null,
+        answering?.itemId ?? null
+      )
       if (!mounted.current) return
       editorRef.current?.clear()
       attach.clearAttachments()
       setText("")
       setWrapped(false)
       onClearQuote()
+      onClearAnswer?.()
       onSent?.()
     } catch (e) {
-      toast.error(toErrorMessage(e))
+      // What was typed stays; a question that can no longer be answered
+      // takes its bar with it, so the next send is a plain message.
+      const key = extractAppCommandError(e)?.i18n_key
+      if (
+        key === "matterErrors.answerChanged" ||
+        key === "matterErrors.answerQueued"
+      ) {
+        onClearAnswer?.()
+      }
+      toast.error(errorText(e))
     } finally {
       setSending(false)
     }
   }
 
-  // Quoting focuses the line, ready to type the reply.
+  // Quoting focuses the line, ready to type the reply; answering too.
   useEffect(() => {
     if (quoting != null) editorRef.current?.focus()
   }, [quoting])
+  const answeringId = answering?.itemId ?? null
+  useEffect(() => {
+    if (answeringId != null) editorRef.current?.focus()
+  }, [answeringId])
 
   // A card's message to edit first: after what is already typed, never in
   // place of it.
@@ -409,7 +439,17 @@ export function PersonalAgentComposer({
                   )}
                 />
               </div>
-              {quoting != null ? (
+              {answering ? (
+                <div className="pb-1.5" style={{ gridArea: "quote" }}>
+                  <AnswerBar
+                    question={answering}
+                    onDismiss={() => {
+                      onClearAnswer?.()
+                      editorRef.current?.focus()
+                    }}
+                  />
+                </div>
+              ) : quoting != null ? (
                 <div className="pb-1.5" style={{ gridArea: "quote" }}>
                   <QuoteBar
                     targetId={quoting}

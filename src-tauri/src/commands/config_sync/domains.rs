@@ -744,7 +744,7 @@ fn package_avatar(avatar: BotAvatar) -> AssistantAvatar {
             "brown" | "yellow" => "amber",
             "purple" => "violet",
             "magenta" => "pink",
-            "gray" => "slate",
+            "gray" | "black" => "slate",
             other => other,
         };
         if crate::models::assistant::ASSISTANT_AVATAR_COLORS.contains(&near) {

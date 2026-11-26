@@ -5,6 +5,11 @@ import { useTranslations } from "next-intl"
 import { Eye, EyeOff, Loader2, Save, ShieldCheck } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  AgentPanelCard,
+  AgentPanelGroup,
+  AgentPanelSaveBar,
+} from "@/components/settings/agent-panel-layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -92,23 +97,11 @@ export function KiroConfigPanel({
   }, [agent.env, agent.enabled, apiKey, mode, onSave, t])
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-      <div>
-        <label className="text-xs font-medium">
-          {t("kiro.configManagement")}
-        </label>
-        <p className="mt-1 text-2xs text-muted-foreground">
-          {t("kiro.configDescription")}
-        </p>
-      </div>
-
-      <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
-        <div className="flex items-center gap-1.5">
-          <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-2xs font-medium">
-            {t("kiro.permissionsTitle")}
-          </span>
-        </div>
+    <AgentPanelGroup
+      title={t("kiro.configManagement")}
+      description={t("kiro.configDescription")}
+    >
+      <AgentPanelCard icon={ShieldCheck} title={t("kiro.permissionsTitle")}>
         <div className="space-y-1">
           <label
             htmlFor="kiro-permission-mode"
@@ -143,45 +136,51 @@ export function KiroConfigPanel({
             ? t("kiro.permissionModeTrustAllHint")
             : t("kiro.permissionModeAskHint")}
         </p>
-      </div>
+      </AgentPanelCard>
 
-      <div className="space-y-1.5">
-        <label
-          htmlFor="kiro-api-key"
-          className="text-2xs text-muted-foreground"
-        >
-          {t("kiro.apiKeyLabel")}
-        </label>
-        <div className="flex items-center gap-2">
-          <Input
-            id="kiro-api-key"
-            type={showKey ? "text" : "password"}
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
-            autoComplete="off"
-            disabled={saving}
-          />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setShowKey((prev) => !prev)}
-            title={showKey ? t("actions.hideApiKey") : t("actions.showApiKey")}
-            aria-label={
-              showKey ? t("actions.hideApiKey") : t("actions.showApiKey")
-            }
+      <AgentPanelCard>
+        <div className="space-y-1.5">
+          <label
+            htmlFor="kiro-api-key"
+            className="text-2xs text-muted-foreground"
           >
-            {showKey ? (
-              <EyeOff className="h-3.5 w-3.5" />
-            ) : (
-              <Eye className="h-3.5 w-3.5" />
-            )}
-          </Button>
+            {t("kiro.apiKeyLabel")}
+          </label>
+          <div className="flex items-center gap-2">
+            <Input
+              id="kiro-api-key"
+              type={showKey ? "text" : "password"}
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              autoComplete="off"
+              disabled={saving}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setShowKey((prev) => !prev)}
+              title={
+                showKey ? t("actions.hideApiKey") : t("actions.showApiKey")
+              }
+              aria-label={
+                showKey ? t("actions.hideApiKey") : t("actions.showApiKey")
+              }
+            >
+              {showKey ? (
+                <EyeOff className="h-3.5 w-3.5" />
+              ) : (
+                <Eye className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          </div>
+          <p className="text-2xs text-muted-foreground">
+            {t("kiro.apiKeyHint")}
+          </p>
         </div>
-        <p className="text-2xs text-muted-foreground">{t("kiro.apiKeyHint")}</p>
-      </div>
+      </AgentPanelCard>
 
-      <div className="flex justify-end">
+      <AgentPanelSaveBar>
         <Button
           type="button"
           size="sm"
@@ -201,7 +200,7 @@ export function KiroConfigPanel({
             </>
           )}
         </Button>
-      </div>
-    </div>
+      </AgentPanelSaveBar>
+    </AgentPanelGroup>
   )
 }

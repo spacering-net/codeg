@@ -2,7 +2,7 @@
 
 /**
  * The owner's personal assistants on the workspace's sidebar (U2): a
- * section of its own, "Personal assistants", above the folders by default.
+ * section of its own, "Assistants", above the folders by default.
  *
  * - Its rows are the roster's (`PersonalAgentRoster variant="sidebar"`):
  *   the primary — or, before it is set up, the row that sets it up — then

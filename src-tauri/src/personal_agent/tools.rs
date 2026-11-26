@@ -661,6 +661,12 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                                 summary,
                                 on_done: on_done.map(Some),
                                 time: time.clone(),
+                                closing: match status {
+                                    Some(ItemStatus::Done) => Some(svc::Closing::new(svc::Closer::Agent, "done")),
+                                    Some(ItemStatus::Dropped) => Some(svc::Closing::new(svc::Closer::Agent, "dropped")),
+                                    _ => None,
+                                },
+                                answer: None,
                             },
                             card,
                             None,
@@ -753,6 +759,15 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                         (None, Some(_)) => Some(WaitsFor::Time),
                         (w, _) => w,
                     };
+                    // A question comes from the reply that asks it; any other
+                    // matter from what the owner wrote.
+                    let origin = match kind {
+                        ItemKind::Question => match engine.turn_reply_row().await {
+                            Some(r) => Some(r),
+                            None => engine.turn_owner_row().await,
+                        },
+                        _ => engine.turn_owner_row().await,
+                    };
                     match svc::create_item_timed(
                         &db.conn,
                         bot,
@@ -762,7 +777,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                         waits_for,
                         summary,
                         on_done,
-                        engine.turn_owner_row().await,
+                        origin,
                         time,
                     )
                     .await

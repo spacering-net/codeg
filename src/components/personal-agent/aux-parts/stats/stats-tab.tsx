@@ -8,6 +8,7 @@ import { useState } from "react"
 import { useTranslations } from "next-intl"
 import type { PersonalAgentSnapshot } from "@/lib/types"
 
+import { faceColorOf } from "../../bot-avatar"
 import { ViewSelect } from "../kit/view-select"
 import { TabBody } from "../tab-body"
 import { ContextSection } from "./context-section"
@@ -69,14 +70,7 @@ export function StatsTab({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
             count: null,
           }))}
         />
-        <StatsBody
-          days={days}
-          face={
-            snapshot.agent?.avatar?.kind === "face"
-              ? snapshot.agent.avatar.color
-              : null
-          }
-        />
+        <StatsBody days={days} face={faceColorOf(snapshot.agent?.avatar)} />
       </section>
     </TabBody>
   )

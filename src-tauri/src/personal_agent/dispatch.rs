@@ -2208,6 +2208,7 @@ impl PersonalAgentEngine {
                         ItemWrite {
                             status: Some(ItemStatus::Done),
                             waits_for: Some(None),
+                            closing: Some(svc::Closing::new(svc::Closer::Owner, "dropped")),
                             ..Default::default()
                         },
                     )
@@ -2354,6 +2355,7 @@ impl PersonalAgentEngine {
                     ItemWrite {
                         status: Some(status),
                         waits_for: Some(waits_for),
+                        closing: Some(svc::Closing::new(svc::Closer::Codeg, "done")),
                         ..Default::default()
                     },
                 )

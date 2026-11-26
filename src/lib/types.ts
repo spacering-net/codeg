@@ -1997,12 +1997,22 @@ export type BotColor =
   | "magenta"
   | "gray"
 
+/** A text avatar's colour on an assistant: one of the faces' colours (what
+ *  the face editor offers), or one of the ten the collaboration settings'
+ *  assistants had, which the avatars made before carry. */
+export type AvatarTextColor = BotColor | AssistantAvatarColor
+
 /** An assistant's avatar: a face (shape and colour), or one of the avatars
  *  the collaboration settings' assistants had, which the assistants made
- *  before 1.6 carry. */
+ *  before 1.6 carry — a monogram or an emoji now in a face's colour. */
 export type BotAvatar =
   | { kind: "face"; shape: BotShape; color: BotColor }
-  | AssistantAvatar
+  | { kind: "monogram"; color: AvatarTextColor }
+  | { kind: "emoji"; emoji: string; color: AvatarTextColor }
+  | { kind: "image"; data_url: string }
+
+/** Any avatar but a face: what `AssistantAvatar` draws. */
+export type DiscAvatar = Exclude<BotAvatar, { kind: "face" }>
 
 export interface PersonalAgentInfo {
   id: number
@@ -2806,6 +2816,62 @@ export interface ItemInfo {
   fired_at: string | null
   /** A `when_mentioned` matter's keywords and how it comes up (6.8). */
   mention?: ItemMention | null
+  /** When it was settled, by whom and how: none while open, and for one
+   *  settled before this was kept. */
+  closed_at?: string | null
+  closed_by?: ItemClosedBy | null
+  closed_how?: ItemClosedHow | null
+  /** A question's: the owner's message answering it, and how it stands
+   *  (`linked`: the assistant has it; `interrupted`: its turn did not
+   *  finish). */
+  answer_row_id?: number | null
+  answer_state?: "linked" | "interrupted" | null
+  /** A message's: the assistant it waits on. */
+  peer?: ItemPeer | null
+}
+
+/** Who settled a matter. */
+export type ItemClosedBy = "owner" | "agent" | "codeg"
+
+/** How a matter was settled. */
+export type ItemClosedHow =
+  | "done"
+  | "dropped"
+  | "withdrawn"
+  | "stopped_waiting"
+  | "plan_canceled"
+  | "answered"
+  | "replied"
+  | "gone"
+  | "used_up"
+  | "expired"
+  | "merged"
+  | "replaced"
+
+/** The assistant a message's matter waits on (its name when it was
+ *  deleted, `gone`). */
+export interface ItemPeer {
+  id: number
+  name: string | null
+  avatar: unknown
+  gone: boolean
+}
+
+/** The owner's act on a matter: the matter as it is now, what takes the
+ *  panel's act back, and — a message's dropped — whether the message was
+ *  taken back. */
+export interface ItemActResult {
+  item: ItemInfo
+  undo: number | null
+  withdrawn: boolean | null
+}
+
+/** What an owner's message answering a question keeps on its row
+ *  (`data.answers_item`). */
+export interface OwnerAnswersItem {
+  id: number
+  summary: string
+  linked_at: string
 }
 
 /** How a matter that comes up when the owner mentions something does. */
@@ -3224,6 +3290,8 @@ export type TodayRowKind =
   // matter gone quiet, a new project.
   | "rule"
   | "routine_report"
+  /** A matter settled today, with who did it and how. */
+  | "matter_closed"
 
 export interface TodayRow {
   /** The same thing keeps the same key across reads. */
@@ -3265,6 +3333,15 @@ export interface TodayRow {
   round?: number | null
   /** An acceptance waiting on the owner whose task is queued to merge. */
   queued?: boolean
+  /** A matter settled today (`matter_closed`): who settled it and how;
+   *  the matter's kind is `state`. */
+  closed_by?: ItemClosedBy | null
+  closed_how?: ItemClosedHow | null
+  /** ... a message's: the assistant it waited on. */
+  peer?: ItemPeer | null
+  /** ... what takes the owner's act on the panel back
+   *  (`personalAgentItemUndo`), while it still can be. */
+  matter_undo?: number | null
 }
 
 /** "Today": every assistant's, in four groups. */
@@ -3300,6 +3377,8 @@ export interface ActivityRow {
   routine: Routine | null
   /** The card of a matter's latest firing with no "today" row. */
   card_row_id: number | null
+  /** Its reminder card while it is open: what [Hand to ...] answers. */
+  card_notice_id?: number | null
 }
 
 /** The activity tab's one list (C1). */

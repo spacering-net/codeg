@@ -44,7 +44,7 @@ import type {
 import { readRosterNow } from "@/stores/personal-agent-roster-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
-import { defaultBotFace, newBotUid } from "./bot-avatar"
+import { defaultBotFace, faceColorOf, newBotUid } from "./bot-avatar"
 import { BotFacePicker } from "./bot-face-picker"
 import { useAgentConfig } from "./settings/use-agent-config"
 
@@ -170,7 +170,7 @@ function NewBotBody({
           className="flex flex-col items-center pt-2"
           data-pa-new-bot-head
           data-pa-face-host
-          data-pa-face={shown.kind === "face" ? shown.color : undefined}
+          data-pa-face={faceColorOf(shown) ?? undefined}
         >
           <div className="relative">
             <span aria-hidden className="pa-setup-halo" />

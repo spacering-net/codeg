@@ -62,6 +62,7 @@ mod m20261116_000001_srn_web;
 mod m20261121_000001_conversation_btw_promoted;
 mod m20261123_000001_conversation_selector_state;
 mod m20261125_000001_personal_agent;
+mod m20261125_000002_personal_agent_item_closure;
 mod m20261125_000005_refresh_btw_instructions;
 pub struct Migrator;
 
@@ -131,6 +132,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261121_000001_conversation_btw_promoted::Migration),
             Box::new(m20261123_000001_conversation_selector_state::Migration),
             Box::new(m20261125_000001_personal_agent::Migration),
+            Box::new(m20261125_000002_personal_agent_item_closure::Migration),
             Box::new(m20261125_000005_refresh_btw_instructions::Migration),
         ]
     }

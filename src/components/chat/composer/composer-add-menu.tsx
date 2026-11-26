@@ -138,7 +138,8 @@ export function ComposerAddMenu({
           type="button"
           disabled={disabled}
           variant="ghost"
-          size="icon-xs"
+          // `icon-sm` (32px): the same square as the composer's send button.
+          size="icon-sm"
           className={cn("shrink-0 text-muted-foreground", triggerClassName)}
           title={t("addActions")}
           aria-label={t("addActions")}

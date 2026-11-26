@@ -3379,7 +3379,7 @@ export function SidebarConversationList({
             paddingLeft: `calc(var(--conv-rail-axis) + 0.875rem + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
           }}
         >
-          <SubsessionAncestorRails depth={depth} />
+          <SubsessionAncestorRails depth={depth} fullHeight />
           <span className="relative truncate">
             {row.totalConversationCount === 0
               ? t("emptyFolderHint")
@@ -3582,7 +3582,7 @@ export function SidebarConversationList({
             paddingLeft: `calc(0.875rem + ${row.depth} * ${CONV_RAIL_DEPTH_STEP} + 0.875rem)`,
           }}
         >
-          <SubsessionAncestorRails depth={row.depth} />
+          <SubsessionAncestorRails depth={row.depth} fullHeight />
           <span className="relative flex items-center gap-1.5">
             <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden />
             {t("loadingSubsessions")}
