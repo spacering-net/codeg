@@ -93,6 +93,7 @@ import type {
   SessionConfigOptionInfo,
   SessionConfigSelectOptionInfo,
   SessionFailureRecord,
+  SessionMcpState,
   SessionModeStateInfo,
   SessionUsageUpdateInfo,
   PromptCapabilitiesInfo,
@@ -544,6 +545,8 @@ export interface ConnectionState {
   configStale: boolean
   /** Which settings surface drifted, for the banner's wording. `null` when not stale. */
   configStaleKind: ConfigStaleKind | null
+  /** Running session MCP delivery and per-server runtime state snapshot. */
+  mcpState: SessionMcpState | null
   /**
    * Launched-but-unresolved background tasks (async sub-agents / background
    * shells) on this connection, mirrored from `background_activity` events
@@ -865,6 +868,11 @@ type Action =
       contextKey: string
       stale: boolean
       kind: ConfigStaleKind
+    }
+  | {
+      type: "SESSION_MCP_STATE"
+      contextKey: string
+      state: SessionMcpState
     }
   | {
       type: "DISMISS_CONFIG_STALE"
@@ -2200,6 +2208,7 @@ function connectionsReducer(
         isViewer: action.isViewer ?? false,
         configStale: false,
         configStaleKind: null,
+        mcpState: null,
         configStaleDismissed: false,
         backgroundOutstanding: 0,
         backgroundTasks: EMPTY_BACKGROUND_TASKS,
@@ -2269,6 +2278,7 @@ function connectionsReducer(
         isViewer: false,
         configStale: false,
         configStaleKind: null,
+        mcpState: null,
         configStaleDismissed: false,
         backgroundOutstanding: 0,
         backgroundTasks: EMPTY_BACKGROUND_TASKS,
@@ -2322,6 +2332,7 @@ function connectionsReducer(
         current.availableCommands ?? action.patch.availableCommands
       const mergedPromptCapabilities =
         action.patch.promptCapabilities ?? current.promptCapabilities
+      const mergedMcpState = current.mcpState ?? action.patch.mcpState
       // Latched like `selectorsReady`: a turn that ran stays run, however old
       // the snapshot that reports it.
       const mergedHasPrompted = action.patch.hasPrompted || current.hasPrompted
@@ -2389,6 +2400,7 @@ function connectionsReducer(
           mergedConfigOptions === current.configOptions &&
           mergedAvailableCommands === current.availableCommands &&
           mergedPromptCapabilities === current.promptCapabilities &&
+          mergedMcpState === current.mcpState &&
           mergedHasPrompted === current.hasPrompted &&
           mergedSessionFailures === current.sessionFailures &&
           mergedToolApprovals === current.toolApprovals &&
@@ -2403,6 +2415,7 @@ function connectionsReducer(
           configOptions: mergedConfigOptions,
           availableCommands: mergedAvailableCommands,
           promptCapabilities: mergedPromptCapabilities,
+          mcpState: mergedMcpState,
           selectorsReady: mergedSelectorsReady,
           supportsFork: mergedSupportsFork,
           supportsRewind: mergedSupportsRewind,
@@ -2475,6 +2488,7 @@ function connectionsReducer(
         // preserved via `...current`.
         configStale: action.patch.configStale,
         configStaleKind: action.patch.configStaleKind,
+        mcpState: action.patch.mcpState,
         // Current-state field like `status`: a client attaching mid-episode
         // recovers the pending-background count the one-shot events won't
         // replay for it, so its teardown gates hold.
@@ -3197,6 +3211,17 @@ function connectionsReducer(
         configStale: action.stale,
         configStaleKind: kind,
         configStaleDismissed: dismissed,
+      })
+      return next
+    }
+
+    case "SESSION_MCP_STATE": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      const next = new Map(state)
+      next.set(action.contextKey, {
+        ...conn,
+        mcpState: action.state,
       })
       return next
     }
@@ -4008,6 +4033,11 @@ export function useAcpActions(): AcpActionsValue {
     throw new Error("useAcpActions must be used within AcpConnectionsProvider")
   }
   return ctx
+}
+
+/** The actions API, or `null` outside `AcpConnectionsProvider`. */
+export function useOptionalAcpActions(): AcpActionsValue | null {
+  return useContext(AcpActionsContext)
 }
 
 // ── Event subscriber context ──
@@ -6334,6 +6364,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             contextKey,
             stale: e.stale,
             kind: e.kind,
+          })
+          break
+        }
+        case "session_mcp_state": {
+          flushStreamingQueue(contextKey)
+          dispatch({
+            type: "SESSION_MCP_STATE",
+            contextKey,
+            state: e.state,
           })
           break
         }

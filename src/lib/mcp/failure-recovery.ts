@@ -6,8 +6,8 @@
  * ignoring Codeg's built-in `chrome_devtools` server so only user-configured
  * MCP servers trigger the chat one-click pause & reconnect recovery strip.
  */
-import { isCustomAgentType, type AgentType } from "@/lib/types"
-import { isMcpAppType, type McpAppType } from "./types"
+import type { AgentType } from "@/lib/types"
+import { isMcpAgentId, type McpAgentId } from "./types"
 
 export interface McpInitFailure {
   serverName: string
@@ -98,11 +98,12 @@ export function extractMcpInitFailure(text: string): McpInitFailure | null {
 
 /**
  * Map a conversation's {@link AgentType} to the corresponding MCP inventory
- * app id, or `null` for custom (`custom:*`) or unknown agents.
+ * agent id (built-in slug or `custom:<registry_id>`), or `null` for unknown
+ * agents.
  */
 export function agentTypeToMcpApp(
   agentType: AgentType | null | undefined
-): McpAppType | null {
-  if (!agentType || isCustomAgentType(agentType)) return null
-  return isMcpAppType(agentType) ? agentType : null
+): McpAgentId | null {
+  if (!agentType) return null
+  return isMcpAgentId(agentType) ? agentType : null
 }

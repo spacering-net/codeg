@@ -109,6 +109,63 @@ describe("reading an inventory", () => {
     expect(() => normalizeInventory("nope")).toThrow(McpClientError)
     expect(() => normalizeInventory({ agents: "x" })).toThrow(McpClientError)
   })
+
+  it("preserves custom ACP agents with display_name and sorts them stably after built-ins", () => {
+    const read = normalizeInventory({
+      agents: [
+        {
+          agent: "custom:zeta",
+          display_name: "Zeta Agent",
+          custom: true,
+          writable: true,
+          config: { path: "/z", status: "ok", basis: "b-z" },
+          entries: [],
+        },
+        {
+          agent: "codex",
+          writable: true,
+          config: { path: "/c", status: "ok", basis: "b-c" },
+          entries: [],
+        },
+        {
+          agent: "custom:alpha",
+          display_name: "Alpha Agent",
+          custom: true,
+          writable: false,
+          config: {
+            path: "/a",
+            status: "read_only",
+            reason: { code: "mcp_disabled_in_agent_settings" },
+          },
+          entries: [],
+        },
+        {
+          agent: "claude_code",
+          writable: true,
+          config: { path: "/cc", status: "ok", basis: "b-cc" },
+          entries: [],
+        },
+      ],
+    })
+    expect(read.agents.map((a) => a.agent)).toEqual([
+      "codex",
+      "claude_code",
+      "custom:alpha",
+      "custom:zeta",
+    ])
+    expect(read.agents[2]).toMatchObject({
+      agent: "custom:alpha",
+      display_name: "Alpha Agent",
+      custom: true,
+      writable: false,
+    })
+    expect(read.agents[3]).toMatchObject({
+      agent: "custom:zeta",
+      display_name: "Zeta Agent",
+      custom: true,
+      writable: true,
+    })
+  })
 })
 
 describe("reading a result", () => {

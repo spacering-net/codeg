@@ -9,7 +9,7 @@ import { useHarnessSlot } from "@/contexts/harness-view-context"
 import { MCP_SHOW_ALL_AGENTS } from "@/lib/harness/mcp-state"
 import { isFolded, type McpAgentInfo } from "@/lib/mcp/model"
 import type { McpTargetBlock } from "@/lib/mcp/targets"
-import type { McpAppType } from "@/lib/mcp/types"
+import type { McpAgentId } from "@/lib/mcp/types"
 import { cn } from "@/lib/utils"
 import { MCP_SECTION_TITLE_CLASS, AgentGlyph } from "./mcp-bits"
 import { ShowAllAgentsToggle } from "./mcp-server-detail"
@@ -17,7 +17,7 @@ import { useMcpLabels } from "./use-mcp-labels"
 
 export interface McpTargetRow {
   info: McpAgentInfo
-  agent: McpAppType
+  agent: McpAgentId
   /** Ticked and allowed: what a save writes to. */
   checked: boolean
   /** Why it cannot be ticked, or `null`. */
@@ -122,7 +122,7 @@ export function McpTargetList({
   hint,
 }: {
   rows: McpTargetRow[]
-  onToggle: (agent: McpAppType, checked: boolean) => void
+  onToggle: (agent: McpAgentId, checked: boolean) => void
   legend: string
   /** What is ticked at first, and why — said before the list. */
   hint?: ReactNode
@@ -192,7 +192,8 @@ export function McpTargetList({
                           row.block && "text-muted-foreground"
                         )}
                       >
-                        {labels.agent(row.agent)}
+                        {row.info.displayName?.trim() ||
+                          labels.agent(row.agent)}
                       </span>
                     </span>
                     <span

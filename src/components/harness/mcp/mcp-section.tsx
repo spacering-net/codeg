@@ -47,6 +47,7 @@ import {
   MCP_VIEW,
   modelOf,
   openCreateEditor,
+  openMcpAgent,
   openMcpServer,
   reloadMcpInventory,
   selectAgent,
@@ -458,20 +459,26 @@ export function McpSection() {
   const zoom = useContext(AppearanceContext)?.zoomLevel ?? 100
   const listRef = useRef<HTMLDivElement>(null)
 
-  // `openHarness({ section: "mcp", serverKey })`: drawn on the server asked
-  // for from the first frame, then applied to the slots.
-  const target = useConsumeHarnessTarget("mcp", (requested) =>
-    openMcpServer(slots, requested.serverKey)
-  )
-  const view = target ? "servers" : viewSlot
-  const shownServer = target ? target.serverKey : selectedServer
+  // `openHarness({ section: "mcp", serverKey | agentId })`: drawn on the
+  // requested server or agent from the first frame, then applied to the slots.
+  const target = useConsumeHarnessTarget("mcp", (requested) => {
+    if (requested.serverKey) openMcpServer(slots, requested.serverKey)
+    else if (requested.agentId) openMcpAgent(slots, requested.agentId)
+  })
+  const view = target?.serverKey
+    ? "servers"
+    : target?.agentId
+      ? "agents"
+      : viewSlot
+  const shownServer = target?.serverKey ?? selectedServer
+  const shownAgent = target?.agentId ?? selectedAgent
   const shownFilters = target ? DEFAULT_MCP_FILTERS : filters
 
   // Unmeasured (the first render, and jsdom) counts as wide, as the page's
   // own switch does.
   const split =
     !isMobile && (width === 0 || width >= (SPLIT_MIN_REM * 16 * zoom) / 100)
-  const selected = view === "servers" ? shownServer : selectedAgent
+  const selected = view === "servers" ? shownServer : shownAgent
   const detailOpen = selected !== null
 
   // One read per visit, then one per `mcp://changed` — from this window or
@@ -604,11 +611,11 @@ export function McpSection() {
   } else {
     const { rows, folded } = agentRows(model, shownFilters, showAll, harness)
     const filtering = isFiltering(shownFilters)
-    if (selectedAgent !== null && filtering) {
+    if (shownAgent !== null && filtering) {
       agentEntries =
-        rows.find((row) => row.info.id === selectedAgent)?.entries ??
-        model.agent(selectedAgent)?.inventory.entries.filter((entry) => {
-          const info = model.agent(selectedAgent)
+        rows.find((row) => row.info.id === shownAgent)?.entries ??
+        model.agent(shownAgent)?.inventory.entries.filter((entry) => {
+          const info = model.agent(shownAgent)
           return info ? entryShown(info, entry, shownFilters, harness) : false
         }) ??
         []
@@ -643,7 +650,7 @@ export function McpSection() {
                 info={info}
                 count={entries.length}
                 total={info.inventory.entries.length}
-                selected={info.id === selectedAgent}
+                selected={info.id === shownAgent}
                 filtered={filtering}
                 onOpen={openAgent}
               />
@@ -693,10 +700,10 @@ export function McpSection() {
           harness={harness}
         />
       ) : null
-    ) : selectedAgent !== null ? (
+    ) : shownAgent !== null ? (
       <McpAgentDetail
         model={model}
-        agentId={selectedAgent}
+        agentId={shownAgent}
         entries={agentEntries}
         filtered={isFiltering(shownFilters)}
         onBack={split ? undefined : close}

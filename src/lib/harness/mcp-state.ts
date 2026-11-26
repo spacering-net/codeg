@@ -71,8 +71,8 @@ import {
 import { isSaved } from "@/lib/mcp/results"
 import { defaultCreateTargets } from "@/lib/mcp/targets"
 import type {
+  McpAgentId,
   McpApplyResult,
-  McpAppType,
   McpDefinition,
   McpInventory,
   McpOp,
@@ -333,6 +333,16 @@ export function openMcpServer(slots: HarnessSlotStore, key: string): void {
   slots.set(MCP_SELECTED_SERVER, key)
 }
 
+/**
+ * Open one agent in the agent view — what `openHarness({ section: "mcp",
+ * agentId })` asks for (e.g. from Session Details or the composer popover).
+ */
+export function openMcpAgent(slots: HarnessSlotStore, agentId: string): void {
+  slots.set(MCP_VIEW, "agents")
+  slots.set(MCP_FILTERS, DEFAULT_MCP_FILTERS)
+  slots.set(MCP_SELECTED_AGENT, agentId)
+}
+
 // ─── Saves from a row ─────────────────────────────────────────────────
 
 /** What a switch asks of one agent's entry. */
@@ -344,7 +354,7 @@ export type McpRowAction =
 
 export interface McpRowWrite {
   seq: number
-  agent: McpAppType
+  agent: McpAgentId
   key: string
   action: McpRowAction
   /** Where the switch is going: on, or off. */
@@ -369,7 +379,7 @@ export const rowId = (agent: string, key: string) => `${agent}\u0000${key}`
 /** What a screen reader is told about a row's save. */
 export interface McpAnnouncement {
   seq: number
-  agent: McpAppType
+  agent: McpAgentId
   key: string
   target: boolean
   saved: boolean
@@ -380,7 +390,7 @@ export const MCP_ANNOUNCEMENT = defineHarnessSlot<McpAnnouncement | null>(
   () => null
 )
 
-function rowOps(agent: McpAppType, key: string, action: McpRowAction): McpOp[] {
+function rowOps(agent: McpAgentId, key: string, action: McpRowAction): McpOp[] {
   switch (action.kind) {
     case "enable":
       return [enableOp(key, agent, true)]
@@ -400,7 +410,7 @@ function rowOps(agent: McpAppType, key: string, action: McpRowAction): McpOp[] {
  */
 export async function writeRow(
   slots: HarnessSlotStore,
-  agent: McpAppType,
+  agent: McpAgentId,
   key: string,
   action: McpRowAction,
   /** The basis the user decided on, when that was not now: a question that
@@ -529,7 +539,7 @@ export interface McpRemoveDialog {
   id: number
   key: string
   /** The agents ticked to remove it from. */
-  agents: McpAppType[]
+  agents: McpAgentId[]
   flow: McpFlow
 }
 
@@ -554,7 +564,7 @@ export interface McpPasteDialog {
     request: number
   }
   choices: McpPasteChoice[]
-  targets: McpAppType[]
+  targets: McpAgentId[]
   flow: McpFlow
 }
 
@@ -577,7 +587,7 @@ export interface McpConfirmChoice {
 export interface McpConfirmDialog {
   kind: "confirm"
   id: number
-  agent: McpAppType
+  agent: McpAgentId
   key: string
   action: "enable" | "disable" | "remove" | "add"
   /** `add`: the definitions on offer. */
@@ -610,7 +620,7 @@ export type McpBulkDialog =
       kind: "bulk"
       id: number
       mode: "agent_enable"
-      agent: McpAppType
+      agent: McpAgentId
       flow: McpFlow
     }
 
@@ -799,8 +809,8 @@ export function keepEditorVersion(slots: HarnessSlotStore, id: number): void {
   updateDialog(slots, id, "editor", (dialog) => {
     if (!dialog.origin || !model) return dialog
     const server = model.server(dialog.key)
-    const snapshot: Partial<Record<McpAppType, string>> = {}
-    for (const agent of Object.keys(dialog.origin.snapshot) as McpAppType[]) {
+    const snapshot: Partial<Record<McpAgentId, string>> = {}
+    for (const agent of Object.keys(dialog.origin.snapshot) as McpAgentId[]) {
       const holder = server?.holders.find((entry) => entry.info.id === agent)
       if (holder?.entry.fingerprint) snapshot[agent] = holder.entry.fingerprint
     }
@@ -827,7 +837,7 @@ export function updateEditorDraft(
 
 /** The agents a server can be removed from or renamed in: those whose entry
  *  takes ops. */
-export function editableHolders(model: McpModel, key: string): McpAppType[] {
+export function editableHolders(model: McpModel, key: string): McpAgentId[] {
   const server = model.server(key)
   if (!server) return []
   const agents = server.holders.flatMap((holder) => {
@@ -1124,7 +1134,7 @@ function followSave(slots: HarnessSlotStore, id: number, plan: McpPlan) {
     const removed = new Set(agentsOf(plan.ops))
     const left = model
       ?.server(dialog.key)
-      ?.holders.filter((holder) => !removed.has(holder.info.id as McpAppType))
+      ?.holders.filter((holder) => !removed.has(holder.info.id as McpAgentId))
     if (!left || left.length === 0) slots.set(MCP_SELECTED_SERVER, null)
   }
 }
@@ -1303,7 +1313,7 @@ export function openServerBulkDisableDialog(
 
 export function openAgentBulkEnableDialog(
   slots: HarnessSlotStore,
-  agent: McpAppType
+  agent: McpAgentId
 ): void {
   const model = currentModel(slots)
   if (!model?.agent(agent)) return
@@ -1332,7 +1342,7 @@ export type McpProbeMap = Readonly<Record<string, McpProbeRecord>>
 
 export const MCP_PROBES = defineHarnessSlot<McpProbeMap>("mcp", () => ({}))
 
-export function probeEntryKey(agent: McpAppType, key: string): string {
+export function probeEntryKey(agent: McpAgentId, key: string): string {
   return `entry:${agent}:${key}`
 }
 

@@ -65,7 +65,7 @@ import {
 } from "@/lib/mcp/secrets"
 import {
   MCP_TRANSPORTS,
-  type McpAppType,
+  type McpAgentId,
   type McpDefinition,
 } from "@/lib/mcp/types"
 import { cn } from "@/lib/utils"
@@ -1315,7 +1315,7 @@ function EditorTargets({
   const { slots } = useHarnessView()
   const rows = useEditorTargetRows(dialog, model, definition)
   const count = effectiveTargets(dialog, model).length
-  const onToggle = (agent: McpAppType, checked: boolean) =>
+  const onToggle = (agent: McpAgentId, checked: boolean) =>
     updateDialog(slots, dialog.id, "editor", (prev) => ({
       ...prev,
       targets: checked

@@ -1970,4 +1970,58 @@ describe("MCP — probes, soft pause, and cross-agent bulk allocation (#1296 / #
       },
     ])
   })
+
+  it("displays custom ACP agents with display_name, allows writing when enabled, and links to Agent Settings when MCP is disabled", async () => {
+    const user = userEvent.setup()
+    files = inventory([
+      agent("claude_code", [entry("github", stdio("npx", ["-y", "github"]))]),
+      agent("custom:goose", [], {
+        custom: true,
+        display_name: "Goose ACP",
+        writable: true,
+        can_disable: true,
+        disable_mode: "codeg_pause",
+        delivery: "codeg_session",
+        transports: ["stdio", "http"],
+      }),
+      agent("custom:locked", [], {
+        custom: true,
+        display_name: "Locked ACP",
+        writable: false,
+        config: {
+          status: "read_only",
+          reason: { code: "mcp_disabled_in_agent_settings" },
+        },
+      }),
+    ])
+
+    render(<Harness />)
+    const detail = await openServer(user, "github")
+
+    expect(within(detail).getByText("Goose ACP")).toBeInTheDocument()
+    expect(within(detail).getByText("Locked ACP")).toBeInTheDocument()
+    expect(
+      within(detail).getByText(/MCP support is turned off/i)
+    ).toBeInTheDocument()
+
+    await user.click(
+      within(detail).getByRole("button", { name: "Open Agent Settings" })
+    )
+    expect(mocks.openSettingsWindow).toHaveBeenCalledWith("agents")
+
+    // Toggle server on for the writable custom agent
+    const gooseSwitch = within(detail).getByRole("switch", {
+      name: "Goose ACP",
+    })
+    await user.click(gooseSwitch)
+    await waitFor(() => expect(saves().length).toBe(1))
+    expect(saves()[0].ops).toEqual([
+      {
+        agent: "custom:goose",
+        key: "github",
+        action: "set",
+        definition: { type: "stdio", command: "npx", args: ["-y", "github"] },
+      },
+    ])
+  })
 })

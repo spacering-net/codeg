@@ -13,9 +13,19 @@
  * ({@link Open}), and has to be shown as "unknown" rather than looked up. What
  * is SENT stays closed: an op names only agents and actions this build knows.
  */
-import type { McpAppType } from "@/lib/types"
+import {
+  CUSTOM_AGENT_PREFIX,
+  isCustomAgentType,
+  type McpAppType,
+} from "@/lib/types"
 
 export type { McpAppType }
+
+/** Wire identifier for a user-registered custom ACP agent (`custom:<registry_id>`). */
+export type CustomMcpAgentId = `${typeof CUSTOM_AGENT_PREFIX}${string}`
+
+/** Any MCP agent target: a built-in {@link McpAppType} or a custom ACP agent. */
+export type McpAgentId = McpAppType | CustomMcpAgentId
 
 /**
  * One of a known set of strings, or one a newer backend added. `string & {}`
@@ -56,10 +66,17 @@ export const MCP_APP_TYPES: readonly McpAppType[] = (
 
 const APP_TYPE_SET: ReadonlySet<string> = new Set(MCP_APP_TYPES)
 
-/** Whether `value` is an agent this build knows — the only kind an op may
- *  name. */
+/** Whether `value` is a built-in agent this build knows. */
 export function isMcpAppType(value: unknown): value is McpAppType {
   return typeof value === "string" && APP_TYPE_SET.has(value)
+}
+
+/** Whether `value` is a known built-in MCP agent OR a custom ACP agent
+ *  (`custom:<registry_id>`). */
+export function isMcpAgentId(value: unknown): value is McpAgentId {
+  if (typeof value !== "string") return false
+  if (APP_TYPE_SET.has(value)) return true
+  return isCustomAgentType(value) && value.length > CUSTOM_AGENT_PREFIX.length
 }
 
 // ─── Definitions ──────────────────────────────────────────────────────
@@ -156,7 +173,11 @@ export interface McpEntry {
 }
 
 export interface McpAgentInventory {
-  agent: Open<McpAppType>
+  agent: Open<McpAgentId>
+  /** Human-readable display name for custom ACP agents (when provided). */
+  display_name?: string | null
+  /** True for user-registered custom ACP agents (`custom:<registry_id>`). */
+  custom?: boolean
   /** `null`: codeg could not tell. */
   installed: boolean | null
   config: McpConfigFile
@@ -190,22 +211,22 @@ export interface McpInventory {
  *  beside it. */
 export type McpOp =
   | {
-      agent: McpAppType
+      agent: McpAgentId
       key: string
       action: "set"
       definition: McpDefinition
     }
-  | { agent: McpAppType; key: string; action: "remove" }
+  | { agent: McpAgentId; key: string; action: "remove" }
   | {
-      agent: McpAppType
+      agent: McpAgentId
       key: string
       action: "set_enabled"
       enabled: boolean
     }
-  | { agent: McpAppType; key: string; action: "rename"; new_key: string }
+  | { agent: McpAgentId; key: string; action: "rename"; new_key: string }
 
 /** `config.basis` per agent, as last seen. */
-export type McpBasis = Partial<Record<McpAppType, string>>
+export type McpBasis = Partial<Record<McpAgentId, string>>
 
 export interface McpApplyArgs {
   basis?: McpBasis
@@ -269,7 +290,7 @@ export interface McpFileWrite {
 }
 
 export interface McpAgentResult {
-  agent: Open<McpAppType>
+  agent: Open<McpAgentId>
   /** The agent's servers file. */
   path: string
   status: Open<McpAgentStatus>
@@ -328,7 +349,7 @@ export const MCP_CHANGED_EVENT = "mcp://changed"
 
 /** Agent names only: no paths, no keys, no configuration. */
 export interface McpChanged {
-  agents: Open<McpAppType>[]
+  agents: Open<McpAgentId>[]
 }
 
 // ─── mcp_probe ────────────────────────────────────────────────────────
@@ -345,7 +366,7 @@ export type McpProbeStatus =
   | "config_error"
 
 export interface McpProbeArgs {
-  agent?: McpAppType
+  agent?: McpAgentId
   key?: string
   definition?: McpDefinition
   timeout_ms?: number

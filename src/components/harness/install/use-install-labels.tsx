@@ -10,7 +10,7 @@ import type {
   HarnessUninstallAction,
 } from "@/lib/harness/mcp-install-types"
 import { HARNESS_PERMISSION_KEYS } from "@/lib/harness/types"
-import { isMcpAppType } from "@/lib/mcp/types"
+import { isMcpAgentId } from "@/lib/mcp/types"
 import { Code } from "../discover/detail-sections"
 
 /**
@@ -144,7 +144,7 @@ export function useInstallLabels(): InstallLabels {
     const code = (chunks: ReactNode) => <Code>{chunks}</Code>
     const rich = (key: string, values: Record<string, string> = {}) =>
       t.rich(key as never, { ...values, code } as never)
-    const agent = (id: string) => (isMcpAppType(id) ? getAgentLabel(id) : id)
+    const agent = (id: string) => (isMcpAgentId(id) ? getAgentLabel(id) : id)
     const check = (verified: string | null) =>
       tDetail(
         `verified.${(verified && oneOf(PACKAGE_CHECKS, verified)) || "unknown"}`

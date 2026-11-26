@@ -15,6 +15,7 @@
  * describe — no definition, no fingerprint — with the problem the backend
  * uses for a word it does not know (`unsupported_type`).
  */
+import { isCustomAgentType } from "@/lib/types"
 import { McpClientError } from "./errors"
 import type {
   McpAgentInventory,
@@ -218,8 +219,12 @@ function agent(value: unknown): McpAgentInventory | null {
       : canDisable
         ? "native"
         : "unsupported"
+  const custom = bool(value.custom) || isCustomAgentType(value.agent)
+  const displayName = strOrNull(value.display_name)
   return {
     agent: value.agent,
+    ...(displayName !== null ? { display_name: displayName } : {}),
+    ...(custom ? { custom: true } : {}),
     installed: typeof value.installed === "boolean" ? value.installed : null,
     config: config(value.config),
     writable: bool(value.writable),
@@ -233,6 +238,11 @@ function agent(value: unknown): McpAgentInventory | null {
   }
 }
 
+const customAgentCollator = new Intl.Collator("en", {
+  sensitivity: "base",
+  numeric: true,
+})
+
 export function normalizeInventory(value: unknown): McpInventory {
   if (!isRaw(value) || !Array.isArray(value.agents)) {
     throw new McpClientError(
@@ -240,8 +250,26 @@ export function normalizeInventory(value: unknown): McpInventory {
       "mcp_inventory answered with something that is not an inventory"
     )
   }
+  const allAgents = list(value.agents, agent)
+  const builtins: McpAgentInventory[] = []
+  const customs: McpAgentInventory[] = []
+  for (const item of allAgents) {
+    if (item.custom || isCustomAgentType(item.agent)) {
+      customs.push(item)
+    } else {
+      builtins.push(item)
+    }
+  }
+  customs.sort((a, b) => {
+    const labelA = a.display_name?.trim() || a.agent
+    const labelB = b.display_name?.trim() || b.agent
+    return (
+      customAgentCollator.compare(labelA, labelB) ||
+      (a.agent < b.agent ? -1 : a.agent > b.agent ? 1 : 0)
+    )
+  })
   return {
-    agents: list(value.agents, agent),
+    agents: [...builtins, ...customs],
     reserved_keys: strings(value.reserved_keys),
     key_pattern: str(value.key_pattern),
   }

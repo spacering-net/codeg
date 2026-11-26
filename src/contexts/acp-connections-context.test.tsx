@@ -231,6 +231,7 @@ beforeEach(() => {
     supportsFork: false,
     configStale: false,
     configStaleKind: null,
+    mcpState: null,
     lastError: null,
     lastErrorCode: null,
     lastErrorLevel: "error",
@@ -315,6 +316,7 @@ function snapshotBase() {
     supportsFork: false,
     configStale: false,
     configStaleKind: null,
+    mcpState: null,
     backgroundOutstanding: 0,
     backgroundTasks: [],
     activeDelegations: [],
@@ -11202,5 +11204,69 @@ describe("structured AppCommandError normalization and post-failure reconnect", 
     expect(h.store!.getConnection(TAB)?.connectionId).toBe(
       "conn-agent-b-recovered"
     )
+  })
+})
+
+describe("session_mcp_state event and snapshot hydration (#1296 Phase 2)", () => {
+  it("updates ConnectionState.mcpState on session_mcp_state events and recovers from snapshot", async () => {
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x")
+    })
+    const handlers = latestAttachHandlers()
+    expect(h.store!.getConnection(TAB)?.mcpState).toBeNull()
+
+    const liveMcpState = {
+      delivery: "codeg_session" as const,
+      supports_mcp: true,
+      codeg_mcp_attached: true,
+      capabilities: { http: true, sse: false },
+      config_basis: "basis-1",
+      servers: [
+        {
+          key: "github",
+          transport: "stdio" as const,
+          origin: "codeg_session" as const,
+          fingerprint: "fp-1",
+          status: "attached" as const,
+        },
+      ],
+    }
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "session_mcp_state",
+      state: liveMcpState,
+    })
+    expect(h.store!.getConnection(TAB)?.mcpState).toEqual(liveMcpState)
+
+    const hydratedMcpState = {
+      ...liveMcpState,
+      servers: [
+        {
+          ...liveMcpState.servers[0],
+          status: "confirmed" as const,
+          confirmed_tools: ["search_code"],
+        },
+      ],
+    }
+    h.denormalizeSnapshot.mockReturnValueOnce({
+      ...snapshotBase(),
+      selectorsReady: true,
+      configStale: true,
+      configStaleKind: "mcp_config",
+      mcpState: hydratedMcpState,
+      eventSeq: 5,
+    })
+
+    hydrateSnapshot(handlers, {
+      connection_id: "spawned-conn",
+      event_seq: 5,
+    } as unknown as LiveSessionSnapshot)
+
+    expect(h.store!.getConnection(TAB)?.mcpState).toEqual(hydratedMcpState)
+    expect(h.store!.getConnection(TAB)?.configStale).toBe(true)
+    expect(h.store!.getConnection(TAB)?.configStaleKind).toBe("mcp_config")
   })
 })

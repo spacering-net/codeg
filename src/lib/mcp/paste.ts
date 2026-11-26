@@ -11,7 +11,7 @@ import { newKeyProblem, type McpKeyProblem } from "./keys"
 import type { McpModel } from "./model"
 import { setOps } from "./ops"
 import { setTargetBlock, type McpTargetBlock } from "./targets"
-import type { McpAppType, McpOp, McpSnippet } from "./types"
+import type { McpAgentId, McpOp, McpSnippet } from "./types"
 
 export interface McpPasteChoice {
   /** The name it is added under: the pasted key, or what the user typed. */
@@ -55,7 +55,7 @@ export function pasteIssue(
 }
 
 /** The agents a default paste goes to: the installed ones Codeg can write. */
-export function defaultPasteTargets(model: McpModel): McpAppType[] {
+export function defaultPasteTargets(model: McpModel): McpAgentId[] {
   return model.agents.flatMap((info) =>
     info.agent && info.installed === true && !info.editBlock ? [info.agent] : []
   )
@@ -68,15 +68,15 @@ export function pasteTargetsFor(
   /** The name it is added under — an agent whose entry of that name takes
    *  no edits is skipped. */
   name: string,
-  targets: readonly McpAppType[],
+  targets: readonly McpAgentId[],
   model: McpModel
 ): {
-  agents: McpAppType[]
-  skipped: { agent: McpAppType; block: McpTargetBlock }[]
+  agents: McpAgentId[]
+  skipped: { agent: McpAgentId; block: McpTargetBlock }[]
 } {
   const definition = snippet.servers[index]?.definition
-  const agents: McpAppType[] = []
-  const skipped: { agent: McpAppType; block: McpTargetBlock }[] = []
+  const agents: McpAgentId[] = []
+  const skipped: { agent: McpAgentId; block: McpTargetBlock }[] = []
   if (!definition) return { agents, skipped }
   for (const agent of targets) {
     const info = model.agent(agent)
@@ -94,7 +94,7 @@ export function pasteTargetsFor(
 export function pasteReady(
   snippet: McpSnippet,
   choices: readonly McpPasteChoice[],
-  targets: readonly McpAppType[],
+  targets: readonly McpAgentId[],
   model: McpModel
 ): boolean {
   let any = false
@@ -116,7 +116,7 @@ export function pasteReady(
 export function pasteOps(
   snippet: McpSnippet,
   choices: readonly McpPasteChoice[],
-  targets: readonly McpAppType[],
+  targets: readonly McpAgentId[],
   model: McpModel
 ): McpOp[] {
   return snippet.servers.flatMap((server, index) => {
