@@ -4371,15 +4371,50 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
    */
   const refreshAttention = useCallback(() => {
     const store = storeRef.current
+    // Backend connection id → the store key it lives under, so a delegated
+    // child (keyed by its own connection id) can be walked up to the top-level
+    // connection whose conversation the user actually has to open.
+    const keyByConnectionId = new Map<string, string>()
+    for (const [key, conn] of store.connections) {
+      keyByConnectionId.set(conn.connectionId, key)
+    }
     const candidates: AttentionCandidate[] = []
     for (const [key, conn] of store.connections) {
-      // A delegated sub-agent's connection is not a row the sidebar lists; its
-      // blocking state belongs to the parent's card, which reads the child
-      // connection directly.
-      if (conn.isDelegationChild) continue
+      const prompts = blockingPrompts(conn)
+      let ownerKey: string | undefined = key
+      if (conn.isDelegationChild) {
+        // A sub-agent's prompt is answered from the PARENT conversation's
+        // delegation card (the live-runs chip already reads it as "awaiting
+        // you"), so it marks the parent's row. Skip the walk when the child
+        // waits on nobody — the common case on every dispatch.
+        if (!prompts) continue
+        // Nested delegations chain child → child → root; the guard only stops
+        // a malformed cycle from spinning.
+        let cursor: ConnectionState = conn
+        const seen = new Set<string>()
+        while (cursor.isDelegationChild && ownerKey !== undefined) {
+          if (seen.has(ownerKey)) {
+            ownerKey = undefined
+            break
+          }
+          seen.add(ownerKey)
+          const parentKey: string | undefined = cursor.parentConnectionId
+            ? keyByConnectionId.get(cursor.parentConnectionId)
+            : undefined
+          const parent =
+            parentKey !== undefined
+              ? store.connections.get(parentKey)
+              : undefined
+          ownerKey = parent ? parentKey : undefined
+          if (parent) cursor = parent
+        }
+        // A child whose parent this window does not hold has no row to mark.
+        if (ownerKey === undefined) continue
+      }
       candidates.push({
-        conversationId: lastConnectParamsRef.current.get(key)?.conversationId,
-        prompts: blockingPrompts(conn),
+        conversationId:
+          lastConnectParamsRef.current.get(ownerKey)?.conversationId,
+        prompts,
       })
     }
     const next = buildAttentionIndex(candidates)
@@ -4557,7 +4592,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     for (const cb of storeRef.current.activeKeyListeners) cb()
   }, [])
 
-  // ── Notify helpers ──
+  /**
+   * Publish (or retire) the in-flight-`connect()` marker for a key and wake its
+   * subscribers. Rides the SAME per-key listener set as the connections map, so
+   * a surface watching one key observes the pending → entry handover as one
+   * continuous stream rather than two stores it has to reconcile.
+   */
   const setConnectPending = useCallback(
     (key: string, info: ConnectPendingInfo | null) => {
       const { connectPending } = storeRef.current

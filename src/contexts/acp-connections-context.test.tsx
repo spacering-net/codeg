@@ -10555,6 +10555,66 @@ describe("AcpConnectionsProvider conversation attention index", () => {
 
     off()
   })
+
+  it("marks the PARENT conversation when its delegated sub-agent asks", async () => {
+    // The user answers a sub-agent's prompt from the parent's delegation card,
+    // so the parent's row is the one waiting on them.
+    await connectOwner()
+    act(() => {
+      h.actions!.attachDelegationChild({
+        connectionId: "child-conn",
+        parentConnectionId: "spawned-conn",
+        parentToolUseId: "tool-1",
+        agentType: "claude_code",
+        hydrate: false,
+      })
+    })
+    const child = latestAttachHandlers()
+    emitAcpEvent(child, {
+      seq: 1,
+      connection_id: "child-conn",
+      type: "permission_request",
+      request_id: "req-child",
+      tool_call: {},
+      options: [],
+    })
+    expect(index().get(42)).toBe("permission")
+
+    emitAcpEvent(child, {
+      seq: 2,
+      connection_id: "child-conn",
+      type: "permission_resolved",
+      request_id: "req-child",
+    } as unknown as EventEnvelope)
+    expect(index().size).toBe(0)
+  })
+
+  it("leaves a self-parented work-task viewer unmarked (and does not spin)", async () => {
+    // A work-task transcript viewer attaches as a child whose parent is
+    // itself: there is no parent row to attribute the prompt to.
+    await mountProvider()
+    act(() => {
+      h.actions!.attachDelegationChild({
+        connectionId: "task-conn-1",
+        parentConnectionId: "task-conn-1",
+        parentToolUseId: "work-task-9",
+        agentType: "claude_code",
+        hydrate: false,
+      })
+    })
+    emitAcpEvent(latestAttachHandlers(), {
+      seq: 1,
+      connection_id: "task-conn-1",
+      type: "permission_request",
+      request_id: "req-task",
+      tool_call: {},
+      options: [],
+    })
+    expect(h.store!.getConnection("task-conn-1")?.pendingPermission).not.toBe(
+      null
+    )
+    expect(index().size).toBe(0)
+  })
 })
 
 describe("a dispatching assistant answers for the owner (personal agent 7.3.1)", () => {

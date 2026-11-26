@@ -1,17 +1,12 @@
 "use client"
 
-import { useSyncExternalStore } from "react"
+import { useCallback, useSyncExternalStore } from "react"
 
-import {
-  useOptionalConnectionStore,
-  type ConnectionStoreApi,
-} from "@/contexts/acp-connections-context"
-import {
-  blockingPromptKind,
-  blockingPrompts,
-  type BlockingPromptKind,
-} from "@/lib/blocking-prompts"
+import { useOptionalConnectionStore } from "@/contexts/acp-connections-context"
+import type { BlockingPromptKind } from "@/lib/blocking-prompts"
 import type { AttentionIndex } from "@/lib/conversation-attention"
+
+const NO_SUBSCRIPTION = () => () => {}
 
 /**
  * Every conversation parked on the user, as one reference-stable index.
@@ -26,40 +21,42 @@ import type { AttentionIndex } from "@/lib/conversation-attention"
  */
 export function useConversationAttentionIndex(): AttentionIndex | null {
   const store = useOptionalConnectionStore()
-  const subscribe = (onChange: () => void) =>
-    store ? store.subscribeAttention(onChange) : () => {}
-  const getSnapshot = () => store?.getAttention()
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot) ?? null
+  const subscribe = useCallback(
+    (onChange: () => void) =>
+      store ? store.subscribeAttention(onChange) : () => {},
+    [store]
+  )
+  const getSnapshot = useCallback(() => store?.getAttention() ?? null, [store])
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
 /**
  * One conversation's blocking prompt, or `null` when it waits on nobody.
  *
- * For a component that already sits inside that conversation's own surface (the
- * detail header): it subscribes to that ONE key, so a prompt on the surface the
- * user is looking at re-renders nothing else. A list should read
- * {@link useConversationAttentionIndex} instead.
- *
- * `contextKey` is the connection's key (a tab id), not a DB conversation id.
+ * Reads the same index as the sidebar, keyed by the persisted conversation id,
+ * so a tab and its sidebar row can never disagree — including when the prompt
+ * is raised by a delegated sub-agent, which the index attributes to its parent
+ * conversation. The snapshot is a primitive, so a change re-renders only the
+ * component whose own mark moved. For a few marks at a time (the tab strip); a
+ * long list should read {@link useConversationAttentionIndex} once instead.
  */
 export function useAwaitingAnswer(
-  contextKey: string | null | undefined
+  conversationId: number | null | undefined
 ): BlockingPromptKind | null {
   const store = useOptionalConnectionStore()
-  const subscribe = (onChange: () => void) =>
-    store && contextKey ? store.subscribeKey(contextKey, onChange) : () => {}
-  const getSnapshot = () =>
-    store && contextKey ? awaitingAnswerOf(store, contextKey) : null
+  const subscribe = useCallback(
+    (onChange: () => void) =>
+      store && conversationId != null
+        ? store.subscribeAttention(onChange)
+        : NO_SUBSCRIPTION(),
+    [store, conversationId]
+  )
+  const getSnapshot = useCallback(
+    () =>
+      store && conversationId != null
+        ? (store.getAttention().get(conversationId) ?? null)
+        : null,
+    [store, conversationId]
+  )
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-}
-
-function awaitingAnswerOf(
-  store: ConnectionStoreApi,
-  contextKey: string
-): BlockingPromptKind | null {
-  const conn = store.getConnection(contextKey)
-  // A delegated sub-agent's prompt belongs to the parent's card, which reads
-  // the child connection itself; it is not a session the user "has open".
-  if (!conn || conn.isDelegationChild) return null
-  return blockingPromptKind(blockingPrompts(conn))
 }

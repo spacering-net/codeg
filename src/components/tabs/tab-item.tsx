@@ -124,11 +124,11 @@ export const TabItem = memo(function TabItem({
   // 等待原因复用侧栏已翻译好的三种说法，不新增文案。
   const tSidebar = useTranslations("Folder.sidebar")
   const itemRef = useRef<HTMLDivElement>(null)
-  // The tab's own key IS its connection key, so this subscribes to exactly one
-  // connection: a prompt raised in a background tab re-renders that tab's dot
-  // and nothing else. A draft has no conversation row and no connection, so it
-  // can never be parked.
-  const awaiting = useAwaitingAnswer(tab.conversationId == null ? null : tab.id)
+  // Read off the same conversation-keyed index as the sidebar, so the tab and
+  // its row agree (a delegated sub-agent's prompt marks both). The value is a
+  // primitive: a prompt raised elsewhere re-renders only the tab it concerns.
+  // A draft has no conversation row yet, so there is nothing to mark.
+  const awaiting = useAwaitingAnswer(tab.conversationId)
 
   const resolvedFolderName = folderName ?? String(tab.folderId)
   const tooltip = folderBranch
