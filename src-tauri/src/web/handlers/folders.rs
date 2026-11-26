@@ -81,6 +81,7 @@ pub async fn open_worktree_folder(
 ) -> Result<Json<FolderDetail>, AppCommandError> {
     Ok(Json(
         folder_commands::open_worktree_folder_core(
+            &state.emitter,
             &state.db,
             params.path,
             params.source_folder_id,
@@ -622,7 +623,7 @@ pub async fn add_folder_to_history(
     Json(params): Json<AddFolderParams>,
 ) -> Result<Json<FolderHistoryEntry>, AppCommandError> {
     Ok(Json(
-        folder_commands::add_folder_to_history_core(&state.db, params.path).await?,
+        folder_commands::add_folder_to_history_core(&state.emitter, &state.db, params.path).await?,
     ))
 }
 
@@ -630,7 +631,8 @@ pub async fn remove_folder_from_history(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AddFolderParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    folder_commands::remove_folder_from_history_core(&state.db, params.path).await?;
+    folder_commands::remove_folder_from_history_core(&state.emitter, &state.db, params.path)
+        .await?;
     Ok(Json(()))
 }
 

@@ -151,9 +151,16 @@ methods out of `server.methods`.
 | `workspace.open.before` | `{ path }` | Runs when a user opens by path. Return `null` to keep the path, or `{ path }` with an absolute replacement. |
 | `workspace.open.after` | `{ folderId, path }` | Observes a completed open by path or reopening a saved folder by ID. |
 | `workspace.close.after` | `{ folderId }` | Observes removing an open folder from the workspace. |
+| `workspace.create.before` | `{ path }` | For a path first registered through the workspace UI, after `workspace.open.before`. Return `null` or an absolute replacement `{ path }`. |
+| `workspace.create.after` | `{ folderId, path, name, parentId }` | Observes first registration of a workspace or an opened worktree workspace. |
+| `workspace.archive.after` | `{ folderId, path, name, parentId }` | Observes removing the saved workspace record from history or archiving it through worktree cleanup. |
 
 The host applies before hooks in plugin ID order and uses each replacement as
 the next hook's input. An error, invalid response or timeout stops the open.
+The create transformation runs when the path returned by the open hooks has
+no saved workspace ID. A worktree is registered at the checkout's actual path.
+Reopening a saved or previously archived folder reuses its workspace ID.
+Closing a workspace keeps the record available in history.
 After hooks run asynchronously. Return a JSON value to publish it to that
 plugin's open client surfaces, or `null` to skip publishing. Subscribe with
 `window.codeg.events.subscribe(({ event, folderId, data }) => { … })`. The call
@@ -164,6 +171,8 @@ Install the [Workspace Lifecycle example](../examples/plugins/workspace-lifecycl
 and open its **Workspace Events** settings panel. Open or close a folder in a
 second Codeg window connected to the same host to see the events. Opening
 `workspace-alias` by path opens the sibling `workspace-real` directory.
+For a first registration, the same example maps `workspace-create-alias` to
+`workspace-real` in `workspace.create.before`.
 
 ## Worktree lifecycle hooks
 
