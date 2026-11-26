@@ -10267,7 +10267,8 @@
       "ariaLabel": "傳給個人助手的訊息",
       "send": "傳送",
       "queue": "加入佇列",
-      "waitForUpload": "請等圖片上傳完成。"
+      "waitForUpload": "請等圖片上傳完成。",
+      "draftWhileSending": "正在傳送，傳完再放進輸入框。"
     },
     "aux": {
       "rename": "點擊修改名稱",
@@ -10341,7 +10342,7 @@
       "waitingAnswer": "等 {name} 回覆：{text}",
       "wroteToYou": "{name} 傳來訊息：{text}",
       "kind": {
-        "dispatch": "派活",
+        "dispatch": "派出的工作",
         "reminder": "提醒",
         "followup": "跟進",
         "question": "提問",
@@ -13077,7 +13078,8 @@
         "notWithdrawn": "訊息沒有撤回，{name}不再等{peer}回覆",
         "stopped": "以後不再提醒：{title}",
         "handed": "已交給{name}",
-        "undone": "已復原"
+        "undone": "已復原",
+        "notRefreshed": "重新整理失敗，請稍後再試。"
       },
       "meta": {
         "reminds": "{name}提醒你 · {when} 到點",

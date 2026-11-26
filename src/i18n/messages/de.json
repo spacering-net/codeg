@@ -10267,7 +10267,8 @@
       "ariaLabel": "Nachricht an deinen persönlichen Agenten",
       "send": "Senden",
       "queue": "Einreihen",
-      "waitForUpload": "Warte, bis das Bild hochgeladen ist."
+      "waitForUpload": "Warte, bis das Bild hochgeladen ist.",
+      "draftWhileSending": "Wird gesendet – füge es danach ins Eingabefeld ein."
     },
     "aux": {
       "rename": "Zum Umbenennen klicken",
@@ -10341,7 +10342,7 @@
       "waitingAnswer": "Wartet auf die Antwort von {name}: {text}",
       "wroteToYou": "{name} schrieb: {text}",
       "kind": {
-        "dispatch": "Zuweisung",
+        "dispatch": "übergebene Arbeit",
         "reminder": "Erinnerung",
         "followup": "Nachfassen",
         "question": "Frage",
@@ -13077,7 +13078,8 @@
         "notWithdrawn": "Die Nachricht wurde nicht zurückgezogen; {name} wartet nicht mehr auf die Antwort von {peer}",
         "stopped": "Keine Erinnerungen mehr: {title}",
         "handed": "An {name} übergeben",
-        "undone": "Rückgängig gemacht"
+        "undone": "Rückgängig gemacht",
+        "notRefreshed": "Aktualisieren fehlgeschlagen – versuche es gleich noch einmal."
       },
       "meta": {
         "reminds": "{name} erinnert dich · fällig {when}",

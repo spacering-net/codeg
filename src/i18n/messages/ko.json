@@ -10267,7 +10267,8 @@
       "ariaLabel": "개인 에이전트에게 보낼 메시지",
       "send": "보내기",
       "queue": "대기열에 추가",
-      "waitForUpload": "이미지 업로드가 끝날 때까지 기다려 주세요."
+      "waitForUpload": "이미지 업로드가 끝날 때까지 기다려 주세요.",
+      "draftWhileSending": "보내는 중입니다. 다 보낸 뒤에 입력창에 넣어 주세요."
     },
     "aux": {
       "rename": "클릭하여 이름 변경",
@@ -10341,7 +10342,7 @@
       "waitingAnswer": "{name}의 답변 대기: {text}",
       "wroteToYou": "{name}의 메시지: {text}",
       "kind": {
-        "dispatch": "배정",
+        "dispatch": "맡긴 작업",
         "reminder": "리마인더",
         "followup": "후속 확인",
         "question": "질문",
@@ -13077,7 +13078,8 @@
         "notWithdrawn": "메시지는 회수하지 못했어요. {name}은(는) {peer}의 답을 더 기다리지 않아요",
         "stopped": "앞으로 알리지 않아요: {title}",
         "handed": "{name}에게 맡겼어요",
-        "undone": "되돌렸어요"
+        "undone": "되돌렸어요",
+        "notRefreshed": "새로 고치지 못했습니다. 잠시 후 다시 시도해 주세요."
       },
       "meta": {
         "reminds": "{name}의 알림 · {when} 예정",

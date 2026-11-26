@@ -2694,7 +2694,10 @@ export async function personalAgentItemAct(
   until?: "15m" | "1h" | "tomorrow" | (string & {}),
   /** Where the owner did it: the activity panel (taken back with the
    *  result's `undo`) or a card the assistant drew. */
-  from: "panel" | "card" = "panel"
+  from: "panel" | "card" = "panel",
+  /** The matter's `updated_at` as the button read it: refused
+   *  (`matterErrors.changed`) when it was written since. */
+  expectUpdatedAt: string | null = null
 ): Promise<ItemActResult> {
   return getTransport().call("personal_agent_item_act", {
     botId,
@@ -2702,6 +2705,7 @@ export async function personalAgentItemAct(
     act,
     until: until ?? null,
     from,
+    expectUpdatedAt,
   })
 }
 
@@ -3085,13 +3089,18 @@ export async function personalAgentNoticeAct(
   bot?: number | null,
   /** `hand_over` and `hand`: the owner's words, posted as their message
    *  quoting the card. */
-  text?: string
+  text?: string,
+  /** `hand_over` from a matter's row: the matter's `updated_at` as the
+   *  button read it — refused (`matterErrors.changed`), nothing handed
+   *  over, when it was written since. */
+  expectUpdatedAt: string | null = null
 ): Promise<TimelineRow> {
   return getTransport().call("personal_agent_notice_act", {
     noticeId,
     action,
     botId: bot ?? null,
     text: text ?? null,
+    expectUpdatedAt,
   })
 }
 

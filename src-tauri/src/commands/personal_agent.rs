@@ -193,17 +193,17 @@ pub async fn personal_agent_items_core(
     Ok(out)
 }
 
-async fn item_peer(
+async fn message_source(
     db: &AppDatabase,
     i: &crate::db::entities::personal_agent_item::Model,
-) -> Option<serde_json::Value> {
-    crate::personal_agent::today::item_peer(db, i).await
+) -> crate::personal_agent::today::MessageSource {
+    crate::personal_agent::today::message_source(db, i).await
 }
 
 fn item_info(
     i: crate::db::entities::personal_agent_item::Model,
     dispatch_state: Option<DispatchState>,
-    peer: Option<serde_json::Value>,
+    source: crate::personal_agent::today::MessageSource,
 ) -> ItemInfo {
     ItemInfo {
         id: i.id,
@@ -228,7 +228,9 @@ fn item_info(
         closed_how: i.closed_how,
         answer_row_id: i.answer_row_id,
         answer_state: i.answer_state,
-        peer,
+        peer: source.peer,
+        written: source.written,
+        direction: source.direction,
     }
 }
 
@@ -707,6 +709,7 @@ pub async fn personal_agent_turn_steps_core(
 /// waits with no time), or snoozed `until` — `15m`, `1h`, `tomorrow`
 /// (morning) or a time (6.1). Handed-out work ends with the work itself.
 /// The panel's act comes with what takes it back (`undo`).
+#[allow(clippy::too_many_arguments)]
 pub async fn personal_agent_item_act_core(
     db: &AppDatabase,
     bot_id: Option<i32>,
@@ -714,15 +717,17 @@ pub async fn personal_agent_item_act_core(
     act: String,
     until: Option<String>,
     from: Option<String>,
+    expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<ItemActResult, AppCommandError> {
     let engine = engine(bot_id).await?;
     let acted = on_own_task(async move {
         engine
-            .settle_item_from(
+            .settle_item_seen(
                 item_id,
                 &act,
                 until.as_deref(),
                 crate::personal_agent::reminders::OpSource::from_page(from.as_deref()),
+                expect_updated_at,
             )
             .await
             .map_err(refusal)
@@ -759,8 +764,8 @@ async fn item_info_now(
         Some(id) => svc::get_dispatch(&db.conn, id).await?.map(|d| d.state),
         None => None,
     };
-    let peer = item_peer(db, &item).await;
-    Ok(item_info(item, dispatch_state, peer))
+    let source = message_source(db, &item).await;
+    Ok(item_info(item, dispatch_state, source))
 }
 
 /// One codeg window's beat (6.2, 1.12): whether it has the focus, and how
@@ -886,8 +891,8 @@ async fn activity_in(
             }
         }
         item_bots.insert(i.id, i.bot_id.unwrap_or(bot));
-        let peer = item_peer(db, &i).await;
-        items.push(item_info(i, dispatch.map(|d| d.state), peer));
+        let source = message_source(db, &i).await;
+        items.push(item_info(i, dispatch.map(|d| d.state), source));
     }
     let routines = crate::personal_agent::routines::routines_of(db, Some(bot))
         .await
@@ -1537,11 +1542,12 @@ pub async fn personal_agent_notice_act_core(
     notice_id: i32,
     action: String,
     text: Option<String>,
+    expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<TimelineRow, AppCommandError> {
     let engine = engine(bot_id).await?;
     on_own_task(async move {
         engine
-            .act_on_notice_worded(notice_id, &action, text)
+            .act_on_notice_seen(notice_id, &action, text, expect_updated_at)
             .await
             .map_err(refusal)
     })
@@ -1847,8 +1853,9 @@ pub async fn personal_agent_item_act(
     act: String,
     until: Option<String>,
     from: Option<String>,
+    expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<ItemActResult, AppCommandError> {
-    personal_agent_item_act_core(&db, bot_id, item_id, act, until, from).await
+    personal_agent_item_act_core(&db, bot_id, item_id, act, until, from, expect_updated_at).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -2291,8 +2298,9 @@ pub async fn personal_agent_notice_act(
     notice_id: i32,
     action: String,
     text: Option<String>,
+    expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<TimelineRow, AppCommandError> {
-    personal_agent_notice_act_core(bot_id, notice_id, action, text).await
+    personal_agent_notice_act_core(bot_id, notice_id, action, text, expect_updated_at).await
 }
 
 #[cfg(feature = "tauri-runtime")]

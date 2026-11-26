@@ -10267,7 +10267,8 @@
       "ariaLabel": "رسالة إلى وكيلك الشخصي",
       "send": "إرسال",
       "queue": "إضافة إلى قائمة الانتظار",
-      "waitForUpload": "انتظر حتى يكتمل رفع الصورة."
+      "waitForUpload": "انتظر حتى يكتمل رفع الصورة.",
+      "draftWhileSending": "جارٍ الإرسال — ضعه في مربع الكتابة بعد انتهائه."
     },
     "aux": {
       "rename": "انقر لإعادة التسمية",
@@ -10341,7 +10342,7 @@
       "waitingAnswer": "بانتظار رد {name}: {text}",
       "wroteToYou": "كتب {name}: {text}",
       "kind": {
-        "dispatch": "إسناد",
+        "dispatch": "عمل مُسند",
         "reminder": "تذكير",
         "followup": "متابعة",
         "question": "سؤال",
@@ -13077,7 +13078,8 @@
         "notWithdrawn": "لم تُسحب الرسالة؛ لم يعد {name} ينتظر ردّ {peer}",
         "stopped": "لا مزيد من التذكيرات: {title}",
         "handed": "سُلِّم إلى {name}",
-        "undone": "تم التراجع"
+        "undone": "تم التراجع",
+        "notRefreshed": "تعذّر التحديث — حاول مرة أخرى بعد قليل."
       },
       "meta": {
         "reminds": "{name} يذكّرك · موعده {when}",

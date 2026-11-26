@@ -597,6 +597,13 @@ pub struct ItemInfo {
     /// A message's: the assistant it waits on (`{ id, name, avatar, gone }`,
     /// the name it had when it was deleted).
     pub peer: Option<serde_json::Value>,
+    /// A message's: what was written, as its line keeps it (not codeg's
+    /// summary of it), and which way it went (`out`: this assistant sent
+    /// it; `in`: it was written to it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub written: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
 }
 
 /// The owner's act on a matter (`personal_agent_item_act`): the matter as

@@ -318,6 +318,9 @@ pub struct ItemActParams {
     /// `panel` (the default) or `card`.
     #[serde(default)]
     pub from: Option<String>,
+    /// The matter's `updated_at` as the button read it.
+    #[serde(default)]
+    pub expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub async fn personal_agent_item_act(
@@ -332,6 +335,7 @@ pub async fn personal_agent_item_act(
             params.act,
             params.until,
             params.from,
+            params.expect_updated_at,
         )
         .await?,
     ))
@@ -868,6 +872,10 @@ pub struct NoticeActParams {
     /// handed to the assistant).
     #[serde(default)]
     pub text: Option<String>,
+    /// A reminder card's answer from a matter's row: the matter's
+    /// `updated_at` as the row read it.
+    #[serde(default)]
+    pub expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub async fn personal_agent_notice_act(
@@ -879,6 +887,7 @@ pub async fn personal_agent_notice_act(
             params.notice_id,
             params.action,
             params.text,
+            params.expect_updated_at,
         )
         .await?,
     ))

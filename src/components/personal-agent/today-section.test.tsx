@@ -85,6 +85,7 @@ import {
 
 import { ActivityList } from "./aux-parts/activity/activity-tab"
 import { BriefRows } from "./today-section"
+import { clearSettling } from "./aux-parts/activity/act-settle"
 
 function row(
   patch: Partial<TodayRow> & Pick<TodayRow, "key" | "kind">
@@ -291,6 +292,7 @@ function draw(
 }
 
 beforeEach(() => {
+  clearSettling()
   __resetRosterForTests()
   api.personalAgentBots.mockResolvedValue([
     entry(1, "Nova", "primary"),
@@ -814,6 +816,8 @@ describe("the activity's list", () => {
               bot_id: 1,
               item_id: 10,
               title: "Waiting for Dev's answer: review it",
+              written: "review it",
+              direction: "out",
               at,
               state: "message",
               closed_by: "codeg",
@@ -867,7 +871,14 @@ describe("the activity's list", () => {
     const el = document.querySelector('[data-key="reminder:4"]') as HTMLElement
     fireEvent.click(within(el).getByRole("button", { name: "Done" }))
     await waitFor(() =>
-      expect(api.personalAgentItemAct).toHaveBeenCalledWith(1, 4, "done")
+      expect(api.personalAgentItemAct).toHaveBeenCalledWith(
+        1,
+        4,
+        "done",
+        undefined,
+        "panel",
+        "2026-11-11T07:30:00Z"
+      )
     )
     await waitFor(() => expect(feed.refresh).toHaveBeenCalled())
     // Its [Put off] too: the matter's whole menu (its own tests elsewhere).
@@ -1315,7 +1326,14 @@ describe("the activity's list", () => {
     ).toBeTruthy()
     fireEvent.click(within(card).getByRole("button", { name: "Not needed" }))
     await waitFor(() =>
-      expect(api.personalAgentItemAct).toHaveBeenCalledWith(2, 4, "drop")
+      expect(api.personalAgentItemAct).toHaveBeenCalledWith(
+        2,
+        4,
+        "drop",
+        undefined,
+        "panel",
+        "2026-11-11T07:30:00Z"
+      )
     )
   })
 

@@ -100,7 +100,7 @@ export function AnswerBar({
         title={t("dismiss")}
         aria-label={t("dismiss")}
       >
-        <X className="size-3.5" />
+        <X aria-hidden className="size-3.5" />
       </button>
     </div>
   )

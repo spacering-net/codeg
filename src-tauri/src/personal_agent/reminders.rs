@@ -756,11 +756,28 @@ impl PersonalAgentEngine {
         op: ItemOp,
         source: OpSource,
     ) -> Result<ItemActed, Refusal> {
+        self.item_op_seen(item_id, op, source, None).await
+    }
+
+    /// [`Self::item_op`], from a button that read the matter at `seen` (its
+    /// `updated_at`): refused (`changed`) when it was written since — a
+    /// stale button never acts on the matter as it is now (a repeating
+    /// one's next time skipped too).
+    pub async fn item_op_seen(
+        &self,
+        item_id: i32,
+        op: ItemOp,
+        source: OpSource,
+        seen: Option<DateTime<Utc>>,
+    ) -> Result<ItemActed, Refusal> {
         let bot = self.bot().await;
         let item = svc::get_item_of(&self.db.conn, bot, item_id)
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| Refusal::new(keys::GONE, format!("no matter #{item_id}")))?;
+        if seen.is_some_and(|s| s != item.updated_at) {
+            return Err(Self::changed_since_seen(item_id));
+        }
         let timed = matches!(op, ItemOp::Later | ItemOp::Snooze(_));
         // Handed-out work settles itself as the work ends — except a pull
         // request codeg does not follow yet (8.5): the owner closes that
@@ -1004,6 +1021,15 @@ impl PersonalAgentEngine {
         })
     }
 
+    /// The refusal of a button that read matter `item_id` before its last
+    /// write.
+    fn changed_since_seen(item_id: i32) -> Refusal {
+        Refusal::new(
+            keys::CHANGED,
+            format!("matter #{item_id} changed since it was shown: look at it again"),
+        )
+    }
+
     /// What a matter's open reminder cards close as (`card`'s state).
     fn card_close(card: &str, until: Option<DateTime<Utc>>) -> svc::CardClose {
         svc::CardClose {
@@ -1137,6 +1163,7 @@ impl PersonalAgentEngine {
         notice: &notice_entity::Model,
         action: &str,
         text: Option<String>,
+        seen: Option<DateTime<Utc>>,
     ) -> Result<TimelineRow, Refusal> {
         let item_id = serde_json::from_str::<Value>(&notice.payload)
             .ok()
@@ -1182,6 +1209,14 @@ impl PersonalAgentEngine {
         let item = svc::get_item_of(&self.db.conn, self.bot().await, item_id)
             .await
             .map_err(|e| e.to_string())?;
+        // From a matter's row that read it before its last write: nothing
+        // is done — not even the hand-over, which goes out before the
+        // matter is written.
+        if let (Some(s), Some(i)) = (seen, item.as_ref()) {
+            if s != i.updated_at {
+                return Err(Self::changed_since_seen(item_id));
+            }
+        }
         let settled = match item.as_ref().map(|i| i.status) {
             None => Some("closed"),
             Some(ItemStatus::Done) => Some("done"),
@@ -1201,7 +1236,7 @@ impl PersonalAgentEngine {
         match op {
             Some(op) => {
                 // The matter's change closes its open cards, this one too.
-                if let Err(e) = self.item_op(item_id, op, OpSource::ReminderCard).await {
+                if let Err(e) = self.item_op_seen(item_id, op, OpSource::ReminderCard, seen).await {
                     let _ = self
                         .set_reminder_row(&notice, "open", None, Some(&e))
                         .await;

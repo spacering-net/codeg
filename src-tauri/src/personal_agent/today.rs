@@ -164,6 +164,12 @@ pub struct TodayRow {
     /// be (`personal_agent_item_undo`); a card's [Undo] is `undo`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matter_undo: Option<i32>,
+    /// ... a message's: what was written, and which way it went (`out` /
+    /// `in`), from its line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub written: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -202,22 +208,62 @@ impl TodayRow {
             closed_how: None,
             peer: None,
             matter_undo: None,
+            written: None,
+            direction: None,
         }
     }
 }
 
-/// The assistant a message's matter waits on, as its sender's line keeps
-/// it: by its name now, or — deleted — the one it had.
-pub(crate) async fn item_peer(db: &AppDatabase, i: &item_entity::Model) -> Option<Value> {
+/// What a message's matter came from — its line between the assistants,
+/// read once: the words written (the line's body, not codeg's summary of
+/// them), which way they went, and the assistant at the other end.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MessageSource {
+    pub written: Option<String>,
+    pub direction: Option<String>,
+    pub peer: Option<Value>,
+}
+
+/// [`MessageSource`] of matter `i`; empty for one that is not a message's,
+/// or whose line is gone.
+pub(crate) async fn message_source(db: &AppDatabase, i: &item_entity::Model) -> MessageSource {
     if i.kind != item_entity::ItemKind::Message {
-        return None;
+        return MessageSource::default();
     }
-    let line = svc::get_row(&db.conn, i.origin_timeline_id?).await.ok().flatten()?;
+    let line = match i.origin_timeline_id {
+        Some(id) => svc::get_row(&db.conn, id).await.ok().flatten(),
+        None => None,
+    };
+    match line {
+        Some(line) => source_of_line(db, &line).await,
+        None => MessageSource::default(),
+    }
+}
+
+/// [`MessageSource`] of a message's line.
+async fn source_of_line(
+    db: &AppDatabase,
+    line: &crate::db::entities::personal_agent_timeline::Model,
+) -> MessageSource {
     let data = line
         .data
         .as_deref()
-        .and_then(|d| serde_json::from_str::<Value>(d).ok())?;
-    let id = data["to_bot_id"].as_i64().and_then(|v| i32::try_from(v).ok())?;
+        .and_then(|d| serde_json::from_str::<Value>(d).ok())
+        .unwrap_or(Value::Null);
+    let direction = data["direction"].as_str().filter(|d| matches!(*d, "in" | "out"));
+    MessageSource {
+        written: Some(line.body.clone()),
+        direction: direction.map(str::to_string),
+        peer: line_peer(db, &data, direction).await,
+    }
+}
+
+/// The assistant at the other end of a message's line (`data`): its
+/// receiver on the sender's line, its sender on the receiver's — by its
+/// name now, or, deleted, the one it had.
+async fn line_peer(db: &AppDatabase, data: &Value, direction: Option<&str>) -> Option<Value> {
+    let key = if direction == Some("in") { "from_bot_id" } else { "to_bot_id" };
+    let id = data[key].as_i64().and_then(|v| i32::try_from(v).ok())?;
     let snapshot = &data["peer"];
     let bot = svc::get_bot_any(&db.conn, id).await.ok().flatten();
     let avatar = |b: &AgentModel| serde_json::from_str::<Value>(&b.avatar).unwrap_or(Value::Null);
@@ -281,7 +327,10 @@ pub async fn closed_matters(
         row.state = Some(super::engine::enum_str(&i.kind));
         row.closed_by = i.closed_by.clone();
         row.closed_how = i.closed_how.clone();
-        row.peer = item_peer(db, &i).await;
+        let source = message_source(db, &i).await;
+        row.peer = source.peer;
+        row.written = source.written;
+        row.direction = source.direction;
         // Where it goes: an answered question to the answer, a message
         // answered to the answer, the rest to where it came from.
         row.row_id = match (i.kind, i.closed_how.as_deref()) {

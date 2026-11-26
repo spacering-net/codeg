@@ -2827,6 +2827,10 @@ export interface ItemInfo {
   answer_state?: "linked" | "interrupted" | null
   /** A message's: the assistant it waits on. */
   peer?: ItemPeer | null
+  /** A message's: what was written, from its line (not codeg's summary of
+   *  it), and which way it went. Absent for an older read: show `summary`. */
+  written?: string
+  direction?: "in" | "out"
 }
 
 /** Who settled a matter. */
@@ -3341,6 +3345,10 @@ export interface TodayRow {
   /** ... what takes the owner's act on the panel back
    *  (`personalAgentItemUndo`), while it still can be. */
   matter_undo?: number | null
+  /** ... a message's: what was written, from its line, and which way it
+   *  went. */
+  written?: string
+  direction?: "in" | "out"
 }
 
 /** "Today": every assistant's, in four groups. */

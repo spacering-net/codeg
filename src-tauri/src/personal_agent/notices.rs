@@ -565,12 +565,25 @@ impl PersonalAgentEngine {
         action: &str,
         text: Option<String>,
     ) -> Result<TimelineRow, super::refusal::Refusal> {
+        self.act_on_notice_seen(notice_id, action, text, None).await
+    }
+
+    /// [`Self::act_on_notice_worded`]; a reminder card's answer from a
+    /// matter's row carries the matter's version as the row read it
+    /// (`seen`), and is refused when the matter was written since.
+    pub async fn act_on_notice_seen(
+        self: &Arc<Self>,
+        notice_id: i32,
+        action: &str,
+        text: Option<String>,
+        seen: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<TimelineRow, super::refusal::Refusal> {
         if action != "mute" {
             let notice = svc::get_notice_of(&self.db.conn, self.bot().await, notice_id)
                 .await
                 .map_err(|e| e.to_string())?;
             if let Some(n) = notice.filter(|n| n.kind == NoticeKind::Reminder) {
-                return self.act_on_reminder(&n, action, text).await;
+                return self.act_on_reminder(&n, action, text, seen).await;
             }
         }
         Ok(self.act_on_notice_with(notice_id, action, text).await?)
@@ -608,7 +621,7 @@ impl PersonalAgentEngine {
             }
             NoticeKind::Reminder => {
                 return self
-                    .act_on_reminder(&notice, action, text)
+                    .act_on_reminder(&notice, action, text, None)
                     .await
                     .map_err(String::from)
             }

@@ -10267,7 +10267,8 @@
       "ariaLabel": "发给个人助手的消息",
       "send": "发送",
       "queue": "加入队列",
-      "waitForUpload": "请等图片上传完成。"
+      "waitForUpload": "请等图片上传完成。",
+      "draftWhileSending": "正在发送，发完再放进输入框。"
     },
     "aux": {
       "rename": "点击修改名称",
@@ -10341,7 +10342,7 @@
       "waitingAnswer": "等 {name} 回复：{text}",
       "wroteToYou": "{name} 发来消息：{text}",
       "kind": {
-        "dispatch": "派活",
+        "dispatch": "派出的工作",
         "reminder": "提醒",
         "followup": "跟进",
         "question": "提问",
@@ -13077,7 +13078,8 @@
         "notWithdrawn": "消息没有撤回，{name}不再等{peer}回复",
         "stopped": "以后不再提醒：{title}",
         "handed": "已交给{name}",
-        "undone": "已撤销"
+        "undone": "已撤销",
+        "notRefreshed": "刷新失败，稍后再试。"
       },
       "meta": {
         "reminds": "{name}提醒你 · {when} 到点",

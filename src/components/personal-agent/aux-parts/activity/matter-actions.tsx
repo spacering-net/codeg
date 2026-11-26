@@ -14,7 +14,7 @@
  *  did after — a toast with [Undo], the panel's acts taken back within ten
  *  minutes. Handed-out work still moving settles itself. */
 
-import { useState, type ReactNode } from "react"
+import { useId, useState, type ReactElement, type ReactNode } from "react"
 import { useLocale, useTranslations } from "next-intl"
 import {
   Check,
@@ -33,10 +33,17 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
   personalAgentItemAct,
   personalAgentItemUndo,
   personalAgentNoticeAct,
 } from "@/lib/api"
+import { extractAppCommandError } from "@/lib/app-error"
 import type {
   ActivityRow,
   DispatchInfo,
@@ -60,6 +67,7 @@ import { useActivityTranslate } from "../../activity-text"
 import { repeatText } from "../../due-text"
 import { useBotName } from "../../shared"
 import { MOVING } from "../use-work"
+import { useActSettle, waitForSettle } from "./act-settle"
 
 const SNOOZES = [
   { until: "15m", label: "in15m" },
@@ -120,24 +128,49 @@ function useShowConversation(): (
   }
 }
 
+/** A refusal because the matter was written since the button read it:
+ *  the activity is read again, so the next press acts on it as it is. */
+export function refreshIfChanged(e: unknown) {
+  const key = extractAppCommandError(e)?.i18n_key
+  if (
+    key === "matterErrors.changed" ||
+    key === "matterErrors.reminderAnswered"
+  ) {
+    refreshActivity()
+  }
+}
+
+/** The undo tokens being taken back: an [Undo] pressed again — on the row,
+ *  or on the toast that carries the same token — while one is under way
+ *  does nothing. */
+const undoing = new Set<number>()
+
 /** Take back an act from the panel (`undo`, its token): what the owner is
- *  told either way. */
+ *  told either way, and the matter as the undo left it (`null`: not taken
+ *  back). */
 export function useUndoMatter(): (
   bot: number | null,
   itemId: number,
   undo: number
-) => Promise<void> {
+) => Promise<ItemInfo | null> {
   const t = useTranslations("PersonalAgent.matter.toast")
   const errorText = useMatterError()
-  return (bot, itemId, undo) =>
-    personalAgentItemUndo(bot, itemId, undo)
-      .then(() => {
+  return (bot, itemId, undo) => {
+    if (undoing.has(undo)) return Promise.resolve(null)
+    undoing.add(undo)
+    return personalAgentItemUndo(bot, itemId, undo)
+      .then((item) => {
         toast.success(t("undone"))
         refreshActivity()
+        return item
       })
       .catch((e) => {
+        undoing.delete(undo)
+        refreshIfChanged(e)
         toast.error(errorText(e))
+        return null
       })
+  }
 }
 
 type Act =
@@ -172,6 +205,11 @@ export function MatterActions({
   const name = useRowBotName()(row.bot_id)
   const bot = row.bot_id
   const [acting, setActing] = useState(false)
+  // Done, the buttons stay off until the row as read shows it.
+  const settleKey = `item:${item.id}`
+  const settle = useActSettle(settleKey, item.updated_at)
+  const busy = acting || settle.waiting
+  const hintId = useId()
   if (!hasItemActions(item, dispatch)) return null
 
   const title = matterTitleOf(item)
@@ -207,30 +245,64 @@ export function MatterActions({
       text = t("toast.done", { title })
     }
     const undo = res?.undo
+    const notRefreshed = t("toast.notRefreshed")
     toast.success(text, {
       duration: UNDO_TOAST_MS,
       action:
         undo != null
           ? {
               label: t("act.undo"),
-              onClick: () => void undoMatter(bot, item.id, undo),
+              // The row may be drawn elsewhere by now (another group): it
+              // waits by its key, wherever it is.
+              onClick: () =>
+                void undoMatter(bot, item.id, undo).then((back) => {
+                  if (back) {
+                    waitForSettle(
+                      settleKey,
+                      { atLeast: back.updated_at },
+                      notRefreshed
+                    )
+                  }
+                }),
             }
           : undefined,
     })
   }
 
+  // Every act carries the version the button read: one the row's read went
+  // past (a stale button) is refused, never done to the matter as it is
+  // now — a repeating one's next time skipped too.
   const run = (act: Act) => {
     setActing(true)
     const call =
       act.op === "snooze"
-        ? personalAgentItemAct(bot, item.id, "snooze", act.until)
-        : personalAgentItemAct(bot, item.id, act.op)
+        ? personalAgentItemAct(
+            bot,
+            item.id,
+            "snooze",
+            act.until,
+            "panel",
+            item.updated_at
+          )
+        : personalAgentItemAct(
+            bot,
+            item.id,
+            act.op,
+            undefined,
+            "panel",
+            item.updated_at
+          )
     call
       .then((res) => {
+        const wrote = res?.item?.updated_at
+        if (wrote) settle.waitFor({ atLeast: wrote })
         refreshActivity()
         tell(act, res)
       })
-      .catch((e) => toast.error(errorText(e)))
+      .catch((e) => {
+        refreshIfChanged(e)
+        toast.error(errorText(e))
+      })
       .finally(() => setActing(false))
   }
 
@@ -239,17 +311,25 @@ export function MatterActions({
     const notice = row.card_notice_id
     if (notice == null) return
     setActing(true)
+    const seen = item.updated_at
     personalAgentNoticeAct(
       notice,
       "hand_over",
       bot,
-      tr("handOverText", { summary: title })
+      tr("handOverText", { summary: title }),
+      seen
     )
       .then(() => {
+        // Handed over writes the matter: off until the row is read past
+        // the version this press saw (or it moves to "under way").
+        settle.waitFor({ differs: seen })
         toast.success(t("toast.handed", { name }))
         refreshActivity()
       })
-      .catch((e) => toast.error(errorText(e)))
+      .catch((e) => {
+        refreshIfChanged(e)
+        toast.error(errorText(e))
+      })
       .finally(() => setActing(false))
   }
 
@@ -263,6 +343,24 @@ export function MatterActions({
     showConversation(bot, item.origin_timeline_id, inDrawer)
   }
 
+  // What a button will do, before it is pressed: a tooltip on pointer and
+  // focus, and its description for a screen reader (always there, not only
+  // while the tooltip shows).
+  const hinted = (key: string, hint: string | null, trigger: ReactElement) =>
+    hint ? (
+      <TooltipProvider key={key} delayDuration={300}>
+        <Tooltip>
+          <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+          <TooltipContent>{hint}</TooltipContent>
+        </Tooltip>
+        <span id={`${hintId}-${key}`} className="sr-only">
+          {hint}
+        </span>
+      </TooltipProvider>
+    ) : (
+      trigger
+    )
+
   const button = (
     key: string,
     label: string,
@@ -273,21 +371,24 @@ export function MatterActions({
       icon?: ReactNode
       quiet?: boolean
     } = {}
-  ) => (
-    <Button
-      key={key}
-      size="sm"
-      variant={opts.main ? "default" : opts.quiet ? "ghost" : "outline"}
-      className={opts.quiet ? "text-muted-foreground" : undefined}
-      disabled={acting}
-      onClick={onClick}
-      title={hint ?? undefined}
-      data-pa-item-act={key}
-    >
-      {opts.icon}
-      {label}
-    </Button>
-  )
+  ) =>
+    hinted(
+      key,
+      hint,
+      <Button
+        key={key}
+        size="sm"
+        variant={opts.main ? "default" : opts.quiet ? "ghost" : "outline"}
+        className={opts.quiet ? "text-muted-foreground" : undefined}
+        disabled={busy}
+        onClick={onClick}
+        aria-describedby={hint ? `${hintId}-${key}` : undefined}
+        data-pa-item-act={key}
+      >
+        {opts.icon}
+        {label}
+      </Button>
+    )
 
   const timeMenu = (key: "snooze" | "setTime") => {
     const hint =
@@ -300,19 +401,29 @@ export function MatterActions({
           : t("hint.setTimeNotify")
     return (
       <DropdownMenu key={key}>
-        <DropdownMenuTrigger asChild>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={acting}
-            title={hint}
-            data-pa-item-act={`${key}-menu`}
-          >
-            <Clock aria-hidden />
-            {t(`act.${key}`)}
-            <ChevronDown aria-hidden className="-ms-0.5 opacity-60" />
-          </Button>
-        </DropdownMenuTrigger>
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  aria-describedby={`${hintId}-${key}`}
+                  data-pa-item-act={`${key}-menu`}
+                >
+                  <Clock aria-hidden />
+                  {t(`act.${key}`)}
+                  <ChevronDown aria-hidden className="-ms-0.5 opacity-60" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent>{hint}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+        <span id={`${hintId}-${key}`} className="sr-only">
+          {hint}
+        </span>
         <DropdownMenuContent align="start">
           {SNOOZES.map((c) => (
             <DropdownMenuItem

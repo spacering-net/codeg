@@ -10267,7 +10267,8 @@
       "ariaLabel": "Message to your personal agent",
       "send": "Send",
       "queue": "Queue",
-      "waitForUpload": "Wait for the image to finish uploading."
+      "waitForUpload": "Wait for the image to finish uploading.",
+      "draftWhileSending": "Sending — put it in the box once that's done."
     },
     "aux": {
       "rename": "Click to rename",
@@ -10341,7 +10342,7 @@
       "waitingAnswer": "Waiting for {name}'s answer: {text}",
       "wroteToYou": "{name} wrote: {text}",
       "kind": {
-        "dispatch": "dispatch",
+        "dispatch": "work handed out",
         "reminder": "reminder",
         "followup": "follow-up",
         "question": "question",
@@ -13077,7 +13078,8 @@
         "notWithdrawn": "The message was not taken back; {name} no longer waits for {peer}'s reply",
         "stopped": "No more reminders: {title}",
         "handed": "Handed to {name}",
-        "undone": "Undone"
+        "undone": "Undone",
+        "notRefreshed": "Couldn't refresh it — try again in a moment."
       },
       "meta": {
         "reminds": "{name} reminds you · due {when}",

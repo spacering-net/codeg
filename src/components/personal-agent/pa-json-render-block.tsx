@@ -1083,8 +1083,11 @@ function PaCard({
                   <Button
                     variant="outline"
                     onClick={() => {
-                      page.onDraft?.(scope.rowId, pending.text)
-                      setPending(null)
+                      // Kept open, its text with it, while the box is
+                      // sending: the owner may press it again after.
+                      if (page.onDraft?.(scope.rowId, pending.text)) {
+                        setPending(null)
+                      }
                     }}
                     data-pa-card-to-composer
                   >

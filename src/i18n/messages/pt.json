@@ -10267,7 +10267,8 @@
       "ariaLabel": "Mensagem para o seu agente pessoal",
       "send": "Enviar",
       "queue": "Pôr na fila",
-      "waitForUpload": "Aguarde o envio da imagem terminar."
+      "waitForUpload": "Aguarde o envio da imagem terminar.",
+      "draftWhileSending": "Enviando — coloque na caixa quando terminar."
     },
     "aux": {
       "rename": "Clique para renomear",
@@ -10341,7 +10342,7 @@
       "waitingAnswer": "Aguardando a resposta de {name}: {text}",
       "wroteToYou": "{name} escreveu: {text}",
       "kind": {
-        "dispatch": "atribuição",
+        "dispatch": "trabalho encarregado",
         "reminder": "lembrete",
         "followup": "acompanhamento",
         "question": "pergunta",
@@ -13077,7 +13078,8 @@
         "notWithdrawn": "A mensagem não foi retirada; {name} não espera mais a resposta de {peer}",
         "stopped": "Sem mais lembretes: {title}",
         "handed": "Passado para {name}",
-        "undone": "Desfeito"
+        "undone": "Desfeito",
+        "notRefreshed": "Não foi possível atualizar — tente de novo daqui a pouco."
       },
       "meta": {
         "reminds": "{name} lembra você · para {when}",

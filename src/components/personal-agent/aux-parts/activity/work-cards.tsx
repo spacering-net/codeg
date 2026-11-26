@@ -48,7 +48,7 @@ import { repeatText } from "../../due-text"
 import { AnsweredForYou } from "../../event-card"
 import { LadderChip, TaskStopButton, TaskStrip } from "../../task-strip"
 import { useTodayRowProps, type Opener } from "../../today-section"
-import { peerName, useWaited, useWhen } from "../../matter-text"
+import { messageWords, peerName, useWaited, useWhen } from "../../matter-text"
 import {
   hasItemActions,
   MatterActions,
@@ -56,6 +56,7 @@ import {
   useRowBotName,
   useUndoMatter,
 } from "./matter-actions"
+import { useActSettle } from "./act-settle"
 
 /** A piece of work's glyph leading a row, in px at 100% zoom: as a kind's
  *  icon tile. */
@@ -70,37 +71,16 @@ const KIND_ICON: Record<Exclude<ItemKind, "dispatch">, LucideIcon> = {
   when_mentioned: Ear,
 }
 
-/** codeg's own words for the matters of a message between assistants
- *  (`messages.rs`): its sender's, and its receiver's. */
-const WAITING_ANSWER = /^Waiting for (.+?)'s answer: ([\s\S]*)$/
-const WROTE_TO_YOU = /^(.+?) wrote to you: ([\s\S]*)$/
-
-/** A message's matter written by codeg, in the page's language: what it
- *  says with its sender or receiver named; `null` for words of anyone
- *  else's (an assistant's own summary), shown as written. */
-export function messageMatterWords(
-  summary: string
-): { key: "waitingAnswer" | "wroteToYou"; name: string; text: string } | null {
-  const waiting = WAITING_ANSWER.exec(summary)
-  if (waiting)
-    return { key: "waitingAnswer", name: waiting[1]!, text: waiting[2]! }
-  const wrote = WROTE_TO_YOU.exec(summary)
-  if (wrote) return { key: "wroteToYou", name: wrote[1]!, text: wrote[2]! }
-  return null
-}
-
-/** A matter's title: its summary — codeg's words for a message's matter in
- *  the page's language. */
+/** A matter's title: its summary — a message's, what was written (from
+ *  its line), with who wrote it when it was written to this assistant. */
 function useMatterTitle(): (item: ItemInfo) => string {
   const t = useTranslations("PersonalAgent.items")
   return (item) => {
-    const words =
-      item.kind === "message" ? messageMatterWords(item.summary) : null
+    const words = item.kind === "message" ? messageWords(item) : null
+    if (!words) return item.summary
     // Who it waits on is said on its line: the title is what was written.
-    if (words?.key === "waitingAnswer") return words.text
-    return words
-      ? t(words.key, { name: words.name, text: words.text })
-      : item.summary
+    if (!words.toMe) return words.text
+    return t("wroteToYou", { name: peerName(item), text: words.text })
   }
 }
 
@@ -653,6 +633,12 @@ function MatterClosedShell({ today, ...p }: ShellProps & { today: TodayRow }) {
   const undoMatter = useUndoMatter()
   const jumpTo = useJumpTo(p.scope.inDrawer)
   const [acting, setActing] = useState(false)
+  // Taken back, [Undo] stays off until the row is read again without that
+  // undo (or goes: the matter is open again).
+  const settle = useActSettle(
+    `today:${today.key}`,
+    String(today.matter_undo ?? "")
+  )
   const bot = today.bot_id
   const name = nameOf(bot)
   const peer = today.peer?.name?.trim() || t("meta.someone")
@@ -690,7 +676,7 @@ function MatterClosedShell({ today, ...p }: ShellProps & { today: TodayRow }) {
   const kind = (today.state ?? "reminder") as ItemKind
   const title =
     kind === "message"
-      ? (messageMatterWords(today.title)?.text ?? today.title)
+      ? (messageWords(today)?.text ?? today.title)
       : today.title
   const undo = today.matter_undo
   const itemId = today.item_id
@@ -699,10 +685,14 @@ function MatterClosedShell({ today, ...p }: ShellProps & { today: TodayRow }) {
       <Button
         size="sm"
         variant="outline"
-        disabled={acting}
+        disabled={acting || settle.waiting}
         onClick={() => {
           setActing(true)
-          void undoMatter(bot, itemId, undo).finally(() => setActing(false))
+          void undoMatter(bot, itemId, undo)
+            .then((done) => {
+              if (done) settle.waitFor({ differs: String(undo) })
+            })
+            .finally(() => setActing(false))
         }}
         data-pa-today-act="matter-undo"
       >

@@ -10267,7 +10267,8 @@
       "ariaLabel": "Message à votre agent personnel",
       "send": "Envoyer",
       "queue": "Mettre en file",
-      "waitForUpload": "Attendez la fin de l'envoi de l'image."
+      "waitForUpload": "Attendez la fin de l'envoi de l'image.",
+      "draftWhileSending": "Envoi en cours : mettez-le dans la zone une fois terminé."
     },
     "aux": {
       "rename": "Cliquer pour renommer",
@@ -13077,7 +13078,8 @@
         "notWithdrawn": "Le message n’a pas été retiré ; {name} n’attend plus la réponse de {peer}",
         "stopped": "Plus aucun rappel : {title}",
         "handed": "Confié à {name}",
-        "undone": "Annulé"
+        "undone": "Annulé",
+        "notRefreshed": "Actualisation impossible — réessayez dans un instant."
       },
       "meta": {
         "reminds": "{name} te le rappelle · prévu {when}",

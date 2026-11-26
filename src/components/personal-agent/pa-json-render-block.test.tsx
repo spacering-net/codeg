@@ -178,6 +178,7 @@ beforeEach(() => {
   api.personalAgentItemAct.mockResolvedValue(item(5))
   api.personalAgentItems.mockResolvedValue([item(5)])
   onDraft.mockReset()
+  onDraft.mockReturnValue(true)
 })
 afterEach(() => vi.useRealTimers())
 
@@ -255,6 +256,14 @@ describe("an assistant's card: pa.reply", () => {
       screen.getByRole("button", { name: "Put in the input box" })
     )
     expect(onDraft).toHaveBeenCalledWith(120, "Name: Ada")
+    // Not taken (the box is sending): the confirmation stays, its text too.
+    onDraft.mockReturnValueOnce(false)
+    fireEvent.click(screen.getByRole("button", { name: "Send the form" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Put in the input box" })
+    )
+    expect(screen.getByText("Name: Ada")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
     fireEvent.click(screen.getByRole("button", { name: "Send the form" }))
     fireEvent.click(await screen.findByRole("button", { name: "Send" }))
     await waitFor(() =>

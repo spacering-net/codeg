@@ -22429,9 +22429,15 @@ async fn dropping_a_message_takes_it_back_while_it_waits_and_undoing_sends_it_ag
         .find(|l| l.bot_id == Some(primary))
         .unwrap();
     let item = msvc::waiting_item_of_line(&engine.db.conn, primary, line.id).await.unwrap().unwrap();
-    // Its peer, for the page.
-    let peer = super::today::item_peer(&engine.db, &item).await.unwrap();
+    // Its peer, for the page — and what was written, which way, from the
+    // same line (not codeg's summary of it).
+    let source = super::today::message_source(&engine.db, &item).await;
+    let peer = source.peer.unwrap();
     assert_eq!((peer["id"].as_i64(), peer["gone"].as_bool()), (Some(w as i64), Some(false)));
+    assert_eq!(
+        (source.written.as_deref(), source.direction.as_deref()),
+        (Some("review the login fix"), Some("out"))
+    );
     // Snoozing it says whose reply it waits on.
     let e = engine.settle_item(item.id, "snooze", Some("1h")).await.unwrap_err();
     assert_eq!(e.key, Some(super::refusal::keys::MESSAGE_NO_TIME));
@@ -22707,6 +22713,32 @@ async fn taking_back_a_drop_of_an_answered_question_brings_its_time_back() {
     assert!(data_of(&svc::get_row(&engine.db.conn, row2.id).await.unwrap().unwrap()).get(matter_svc::ANSWER_PRIOR).is_some());
     emit(&engine, &state, "pa-prior-undo", turn_complete("cancelled"), true).await;
     assert_eq!(matter_of(&engine, q2).await.due_at, due2);
+}
+
+/// A button that read the matter before its last write is refused, and
+/// does nothing: an act, and a hand-over from its reminder card (which
+/// would otherwise go out before the matter is written).
+#[tokio::test]
+async fn a_stale_button_on_a_matter_does_nothing() {
+    let (engine, _tmp) = configured().await;
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Call the bank", "due": "1h" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    let seen = matter_of(&engine, id).await.updated_at;
+    call(&engine, "item_update", json!({ "item_id": id, "summary": "Call the bank today" })).await;
+    let e = engine
+        .settle_item_seen(id, "done", None, super::reminders::OpSource::Panel, Some(seen))
+        .await
+        .unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::CHANGED));
+    assert_eq!(matter_of(&engine, id).await.status, ItemStatus::Open);
+    // As read now: done.
+    let now = matter_of(&engine, id).await.updated_at;
+    let acted = engine
+        .settle_item_seen(id, "done", None, super::reminders::OpSource::Panel, Some(now))
+        .await
+        .unwrap();
+    assert_eq!(acted.item.status, ItemStatus::Done);
+    assert!(acted.item.updated_at >= now);
 }
 
 /// Two sends again of one interrupted message at once: one copy, its

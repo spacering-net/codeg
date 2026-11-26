@@ -685,9 +685,18 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     useEffect(() => {
       if (!referenceSearch && mentionOpenRef.current) closeMention()
     }, [referenceSearch, closeMention])
+    // Turned read-only while a panel is open (a box locked while it sends):
+    // the panel goes too — its picks insert through editor commands, which
+    // a read-only editor does not stop.
+    const disabledRef = useRef(disabled)
+    useEffect(() => {
+      disabledRef.current = disabled
+      if (disabled && mentionOpenRef.current) closeMention()
+    }, [disabled, closeMention])
 
     const handleReferenceSelect = useCallback(
       (reference: ReferenceAttrs, range: { from: number; to: number }) => {
+        if (disabledRef.current) return
         editor
           ?.chain()
           .focus()
