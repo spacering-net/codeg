@@ -3260,7 +3260,7 @@
   },
   {
     "name": "session_brief",
-    "description": "Read, replace or edit your persistent session brief. Keep durable goals, decisions and context within 12000 characters. Every edit oldText must match exactly once; the entire edit batch commits atomically. The brief is included in get_current_session and in the first prompt of newly delegated children.",
+    "description": "Read, replace or edit your persistent session brief. Update it before handing work off, ending a phase, or ending your turn while waiting for a collaborator. Save the current goal, durable decisions, open work, relevant conversation or task IDs, and the next action. Read it when picking work back up after a pause or context compaction. Keep it within 12000 characters. Every edit oldText must match exactly once. The entire edit batch commits atomically. The brief is included in get_current_session and in the first prompt of newly delegated children.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3306,7 +3306,7 @@
   },
   {
     "name": "session_digest",
-    "description": "Replace your current session digest in full. Keep now (up to 8), news (5), needsYou (3 questions, 4 options each), and suggestions (3) concise; each line has at most 300 characters. recommended must exactly equal an option. Use stable question IDs until the question changes. Dismissed suggestion titles are persistently filtered and returned in dismissedSuggestions; respect them instead of rephrasing the same suggestion. The user sees the digest above chat and answers through ordinary user messages.",
+    "description": "Update your user-facing session digest when a milestone is reached, the plan changes, or you need a decision from the user. Replace the digest in full and carry forward items that still apply. Use now for active work and news for meaningful changes. Use needsYou for decisions that require the user, and suggestions for optional next steps. Limits are 8 now items, 5 news items, 3 questions with up to 4 options each, and 3 suggestions. Each line has at most 300 characters. recommended must exactly equal an option. Keep question IDs stable until the question changes. Dismissed suggestion titles are returned in dismissedSuggestions. Respect them across updates. The user sees the digest above chat and answers through ordinary user messages.",
     "inputSchema": {
       "type": "object",
       "properties": {
