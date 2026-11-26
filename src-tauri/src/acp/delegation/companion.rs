@@ -8049,6 +8049,48 @@ mod tests {
         .contains("expect[0]"));
     }
 
+    /// Every `enum` in the embedded tool schema must hold non-empty strings so
+    /// providers whose function-declaration schema only accepts string enums
+    /// (e.g. Gemini) do not reject `tools/list` with INVALID_ARGUMENT.
+    #[test]
+    fn tool_schema_enums_are_non_empty_strings() {
+        fn check(value: &Value, path: &str) {
+            match value {
+                Value::Object(map) => {
+                    if let Some(enum_val) = map.get("enum") {
+                        assert_eq!(
+                            map.get("type").and_then(Value::as_str),
+                            Some("string"),
+                            "enum at {path} must have type \"string\""
+                        );
+                        let items = enum_val
+                            .as_array()
+                            .unwrap_or_else(|| panic!("enum at {path} must be an array"));
+                        assert!(!items.is_empty(), "enum at {path} must not be empty");
+                        for (i, item) in items.iter().enumerate() {
+                            let s = item.as_str().unwrap_or_else(|| {
+                                panic!("enum[{i}] at {path} must be a string, got {item}")
+                            });
+                            assert!(!s.is_empty(), "enum[{i}] at {path} must not be empty");
+                        }
+                    }
+                    for (k, v) in map {
+                        check(v, &format!("{path}.{k}"));
+                    }
+                }
+                Value::Array(items) => {
+                    for (i, v) in items.iter().enumerate() {
+                        check(v, &format!("{path}[{i}]"));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let schema: Value = serde_json::from_str(TOOL_SCHEMA_JSON).unwrap();
+        check(&schema, "$");
+    }
+
     /// A drag names two points in one screenshot and may hold modifiers; a
     /// held key names how long; a click may hold modifiers too. Each is as
     /// strict as the rest: an argument the tool does not take, or a length
