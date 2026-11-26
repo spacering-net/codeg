@@ -499,14 +499,16 @@ describe("the roster", () => {
     expect(primary.querySelector("[data-pa-roster-line]")?.textContent).toBe(
       "All set."
     )
-    expect(primary.parentElement!.className).toContain("py-0.5")
-    // A little room between the rows.
+    expect(primary.parentElement!.className).toContain("pb-[0.0625rem]")
+    // The conversation list's room between the rows: 1px, under each.
     // (inside what folds, which itself has none, so it shuts to nothing).
     const rows = nav.querySelectorAll("[data-pa-roster-row-state] > div")
     expect(rows.length).toBe(2)
     rows.forEach((r) => {
       expect(r.className).toBe("")
-      expect((r.firstElementChild as HTMLElement).className).toContain("py-0.5")
+      expect((r.firstElementChild as HTMLElement).className).toBe(
+        "pb-[0.0625rem]"
+      )
     })
     // No [+ new] at a foot: the section's head has it.
     expect(nav.querySelector("[data-pa-roster-foot]")).toBeNull()

@@ -1,9 +1,10 @@
 "use client"
 
-import { useCallback, useMemo, useState, type ReactNode } from "react"
+import { useCallback, useId, useMemo, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { ExternalLink, SlidersHorizontal } from "lucide-react"
 
+import { AgentPanelCard } from "@/components/settings/agent-panel-layout"
 import { BrowserLink } from "@/components/ui/browser-link"
 import { Input } from "@/components/ui/input"
 import {
@@ -152,189 +153,187 @@ export function OpenCodeBehaviorSection({
     view.toggles[field] ?? OPENCODE_TOGGLE_DEFAULTS[field]
 
   return (
-    <div className="space-y-2.5 rounded-md border bg-background/60 p-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <label className="text-2xs font-medium">
-            {t("openCode.behavior.title")}
-          </label>
-          <p className="mt-1 text-3xs text-muted-foreground">
-            {t("openCode.behavior.description")}
+    <div className="space-y-3">
+      <AgentPanelCard
+        title={t("openCode.behavior.title")}
+        description={t("openCode.behavior.description")}
+        control={
+          <BrowserLink
+            href={DOCS_URL}
+            className="inline-flex shrink-0 items-center gap-1 text-2xs text-primary hover:underline"
+          >
+            {t("openCode.behavior.docsLink")}
+            <ExternalLink className="h-3 w-3" />
+          </BrowserLink>
+        }
+      >
+        {!editable && (
+          <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
+            {t("openCode.permissions.unparsableConfig")}
           </p>
-        </div>
-        <BrowserLink
-          href={DOCS_URL}
-          className="inline-flex shrink-0 items-center gap-1 text-2xs text-primary hover:underline"
-        >
-          {t("openCode.behavior.docsLink")}
-          <ExternalLink className="h-3 w-3" />
-        </BrowserLink>
-      </div>
+        )}
 
-      {!editable && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
-          {t("openCode.permissions.unparsableConfig")}
-        </p>
-      )}
-
-      {editable && view.ignoredLegacyKeys.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5">
-          <p className="min-w-0 flex-1 text-2xs text-amber-500">
-            {t("openCode.behavior.ignoredLegacyKeys", {
-              keys: view.ignoredLegacyKeys.join(", "),
-            })}
-          </p>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            disabled={locked}
-            onClick={() => onChange(removeIgnoredLegacyKeys(configText))}
-          >
-            {t("openCode.behavior.removeIgnoredLegacyKeys")}
-          </Button>
-        </div>
-      )}
-
-      {/* ---- Session defaults ---- */}
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="min-w-0">
-            <div className="text-2xs font-medium">
-              {t("openCode.behavior.defaultAgent")}
-            </div>
-            <p className="mt-0.5 text-3xs text-muted-foreground">
-              {t("openCode.behavior.defaultAgentHint")}
+        {editable && view.ignoredLegacyKeys.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5">
+            <p className="min-w-0 flex-1 text-2xs text-amber-500">
+              {t("openCode.behavior.ignoredLegacyKeys", {
+                keys: view.ignoredLegacyKeys.join(", "),
+              })}
             </p>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={locked}
+              onClick={() => onChange(removeIgnoredLegacyKeys(configText))}
+            >
+              {t("openCode.behavior.removeIgnoredLegacyKeys")}
+            </Button>
           </div>
-          <Input
-            value={view.defaultAgent}
-            disabled={locked}
-            placeholder="build"
-            spellCheck={false}
-            className="h-7 w-44 font-mono text-xs"
-            onChange={(event) => {
-              onChange(setOpenCodeDefaultAgent(configText, event.target.value))
-            }}
-            aria-label={t("openCode.behavior.defaultAgent")}
-          />
-        </div>
+        )}
 
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="min-w-0">
-            <div className="text-2xs font-medium">
-              {t("openCode.behavior.autoUpdate")}
-            </div>
-            <p className="mt-0.5 text-3xs text-muted-foreground">
-              {t("openCode.behavior.autoUpdateHint")}
-            </p>
-          </div>
-          <Select
-            value={view.update ?? UNSET}
-            disabled={locked}
-            onValueChange={(value) => {
-              onChange(
-                setOpenCodeUpdate(
-                  configText,
-                  value === UNSET ? null : (value as OpenCodeUpdateMode)
-                )
-              )
-            }}
-          >
-            <SelectTrigger className="h-7 w-44 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="end">
-              <SelectItem value={UNSET}>
-                {t("openCode.behavior.unset")}
-              </SelectItem>
-              {OPENCODE_UPDATE_MODES.map((mode) => (
-                <SelectItem key={mode} value={mode}>
-                  {updateLabel(mode)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      {/* ---- Switches ---- */}
-      <div className="space-y-2 border-t pt-2">
-        <ToggleRow
-          icon
-          label={t("openCode.behavior.snapshot")}
-          hint={t("openCode.behavior.snapshotHint")}
-          // Default on. Off is what disables undo/revert.
-          checked={toggleChecked("snapshots")}
-          disabled={locked}
-          onChange={(checked) => handleToggle("snapshots", checked)}
-        />
-        <ToggleRow
-          label={t("openCode.behavior.compactionAuto")}
-          hint={t("openCode.behavior.compactionAutoHint")}
-          checked={toggleChecked("compaction.auto")}
-          disabled={locked}
-          onChange={(checked) => handleToggle("compaction.auto", checked)}
-        />
-        <ToggleRow
-          label={t("openCode.behavior.backgroundCompaction")}
-          hint={t("openCode.behavior.backgroundCompactionHint")}
-          // Default on since OpenCode 2.3.1. Off saves the tokens an unused
-          // summary costs.
-          checked={toggleChecked("compaction.background")}
-          disabled={locked}
-          onChange={(checked) => handleToggle("compaction.background", checked)}
-        />
-        <ToggleRow
-          label={t("openCode.behavior.todo")}
-          hint={t("openCode.behavior.todoHint")}
-          checked={toggleChecked("experimental.todo")}
-          disabled={locked}
-          onChange={(checked) => handleToggle("experimental.todo", checked)}
-        />
-      </div>
-
-      {/* ---- Numeric limits ---- */}
-      <div className="space-y-1.5 border-t pt-2">
-        {OPENCODE_NUMBER_FIELDS.map((meta) => (
-          <div
-            key={meta.field}
-            className="flex flex-wrap items-center justify-between gap-2"
-          >
+        {/* ---- Session defaults ---- */}
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0">
               <div className="text-2xs font-medium">
-                {numberLabels[meta.field]}
+                {t("openCode.behavior.defaultAgent")}
               </div>
-              <p className="mt-0.5 text-3xs text-muted-foreground">
-                {numberHints[meta.field]}
+              <p className="mt-0.5 text-2xs text-muted-foreground">
+                {t("openCode.behavior.defaultAgentHint")}
               </p>
             </div>
-            {meta.percent ? (
-              <ShareOrNumberInput
-                value={view.numbers[meta.field]}
-                disabled={locked}
-                placeholder={meta.placeholder}
-                onType={(raw) => handleNumberChange(meta.field, raw)}
-                ariaLabel={numberLabels[meta.field]}
-              />
-            ) : (
-              <Input
-                type="number"
-                inputMode="numeric"
-                min={meta.min}
-                value={view.numbers[meta.field] ?? ""}
-                disabled={locked}
-                placeholder={meta.placeholder}
-                className="h-7 w-44 font-mono text-xs"
-                onChange={(event) => {
-                  handleNumberChange(meta.field, event.target.value)
-                }}
-                aria-label={numberLabels[meta.field]}
-              />
-            )}
+            <Input
+              value={view.defaultAgent}
+              disabled={locked}
+              placeholder="build"
+              spellCheck={false}
+              className="h-7 w-44 font-mono text-xs"
+              onChange={(event) => {
+                onChange(
+                  setOpenCodeDefaultAgent(configText, event.target.value)
+                )
+              }}
+              aria-label={t("openCode.behavior.defaultAgent")}
+            />
           </div>
-        ))}
-      </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-2xs font-medium">
+                {t("openCode.behavior.autoUpdate")}
+              </div>
+              <p className="mt-0.5 text-2xs text-muted-foreground">
+                {t("openCode.behavior.autoUpdateHint")}
+              </p>
+            </div>
+            <Select
+              value={view.update ?? UNSET}
+              disabled={locked}
+              onValueChange={(value) => {
+                onChange(
+                  setOpenCodeUpdate(
+                    configText,
+                    value === UNSET ? null : (value as OpenCodeUpdateMode)
+                  )
+                )
+              }}
+            >
+              <SelectTrigger className="h-7 w-44 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                <SelectItem value={UNSET}>
+                  {t("openCode.behavior.unset")}
+                </SelectItem>
+                {OPENCODE_UPDATE_MODES.map((mode) => (
+                  <SelectItem key={mode} value={mode}>
+                    {updateLabel(mode)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </AgentPanelCard>
+
+      {/* ---- Switches ---- */}
+      <ToggleRow
+        icon
+        label={t("openCode.behavior.snapshot")}
+        hint={t("openCode.behavior.snapshotHint")}
+        // Default on. Off is what disables undo/revert.
+        checked={toggleChecked("snapshots")}
+        disabled={locked}
+        onChange={(checked) => handleToggle("snapshots", checked)}
+      />
+      <ToggleRow
+        label={t("openCode.behavior.compactionAuto")}
+        hint={t("openCode.behavior.compactionAutoHint")}
+        checked={toggleChecked("compaction.auto")}
+        disabled={locked}
+        onChange={(checked) => handleToggle("compaction.auto", checked)}
+      />
+      <ToggleRow
+        label={t("openCode.behavior.backgroundCompaction")}
+        hint={t("openCode.behavior.backgroundCompactionHint")}
+        // Default on since OpenCode 2.3.1. Off saves the tokens an unused
+        // summary costs.
+        checked={toggleChecked("compaction.background")}
+        disabled={locked}
+        onChange={(checked) => handleToggle("compaction.background", checked)}
+      />
+      <ToggleRow
+        label={t("openCode.behavior.todo")}
+        hint={t("openCode.behavior.todoHint")}
+        checked={toggleChecked("experimental.todo")}
+        disabled={locked}
+        onChange={(checked) => handleToggle("experimental.todo", checked)}
+      />
+
+      {/* ---- Numeric limits ---- */}
+      <AgentPanelCard>
+        <div className="space-y-1.5">
+          {OPENCODE_NUMBER_FIELDS.map((meta) => (
+            <div
+              key={meta.field}
+              className="flex flex-wrap items-center justify-between gap-2"
+            >
+              <div className="min-w-0">
+                <div className="text-2xs font-medium">
+                  {numberLabels[meta.field]}
+                </div>
+                <p className="mt-0.5 text-2xs text-muted-foreground">
+                  {numberHints[meta.field]}
+                </p>
+              </div>
+              {meta.percent ? (
+                <ShareOrNumberInput
+                  value={view.numbers[meta.field]}
+                  disabled={locked}
+                  placeholder={meta.placeholder}
+                  onType={(raw) => handleNumberChange(meta.field, raw)}
+                  ariaLabel={numberLabels[meta.field]}
+                />
+              ) : (
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={meta.min}
+                  value={view.numbers[meta.field] ?? ""}
+                  disabled={locked}
+                  placeholder={meta.placeholder}
+                  className="h-7 w-44 font-mono text-xs"
+                  onChange={(event) => {
+                    handleNumberChange(meta.field, event.target.value)
+                  }}
+                  aria-label={numberLabels[meta.field]}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      </AgentPanelCard>
     </div>
   )
 }
@@ -403,23 +402,22 @@ function ToggleRow({
   disabled: boolean
   onChange: (checked: boolean) => void
 }) {
+  const id = useId()
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <div className="flex min-w-0 flex-1 items-start gap-2">
-        {icon && (
-          <SlidersHorizontal className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        )}
-        <div className="min-w-0">
-          <div className="text-2xs font-medium">{label}</div>
-          <p className="mt-0.5 text-3xs text-muted-foreground">{hint}</p>
-        </div>
-      </div>
-      <Switch
-        checked={checked}
-        disabled={disabled}
-        onCheckedChange={onChange}
-        aria-label={label}
-      />
-    </div>
+    <AgentPanelCard
+      icon={icon ? SlidersHorizontal : undefined}
+      title={label}
+      description={hint}
+      htmlFor={id}
+      control={
+        <Switch
+          id={id}
+          checked={checked}
+          disabled={disabled}
+          onCheckedChange={onChange}
+          aria-label={label}
+        />
+      }
+    />
   )
 }
