@@ -6,12 +6,6 @@ import en from "@/i18n/messages/en.json"
 import { ATTACH_REFERENCE_TO_SESSION_EVENT } from "@/lib/session-attachment-events"
 import { ProjectKnowledgeTab } from "./aux-panel-project-knowledge-tab"
 
-vi.mock("@/components/ai-elements/message", () => ({
-  MessageResponse: ({ children }: { children: string }) => (
-    <div>{children}</div>
-  ),
-}))
-
 const { entries } = vi.hoisted(() => ({
   entries: new Map<
     string,
@@ -93,7 +87,16 @@ it("adds a saved note to the selected session draft", async () => {
     screen.getByRole("textbox", { name: "Write a note" }),
     "Check recovery"
   )
+  await user.type(
+    screen.getByRole("textbox", { name: "Write a note" }),
+    "{enter}{enter}**Verified**"
+  )
   await user.click(screen.getByRole("button", { name: "Save" }))
+  expect(
+    await screen.findByText("Verified", {
+      selector: '[data-streamdown="strong"]',
+    })
+  ).toBeInTheDocument()
   await user.click(screen.getByRole("button", { name: "Add to Chat" }))
   expect(append).toHaveBeenCalledWith(
     expect.objectContaining({

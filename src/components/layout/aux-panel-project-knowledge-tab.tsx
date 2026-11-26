@@ -313,21 +313,17 @@ function ProjectKnowledgePanel({
           ) : (
             current && (
               <div className="min-h-0 flex-1 overflow-auto px-3 py-2 select-text [scrollbar-width:thin]">
-                {kind === "plans" ? (
-                  <MessageResponse
-                    mode="static"
-                    className="plan-markdown [&_ol]:ps-5! [&_ul]:ps-5!"
-                  >
-                    {current.body.replace(
-                      /^(?:[ \t]*\r?\n)* {0,3}# [^\r\n]+(?:\r?\n|$)/,
-                      ""
-                    )}
-                  </MessageResponse>
-                ) : (
-                  <p className="whitespace-pre-wrap wrap-break-word">
-                    {current.body}
-                  </p>
-                )}
+                <MessageResponse
+                  mode="static"
+                  className="plan-markdown [&_ol]:ps-5! [&_ul]:ps-5!"
+                >
+                  {kind === "plans"
+                    ? current.body.replace(
+                        /^(?:[ \t]*\r?\n)* {0,3}# [^\r\n]+(?:\r?\n|$)/,
+                        ""
+                      )
+                    : current.body}
+                </MessageResponse>
               </div>
             )
           )}
