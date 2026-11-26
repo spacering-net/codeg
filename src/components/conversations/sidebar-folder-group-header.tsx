@@ -232,17 +232,15 @@ export const SidebarFolderGroupHeader = memo(function SidebarFolderGroupHeader({
                       match the spinner on the cards, and nothing at all when
                       none are. A collapsed group is exactly when this is the
                       only way to see that work is under way in there. */}
-            {/* Blocked-session badge, ahead of the running one and standing in
-                      for it while any exist — the same rule the folder header and
-                      the cards follow (see `conversation-attention`). Violet with
-                      a breathing pulse: a collapsed group is exactly when this is
-                      the only way to see that something in there is waiting on
-                      the user. */}
+            {/* 等待你处理的会话计数，排在运行计数前面并顶替它——与文件夹头和
+                      卡片同一条规则（见 `conversation-attention`）。收起的组里，
+                      这正是唯一能看出有东西在等你的地方。紫色、静态不闪，与卡片
+                      上的等待图标同一色系。 */}
             {awaitingCount > 0 ? (
               <span
                 title={t("awaitingCountBadge", { count: awaitingCount })}
                 className={cn(
-                  "inline-flex shrink-0 animate-pulse items-center justify-center motion-reduce:animate-none",
+                  "inline-flex shrink-0 items-center justify-center",
                   "h-[0.9375rem] min-w-[1rem] rounded-[0.3125rem] px-[0.25rem]",
                   "text-[0.625rem] font-semibold leading-none tabular-nums",
                   "bg-violet-500/12 text-violet-700",

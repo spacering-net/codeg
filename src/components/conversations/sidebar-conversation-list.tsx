@@ -574,18 +574,15 @@ const FolderHeader = memo(function FolderHeader({
                       amber-600) carries the light-mode fill: at 0.625rem this is
                       small text, and amber-600 on the tinted surface lands near
                       3:1 — under the AA floor amber-700 (~4.7:1) clears. */}
-                  {/* Blocked-session badge, ahead of the running one and taking
-                      its place while any exist: "3 running" beside "1 waiting for
-                      you" reads as two unrelated facts, and only the second is
-                      something the user has to act on. Violet, matching the cards'
-                      own mark (and distinct from amber's "busy"), with a breathing
-                      pulse so it catches the eye in a long list of folders without
-                      relying on colour alone. */}
+                  {/* 等待你处理的会话计数，排在运行计数前面并顶替它：把"3 个
+                      运行中"和"1 个在等你"并排显示像两件无关的事，而只有后者
+                      需要用户动手。紫色，与卡片上的等待图标、状态点同一个色系，
+                      和琥珀色的"忙碌"区分开；静态不闪，不做呼吸动画。 */}
                   {awaitingCount > 0 ? (
                     <span
                       title={t("awaitingCountBadge", { count: awaitingCount })}
                       className={cn(
-                        "inline-flex shrink-0 animate-pulse items-center justify-center motion-reduce:animate-none",
+                        "inline-flex shrink-0 items-center justify-center",
                         "h-[0.9375rem] min-w-[1rem] rounded-[0.3125rem] px-[0.25rem]",
                         "text-[0.625rem] font-semibold leading-none tabular-nums",
                         "bg-violet-500/12 text-violet-700",

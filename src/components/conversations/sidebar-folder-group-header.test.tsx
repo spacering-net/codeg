@@ -102,3 +102,29 @@ describe("SidebarFolderGroupHeader add-a-folder actions", () => {
     expect(queryByLabelText("More options")).toBeNull()
   })
 })
+
+describe("SidebarFolderGroupHeader live-activity badge", () => {
+  it("counts the running sessions when nothing is waiting on the user", () => {
+    const { container } = renderWithIntl(header({ runningCount: 2 }))
+
+    expect(
+      container.querySelector('[title="2 sessions running"]')
+    ).not.toBeNull()
+    expect(container.textContent).toContain("2")
+  })
+
+  it("lets the waiting count stand in for the running one", () => {
+    // 收起的组里这个徽标是唯一能看出"里面有东西在等你"的地方；两个数字并排
+    // 会被读成两件无关的事，所以等待计数顶替运行计数。
+    const { container } = renderWithIntl(
+      header({ runningCount: 3, awaitingCount: 1 })
+    )
+
+    const waiting = container.querySelector(
+      '[title="1 session waiting on you"]'
+    )
+    expect(waiting).not.toBeNull()
+    expect(waiting?.textContent).toContain("1")
+    expect(container.querySelector('[title="3 sessions running"]')).toBeNull()
+  })
+})

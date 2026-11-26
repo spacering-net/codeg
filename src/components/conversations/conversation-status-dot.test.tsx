@@ -20,20 +20,21 @@ describe("ConversationStatusDot", () => {
     const dot = dotOf(container)
 
     expect(dot.className).toContain(STATUS_COLORS.completed)
-    // No attention mark, no pulse: a finished session sits still.
+    // 没有等待标记，也没有动画：已完成的会话是静止的。
     expect(dot.className).not.toContain("animate-pulse")
     expect(dot.getAttribute("data-attention")).toBeNull()
   })
 
   it("lets attention outrank a status that would otherwise read as busy", () => {
-    // The whole point of the mark: an awaiting session IS in_progress, so the
-    // running colour would make a blocked session look like a busy one.
+    // 这个标记的全部意义：等待中的会话本身就是 in_progress，用运行色会把
+    // 一个被卡住的会话画成忙碌的。
     const { container } = render(
       <ConversationStatusDot status="in_progress" attention="permission" />
     )
     const dot = dotOf(container)
 
     expect(dot.className).toContain("bg-violet-500")
+    expect(dot.className).toContain("dark:bg-violet-400")
     expect(dot.className).not.toContain(STATUS_COLORS.in_progress)
     expect(dot.getAttribute("data-attention")).toBe("permission")
   })
@@ -46,14 +47,14 @@ describe("ConversationStatusDot", () => {
       )
       const dot = dotOf(container)
 
-      // One hue for all three kinds; the kind travels in data-attention and the
-      // card's own wording, not in a colour a 6px dot cannot deliver.
+      // 三种等待共用一个紫色；种类落在 data-attention 和卡片自己的图标/文案
+      // 上，不由 6 像素的圆点区分。
       expect(dot.className).toContain("bg-violet-500")
       expect(dot.getAttribute("data-attention")).toBe(kind)
     }
   )
 
-  it("keeps the motion safe for callers that place the dot absolutely", () => {
+  it("stays static and box-free, so absolute callers keep their own geometry", () => {
     const { container } = render(
       <ConversationStatusDot
         attention="question"
@@ -62,12 +63,9 @@ describe("ConversationStatusDot", () => {
     )
     const dot = dotOf(container)
 
-    // `outline` takes no box and `animate-pulse` only touches opacity, so the
-    // caller's own offsets survive and the sidebar virtualizer's row height
-    // never changes mid-scroll.
-    expect(dot.className).toContain("outline")
-    expect(dot.className).toContain("animate-pulse")
-    expect(dot.className).toContain("motion-reduce:animate-none")
+    // 等待提示静态显示，保留调用方指定的绝对定位。
+    expect(dot.className).not.toContain("animate-pulse")
+    expect(dot.className).not.toContain("outline")
     expect(dot.className).toContain("absolute right-1")
     expect(dot.className).not.toContain("relative")
   })

@@ -22,7 +22,7 @@ import {
   ChevronRight,
   SquareTerminal,
   ListChecks,
-  MessageCircleQuestionMark,
+  Hand,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
@@ -617,37 +617,24 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                         // Roots swap the badge out for the hover actions; sub-sessions
                         // have no actions, so keep the badge (incl. the running
                         // spinner) visible on hover.
-                        //
-                        // An awaiting chip is the exception among roots: it is the
-                        // one thing on this row the user must act on, and hiding it
-                        // the moment the pointer lands on the row would hide it
-                        // exactly when they are looking for it. The pin/done
-                        // buttons take the space beside it instead.
-                        !isSubsession && !isAwaiting && "group-hover:hidden"
+                        !isSubsession && "group-hover:hidden"
                       )}
                     >
-                      {isAwaiting ? (
-                        // The one state worth interrupting for, so it takes the
-                        // slot the running spinner and the timestamp compete
-                        // for. Worded, not just coloured: the row is one line
-                        // and 6px of violet is not a readable answer to "why
-                        // has this session not moved in ten minutes".
+                      {awaiting != null ? (
+                        // 最值得打断用户的一个状态，所以占用运行中转圈和时间
+                        // 争的那一格。只画一个静态紫色的 Hand 图标：等待原因
+                        // 留在 title 和 sr-only 里，行上不再有可见文案。容器与
+                        // 下面取消状态的 XCircle 完全一致，两个图标于是落在同一
+                        // 个 x 上；悬停也一视同仁地让位给快捷操作。
                         <span
-                          className="relative inline-flex shrink-0 items-center gap-1"
+                          className="relative inline-flex shrink-0 items-center justify-center"
                           title={tSidebar(`statusAwaiting.${awaiting}`)}
                         >
-                          <span
-                            className="inline-flex animate-pulse motion-reduce:animate-none"
+                          <Hand
+                            className="h-3.5 w-3.5 text-violet-700 dark:text-violet-300"
                             aria-hidden
-                          >
-                            <MessageCircleQuestionMark className="h-3.5 w-3.5 text-violet-600 dark:text-violet-400" />
-                          </span>
-                          <span
-                            className={cn(
-                              "text-[0.71875rem] font-medium whitespace-nowrap",
-                              "text-violet-700 dark:text-violet-300"
-                            )}
-                          >
+                          />
+                          <span className="sr-only">
                             {tSidebar(`statusAwaiting.${awaiting}`)}
                           </span>
                         </span>

@@ -121,6 +121,8 @@ export const TabItem = memo(function TabItem({
   onTouchSortingEnd,
 }: TabItemProps) {
   const t = useTranslations("Folder.tabs")
+  // 等待原因复用侧栏已翻译好的三种说法，不新增文案。
+  const tSidebar = useTranslations("Folder.sidebar")
   const itemRef = useRef<HTMLDivElement>(null)
   // The tab's own key IS its connection key, so this subscribes to exactly one
   // connection: a prompt raised in a background tab re-renders that tab's dot
@@ -335,6 +337,11 @@ export const TabItem = memo(function TabItem({
             <ConversationStatusDot
               status={tab.status as ConversationStatus | undefined}
               attention={awaiting}
+              // 悬停可读到"在等什么"：静态紫色点本身说明不了原因，标签标题上
+              // 的 folder / branch / title 组合也不会替它解释。
+              title={
+                awaiting ? tSidebar(`statusAwaiting.${awaiting}`) : undefined
+              }
             />
             <span
               className={cn(
