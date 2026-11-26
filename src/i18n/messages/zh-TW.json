@@ -1142,7 +1142,7 @@
       "methodHints": {
         "oauth-personal": "你的 Google 帳號，任意方案（含免費版）。首次工作階段會開啟瀏覽器；沒有瀏覽器？用下面的免瀏覽器登入。",
         "oauth-business": "Gemini Enterprise 帳號，需填 GCP 專案與區域。首次工作階段會開啟瀏覽器；沒有瀏覽器？用下面的免瀏覽器登入。",
-        "gemini-api-key": "Gemini Developer API 的金鑰，以 GEMINI_API_KEY 傳給智慧代理。",
+        "gemini-api-key": "Gemini Developer API 的金鑰，以 GEMINI_API_KEY 傳給智慧體。",
         "agent-platform": "使用 API Key，或專案和區域搭配應用程式預設憑證。如有需要，執行 gcloud auth application-default login。"
       },
       "geminiApiKeyLabel": "Gemini API Key",
