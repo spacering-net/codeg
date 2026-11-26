@@ -872,10 +872,7 @@
                   },
                   "exists": {
                     "type": "boolean",
-                    "enum": [
-                      true
-                    ],
-                    "description": "Only true: absence cannot be proven."
+                    "description": "Only true: absence cannot be proven; false is rejected at runtime."
                   },
                   "enabled": {
                     "type": "boolean"
