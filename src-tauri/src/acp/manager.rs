@@ -35,6 +35,9 @@ use crate::acp::types::{
 use crate::db::entities::conversation::{self, ConversationKind, ConversationStatus};
 use crate::db::service::conversation_service;
 use crate::db::AppDatabase;
+use crate::host_plugins::lifecycle::{
+    observe_agent_created, prepare_agent_title, prepare_session_prompt, SessionHookScope,
+};
 use crate::models::agent::AgentType;
 use crate::web::event_bridge::{emit_with_state, emit_with_state_gated, EventEmitter};
 
@@ -1120,6 +1123,23 @@ impl ConnectionManager {
             });
         }
 
+        if let Some(plugins) = emitter.host_plugins() {
+            let additions = plugins
+                .agent_launch_environment(agent_type, working_dir.as_deref(), session_id.as_deref())
+                .await
+                .map_err(|error| AcpError::SpawnFailed(error.to_string()))?;
+            for (key, value) in additions {
+                if cfg!(windows)
+                    && runtime_env
+                        .keys()
+                        .any(|existing| existing.eq_ignore_ascii_case(&key))
+                {
+                    continue;
+                }
+                runtime_env.entry(key).or_insert(value);
+            }
+        }
+
         let connection_id = uuid::Uuid::new_v4().to_string();
         tracing::info!(
             "[ACP] spawning connection id={} owner_window={} agent={:?}",
@@ -1520,10 +1540,32 @@ impl ConnectionManager {
     pub async fn send_prompt(
         &self,
         conn_id: &str,
-        blocks: Vec<PromptInputBlock>,
+        mut blocks: Vec<PromptInputBlock>,
     ) -> Result<(), AcpError> {
         let prompt_lock = self.clone_prompt_lock(conn_id).await?;
         let _guard = prompt_lock.lock_owned().await;
+        if !blocks.is_empty() {
+            let (state, emitter) = {
+                let connections = self.connections.lock().await;
+                let conn = connections
+                    .get(conn_id)
+                    .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+                (conn.state.clone(), conn.emitter.clone())
+            };
+            let scope = {
+                let state = state.read().await;
+                if state.turn_in_flight
+                    || crate::acp::rewind::hold_blocks(state.rewind_hold.as_ref(), None)
+                {
+                    return Err(AcpError::TurnInProgress);
+                }
+                SessionHookScope::from(&*state)
+            };
+            if strip_route_separator_from_prompt(&mut blocks) {
+                tracing::debug!("[ACP][{conn_id}] removed the reserved routing separator from an outgoing prompt");
+            }
+            prepare_session_prompt(&emitter, scope, &mut blocks).await?;
+        }
         self.send_prompt_inner(conn_id, blocks, None, Vec::new(), None, None, None)
             .await
     }
@@ -1767,16 +1809,18 @@ impl ConnectionManager {
             already_linked,
             turn_in_flight,
             bound_conversation_id,
+            bound_folder_id,
             launch_dir,
         ) = {
             let connections = self.connections.lock().await;
             let conn = connections
                 .get(conn_id)
                 .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
-            let (bound, in_flight, launch_dir) = {
+            let (bound, bound_folder, in_flight, launch_dir) = {
                 let s = conn.state.read().await;
                 (
                     s.conversation_id,
+                    s.folder_id,
                     // A session held for an edited message is busy for any
                     // other prompt (see `RewindHold`), checked here before any
                     // side effect like the flag itself.
@@ -1795,6 +1839,7 @@ impl ConnectionManager {
                 bound.is_some(),
                 in_flight,
                 bound,
+                bound_folder,
                 launch_dir,
             )
         };
@@ -1828,6 +1873,18 @@ impl ConnectionManager {
             self.admit_relocated(&db.conn, cid, launch_dir.as_deref())
                 .await?;
         }
+
+        // A plugin rejection must leave the original turn intact during an edit.
+        prepare_session_prompt(
+            &emitter,
+            SessionHookScope {
+                conversation_id: bound_conversation_id.or(conversation_id),
+                folder_id: bound_folder_id.or(folder_id),
+                agent_type,
+            },
+            &mut blocks,
+        )
+        .await?;
 
         // Re-hydrate uploaded image attachments (web / remote-workspace mode
         // sends empty-payload marker blocks with a `file://` uri into the
@@ -1974,10 +2031,11 @@ impl ConnectionManager {
                         linked_folder_id,
                         parent_conv_for_event,
                         parent_tool_for_event,
+                        created_row,
                     ) = match (conversation_id, folder_id) {
                         // Branch A: caller already owns a row — adopt it. No DB write.
                         (Some(caller_conv_id), Some(caller_folder_id)) => {
-                            (caller_conv_id, caller_folder_id, None, None)
+                            (caller_conv_id, caller_folder_id, None, None, None)
                         }
                         // Function-entry guard rejects this combination.
                         (Some(_), None) => unreachable!(
@@ -1997,11 +2055,26 @@ impl ConnectionManager {
                             let parent_tool_use_id_for_event = task_delegation
                                 .as_ref()
                                 .map(|d| d.parent_tool_use_id.clone());
+                            let kind = if task_delegation.is_some() {
+                                ConversationKind::Delegate
+                            } else {
+                                ConversationKind::Regular
+                            };
+                            let title = prepare_agent_title(
+                                &task_emitter,
+                                agent_type,
+                                Some(folder_id),
+                                kind,
+                                parent_conversation_id_for_event,
+                                seed_title,
+                            )
+                            .await
+                            .map_err(|e| AcpError::protocol(e.to_string()))?;
                             let row = conversation_service::create_with_delegation(
                                 &db_conn,
                                 folder_id,
                                 agent_type,
-                                seed_title,
+                                title,
                                 None,
                                 task_delegation,
                             )
@@ -2012,6 +2085,7 @@ impl ConnectionManager {
                                 folder_id,
                                 parent_conversation_id_for_event,
                                 parent_tool_use_id_for_event,
+                                Some(row),
                             )
                         }
                         (None, None) => {
@@ -2114,6 +2188,9 @@ impl ConnectionManager {
                         },
                     )
                     .await;
+                    if let Some(row) = created_row {
+                        observe_agent_created(&task_emitter, &row);
+                    }
                     // Sidebar sync: a conversation born here (agent path — a
                     // prompt sent without a pre-created row, not the create
                     // button) must reach every client immediately via the global
@@ -5680,13 +5757,13 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         // folder_id must be None too — the manager's create-new-row branch
         // requires folder_id, which we resolve from the child's working_dir
         // via folder_service. Do that lookup here so the trait stays small.
-        let working_dir_pathbuf = {
+        let (working_dir_pathbuf, emitter) = {
             let conns = self.manager.connections.lock().await;
             let conn = conns
                 .get(conn_id)
                 .ok_or_else(|| SpawnerError::Send(format!("child {conn_id} not found")))?;
             let s = conn.state.read().await;
-            s.working_dir.clone()
+            (s.working_dir.clone(), conn.emitter.clone())
         };
         let folder_path = working_dir_pathbuf
             .ok_or_else(|| {
@@ -5696,16 +5773,15 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
             })?
             .to_string_lossy()
             .to_string();
-        // `ensure_folder_for_path`, NOT `add_folder`: the row exists to carry the
-        // child's `folder_id` and to resolve its cwd on resume, and neither of
-        // those reads `is_open`. Opening it would turn whatever `working_dir` the
-        // agent picked — a PR checkout under /tmp, a throwaway worktree — into a
-        // top-level project in the user's sidebar, and would silently reopen a
-        // folder the user had closed.
-        let folder =
-            crate::db::service::folder_service::ensure_folder_for_path(&self.db.conn, &folder_path)
-                .await
-                .map_err(|e| SpawnerError::Send(format!("ensure_folder_for_path: {e}")))?;
+        // The closed row carries the child's folder ID and its cwd on resume.
+        let folder = crate::commands::folders::register_closed_workspace_with_plugins(
+            &emitter,
+            &self.db,
+            &folder_path,
+            None,
+        )
+        .await
+        .map_err(|e| SpawnerError::Send(format!("register child workspace: {e}")))?;
 
         let result = self
             .manager
@@ -7557,6 +7633,96 @@ mod tests {
             _ => panic!("expected a GoalControl command"),
         }
         assert!(rx.try_recv().is_err(), "the carrying turn survives");
+    }
+
+    #[tokio::test]
+    async fn session_guard_rejects_before_link_or_dispatch_and_is_removed_on_deactivation() {
+        use crate::db::test_helpers;
+        use crate::host_plugins::lifecycle::tests::{install_session_guard, SESSION_GUARD_ID};
+        use crate::host_plugins::Mutation;
+
+        let data = tempfile::tempdir().unwrap();
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/session-guard").await;
+        let app = crate::app_state::AppState::new_for_test(db, data.path().into());
+        install_session_guard(&app.host_plugins, SESSION_GUARD_ID, None).await;
+        let mgr = &app.connection_manager;
+        let conn_id = "conn-session-guard";
+        let mut rx = mgr
+            .insert_test_connection_live(
+                conn_id,
+                AgentType::Codex,
+                Some("/tmp/session-guard".into()),
+                app.emitter.clone(),
+            )
+            .await;
+        let scope = mgr.get_state(conn_id).await.unwrap();
+        let blocked = vec![PromptInputBlock::Text {
+            text: "EXAMPLE_SECRET_PLACEHOLDER".into(),
+        }];
+        for linked in [true, false] {
+            let error = if linked {
+                mgr.send_prompt_linked(
+                    &app.db,
+                    conn_id,
+                    blocked.clone(),
+                    Some(folder_id),
+                    None,
+                    None,
+                )
+                .await
+                .map(|_| ())
+                .unwrap_err()
+            } else {
+                mgr.send_prompt(conn_id, blocked.clone()).await.unwrap_err()
+            };
+            assert!(matches!(error, AcpError::PromptHook(_)));
+            assert!(error
+                .to_string()
+                .contains("Remove EXAMPLE_SECRET_PLACEHOLDER"));
+            assert!(rx.try_recv().is_err());
+            let state = scope.read().await;
+            assert!(!state.turn_in_flight);
+            assert!(state.conversation_id.is_none());
+        }
+
+        let conversation_id = test_helpers::seed_conversation(&app.db, folder_id, AgentType::Codex)
+            .await;
+        let error = mgr
+            .send_prompt_linked_rewinding(
+                &app.db,
+                conn_id,
+                blocked.clone(),
+                Some(folder_id),
+                Some(conversation_id),
+                Some("guarded-edit".into()),
+                crate::acp::rewind::RewindTarget {
+                    agent_message_id: "original-message".into(),
+                    text: "original prompt".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AcpError::PromptHook(_)));
+        assert!(rx.try_recv().is_err());
+        assert!(scope.read().await.rewind_hold.is_none());
+
+        for mutation in [
+            Mutation::SetEnabled {
+                id: SESSION_GUARD_ID.into(),
+                enabled: false,
+            },
+            Mutation::Remove {
+                id: SESSION_GUARD_ID.into(),
+            },
+        ] {
+            app.host_plugins.apply(mutation).unwrap();
+            mgr.send_prompt(conn_id, blocked.clone()).await.unwrap();
+            assert!(
+                matches!(rx.try_recv().unwrap(), ConnectionCommand::Prompt { blocks, .. } if blocks == blocked)
+            );
+            scope.write().await.turn_in_flight = false;
+        }
     }
 
     #[tokio::test]

@@ -8,6 +8,8 @@ pub enum AcpError {
     ConnectionNotFound(String),
     #[error("ACP protocol error: {0}")]
     Protocol(String),
+    #[error(transparent)]
+    PromptHook(#[from] crate::app_error::AppCommandError),
     #[error("agent process exited unexpectedly")]
     ProcessExited,
     /// A prompt arrived while this connection already had a turn in flight.
@@ -163,7 +165,7 @@ impl AcpError {
             Self::AgentRuntimeOutdated(_) => Some("agent_runtime_outdated"),
             Self::ConversationMoved { .. } => Some("conversation_moved"),
             Self::RewindRefused(_) => Some("rewind_refused"),
-            Self::Protocol(_) => None,
+            Self::Protocol(_) | Self::PromptHook(_) => None,
         }
     }
 }
@@ -173,7 +175,10 @@ impl Serialize for AcpError {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        match self {
+            Self::PromptHook(error) => error.serialize(serializer),
+            _ => serializer.serialize_str(&self.to_string()),
+        }
     }
 }
 

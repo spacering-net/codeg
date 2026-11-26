@@ -67,6 +67,10 @@ use crate::acp::types::{
     SessionConfigSelectOptionInfo, SessionFailureRecord, SessionModeInfo, SessionModeStateInfo,
     SessionNotice, ToolApprovalInfo, ToolCallImageInfo, UserMessageBlock,
 };
+use crate::host_plugins::lifecycle::{
+    PermissionHookAction, PermissionHookDecision, PermissionHookRequest, SessionHookScope,
+    SessionPermissionHooks,
+};
 use crate::logging::throttle::LeadingEdgeThrottle;
 use crate::models::agent::AgentType;
 use crate::network::proxy;
@@ -3249,6 +3253,7 @@ pub async fn spawn_agent_connection(
                 .await;
         }
 
+        let failed = result.is_err();
         if let Err(e) = result {
             let code = e.code().map(String::from);
             emit_with_state(
@@ -3290,6 +3295,8 @@ pub async fn spawn_agent_connection(
             },
         )
         .await;
+        let session = state_clone.read().await;
+        crate::host_plugins::lifecycle::observe_agent_close(&emitter_clone, &session, failed);
                 // Connection loop ended; `block_on` returns and `_cleanup`
                 // (bound at the top of the thread body) drops next, removing
                 // the manager map entry — same as on a panic unwind.
@@ -3442,6 +3449,23 @@ struct PermissionDecision {
     option_name: String,
 }
 
+impl PermissionDecision {
+    fn from_option(
+        tool_call_id: String,
+        options: &[PermissionOptionInfo],
+        option_id: &str,
+    ) -> Option<Self> {
+        let option = options
+            .iter()
+            .find(|option| option.option_id == option_id)?;
+        (!tool_call_id.is_empty()).then(|| Self {
+            tool_call_id,
+            option_kind: option.kind.clone(),
+            option_name: option.name.clone(),
+        })
+    }
+}
+
 /// Where a card stood when it left [`PermissionQueue`].
 enum Departure {
     /// It was on screen; `next` is the card promoted into its place, if any.
@@ -3522,6 +3546,11 @@ struct PermissionQueue<R = PendingPermission> {
     /// Dropping the sender is the signal; the bridged task then cancels its
     /// question and answers the agent `Cancelled`.
     detached: Vec<oneshot::Sender<()>>,
+    /// An awaited policy can be running before its card enters the queue.
+    /// Invalidate those requests too when the turn is stopped or completed.
+    policy_epoch: CancellationToken,
+    /// Tool calls gated by a policy currently evaluating, for Stop cleanup.
+    policy_tool_calls: BTreeMap<String, String>,
 }
 
 // Hand-written rather than derived: `#[derive(Default)]` would demand
@@ -3533,6 +3562,8 @@ impl<R> Default for PermissionQueue<R> {
             showing: None,
             waiting: VecDeque::new(),
             detached: Vec::new(),
+            policy_epoch: CancellationToken::new(),
+            policy_tool_calls: BTreeMap::new(),
         }
     }
 }
@@ -3572,16 +3603,8 @@ impl<R: PermissionResponder> PermissionQueue<R> {
                 decision: None,
             };
         };
-        let decision = parked
-            .options
-            .iter()
-            .find(|o| o.option_id == option_id)
-            .filter(|_| !parked.tool_call_id.is_empty())
-            .map(|o| PermissionDecision {
-                tool_call_id: parked.tool_call_id.clone(),
-                option_kind: o.kind.clone(),
-                option_name: o.name.clone(),
-            });
+        let decision =
+            PermissionDecision::from_option(parked.tool_call_id, &parked.options, &option_id);
         parked.responder.respond_selected(option_id);
         ResolvedPermission {
             answered: true,
@@ -3667,6 +3690,8 @@ impl<R: PermissionResponder> PermissionQueue<R> {
         }
         self.waiting.clear();
         self.detached.clear();
+        std::mem::take(&mut self.policy_epoch).cancel();
+        self.policy_tool_calls.clear();
         self.showing.take()
     }
 
@@ -3685,8 +3710,8 @@ impl<R: PermissionResponder> PermissionQueue<R> {
     }
 
     /// The tool calls the parked cards ask about: the one on screen first,
-    /// then the waiting ones in order, each once. A card that names no tool
-    /// call adds nothing.
+    /// then the waiting ones in order and the ones still evaluating policy.
+    /// A call appears only once, and missing call IDs are skipped.
     fn parked_tool_call_ids(&self) -> Vec<String> {
         let mut ids: Vec<String> = Vec::new();
         for request_id in self
@@ -3698,6 +3723,11 @@ impl<R: PermissionResponder> PermissionQueue<R> {
                 if !parked.tool_call_id.is_empty() && !ids.contains(&parked.tool_call_id) {
                     ids.push(parked.tool_call_id.clone());
                 }
+            }
+        }
+        for tool_call_id in self.policy_tool_calls.values() {
+            if !tool_call_id.is_empty() && !ids.contains(tool_call_id) {
+                ids.push(tool_call_id.clone());
             }
         }
         ids
@@ -3739,22 +3769,56 @@ async fn admit_permission(
     emitter: &EventEmitter,
     reply: PermissionReply,
     card: QueuedPermission,
+    policy: Option<(CancellationToken, Option<PermissionHookDecision>)>,
 ) {
     let cancellation = reply.cancellation();
     let (settled_tx, settled_rx) = oneshot::channel();
     let request_id = card.request_id.clone();
-    admit_card(
-        perms,
-        state,
-        emitter,
-        PendingPermission {
-            reply,
-            withdrawn: cancellation.clone(),
-            _settled: settled_tx,
-        },
-        card,
-    )
-    .await;
+    let responder = PendingPermission {
+        reply,
+        withdrawn: cancellation.clone(),
+        _settled: settled_tx,
+    };
+    let mut queue = perms.lock().await;
+    if let Some((epoch, policy)) = policy {
+        queue.policy_tool_calls.remove(&request_id);
+        if epoch.is_cancelled() || cancellation.is_cancelled() {
+            responder.respond_cancelled();
+            return;
+        }
+        if let Some(policy) = policy.filter(PermissionHookDecision::is_current) {
+            let (option_id, decision) = match policy.action {
+                PermissionHookAction::Select { option_id } => {
+                    let tool_call_id =
+                        crate::acp::session_state::extract_tool_call_id(&card.tool_call);
+                    let decision =
+                        PermissionDecision::from_option(tool_call_id, &card.options, &option_id);
+                    responder.respond_selected(option_id.clone());
+                    (Some(option_id), decision)
+                }
+                PermissionHookAction::Cancel {} => {
+                    responder.respond_cancelled();
+                    (None, None)
+                }
+            };
+            tracing::info!(%request_id, plugin_id = %policy.plugin_id, "Host plugin settled ACP permission");
+            publish_permission_resolution(
+                state,
+                emitter,
+                request_id,
+                option_id,
+                PermissionAnswerOrigin::HostPlugin {
+                    plugin_id: policy.plugin_id,
+                },
+                decision,
+                chrono::Utc::now(),
+            )
+            .await;
+            return;
+        }
+    }
+    admit_card(&mut queue, state, emitter, responder, card).await;
+    drop(queue);
     watch_permission_withdrawal(
         cx,
         cancellation,
@@ -3766,16 +3830,14 @@ async fn admit_permission(
     );
 }
 
-/// The queue half of [`admit_permission`]: admit, then publish the card or the
-/// new queue depth while still holding the lock.
+/// Publish the card or updated queue depth while holding the permission queue lock.
 async fn admit_card(
-    perms: &PendingPermissions,
+    queue: &mut PermissionQueue,
     state: &Arc<RwLock<SessionState>>,
     emitter: &EventEmitter,
     responder: PendingPermission,
     card: QueuedPermission,
 ) {
-    let mut queue = perms.lock().await;
     let scope = permission_log_scope(state).await;
     let request_id = card.request_id.clone();
     match queue.admit(responder, card) {
@@ -3852,20 +3914,39 @@ async fn resolve_permission(
         let depth = queue.waiting_len();
         publish_promoted(state, emitter, &scope, &request_id, card, depth).await;
     }
-    // Only an answer that took effect gets here (a stale or duplicate one
-    // returned above), so this option and origin are the effective ones.
+    publish_permission_resolution(
+        state,
+        emitter,
+        request_id,
+        Some(option_id),
+        origin,
+        resolved.decision,
+        decided_at,
+    )
+    .await;
+}
+
+async fn publish_permission_resolution(
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    request_id: String,
+    option_id: Option<String>,
+    origin: PermissionAnswerOrigin,
+    decision: Option<PermissionDecision>,
+    decided_at: chrono::DateTime<chrono::Utc>,
+) {
     let origin_kind = origin.kind();
     emit_with_state(
         state,
         emitter,
         AcpEvent::PermissionResolved {
             request_id,
-            option_id: Some(option_id),
+            option_id,
             origin: Some(origin),
         },
     )
     .await;
-    if let Some(decision) = resolved.decision {
+    if let Some(decision) = decision {
         emit_with_state(
             state,
             emitter,
@@ -11678,6 +11759,7 @@ async fn handle_elicitation_request(
                     tool_call,
                     options,
                 },
+                None,
             )
             .await;
         }
@@ -12054,19 +12136,70 @@ async fn handle_permission_request(
 
     hoist_request_permission_meta(&mut tool_call_value, req.meta.as_ref());
 
-    admit_permission(
-        cx,
-        perms,
-        state,
-        emitter,
-        PermissionReply::Acp(responder),
-        QueuedPermission {
-            request_id,
-            tool_call: tool_call_value,
-            options,
-        },
-    )
-    .await;
+    let card = QueuedPermission {
+        request_id,
+        tool_call: tool_call_value,
+        options,
+    };
+    let reply = PermissionReply::Acp(responder);
+    let hooks = if let Some(hooks) = SessionPermissionHooks::for_emitter(emitter) {
+        let session = state.read().await;
+        // A headless run has an explicit permission policy of its own.
+        session
+            .cli_run
+            .is_none()
+            .then(|| (hooks, SessionHookScope::from(&*session)))
+    } else {
+        None
+    };
+    let Some((hooks, scope)) = hooks else {
+        admit_permission(cx, perms, state, emitter, reply, card, None).await;
+        return;
+    };
+
+    // Request handlers run on the ACP dispatch loop. Move the awaited policy
+    // to a connection task so cancellation and other messages can advance.
+    let epoch = {
+        let mut queue = perms.lock().await;
+        queue.policy_tool_calls.insert(
+            card.request_id.clone(),
+            crate::acp::session_state::extract_tool_call_id(&card.tool_call),
+        );
+        queue.policy_epoch.clone()
+    };
+    let request_id = card.request_id.clone();
+    let (policy_cx, policy_perms, state, emitter) =
+        (cx.clone(), perms.clone(), state.clone(), emitter.clone());
+    let tool = req.tool_call.fields;
+    if let Err(error) = cx.spawn(async move {
+        let cancellation = reply.cancellation();
+        let policy = tokio::select! {
+            biased;
+            () = epoch.cancelled() => None,
+            () = cancellation.cancelled() => None,
+            decision = hooks.decide(scope, PermissionHookRequest {
+                request_id: &card.request_id,
+                title: tool.title.as_deref().unwrap_or_default(),
+                tool_kind: tool.kind.as_ref(),
+                raw_input: tool.raw_input.as_ref(),
+                options: &card.options,
+            }) => decision,
+        };
+        admit_permission(
+            &policy_cx,
+            &policy_perms,
+            &state,
+            &emitter,
+            reply,
+            card,
+            Some((epoch, policy)),
+        )
+        .await;
+        Ok(())
+    }) {
+        perms.lock().await.policy_tool_calls.remove(&request_id);
+        tracing::debug!(%error, "ACP connection closed before permission policy could start");
+    }
 }
 
 fn respond_terminal_request<T: agent_client_protocol::JsonRpcResponse>(
@@ -28997,6 +29130,202 @@ mod tests {
         }
         let (_parked, settled_rx) = oneshot::channel::<()>();
         assert!(withdrawn_while_parked(settled_rx, std::future::ready(())).await);
+    }
+
+    #[tokio::test]
+    async fn session_guard_resolves_acp_requests_and_fails_closed_to_the_manual_card() {
+        use crate::host_plugins::lifecycle::tests::{install_session_guard, SESSION_GUARD_ID};
+        use agent_client_protocol::schema::v1::{
+            PermissionOption, ToolCallUpdate, ToolCallUpdateFields,
+        };
+        use agent_client_protocol::Channel;
+
+        let cases = [
+            (None, true, Some("deny")),
+            (None, false, None),
+            (
+                Some("return { action: 'select', optionId: 'mismatch' }"),
+                true,
+                Some("allow"),
+            ),
+            (
+                Some("return { action: 'cancel', optionId: 'allow' }"),
+                true,
+                Some("allow"),
+            ),
+            (Some("return NaN"), true, Some("allow")),
+            (
+                Some("throw new Error('plugin diagnostic')"),
+                true,
+                Some("allow"),
+            ),
+            (Some("while (true) {}"), true, Some("allow")),
+        ];
+        for (bad_hook, offers_denial, selected) in cases {
+            let data = tempfile::tempdir().unwrap();
+            let db = crate::db::test_helpers::fresh_in_memory_db().await;
+            let app = crate::app_state::AppState::new_for_test(db, data.path().into());
+            install_session_guard(&app.host_plugins, SESSION_GUARD_ID, None).await;
+            if let Some(result) = bad_hook {
+                let code = format!("export function handle() {{ {result} }}");
+                install_session_guard(&app.host_plugins, "a.invalid-policy", Some(&code)).await;
+            }
+            // Assert the permission input contract before the policy handles it.
+            install_session_guard(
+                &app.host_plugins,
+                "a.check-policy-input",
+                Some(
+                    r#"
+                export async function handle(_, input) {
+                    const { conversationId, folderId, agentType, requestId, title, toolKind,
+                            rawInputPreview, options, ...rest } = input
+                    if (conversationId !== 29 || folderId !== 17 || !agentType || !requestId ||
+                        title !== 'Delete item' || toolKind !== 'delete' ||
+                        rawInputPreview !== '"' + 'a'.repeat(4094) || Object.keys(rest).length ||
+                        options.some(({ optionId, name, kind, ...rest }) =>
+                            !optionId || !name || !kind || Object.keys(rest).length)) {
+                        throw new Error('unexpected permission hook input')
+                    }
+                }
+            "#,
+                ),
+            )
+            .await;
+
+            let connection_id = "conn-session-guard";
+            let _rx = app
+                .connection_manager
+                .insert_test_connection_live(
+                    connection_id,
+                    AgentType::ClaudeCode,
+                    None,
+                    app.emitter.clone(),
+                )
+                .await;
+            let state = app
+                .connection_manager
+                .get_state(connection_id)
+                .await
+                .unwrap();
+            {
+                let mut session = state.write().await;
+                session.conversation_id = Some(29);
+                session.folder_id = Some(17);
+            }
+            let perms = PendingPermissions::default();
+            let mut events = app.acp_event_bus.subscribe();
+            let (client_end, agent_end) = Channel::duplex();
+            let agent = tokio::spawn(Agent.builder().connect_with(
+                agent_end,
+                async move |cx: ConnectionTo<Client>| {
+                    let mut options = vec![PermissionOption::new(
+                        "allow",
+                        "Allow",
+                        PermissionOptionKind::AllowOnce,
+                    )];
+                    if offers_denial {
+                        options.push(PermissionOption::new(
+                            "deny",
+                            "Deny",
+                            PermissionOptionKind::RejectOnce,
+                        ));
+                    }
+                    cx.send_request_to(
+                        Client,
+                        RequestPermissionRequest::new(
+                            SessionId::new("session-guard"),
+                            ToolCallUpdate::new(
+                                "guard-tool",
+                                ToolCallUpdateFields::new()
+                                    .title("Delete item")
+                                    .kind(ToolKind::Delete)
+                                    .raw_input(serde_json::json!(format!(
+                                        "{}界",
+                                        "a".repeat(4094)
+                                    ))),
+                            ),
+                            options,
+                        ),
+                    )
+                    .block_task()
+                    .await
+                },
+            ));
+            let client = tokio::spawn({
+                let state = state.clone();
+                let perms = perms.clone();
+                let emitter = app.emitter.clone();
+                Client
+                    .builder()
+                    .on_receive_request(
+                        async move |req: RequestPermissionRequest,
+                                    responder: Responder<RequestPermissionResponse>,
+                                    cx: ConnectionTo<Agent>| {
+                            handle_permission_request(
+                                &cx,
+                                &state,
+                                &emitter,
+                                &perms,
+                                "/tmp",
+                                AgentType::ClaudeCode,
+                                req,
+                                responder,
+                            )
+                            .await;
+                            Ok(())
+                        },
+                        on_receive_request!(),
+                    )
+                    .connect_with(client_end, async |_cx: ConnectionTo<Agent>| {
+                        std::future::pending::<Result<(), agent_client_protocol::Error>>().await
+                    })
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let first = events.recv().await.unwrap();
+                let (resolved, expected_origin) = if bad_hook.is_some() {
+                    let AcpEvent::PermissionRequest { request_id, .. } = &first.payload else {
+                        panic!("failed policy must fall back to manual approval: {:?}", first.payload);
+                    };
+                    assert!(!agent.is_finished());
+                    resolve_permission(&perms, &state, &app.emitter, request_id.clone(), "allow".into(), PermissionAnswerOrigin::User).await;
+                    (events.recv().await.unwrap(), PermissionAnswerOrigin::User)
+                } else {
+                    (first, PermissionAnswerOrigin::HostPlugin { plugin_id: SESSION_GUARD_ID.into() })
+                };
+                assert!(matches!(&resolved.payload, AcpEvent::PermissionResolved { option_id, origin: Some(origin), .. }
+                    if option_id.as_deref() == selected && origin == &expected_origin));
+                if selected.is_some() {
+                    let tool_event = events.recv().await.unwrap();
+                    assert!(matches!(&tool_event.payload, AcpEvent::ToolApproval { approval }
+                        if approval.tool_call_id == "guard-tool" && approval.origin == expected_origin.kind()));
+                }
+                let response = agent.await.unwrap().unwrap();
+                match (response.outcome, selected) {
+                    (RequestPermissionOutcome::Selected(option), Some(expected)) => assert_eq!(option.option_id.to_string(), expected),
+                    (RequestPermissionOutcome::Cancelled, None) => {}
+                    (outcome, _) => panic!("unexpected ACP response: {outcome:?}"),
+                }
+                assert!(perms.lock().await.showing.is_none());
+            }).await.unwrap();
+            client.abort();
+        }
+    }
+
+    #[test]
+    fn draining_permissions_cancels_awaited_policies_only_for_the_current_epoch() {
+        let (mut queue, _) = stub_queue();
+        let previous = queue.policy_epoch.clone();
+        queue
+            .policy_tool_calls
+            .insert("policy-request".into(), "gated-tool".into());
+        let reports = stopped_call_reports(AgentType::Qoder, &queue);
+        assert!(
+            matches!(reports.as_slice(), [AcpEvent::ToolCallUpdate { tool_call_id, .. }] if tool_call_id == "gated-tool")
+        );
+        assert!(queue.drain().is_none());
+        assert!(queue.policy_tool_calls.is_empty());
+        assert!(previous.is_cancelled());
+        assert!(!queue.policy_epoch.is_cancelled());
     }
 
     /// The withdrawal path end to end, over the real runtime: the agent raises

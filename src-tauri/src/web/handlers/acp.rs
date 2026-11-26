@@ -246,6 +246,7 @@ pub async fn acp_prompt(
         // recoverable condition (409), not a server fault (500). The
         // frontend re-queues the draft. Other errors stay 500.
         match e {
+            AcpError::PromptHook(error) => error,
             AcpError::TurnInProgress => AppCommandError::new(AppErrorCode::TurnInProgress, message),
             // An edited message's rewind was declined: expected, nothing
             // changed, and the client keeps its editor open.

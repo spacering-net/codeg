@@ -1630,6 +1630,7 @@ export type PermissionAnswerOrigin =
   | { kind: "user" }
   | { kind: "chat_channel" }
   | { kind: "cli_policy"; run_id: string }
+  | { kind: "host_plugin"; plugin_id: string }
   /** An assistant answering a plan approval for the owner (7.3.1). */
   | { kind: "assistant"; bot_id: number }
   /** The owner answering such a plan approval on an assistant's page. */
