@@ -137,6 +137,23 @@ const transportCtl = vi.hoisted(() => {
   }
 })
 
+vi.mock("@/contexts/personal-agent-context", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/contexts/personal-agent-context")
+  >()),
+  usePrimaryAgent: () => ({
+    needsOwner: false,
+    snapshot: { agent: null, status: { unseen: 0 } },
+  }),
+  usePrefetchAssistant: () => () => {},
+}))
+
+vi.mock("@/stores/personal-agent-roster-store", () => ({
+  useRoster: () => [],
+  useBotLive: () => null,
+  reloadRoster: () => {},
+}))
+
 vi.mock("@/lib/transport", () => ({
   isDesktop: () => false,
   getTransport: () => {
