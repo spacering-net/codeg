@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum AcpError {
     #[error("agent process failed to spawn: {0}")]
     SpawnFailed(String),

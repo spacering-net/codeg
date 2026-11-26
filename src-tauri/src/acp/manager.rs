@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::Mutex;
 
@@ -733,6 +733,13 @@ pub struct SpawnOutcome {
     pub reused: bool,
 }
 
+/// The launch result plus the handshake failure, if the driver records one.
+/// This belongs to the spawning call, independently of connection cleanup.
+pub(crate) struct SpawnAttempt {
+    pub outcome: SpawnOutcome,
+    pub startup_failure: Option<Arc<OnceLock<AcpError>>>,
+}
+
 impl Default for ConnectionManager {
     fn default() -> Self {
         Self::new()
@@ -970,6 +977,32 @@ impl ConnectionManager {
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
     ) -> Result<SpawnOutcome, AcpError> {
+        self.spawn_agent_observed(
+            agent_type,
+            working_dir,
+            session_id,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+        )
+        .await
+        .map(|attempt| attempt.outcome)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn spawn_agent_observed(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        session_id: Option<String>,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<SpawnAttempt, AcpError> {
         self.spawn_agent_seeded(
             agent_type,
             working_dir,
@@ -1014,7 +1047,7 @@ impl ConnectionManager {
             },
         )
         .await
-        .map(|outcome| outcome.connection_id)
+        .map(|attempt| attempt.outcome.connection_id)
     }
 
     /// A connection for the personal agent: marked as its own before its agent
@@ -1048,6 +1081,7 @@ impl ConnectionManager {
             },
         )
         .await
+        .map(|attempt| attempt.outcome)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1062,7 +1096,7 @@ impl ConnectionManager {
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
         seed: crate::acp::connection::SpawnSeed,
-    ) -> Result<SpawnOutcome, AcpError> {
+    ) -> Result<SpawnAttempt, AcpError> {
         // Held for the whole establishment. A restore writing back to the
         // agents' own directories takes the write side, so it can never see an
         // empty connection list and then have one appear underneath it. Not
@@ -1114,9 +1148,12 @@ impl ConnectionManager {
                 existing,
                 session_id.as_deref().unwrap_or("")
             );
-            return Ok(SpawnOutcome {
-                connection_id: existing,
-                reused: true,
+            return Ok(SpawnAttempt {
+                outcome: SpawnOutcome {
+                    connection_id: existing,
+                    reused: true,
+                },
+                startup_failure: None,
             });
         }
 
@@ -1138,7 +1175,7 @@ impl ConnectionManager {
         // installs the SessionStarted dedup signal on the state, registers
         // a cleanup hook, and returns the rx half of the signal. Any spawn
         // failure short-circuits before we touch the rx wait.
-        let session_started_rx = spawn_agent_connection(
+        let handshake = spawn_agent_connection(
             connection_id.clone(),
             agent_type,
             working_dir,
@@ -1163,7 +1200,8 @@ impl ConnectionManager {
         // latencies and tune `CODEG_ACP_SPAWN_HANDSHAKE_TIMEOUT_SECS`.
         if dedup_lock.is_some() {
             let timeout = self.spawn_handshake_timeout;
-            let (outcome, elapsed) = wait_for_session_started(session_started_rx, timeout).await;
+            let (outcome, elapsed) =
+                wait_for_session_started(handshake.session_started, timeout).await;
             tracing::info!(
                 "[ACP] dedup_wait connection_id={} session_id={} outcome={} \
                  elapsed_ms={} timeout_ms={}",
@@ -1174,15 +1212,18 @@ impl ConnectionManager {
                 timeout.as_millis(),
             );
         }
-        // session_started_rx (in the no-dedup branch) is dropped here. tx
+        // The session-start receiver in the no-dedup branch is dropped here. tx
         // staying inside SessionState gets dropped naturally when the
         // connection terminates, no leak.
 
         drop(dedup_lock);
 
-        Ok(SpawnOutcome {
-            connection_id,
-            reused: false,
+        Ok(SpawnAttempt {
+            outcome: SpawnOutcome {
+                connection_id,
+                reused: false,
+            },
+            startup_failure: Some(handshake.failure),
         })
     }
 
