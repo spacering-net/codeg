@@ -171,6 +171,14 @@ import {
   saveConfigPreference,
 } from "@/lib/selector-prefs-storage"
 import { rememberAdvertisedCommands } from "@/lib/advertised-commands-store"
+import { blockingPrompts } from "@/lib/blocking-prompts"
+import {
+  buildAttentionIndex,
+  EMPTY_ATTENTION_INDEX,
+  sameAttentionIndex,
+  type AttentionCandidate,
+  type AttentionIndex,
+} from "@/lib/conversation-attention"
 import { rememberModelLabels } from "@/lib/model-label-store"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 
@@ -3669,6 +3677,13 @@ interface InternalStore {
   activeKey: string | null
   keyListeners: Map<string, Set<() => void>>
   activeKeyListeners: Set<() => void>
+  /** Which persisted conversations are parked on the user right now, folded
+   *  from every connection this window holds (see `conversation-attention`).
+   *  Derived, never persisted: it is a property of live connections, not of the
+   *  conversation row. Kept here rather than recomputed per subscriber because
+   *  the sidebar asks about every row it draws. */
+  attention: AttentionIndex
+  attentionListeners: Set<() => void>
 }
 
 // ── Store API for consumers ──
@@ -3686,6 +3701,19 @@ export interface ConnectionStoreApi {
   getActiveKey(): string | null
   subscribeKey(key: string, cb: () => void): () => void
   subscribeActiveKey(cb: () => void): () => void
+  /**
+   * Which persisted conversations are parked on a decision the user has to make
+   * (see `conversation-attention`), for a surface that marks a whole list at
+   * once (the sidebar). Reference-stable between changes, so it is safe as a
+   * `useSyncExternalStore` snapshot; subscribe ONCE at the list level and pass
+   * each row the boolean it needs rather than subscribing per row.
+   *
+   * Only conversations this window holds a connection for are in it. A session
+   * started by an automation or `codeg-cli` in another process, never opened
+   * here, is unknown to this client and never marked.
+   */
+  getAttention(): AttentionIndex
+  subscribeAttention(cb: () => void): () => void
 }
 
 const ConnectionStoreContext = createContext<ConnectionStoreApi | null>(null)
@@ -4187,6 +4215,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     activeKey: null,
     keyListeners: new Map(),
     activeKeyListeners: new Set(),
+    attention: EMPTY_ATTENTION_INDEX,
+    attentionListeners: new Set(),
   })
 
   // connectionId → the contextKeys whose events are routed from the legacy
@@ -4323,6 +4353,106 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   const reconnectRef = useRef<AcpActionsValue["reconnect"] | null>(null)
 
   /**
+   * Rebuild the `conversation → blocking prompt` index from every connection
+   * this window holds, and wake the whole-list subscribers only when the marks
+   * actually changed.
+   *
+   * Called from `dispatch` after each accepted action, so it covers every route
+   * a prompt appears or clears by — the live `question_request` /
+   * `permission_request` / `plan_approval_request` events, their resolutions, a
+   * turn end that clears them, and a snapshot hydrate that arrives while one is
+   * open (the only way a client attaching mid-turn learns of it).
+   *
+   * The conversation id comes off `lastConnectParamsRef`, NOT off an open tab:
+   * a connection outlives its tab (closing a tab whose agent is still busy
+   * keeps it running), and that background case is the whole point. The ref
+   * holds the id `connect()` was given plus the one a first send linked
+   * (`conversation_linked`), both remembered past the surface.
+   */
+  const refreshAttention = useCallback(() => {
+    const store = storeRef.current
+    // Backend connection id → the store key it lives under, so a delegated
+    // child (keyed by its own connection id) can be walked up to the top-level
+    // connection whose conversation the user actually has to open. Several keys
+    // can share one connection id (a tab viewing a work task's connection and
+    // that task's transcript dialog, attached as a self-parented child), so a
+    // top-level entry wins over a child one: the walk must land on a row, not
+    // loop back into the viewer.
+    const keyByConnectionId = new Map<string, string>()
+    for (const [key, conn] of store.connections) {
+      const existing = keyByConnectionId.get(conn.connectionId)
+      if (
+        existing === undefined ||
+        (!conn.isDelegationChild &&
+          store.connections.get(existing)?.isDelegationChild)
+      ) {
+        keyByConnectionId.set(conn.connectionId, key)
+      }
+    }
+    const candidates: AttentionCandidate[] = []
+    for (const [key, conn] of store.connections) {
+      // A connection known to be gone can no longer be answered. Leaving a turn
+      // clears the question and plan cards, but a permission survives the
+      // settle to `disconnected` (the liveness fallback dispatches the status
+      // alone), and marking it would point the user at a prompt that is dead.
+      if (conn.status === "disconnected" || conn.status === "error") continue
+      const prompts = blockingPrompts(conn)
+      let ownerKey: string | undefined = key
+      if (conn.isDelegationChild) {
+        // A sub-agent's prompt is answered from the PARENT conversation's
+        // delegation card (the live-runs chip already reads it as "awaiting
+        // you"), so it marks the parent's row. Skip the walk when the child
+        // waits on nobody — the common case on every dispatch.
+        if (!prompts) continue
+        // A self-parented child is a work-task transcript VIEWER, not a
+        // sub-agent: it answers to no parent row, and when a tab shares its
+        // connection the tab's own entry already carries the prompt. Its
+        // copy is also never settled by the liveness sweep, so routing it
+        // through the tab could revive a mark the tab's settle just dropped.
+        if (conn.parentConnectionId === conn.connectionId) continue
+        // Nested delegations chain child → child → root; the guard only stops
+        // a malformed cycle from spinning.
+        let cursor: ConnectionState = conn
+        const seen = new Set<string>()
+        while (cursor.isDelegationChild && ownerKey !== undefined) {
+          if (seen.has(ownerKey)) {
+            ownerKey = undefined
+            break
+          }
+          seen.add(ownerKey)
+          const parentKey: string | undefined = cursor.parentConnectionId
+            ? keyByConnectionId.get(cursor.parentConnectionId)
+            : undefined
+          const parent =
+            parentKey !== undefined
+              ? store.connections.get(parentKey)
+              : undefined
+          ownerKey = parent ? parentKey : undefined
+          if (parent) cursor = parent
+        }
+        // A child whose parent this window does not hold has no row to mark,
+        // and one whose root has gone has no live card to answer it from.
+        if (
+          ownerKey === undefined ||
+          cursor.status === "disconnected" ||
+          cursor.status === "error"
+        ) {
+          continue
+        }
+      }
+      candidates.push({
+        conversationId:
+          lastConnectParamsRef.current.get(ownerKey)?.conversationId,
+        prompts,
+      })
+    }
+    const next = buildAttentionIndex(candidates)
+    if (sameAttentionIndex(store.attention, next)) return
+    store.attention = next
+    for (const cb of store.attentionListeners) cb()
+  }, [])
+
+  /**
    * Fold backend-resolved identity into the remembered connect params.
    *
    * `connect()` records what the CALLER asked for, and for a new conversation
@@ -4345,8 +4475,13 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       const remembered = lastConnectParamsRef.current.get(contextKey)
       if (!remembered) return
       lastConnectParamsRef.current.set(contextKey, { ...remembered, ...patch })
+      // A connection that was parked on a prompt before its conversation id was
+      // known (a brand-new conversation answers a question in its first turn)
+      // becomes markable exactly now — no `dispatch` follows this event, so
+      // nothing else would fold it in.
+      if (patch.conversationId != null) refreshAttention()
     },
-    []
+    [refreshAttention]
   )
 
   /**
@@ -4637,6 +4772,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
 
       storeRef.current.connections = next
 
+      // Fold the new state into the attention index. A streaming batch moves
+      // no prompt (the deltas touch prose, not the cards), so the two hot paths
+      // skip the walk; every other accepted action may have added, moved or
+      // cleared one.
+      if (
+        action.type !== "STREAM_BATCH" &&
+        action.type !== "BATCH_TOOL_CALL_UPDATES"
+      ) {
+        refreshAttention()
+      }
+
       // Mirror a changed liveMessage into the runtime store OUTSIDE React, so
       // the keep-alive conversation panel no longer has to re-render per
       // streaming token just to run a mirror effect. Fires only when the
@@ -4746,7 +4892,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [discardStreamingKey, notifyKeyListeners, notifyAllKeyListeners]
+    [
+      discardStreamingKey,
+      notifyKeyListeners,
+      notifyAllKeyListeners,
+      refreshAttention,
+    ]
   )
 
   // ── setActiveKey ──
@@ -4802,6 +4953,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         storeRef.current.activeKeyListeners.add(cb)
         return () => {
           storeRef.current.activeKeyListeners.delete(cb)
+        }
+      },
+      getAttention() {
+        return storeRef.current.attention
+      },
+      subscribeAttention(cb: () => void) {
+        const { attentionListeners } = storeRef.current
+        attentionListeners.add(cb)
+        return () => {
+          attentionListeners.delete(cb)
         }
       },
     }

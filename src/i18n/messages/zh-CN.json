@@ -2313,6 +2313,12 @@
       "statusRunningBadge": "运行中",
       "runningCountBadge": "{count} 个会话进行中",
       "statusCancelledBadge": "已取消",
+      "awaitingCountBadge": "{count, plural, other {# 个会话在等你}}",
+      "statusAwaiting": {
+        "permission": "待你授权",
+        "question": "待你回答",
+        "plan": "待你确认"
+      },
       "originalWorkingDir": "最初运行目录",
       "cliBadge": "从命令行启动",
       "conversationCountUnit": "{count} 条",

@@ -2313,6 +2313,12 @@
       "statusRunningBadge": "実行中",
       "runningCountBadge": "{count} 件の会話が実行中",
       "statusCancelledBadge": "キャンセル済み",
+      "awaitingCountBadge": "{count, plural, other {# 件があなたの対応待ち}}",
+      "statusAwaiting": {
+        "permission": "許可待ち",
+        "question": "回答待ち",
+        "plan": "承認待ち"
+      },
       "originalWorkingDir": "元の作業ディレクトリ",
       "cliBadge": "コマンドラインから開始",
       "conversationCountUnit": "{count} 件",

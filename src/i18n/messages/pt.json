@@ -2313,6 +2313,12 @@
       "statusRunningBadge": "Executando",
       "runningCountBadge": "{count, plural, one {# sessão em execução} other {# sessões em execução}}",
       "statusCancelledBadge": "Cancelado",
+      "awaitingCountBadge": "{count, plural, one {# sessão espera por você} other {# sessões esperam por você}}",
+      "statusAwaiting": {
+        "permission": "Espera sua permissão",
+        "question": "Espera sua resposta",
+        "plan": "Espera sua aprovação"
+      },
       "originalWorkingDir": "Diretório de trabalho original",
       "cliBadge": "Iniciada pela linha de comando",
       "conversationCountUnit": "{count, plural, one {# conversa} other {# conversas}}",
