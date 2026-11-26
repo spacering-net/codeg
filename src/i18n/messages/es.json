@@ -2284,6 +2284,7 @@
       "sectionOrderMoveDown": "Bajar",
       "sectionOrderItemLabel": "{name} — posición {position} de {total}",
       "statusRunningBadge": "Ejecutando",
+      "statusWaitingBadge": "En espera",
       "runningCountBadge": "{count, plural, one {# sesión en ejecución} other {# sesiones en ejecución}}",
       "statusCancelledBadge": "Cancelado",
       "originalWorkingDir": "Directorio de trabajo original",
