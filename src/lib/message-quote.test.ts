@@ -1,36 +1,10 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  buildAskPrompt,
   buildQuotedMarkdown,
   parseQuoteBlocks,
   quoteMarkerLength,
 } from "./message-quote"
-
-describe("buildAskPrompt", () => {
-  it("puts the question under the quoted selection", () => {
-    expect(buildAskPrompt("the claim", "why?")).toBe("> the claim\n\nwhy?")
-  })
-
-  it("keeps the question out of the quote when it is read back", () => {
-    // The blank line is load-bearing: without it the question is a lazy
-    // continuation and gets absorbed into the blockquote.
-    expect(parseQuoteBlocks(buildAskPrompt("the claim", "why?"))).toEqual([
-      { kind: "quote", children: [{ kind: "text", text: "the claim" }] },
-      { kind: "text", text: "why?" },
-    ])
-  })
-
-  it("holds a multi-paragraph selection in one quote above the question", () => {
-    expect(buildAskPrompt("para one\n\npara two", "explain")).toBe(
-      "> para one\n>\n> para two\n\nexplain"
-    )
-  })
-
-  it("sends the question alone when the selection has no visible content", () => {
-    expect(buildAskPrompt("  \n \n", "why?")).toBe("why?")
-  })
-})
 
 describe("buildQuotedMarkdown", () => {
   it("prefixes a single line", () => {

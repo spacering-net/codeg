@@ -36,7 +36,9 @@ use crate::app_error::AppCommandError;
 use crate::db::entities::{
     agent_setting, app_metadata, custom_agent, model_provider, quick_message, work_task_template,
 };
+use crate::db::service::personal_agent_service as pa_service;
 use crate::db::service::{app_metadata_service, assistant_service};
+use crate::models::personal_agent_bots::BotAvatar;
 use crate::models::{
     AgentType, AssistantAgentConfig, AssistantAvatar, AssistantDraft, AssistantLabelSnapshot,
 };
@@ -64,6 +66,9 @@ pub struct DomainApplied {
     /// Entries written under another name than the snapshot's, to keep a name
     /// that must be unique free (assistants).
     pub renamed: usize,
+    /// Assistants matched whose persona is their own `SOUL.md` and stays,
+    /// the snapshot's another.
+    pub persona_kept: usize,
 }
 
 impl From<usize> for DomainApplied {
@@ -71,6 +76,7 @@ impl From<usize> for DomainApplied {
         Self {
             written,
             renamed: 0,
+            persona_kept: 0,
         }
     }
 }
@@ -650,12 +656,13 @@ fn default_enabled() -> bool {
 const MAX_ASSISTANT_UID_CHARS: usize = 64;
 
 /// The one row check `validate` and `apply` share: the rules every assistant
-/// write obeys (`assistant_service::normalize_draft`), plus a usable `uid`.
+/// of the collaboration settings obeyed (`assistant_service::normalize_draft`,
+/// so a package from an older build reads as it did), plus a usable `uid`.
 /// `Ok(None)` is a row for an agent this build does not know.
 fn assistant_row(
     index: usize,
     dto: &AssistantDto,
-) -> Result<Option<assistant_service::ImportedAssistant>, AppCommandError> {
+) -> Result<Option<pa_service::ImportedWorker>, AppCommandError> {
     let invalid = |why: String| {
         AppCommandError::invalid_input(format!(
             "Snapshot domain '{DOMAIN_ASSISTANTS}' row {index} is invalid"
@@ -682,24 +689,31 @@ fn assistant_row(
         enabled: dto.enabled,
     };
     let row = assistant_service::normalize_draft(&draft).map_err(|e| invalid(e.to_string()))?;
-    Ok(Some(assistant_service::ImportedAssistant {
-        uid: uid.to_string(),
-        row,
+    Ok(Some(pa_service::ImportedWorker {
+        key: uid.to_string(),
+        name: row.name,
+        persona: row.description,
+        work: pa_service::AgentColumns {
+            agent_type: row.agent_type,
+            agent_options_json: row.agent_options_json,
+            label_snapshot_json: row.label_snapshot_json,
+        },
+        instructions: row.instructions,
+        hidden: !row.enabled,
         sort_order: dto.sort_order,
     }))
 }
 
 /// Decode and check every row, keeping the ones this build can apply — one
 /// per `uid`, the last entry for it, in the order the uids first appear (what
-/// `assistant_service::import_into` writes, so the count says the same).
-fn assistant_rows(
-    value: &Value,
-) -> Result<Vec<assistant_service::ImportedAssistant>, AppCommandError> {
+/// `personal_agent_service::import_workers` writes, so the count says the
+/// same).
+fn assistant_rows(value: &Value) -> Result<Vec<pa_service::ImportedWorker>, AppCommandError> {
     let dtos: Vec<AssistantDto> = decode_rows(DOMAIN_ASSISTANTS, value)?;
-    let mut rows: Vec<assistant_service::ImportedAssistant> = Vec::with_capacity(dtos.len());
+    let mut rows: Vec<pa_service::ImportedWorker> = Vec::with_capacity(dtos.len());
     for (index, dto) in dtos.iter().enumerate() {
         match assistant_row(index, dto)? {
-            Some(row) => match rows.iter_mut().find(|held| held.uid == row.uid) {
+            Some(row) => match rows.iter_mut().find(|held| held.key == row.key) {
                 Some(held) => *held = row,
                 None => rows.push(row),
             },
@@ -721,31 +735,103 @@ fn count_assistants(value: &Value) -> usize {
     assistant_rows(value).map_or(0, |rows| rows.len())
 }
 
-/// Live assistants only: a deleted one is not configuration anyone wants
-/// carried over (and "never delete" means an import could not remove it
-/// here anyway).
+/// A face as the collaboration settings' avatar a package carries (read by
+/// an older build only; this one gives each assistant made its own face):
+/// a monogram in the nearest colour those had, the other kinds as they are.
+fn package_avatar(avatar: BotAvatar) -> AssistantAvatar {
+    let color = |c: &str| -> String {
+        let near = match c {
+            "brown" | "yellow" => "amber",
+            "purple" => "violet",
+            "magenta" => "pink",
+            "gray" | "black" => "slate",
+            other => other,
+        };
+        if crate::models::assistant::ASSISTANT_AVATAR_COLORS.contains(&near) {
+            near.to_string()
+        } else {
+            "violet".to_string()
+        }
+    };
+    match avatar {
+        BotAvatar::Face { color: c, .. } | BotAvatar::Monogram { color: c } => {
+            AssistantAvatar::Monogram { color: color(&c) }
+        }
+        BotAvatar::Emoji { emoji, color: c } => AssistantAvatar::Emoji {
+            emoji,
+            color: color(&c),
+        },
+        BotAvatar::Image { data_url } => AssistantAvatar::Image { data_url },
+    }
+}
+
+/// A work assistant's persona as a package carries it, on one line and no
+/// longer than a description may be: the one waiting for its directory, else
+/// the first paragraph of its `SOUL.md` (none while it is the one it started
+/// with). `None` when its directory cannot be read here.
+fn package_persona(
+    row: &crate::db::entities::personal_agent::Model,
+    data_dir: Option<&std::path::Path>,
+) -> Option<String> {
+    use crate::personal_agent::team;
+    let text = if row.workdir_ready {
+        let soul = crate::personal_agent::workdir::soul_text(data_dir?, row);
+        if crate::personal_agent::templates::persona_unwritten(&soul) {
+            String::new()
+        } else {
+            team::persona_paragraph(&soul)
+        }
+    } else {
+        row.seed_persona.clone().unwrap_or_default()
+    };
+    Some(team::persona_head(
+        &text,
+        assistant_service::MAX_DESCRIPTION_CHARS,
+    ))
+}
+
+/// The work assistants (the primary is not one a package carries), every
+/// one — those with no brain yet too: each under the uid it came with from
+/// the collaboration settings when it did, so a package goes on matching the
+/// same one on every device, else its own. What its work runs on is the
+/// agent and options, its standing instructions the instructions, shown the
+/// enabled; one on an agent codeg no longer knows is left out.
 fn collect_assistants(conn: &DatabaseConnection) -> BoxFuture<'_, Result<Value, AppCommandError>> {
     Box::pin(async move {
-        let rows = assistant_service::live_rows_for_export(conn)
-            .await
-            .map_err(db_err)?;
-        encode(
-            rows.into_iter()
-                .map(|a| AssistantDto {
-                    uid: a.uid,
-                    name: a.name,
-                    description: a.description,
-                    avatar: a.avatar,
-                    agent_type: a.agent_type.as_wire().into_owned(),
-                    agent_options: a.agent_options,
-                    label_snapshot: a.label_snapshot,
-                    instructions: a.instructions,
-                    enabled: a.enabled,
-                    sort_order: a.sort_order,
-                })
-                .collect::<Vec<_>>(),
-        )
+        let data_dir = crate::personal_agent::host::data_dir_hint();
+        collect_assistants_in(conn, data_dir.as_deref()).await
     })
+}
+
+async fn collect_assistants_in(
+    conn: &DatabaseConnection,
+    data_dir: Option<&std::path::Path>,
+) -> Result<Value, AppCommandError> {
+    use crate::db::entities::personal_agent::BotKind;
+    let rows = pa_service::list_bots(conn)
+        .await
+        .map_err(AppCommandError::db)?;
+    encode(
+        rows.into_iter()
+            .filter(|b| b.kind == BotKind::Worker)
+            .filter_map(|b| {
+                let work = crate::personal_agent::engine::work_of_row(&b)?;
+                let uid = b.legacy_assistant_uid.clone().or_else(|| b.uid.clone())?;
+                Some(AssistantDto {
+                    uid,
+                    name: b.name.trim().to_string(),
+                    description: package_persona(&b, data_dir).unwrap_or_default(),
+                    avatar: package_avatar(BotAvatar::parse(&b.avatar)),
+                    agent_type: work.agent_type.as_wire().into_owned(),
+                    agent_options: work.agent_options,
+                    label_snapshot: work.label_snapshot,
+                    instructions: b.work_instructions.clone().unwrap_or_default(),
+                    enabled: !b.hidden,
+                    sort_order: b.sort_order,
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn apply_assistants<'a>(
@@ -754,12 +840,17 @@ fn apply_assistants<'a>(
 ) -> BoxFuture<'a, Result<DomainApplied, AppCommandError>> {
     Box::pin(async move {
         let rows = assistant_rows(value)?;
-        let outcome = assistant_service::import_into(tx, rows)
+        let data_dir = crate::personal_agent::host::data_dir_hint();
+        let persona_of = move |row: &crate::db::entities::personal_agent::Model| {
+            package_persona(row, data_dir.as_deref())
+        };
+        let outcome = pa_service::import_workers(tx, rows, &persona_of)
             .await
-            .map_err(db_err)?;
+            .map_err(AppCommandError::db)?;
         Ok(DomainApplied {
             written: outcome.written,
             renamed: outcome.renamed,
+            persona_kept: outcome.persona_kept,
         })
     })
 }
@@ -1113,6 +1204,8 @@ mod tests {
 
     // ── assistants ──
 
+    use crate::db::entities::personal_agent::{self as pa_entity, BotKind};
+
     fn assistant_json(uid: &str, name: &str) -> Value {
         serde_json::json!({
             "uid": uid,
@@ -1145,29 +1238,64 @@ mod tests {
         applied
     }
 
-    async fn assistants_in(db: &crate::db::AppDatabase) -> Vec<crate::models::AssistantInfo> {
-        assistant_service::list_all(&db.conn).await.expect("list")
+    /// Every work assistant, deleted or not, by id.
+    async fn all_workers(db: &crate::db::AppDatabase) -> Vec<pa_entity::Model> {
+        pa_entity::Entity::find()
+            .filter(pa_entity::Column::Kind.eq(BotKind::Worker))
+            .order_by_asc(pa_entity::Column::Id)
+            .all(&db.conn)
+            .await
+            .expect("workers")
     }
 
-    fn local_draft(name: &str) -> AssistantDraft {
-        let row: AssistantDto =
-            serde_json::from_value(assistant_json("unused", name)).expect("dto");
-        AssistantDraft {
-            name: row.name,
-            description: row.description,
-            avatar: row.avatar,
-            agent_config: AssistantAgentConfig {
-                agent_type: AgentType::Codex,
-                agent_options: row.agent_options,
-                label_snapshot: row.label_snapshot,
-            },
-            instructions: row.instructions,
-            enabled: true,
+    async fn workers_in(db: &crate::db::AppDatabase) -> Vec<pa_entity::Model> {
+        all_workers(db)
+            .await
+            .into_iter()
+            .filter(|b| b.deleted_at.is_none())
+            .collect()
+    }
+
+    fn columns(agent_type: &str) -> pa_service::AgentColumns {
+        pa_service::AgentColumns {
+            agent_type: agent_type.to_string(),
+            agent_options_json: "{}".to_string(),
+            label_snapshot_json: format!(r#"{{"agent":"{agent_type}","mode":null,"options":[]}}"#),
         }
     }
 
+    /// A worker made here, its directory made with it.
+    async fn local_worker(db: &crate::db::AppDatabase, name: &str) -> pa_entity::Model {
+        pa_service::create_worker(
+            &db.conn,
+            pa_service::NewWorker::made(
+                name.to_string(),
+                "{}".to_string(),
+                columns("claude_code"),
+                columns("codex"),
+                "{}".to_string(),
+            ),
+        )
+        .await
+        .expect("worker")
+    }
+
+    async fn primary(db: &crate::db::AppDatabase) -> pa_entity::Model {
+        pa_service::save_primary(
+            &db.conn,
+            pa_service::AgentWrite {
+                name: Some("Primary".to_string()),
+                brain: Some(columns("claude_code")),
+                work: Some(columns("claude_code")),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("primary")
+    }
+
     #[tokio::test]
-    async fn assistants_travel_by_uid_and_move_their_revision_on() {
+    async fn assistants_land_as_work_assistants_matched_by_the_package_uid() {
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
         let first = apply_assistants_committed(
             &db,
@@ -1178,67 +1306,157 @@ mod tests {
             first,
             DomainApplied {
                 written: 1,
-                renamed: 0
+                renamed: 0,
+                persona_kept: 0,
             }
         );
-        let rows = assistants_in(&db).await;
+        let rows = workers_in(&db).await;
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].uid, "u-1");
-        assert_eq!(rows[0].revision, 1);
-        assert_eq!(rows[0].instructions, "Cite line numbers.");
-        assert_eq!(rows[0].sort_order, 3);
+        let made = &rows[0];
+        assert_eq!(made.legacy_assistant_uid.as_deref(), Some("u-1"));
+        let uid = made.uid.clone().expect("a uid of its own");
+        assert_eq!(uid.len(), 32, "its own uid, not the package's: {uid}");
+        assert_eq!(made.name, "Reviewer");
+        assert_eq!(made.work_agent_type, "codex");
+        assert!(made.work_agent_options.contains("gpt-5.5"));
+        assert!(made.work_label_snapshot.contains("GPT-5.5"));
+        assert_eq!(made.work_instructions.as_deref(), Some("Cite line numbers."));
+        assert_eq!(made.sort_order, 3);
+        assert!(!made.hidden);
+        assert!(!made.workdir_ready, "its directory is made when first needed");
+        assert_eq!(made.seed_persona.as_deref(), Some("Reviews diffs"));
+        assert_eq!(made.seed_version, 1);
+        assert_eq!(made.agent_type, None, "no primary here to copy a brain from");
+        assert_eq!(
+            made.avatar,
+            serde_json::to_string(&BotAvatar::default_for(&uid)).unwrap(),
+            "a face of its own, not the package's"
+        );
 
+        // Again, edited: the same one, its persona the new one while its
+        // directory is not made — the version moved on for the one being made.
         let mut edited = assistant_json("u-1", "Reviewer");
         edited["description"] = Value::from("Reads every diff");
+        edited["enabled"] = Value::from(false);
+        edited["instructions"] = Value::from("");
         apply_assistants_committed(&db, &serde_json::json!([edited])).await;
-        let rows = assistants_in(&db).await;
-        assert_eq!(rows.len(), 1, "matched by uid, not added again");
-        assert_eq!(rows[0].description, "Reads every diff");
-        assert_eq!(rows[0].revision, 2);
+        let rows = workers_in(&db).await;
+        assert_eq!(rows.len(), 1, "matched, not added again");
+        assert_eq!(rows[0].id, made.id);
+        assert_eq!(rows[0].seed_persona.as_deref(), Some("Reads every diff"));
+        assert_eq!(rows[0].seed_version, 2);
+        assert!(rows[0].hidden, "not enabled is hidden");
+        assert_eq!(rows[0].work_instructions, None);
+        assert_eq!(rows[0].revision, made.revision + 1);
+    }
+
+    /// One whose directory is made keeps its `SOUL.md`: the persona is not
+    /// written, and the ones kept are counted when the package's differs.
+    #[tokio::test]
+    async fn a_made_ones_persona_stays_its_own() {
+        use sea_orm::TransactionTrait;
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let mine = local_worker(&db, "Reviewer").await;
+        let row = |persona: &str| pa_service::ImportedWorker {
+            key: mine.uid.clone().unwrap(),
+            name: "Reviewer".to_string(),
+            persona: persona.to_string(),
+            work: columns("codex"),
+            instructions: String::new(),
+            hidden: false,
+            sort_order: 1,
+        };
+        for (given, kept) in [("Reads  every\ndiff", 0), ("Something else", 1)] {
+            let tx = db.conn.begin().await.unwrap();
+            let outcome = pa_service::import_workers(&tx, vec![row(given)], &|_| {
+                Some("Reads every diff".to_string())
+            })
+            .await
+            .expect("import");
+            tx.commit().await.unwrap();
+            assert_eq!(outcome.written, 1);
+            assert_eq!(outcome.persona_kept, kept, "{given:?}");
+        }
+        let now = &workers_in(&db).await[0];
+        assert_eq!(now.id, mine.id, "matched by its own uid");
+        assert_eq!(now.seed_persona, None);
+        assert_eq!(now.seed_version, mine.seed_version);
+        assert!(now.workdir_ready);
+        assert_eq!(now.work_agent_type, "codex");
+        assert_eq!(now.agent_type.as_deref(), Some("claude_code"), "its brain stays");
+    }
+
+    #[tokio::test]
+    async fn one_made_by_an_import_gets_the_primarys_brain() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let primary = primary(&db).await;
+        apply_assistants_committed(
+            &db,
+            &serde_json::json!([assistant_json("u-1", "Reviewer")]),
+        )
+        .await;
+        let made = &workers_in(&db).await[0];
+        assert_eq!(made.agent_type, primary.agent_type);
+        assert_eq!(made.agent_options, primary.agent_options);
+        assert_eq!(made.label_snapshot, primary.label_snapshot);
+        assert_eq!(made.work_agent_type, "codex", "its work is the package's");
+    }
+
+    /// The primary is not one a package carries, nor one it writes.
+    #[tokio::test]
+    async fn the_primary_is_never_matched() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let primary = primary(&db).await;
+        let row = assistant_json(primary.uid.as_deref().unwrap(), "Reviewer");
+        apply_assistants_committed(&db, &serde_json::json!([row])).await;
+        let after = pa_service::primary_bot(&db.conn).await.unwrap().unwrap();
+        assert_eq!(after.name, "Primary");
+        assert_eq!(after.revision, primary.revision);
+        assert_eq!(workers_in(&db).await.len(), 1, "a work assistant made");
+
+        let collected = collect_assistants_in(&db.conn, None).await.expect("collect");
+        let rows = collected.as_array().unwrap();
+        assert_eq!(rows.len(), 1, "the primary does not travel");
+        assert_eq!(rows[0]["name"], "Reviewer");
     }
 
     #[tokio::test]
     async fn an_imported_name_another_assistant_has_is_made_unique_the_same_way_twice() {
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        assistant_service::create(&db.conn, &local_draft("Reviewer"))
-            .await
-            .expect("local assistant");
+        local_worker(&db, "Reviewer").await;
+        primary(&db).await;
         let snapshot = serde_json::json!([
             assistant_json("u-1", "reviewer"),
             assistant_json("u-2", "Writer"),
             assistant_json("u-3", "WRITER"),
+            assistant_json("u-4", "primary"),
         ]);
         for _ in 0..2 {
             let applied = apply_assistants_committed(&db, &snapshot).await;
-            assert_eq!(
-                applied,
-                DomainApplied {
-                    written: 3,
-                    renamed: 2
-                }
-            );
-            let mut names: Vec<(String, String)> = assistants_in(&db)
+            assert_eq!((applied.written, applied.renamed), (4, 3));
+            let mut names: Vec<(String, String)> = workers_in(&db)
                 .await
                 .into_iter()
-                .map(|a| (a.uid, a.name))
+                .filter_map(|b| Some((b.legacy_assistant_uid?, b.name)))
                 .collect();
             names.sort();
-            assert_eq!(names.len(), 4);
             assert_eq!(
-                names[1..],
+                names,
                 [
                     ("u-1".to_string(), "reviewer (2)".to_string()),
                     ("u-2".to_string(), "Writer".to_string()),
                     ("u-3".to_string(), "WRITER (2)".to_string()),
+                    ("u-4".to_string(), "primary (2)".to_string()),
                 ]
             );
         }
+        assert_eq!(workers_in(&db).await.len(), 5);
     }
 
     /// The outcome depends on the snapshot and on the rows it leaves alone —
     /// not on what its own rows were called before. Two assistants trading
-    /// names land traded (no rename, no unique-index clash half way), and
-    /// re-applying the snapshot from before puts every name back.
+    /// names land traded, and re-applying the snapshot from before puts every
+    /// name back.
     #[tokio::test]
     async fn assistants_trading_names_land_traded_and_a_rollback_puts_them_back() {
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
@@ -1247,9 +1465,11 @@ mod tests {
             assistant_json("u-b", "Beta"),
         ]);
         apply_assistants_committed(&db, &before).await;
-        let names = |rows: Vec<crate::models::AssistantInfo>| {
-            let mut out: Vec<(String, String)> =
-                rows.into_iter().map(|a| (a.uid, a.name)).collect();
+        let names = |rows: Vec<pa_entity::Model>| {
+            let mut out: Vec<(String, String)> = rows
+                .into_iter()
+                .filter_map(|b| Some((b.legacy_assistant_uid?, b.name)))
+                .collect();
             out.sort();
             out
         };
@@ -1262,7 +1482,7 @@ mod tests {
             let applied = apply_assistants_committed(&db, &traded).await;
             assert_eq!(applied.renamed, 0);
             assert_eq!(
-                names(assistants_in(&db).await),
+                names(workers_in(&db).await),
                 [
                     ("u-a".to_string(), "Beta".to_string()),
                     ("u-b".to_string(), "Alpha".to_string()),
@@ -1272,7 +1492,7 @@ mod tests {
 
         apply_assistants_committed(&db, &before).await;
         assert_eq!(
-            names(assistants_in(&db).await),
+            names(workers_in(&db).await),
             [
                 ("u-a".to_string(), "Alpha".to_string()),
                 ("u-b".to_string(), "Beta".to_string()),
@@ -1280,10 +1500,9 @@ mod tests {
         );
     }
 
-    /// Uids are matched exactly, so two may differ only in case; re-applying
-    /// them must not trip the live-name index, which folds case.
+    /// Uids are matched exactly, so two may differ only in case.
     #[tokio::test]
-    async fn uids_differing_only_in_case_re_apply_cleanly() {
+    async fn uids_differing_only_in_case_are_two_assistants() {
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
         let snapshot = serde_json::json!([
             assistant_json("u-a", "Alpha"),
@@ -1293,7 +1512,7 @@ mod tests {
             let applied = apply_assistants_committed(&db, &snapshot).await;
             assert_eq!(applied.written, 2);
         }
-        assert_eq!(assistants_in(&db).await.len(), 2);
+        assert_eq!(workers_in(&db).await.len(), 2);
     }
 
     #[tokio::test]
@@ -1307,28 +1526,40 @@ mod tests {
         assert_eq!(count_assistants(&snapshot), 2);
         let applied = apply_assistants_committed(&db, &snapshot).await;
         assert_eq!(applied.written, 2);
-        let rows = assistants_in(&db).await;
+        let rows = workers_in(&db).await;
         assert_eq!(rows.len(), 2);
-        assert!(rows.iter().any(|a| a.uid == "u-1" && a.name == "Last"));
+        assert!(rows
+            .iter()
+            .any(|b| b.legacy_assistant_uid.as_deref() == Some("u-1") && b.name == "Last"));
     }
 
+    /// A deleted one is not brought back (its directory may be going away,
+    /// or another's by now): a new one is made, and takes the legacy uid —
+    /// deleted and imported again, the unique index never trips.
     #[tokio::test]
-    async fn an_assistant_deleted_here_comes_back_when_a_snapshot_carries_it() {
+    async fn an_assistant_deleted_here_is_made_anew_when_a_snapshot_carries_it() {
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        apply_assistants_committed(&db, &serde_json::json!([assistant_json("u-1", "Reviewer")]))
-            .await;
-        let id = assistants_in(&db).await[0].id;
-        assistant_service::soft_delete(&db.conn, id)
-            .await
-            .expect("delete");
-
-        apply_assistants_committed(&db, &serde_json::json!([assistant_json("u-1", "Reviewer")]))
-            .await;
-        let rows = assistants_in(&db).await;
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, id, "the same row, not a second one");
-        assert!(rows[0].deleted_at.is_none());
-        assert_eq!(rows[0].revision, 3);
+        let package = serde_json::json!([assistant_json("u-1", "Reviewer")]);
+        apply_assistants_committed(&db, &package).await;
+        let gone = workers_in(&db).await.remove(0);
+        for round in 0..2 {
+            let live = workers_in(&db).await.remove(0);
+            assert!(pa_service::delete_worker(&db.conn, live.id).await.unwrap());
+            apply_assistants_committed(&db, &package).await;
+            let now = workers_in(&db).await;
+            assert_eq!(now.len(), 1, "round {round}");
+            assert_ne!(now[0].id, live.id, "a new one, not the deleted brought back");
+            assert_ne!(now[0].uid, live.uid);
+            assert_eq!(now[0].legacy_assistant_uid.as_deref(), Some("u-1"));
+            assert_eq!(now[0].name, "Reviewer", "a deleted one's name is free");
+        }
+        let all = all_workers(&db).await;
+        assert_eq!(all.len(), 3);
+        assert!(all
+            .iter()
+            .filter(|b| b.deleted_at.is_some())
+            .all(|b| b.legacy_assistant_uid.is_none()));
+        assert_eq!(all[0].id, gone.id);
     }
 
     #[tokio::test]
@@ -1341,7 +1572,7 @@ mod tests {
         assert_eq!(count_assistants(&snapshot), 1);
         let applied = apply_assistants_committed(&db, &snapshot).await;
         assert_eq!(applied.written, 1);
-        assert_eq!(assistants_in(&db).await.len(), 1);
+        assert_eq!(workers_in(&db).await.len(), 1);
     }
 
     #[tokio::test]
@@ -1368,39 +1599,97 @@ mod tests {
             assert!(apply_assistants(&tx, &payload).await.is_err());
             tx.rollback().await.unwrap();
         }
-        assert!(assistants_in(&db).await.is_empty());
+        assert!(workers_in(&db).await.is_empty());
     }
 
+    /// Collected: the live work assistants, each under the uid it came with
+    /// when it did (so the package goes on naming the same one everywhere),
+    /// its persona the one waiting for its directory or its `SOUL.md`'s
+    /// first paragraph, shown the enabled — and landing whole on another
+    /// device.
     #[tokio::test]
-    async fn collecting_carries_live_assistants_whole() {
+    async fn collecting_carries_live_work_assistants_whole() {
         let source = crate::db::test_helpers::fresh_in_memory_db().await;
-        let kept = assistant_service::create(&source.conn, &local_draft("Reviewer"))
+        apply_assistants_committed(
+            &source,
+            &serde_json::json!([assistant_json("u-1", "Reviewer")]),
+        )
+        .await;
+        let mine = local_worker(&source, "Writer").await;
+        let gone = local_worker(&source, "Gone").await;
+        pa_service::delete_worker(&source.conn, gone.id).await.unwrap();
+        pa_entity::Entity::update_many()
+            .col_expr(pa_entity::Column::Hidden, sea_orm::sea_query::Expr::value(true))
+            .col_expr(
+                pa_entity::Column::WorkInstructions,
+                sea_orm::sea_query::Expr::value("Short sentences."),
+            )
+            .filter(pa_entity::Column::Id.eq(mine.id))
+            .exec(&source.conn)
             .await
-            .expect("create");
-        let gone = assistant_service::create(&source.conn, &local_draft("Writer"))
-            .await
-            .expect("create");
-        assistant_service::soft_delete(&source.conn, gone.id)
-            .await
-            .expect("delete");
+            .unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let mine = pa_service::get_bot(&source.conn, mine.id).await.unwrap().unwrap();
+        let dir = crate::personal_agent::workdir::workdir_of_bot(data.path(), &mine);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SOUL.md"),
+            crate::personal_agent::templates::worker_soul(
+                crate::models::system::AppLocale::En,
+                Some("Writes the docs.\nPlainly."),
+            ),
+        )
+        .unwrap();
 
-        let collected = collect_assistants(&source.conn).await.expect("collect");
+        let collected = collect_assistants_in(&source.conn, Some(data.path()))
+            .await
+            .expect("collect");
         let rows = collected.as_array().expect("a list");
-        assert_eq!(rows.len(), 1, "a deleted assistant does not travel");
-        assert_eq!(rows[0]["uid"], kept.uid.as_str());
-        assert!(rows[0].get("id").is_none() && rows[0].get("revision").is_none());
+        assert_eq!(rows.len(), 2, "a deleted assistant does not travel");
+        let by = |name: &str| rows.iter().find(|r| r["name"] == name).expect(name);
+        let reviewer = by("Reviewer");
+        assert_eq!(reviewer["uid"], "u-1", "the uid it came with");
+        assert_eq!(reviewer["description"], "Reviews diffs");
+        assert_eq!(reviewer["enabled"], true);
+        assert_eq!(reviewer["agentType"], "codex");
+        assert_eq!(reviewer["instructions"], "Cite line numbers.");
+        assert_eq!(reviewer["sortOrder"], 3);
+        let writer = by("Writer");
+        assert_eq!(writer["uid"], mine.uid.clone().unwrap().as_str(), "its own");
+        assert_eq!(writer["description"], "Writes the docs. Plainly.");
+        assert_eq!(writer["enabled"], false);
+        assert_eq!(writer["instructions"], "Short sentences.");
+        assert!(rows.iter().all(|r| r.get("id").is_none() && r.get("revision").is_none()));
+        validate_assistants(&collected).expect("a package an older build reads");
+
+        // Its persona unread here (no data dir): none, not the default.
+        let blind = collect_assistants_in(&source.conn, None).await.unwrap();
+        let blind_writer = blind
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == "Writer")
+            .unwrap()
+            .clone();
+        assert_eq!(blind_writer["description"], "");
 
         let target = crate::db::test_helpers::fresh_in_memory_db().await;
         apply_assistants_committed(&target, &collected).await;
-        let landed = &assistants_in(&target).await[0];
-        assert_eq!(landed.uid, kept.uid);
-        assert_eq!(landed.name, kept.name);
-        assert_eq!(landed.avatar, kept.avatar);
-        assert_eq!(landed.agent_type, kept.agent_type);
-        assert_eq!(landed.agent_options, kept.agent_options);
-        assert_eq!(landed.label_snapshot, kept.label_snapshot);
-        assert_eq!(landed.instructions, kept.instructions);
-        assert_eq!(landed.enabled, kept.enabled);
+        let landed = workers_in(&target).await;
+        assert_eq!(landed.len(), 2);
+        let writer = landed.iter().find(|b| b.name == "Writer").unwrap();
+        assert_eq!(writer.legacy_assistant_uid, mine.uid);
+        assert_eq!(writer.seed_persona.as_deref(), Some("Writes the docs. Plainly."));
+        assert!(writer.hidden);
+        assert_eq!(writer.work_agent_type, mine.work_agent_type);
+        assert_eq!(writer.work_instructions.as_deref(), Some("Short sentences."));
+        // And back: the uid it travels under stays the first device's.
+        let again = collect_assistants_in(&target.conn, None).await.unwrap();
+        assert!(again
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["uid"] == mine.uid.clone().unwrap().as_str()));
     }
 
     /// And the pair is not vacuously in agreement: at least one of those

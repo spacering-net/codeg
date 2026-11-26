@@ -156,11 +156,14 @@ export function TaskMessageComposer({
   const containerRef = useRef<HTMLDivElement>(null)
   const chromeFocus = useComposerChromeFocus(editorRef)
 
-  const { groupLabels, uiLabels } = useComposerMentionLabels()
+  const { groupLabels, uiLabels, primaryAssistantName } =
+    useComposerMentionLabels()
   const referenceSearch = useReferenceSearch({
     defaultPath: folderPath,
     enabled: true,
     labels: groupLabels,
+
+    primaryAssistantName,
   })
 
   // One transient probe backs the `/` menu (the snapshot carries
@@ -360,7 +363,7 @@ export function TaskMessageComposer({
         onExternalMenuKeyDown={invocations.onKeyDown}
         className={editorClassName}
       />
-      {/* Centered, not bottom-aligned: the bar mixes a 24px icon button with
+      {/* Centered, not bottom-aligned: the bar mixes a 32px icon button with
           whatever the config section is currently showing (a one-line spinner
           while probing, chips once it lands), and only centering keeps the "+"
           on the same axis as all of them. */}

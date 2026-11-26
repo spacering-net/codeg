@@ -58,7 +58,7 @@ function renderPanel(agent: AcpAgentInfo) {
 // appear for a private (self-hosted) endpoint, where there is no Tencent-account
 // CLI login.
 const CLI_API_KEY_COPY = /sign in with the CodeBuddy CLI/i
-const CLI_LOGIN_COPY = /sign in with your Tencent account/i
+const CLI_LOGIN_COPY = /to sign in with Tencent/i
 
 describe("CodeBuddyConfigPanel — self-hosted (private deployment)", () => {
   it("shows a labelled Deployment URL field and hides all CLI sign-in copy", () => {
@@ -72,7 +72,7 @@ describe("CodeBuddyConfigPanel — self-hosted (private deployment)", () => {
 
     // The private-deployment API-key hint is shown...
     expect(
-      screen.getByText(/Use the key issued by your private deployment/i)
+      screen.getByText(/Use the key from your private deployment/i)
     ).toBeInTheDocument()
     // ...and neither CLI sign-in hint leaks through.
     expect(screen.queryByText(CLI_API_KEY_COPY)).not.toBeInTheDocument()

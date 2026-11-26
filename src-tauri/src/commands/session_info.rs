@@ -121,7 +121,8 @@ impl SessionInfoAccess for DbSessionInfoLookup {
             created_at: Some(summary.created_at),
             updated_at: Some(summary.updated_at),
             parent_id: summary.parent_id,
-            is_delegation_child: summary.parent_id.is_some(),
+            is_delegation_child: summary.kind
+                == crate::db::entities::conversation::ConversationKind::Delegate,
             stats: None,
             messages: None,
             note: None,

@@ -151,6 +151,11 @@ pub struct Model {
     /// which already names its repository and the account that triggered it.
     #[sea_orm(column_type = "Text")]
     pub delivery: Option<String>,
+    /// The personal-agent dispatch that created this task; NULL otherwise.
+    /// Set once at creation by the dispatcher, never by the public
+    /// create/update DTO paths. Such a task lands as the board's settings
+    /// say, like any other.
+    pub personal_agent_dispatch_id: Option<i32>,
     /// JSON `{"<item number>": "<markdown>"}` — the reply drafted for each
     /// thread a forge-sourced task handles: written by the agent through
     /// `task_complete` (sanitized on the way in), editable by the user while

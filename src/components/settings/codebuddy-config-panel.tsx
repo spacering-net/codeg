@@ -5,6 +5,10 @@ import { useTranslations } from "next-intl"
 import { Eye, EyeOff, Loader2, Save } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  AgentPanelCard,
+  AgentPanelSaveBar,
+} from "@/components/settings/agent-panel-layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -155,16 +159,10 @@ export function CodeBuddyConfigPanel({
   }, [agent.env, agent.enabled, apiKey, environment, baseUrl, onSave, t])
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-      <div>
-        <label className="text-xs font-medium">
-          {t("codebuddy.configManagement")}
-        </label>
-        <p className="mt-1 text-2xs text-muted-foreground">
-          {t("codebuddy.configDescription")}
-        </p>
-      </div>
-
+    <AgentPanelCard
+      title={t("codebuddy.configManagement")}
+      description={t("codebuddy.configDescription")}
+    >
       <div className="space-y-1.5">
         <label className="text-2xs text-muted-foreground">
           {t("codebuddy.apiKeyLabel")}
@@ -279,7 +277,7 @@ export function CodeBuddyConfigPanel({
         </p>
       )}
 
-      <div className="flex justify-end">
+      <AgentPanelSaveBar>
         <Button
           type="button"
           size="sm"
@@ -299,7 +297,7 @@ export function CodeBuddyConfigPanel({
             </>
           )}
         </Button>
-      </div>
-    </div>
+      </AgentPanelSaveBar>
+    </AgentPanelCard>
   )
 }

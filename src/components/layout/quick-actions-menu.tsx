@@ -58,6 +58,7 @@ import {
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { HarnessUpdatesBadge } from "@/components/harness/harness-updates-badge"
+import { UserRoundStar } from "@/components/icons/user-round-star"
 import { LabelWithHint } from "@/components/layout/label-with-hint"
 import {
   MENU_TEXT,
@@ -217,7 +218,14 @@ export function QuickActionsItems({ actions }: { actions: QuickActions }) {
           are not. None of them mark the current route the way the sidebar
           rows do — this is a launcher, not a nav list, and every other row
           in it is stateless, so a tinted row here reads as hover/focus
-          rather than "you are here". */}
+          rather than "you are here". The personal agent's row is the one
+          without its sidebar twin's badge or face: here it is only the way
+          to its page. */}
+      <MenuRow
+        icon={<UserRoundStar />}
+        label={tSidebar("personalAgent")}
+        onSelect={() => setRoute("personalAgent")}
+      />
       <MenuRow
         icon={<Zap />}
         label={tSidebar("automations")}

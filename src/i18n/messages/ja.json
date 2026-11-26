@@ -247,6 +247,12 @@
         "appliedToast": "壁紙を適用しました",
         "credit": "画像提供 wallhaven.cc · SFW のみ"
       }
+    },
+    "paAccent": {
+      "title": "アシスタントのアクセントカラー",
+      "description": "アシスタントとの会話で、カードの縁取りとカードのボタンに使う色です。あなたの吹き出しは常にアシスタントの色になります。",
+      "default": "デフォルト",
+      "bot": "アシスタントの色に合わせる"
     }
   },
   "SystemSettings": {
@@ -561,6 +567,54 @@
       "zoom_reset": {
         "title": "ズームをリセット",
         "description": "ウィンドウのズームを 100% に戻します"
+      },
+      "switch_assistant_1": {
+        "title": "アシスタント 1 に切り替え",
+        "description": "アシスタントページで：一覧の 1 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_2": {
+        "title": "アシスタント 2 に切り替え",
+        "description": "アシスタントページで：一覧の 2 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_3": {
+        "title": "アシスタント 3 に切り替え",
+        "description": "アシスタントページで：一覧の 3 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_4": {
+        "title": "アシスタント 4 に切り替え",
+        "description": "アシスタントページで：一覧の 4 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_5": {
+        "title": "アシスタント 5 に切り替え",
+        "description": "アシスタントページで：一覧の 5 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_6": {
+        "title": "アシスタント 6 に切り替え",
+        "description": "アシスタントページで：一覧の 6 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_7": {
+        "title": "アシスタント 7 に切り替え",
+        "description": "アシスタントページで：一覧の 7 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_8": {
+        "title": "アシスタント 8 に切り替え",
+        "description": "アシスタントページで：一覧の 8 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_9": {
+        "title": "アシスタント 9 に切り替え",
+        "description": "アシスタントページで：一覧の 9 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "prev_assistant": {
+        "title": "前のアシスタント",
+        "description": "アシスタントページで：一覧でひとつ上のアシスタントを開く"
+      },
+      "next_assistant": {
+        "title": "次のアシスタント",
+        "description": "アシスタントページで：一覧でひとつ下のアシスタントを開く"
+      },
+      "cycle_assistant": {
+        "title": "アシスタントを順に切り替え",
+        "description": "アシスタントページで：最近開いたアシスタントの間で切り替える"
       }
     }
   },
@@ -758,7 +812,7 @@
   },
   "AcpAgentSettings": {
     "title": "Agent SDK 管理",
-    "description": "Agent SDK の接続、有効化状態、環境変数、設定管理、バージョン事前チェック情報を一元管理します。",
+    "description": "各 Agent の SDK 接続、有効化状態、環境変数、設定、バージョン事前チェックを管理します。",
     "loadingAgents": "エージェント一覧を読み込み中...",
     "agentList": "エージェント一覧",
     "emptyNoAgent": "利用可能なエージェントがありません。",
@@ -766,7 +820,7 @@
     "envVars": "環境変数",
     "systemInstructions": {
       "label": "システム指示",
-      "hint": "このエージェントのグローバルなシステム指示を設定し、グローバル指示ファイルに保存します。",
+      "hint": "このエージェントのグローバル指示。グローバル指示ファイルに保存されます。",
       "placeholder": "グローバルなシステム指示を Markdown 形式で入力してください（役割の定義、ガイドライン、コーディング規約など）...",
       "filePath": "ファイルパス",
       "unsaved": "未保存の変更があります",
@@ -776,22 +830,22 @@
     },
     "hostTools": {
       "label": "ファイルとコマンドをエージェント自身に処理させる",
-      "description": "codeg がファイルアクセスとターミナルコマンドを代行しなくなり、エージェントが自身のプロセスで実行します。そうすることで初めて、エージェント自身のサンドボックスと権限ルールが適用されます。他のエージェントへの委任も無効になります（同じ処理が codeg 経由に戻ってしまうため）。codeg 自体はサンドボックスを提供しないため、エージェント側でサンドボックスを設定済みの場合にのみ有効にしてください。"
+      "description": "ファイルとターミナルの操作はエージェント自身の権限で行われます。codeg はサンドボックスを提供せず、委任も無効になります。エージェント側でサンドボックスを設定済みの場合のみ有効にしてください。"
     },
     "nativeJsonConfig": "ネイティブ JSON 設定",
     "modelHintDefault": "空欄の場合はシステム既定モデルを使用します。",
-    "generalConfigDescriptionClaude": "API URL、API Key、Claude モデルをすばやく設定でき、ネイティブ JSON 設定と同期します。",
-    "generalConfigDescriptionDefault": "重要な設定入力（API URL、API Key、Model）とネイティブ JSON 設定管理をサポートします。",
+    "generalConfigDescriptionClaude": "API URL、API Key、Claude モデルを設定し、ネイティブ JSON 設定と同期します。",
+    "generalConfigDescriptionDefault": "API URL、API Key、Model を設定し、ネイティブ JSON 設定を管理します。",
     "multiAgent": {
       "title": "マルチエージェント連携",
       "description": "アクティブなエージェントがサブタスクを他のエージェントに委任できるようにします。",
       "enable": "委任を有効化",
       "enableHint": "オフにすると、delegate_to_agent ツールはエージェントの MCP ツール一覧から非表示になります。",
-      "withheldByHostTools": "{agents} には委任ツールが渡りません。エージェントごとの「ファイルとコマンドをエージェント自身に任せる」スイッチがオンになっています。",
+      "withheldByHostTools": "{agents} には委任ツールが渡りません。「ファイルとコマンドをエージェント自身に任せる」がオンです。",
       "depthLimit": "最大委任深度",
-      "depthHint": "許可範囲: {min}–{max}。委任チェーン（ルート → 子 → 孫 …）の再帰深度を制限します。",
+      "depthHint": "範囲: {min}–{max}。委任チェーンの最大の深さを制限します。",
       "completedCacheLabel": "完了結果のキャッシュ（MB）",
-      "completedCacheHint": "実行中の委任セッションが保持する、完了したサブエージェント結果のメモリ内キャッシュ。そのセッションの実行中のみ保持され、セッション終了時に自動的に破棄されます。この予算を超えると古い結果から順にメモリから破棄されます（サブエージェント自身のセッションでは引き続き閲覧可能）。0 は無制限（それでもセッション終了時に破棄）。",
+      "completedCacheHint": "完了したサブエージェント結果のメモリキャッシュ。セッション終了時に破棄されます。上限を超えると古い順に破棄（サブエージェントのセッションでは閲覧可能）。0 は無制限。",
       "save": "保存",
       "saving": "保存中…",
       "saved": "委任設定を保存しました",
@@ -799,7 +853,7 @@
       "loadFailed": "委任設定の読み込みに失敗しました: {detail}",
       "tabGeneral": "一般",
       "tabAgentDefaults": "サブエージェント設定",
-      "agentDefaultsDescription": "マルチエージェント連携が委任呼び出しのためにサブエージェントを起動するときに適用される上書き設定です。ここに表示されるオプションはライブプローブで取得しており、選択した内容がそのままエージェントに渡されます。",
+      "agentDefaultsDescription": "委任でサブエージェントを起動するときの上書き設定です。オプションはエージェントのライブプローブで取得します。",
       "agentDefaultsAgentHint": "「既定」のままのオプションは、エージェント自身の値を使います。",
       "agentDefaultsDelegationOff": "マルチエージェント連携がオフです。これらの設定を変更するにはオンにしてください。",
       "probing": "エージェントの利用可能な設定項目を読み込み中…",
@@ -816,19 +870,18 @@
       "modelNotSwitched": "エージェントが選択したモデルに切り替わらなかったため、これらのオプションは別のモデルのものである可能性があります。",
       "unsavedChanges": "未保存の変更があります",
       "assistants": {
-        "description": "アシスタントは @ で呼び出せる委任プリセットです。エージェントとそのすべてのオプション、常設の指示をまとめたもので、委任するとその設定どおりに実行されます。",
-        "create": "新しいアシスタント",
-        "delegationOff": "マルチエージェント連携がオフのため、現在アシスタントに委任できません。",
+        "create": "新しい実行設定",
+        "delegationOff": "マルチエージェント連携がオフのため、現在実行設定に委任できません。",
         "delegationOffAction": "「{tab}」を開く",
         "unsavedElsewhere": "{tabs}に未保存の変更があります。",
         "unsavedGoBack": "戻る",
-        "loadFailed": "アシスタントの読み込みに失敗しました：{detail}",
-        "emptyTitle": "アシスタントはまだありません",
-        "empty": "作成すると、エージェントに固定の設定と常設の指示を持たせ、どの会話からでも @ で呼び出せます。",
-        "reorderFailed": "アシスタントの並べ替えに失敗しました",
-        "saveFailed": "アシスタントを保存できませんでした",
+        "loadFailed": "実行設定の読み込みに失敗しました：{detail}",
+        "emptyTitle": "実行設定はまだありません",
+        "empty": "エージェントに固定の設定と常設の指示を持たせ、どこでも @ で呼び出せます。",
+        "reorderFailed": "実行設定の並べ替えに失敗しました",
+        "saveFailed": "実行設定を保存できませんでした",
         "duplicated": "{name} を作成しました",
-        "deleteFailed": "アシスタントを削除できませんでした",
+        "deleteFailed": "実行設定を削除できませんでした",
         "deleteTitle": "{name} を削除しますか？",
         "deleteDescription": "設定とメンションパネルから消え、委任先として使えなくなります。会話中の既存の委任カードには引き続き表示されます。",
         "cancel": "キャンセル",
@@ -840,27 +893,27 @@
         "more": "{name} のその他の操作",
         "agentNotInstalled": "未インストール",
         "agentDisabled": "無効",
-        "createTitle": "新しいアシスタント",
-        "editTitle": "アシスタントを編集",
-        "editorDescription": "このアシスタントに委任すると、ここで設定したエージェント、オプション、常設の指示のとおりに実行されます。",
+        "createTitle": "新しい実行設定",
+        "editTitle": "実行設定を編集",
+        "editorDescription": "委任時はここのエージェント、オプション、常設の指示どおりに実行されます。",
         "nameLabel": "名前",
         "namePlaceholder": "例：コードレビュアー",
         "descriptionLabel": "説明",
-        "descriptionPlaceholder": "このアシスタントを使う場面",
-        "descriptionHint": "メンションパネルに表示され、委任する側のエージェントにもいつこのアシスタントを選ぶべきかを伝えます。",
+        "descriptionPlaceholder": "この実行設定を使う場面",
+        "descriptionHint": "メンションパネルに表示され、委任側のエージェントにいつ選ぶべきかを伝えます。",
         "agentLabel": "エージェント",
         "agentPlaceholder": "エージェントを選択",
         "agentHint": "すべてのオプションを選ぶ必要があります。",
         "instructionsLabel": "常設の指示",
-        "instructionsPlaceholder": "このアシスタントがすべてのタスクで従う役割と作業ルール",
-        "instructionsHint": "委任のたびにタスクと一緒にエージェントへ渡されます。サブセッションのメッセージには表示されません。",
+        "instructionsPlaceholder": "エージェントがすべてのタスクで従う役割と作業ルール",
+        "instructionsHint": "委任タスクごとに渡され、サブセッションのメッセージには表示されません。",
         "charCount": "{count} / {max}",
         "save": "保存",
         "createSubmit": "作成",
         "pickAgentFirst": "エージェントを選ぶとオプションが表示されます。",
         "pickModelFirst": "モデルを選ぶと残りのオプションが表示されます。",
         "modelNotSwitched": "エージェントがこのモデルに切り替わらなかったため、残りのオプションを読み取れません。再試行するか、別のモデルを選んでください。",
-        "agentUnavailableHint": "このエージェントは無効か未インストールのため、オプションを確認できません。保存済みのオプションを下に表示します。変更するには別のエージェントを選んでください。",
+        "agentUnavailableHint": "エージェントが無効か未インストールのため、オプションを確認できません。下は保存済み。変更は別のエージェントを選んでください。",
         "optionsChanged": "保存後にエージェントのオプションが変わりました。印の付いた {count} 項目を選び直してください。",
         "missingCount": "未選択の項目があと {count} 件あります",
         "cannotSaveProbeFailed": "保存できません：エージェントのオプションを読み込めず、すべて選択済みか確認できません。先に再試行してください。",
@@ -882,23 +935,24 @@
         "avatarUseMonogram": "文字を使う",
         "avatarEmojiPlaceholder": "絵文字を入力または貼り付け",
         "avatarEmojiUse": "使う",
-        "avatarUpload": "画像をアップロード",
-        "avatarUploadHint": "正方形に切り抜き、128×128 に縮小します。",
-        "avatarTooLarge": "縮小してもこの画像は大きすぎます。別の画像を試してください。",
-        "avatarUnreadable": "このファイルを画像として読み込めませんでした。",
         "avatarColor": "色",
         "errors": {
-          "emptyName": "アシスタントの名前を入力してください。",
+          "emptyName": "実行設定の名前を入力してください。",
           "nameTooLong": "名前は {max} 文字以内にしてください。",
-          "duplicateName": "「{name}」という名前のアシスタントは既にあります。",
+          "duplicateName": "「{name}」という名前の実行設定は既にあります。",
           "descriptionTooLong": "説明は {max} 文字以内にしてください。",
           "instructionsTooLong": "指示は {max} 文字以内にしてください。",
           "invalidAvatar": "このアバターは使用できません。別のものを選んでください。",
           "avatarTooLarge": "アバター画像が大きすぎます。",
-          "invalidAgentOptions": "エージェントのオプションが揃っていません。アシスタントを開き直して、すべての項目を選んでください。",
-          "notFound": "このアシスタントはもう存在しません。"
-        }
-      }
+          "invalidAgentOptions": "エージェントのオプションが揃っていません。実行設定を開き直して、すべての項目を選んでください。",
+          "notFound": "この実行設定はもう存在しません。"
+        },
+        "disableTitle": "{name} を無効にしますか？",
+        "disableConfirm": "無効にする"
+      },
+      "assistantsMoved": "アシスタント：サイドバーの「アシスタント」グループで管理",
+      "assistantsMovedHint": "会話で @ するアシスタントは、それぞれ自分のエージェントと常駐指示を持ちます。",
+      "assistantsMovedOpen": "開く"
     },
     "actions": {
       "saveSystemInstructions": "システム指示を保存",
@@ -955,7 +1009,7 @@
       "notRun": "チェックはまだ実行されていません。"
     },
     "grok": {
-      "configDescription": "ここで Grok を設定します。以下のコントロール（権限モード、推論の強さ、任意のカスタム（独自エンドポイント）モデル、圧縮）は ~/.grok/config.toml にマージされ、他のキーやコメントは保持されます。サインインは XAI_API_KEY または `grok login` を使用します。その他のキーは「詳細」で編集できます。",
+      "configDescription": "~/.grok/config.toml にマージされ、他のキーやコメントは保持されます。サインインは XAI_API_KEY または `grok login`。",
       "permissionModeLabel": "権限モード",
       "permissionDefault": "毎回確認",
       "permissionAcceptEdits": "編集を自動承認",
@@ -970,9 +1024,9 @@
       "authTitle": "認証",
       "authMode": "認証方式",
       "authModeApiKey": "XAI API キー",
-      "authModeApiKeyHint": "xAI コンソールの XAI_API_KEY で認証します。非対話・ヘッドレス実行向けで、このエージェントの環境変数に保存されます。",
+      "authModeApiKeyHint": "xAI コンソールの XAI_API_KEY。ヘッドレス実行向けで、このエージェントの環境変数に保存されます。",
       "authModeCustom": "カスタムエンドポイント",
-      "authModeCustomHint": "独自のエンドポイント（BYO）を使用します。下でベース URL と API キーを持つカスタムモデルを定義すると、それが Grok の既定モデルになります。",
+      "authModeCustomHint": "下でベース URL と API キーを持つカスタムモデルを定義すると、Grok の既定モデルになります。",
       "subscriptionHint": "`grok login` でサインインします（SuperGrok / X Premium+）。API キーは保存されません。",
       "loginHint": "ターミナルで次のコマンドを実行してサインインし、この設定を開き直してください：",
       "commandCopied": "コマンドをクリップボードにコピーしました",
@@ -981,13 +1035,13 @@
       "authKeyMissing": "XAI_API_KEY が未設定です。",
       "advancedToggle": "詳細（生の config.toml）",
       "configTomlNative": "config.toml（ネイティブ）",
-      "configTomlHint": "~/.grok/config.toml 全体としてそのまま書き込まれます。無効な TOML は拒否され、タイプミスでファイルが切り詰められることはありません。",
+      "configTomlHint": "~/.grok/config.toml 全体を置き換えます。無効な TOML は拒否されます。",
       "configTomlPlaceholder": "# 上のコントロール以外のキー。例:\n# [mcp_servers.*]、[cli]、[permission] ルール。",
       "customModelTitle": "カスタムモデル（独自エンドポイント）",
-      "customModelHint": "Grok をカスタムまたは自己ホストのエンドポイントに向けます。codeg はモデルごとの `[model.*]` ブロックを書き込み、既定モデルに設定します。モデル ID を空にすると削除されます。",
+      "customModelHint": "Grok をカスタムまたは自己ホストのエンドポイントに向け、既定モデルにします。モデル ID を空にすると削除されます。",
       "customModelIdLabel": "モデル ID",
       "customModelIdPlaceholder": "grok-4.5",
-      "customModelIdHint": "`[model.*]` ブロックとして登録され、モデル名として API に送信されます。`[models].default` にも設定されます。",
+      "customModelIdHint": "モデル名として API に送信され、`[models].default` にも設定されます。",
       "customBaseUrlLabel": "Base URL",
       "customBaseUrlPlaceholder": "https://api.x.ai/v1（既定）",
       "customApiBackendLabel": "API バックエンド",
@@ -999,43 +1053,43 @@
       "customContextWindowLabel": "コンテキストウィンドウ（トークン）",
       "customContextWindowHint": "任意。自動圧縮のタイミングに使われます。空欄の場合はエンドポイントの既定値を使用します。",
       "customReasoningEffortsLabel": "選択できる推論レベル",
-      "customReasoningEffortsEmptyHint": "レベルが宣言されていません。Grok 自身のモデル一覧にこのモデル ID の情報がない限り、入力欄にこのモデルの推論レベル選択は表示されません。エンドポイントが受け付けるレベルを選ぶと表示されます。",
-      "customReasoningEffortsHint": "`[model.*].reasoning_efforts` に書き込まれます。各レベルはそのままエンドポイントへ送られるので、受け付けるものだけを選んでください。新しいセッションは上で選んだ「推論レベル」から始まり、それが「デフォルトを使用」のときはここの最初のレベルから始まります。",
+      "customReasoningEffortsEmptyHint": "レベル未宣言：Grok がこのモデル ID を把握していない限り、入力欄に推論レベル選択は表示されません。",
+      "customReasoningEffortsHint": "そのままエンドポイントへ送られるので、受け付けるものだけを選んでください。上が「デフォルトを使用」なら最初のレベルから始まります。",
       "autoCompactLabel": "自動圧縮のしきい値（%）",
-      "autoCompactHint": "コンテキスト使用率がこの割合に達したら会話を圧縮します（Grok の既定は 85）。`[session]` に書き込まれます。"
+      "autoCompactHint": "コンテキスト使用率がこの割合に達したら会話を圧縮します（Grok の既定は 85）。"
     },
     "cursor": {
-      "configDescription": "ここで Cursor を設定します。まず認証方式を選択し——公式サブスクリプション（ブラウザログイン）またはヘッドレス/サーバー用の Cursor API キー——次にモデルを選び、CLI の権限ルールとサンドボックスを編集します。codeg はこれらを ~/.cursor/cli-config.json に書き込み、cursor-agent CLI と共有します。",
+      "configDescription": "認証方式（サブスクリプションまたは API キー）、モデル、権限ルール、サンドボックスを設定します。~/.cursor/cli-config.json に保存され、cursor-agent と共有します。",
       "authTitle": "認証",
       "authChecking": "確認中…",
       "authNotInstalled": "cursor-agent が未インストールです",
       "authLoggedIn": "ログイン済み",
       "authNotLoggedIn": "未ログイン",
       "authUnverified": "ログイン済み（資格情報を検証できません）",
-      "authUnverifiedHint": "cursor-agent にログイン情報は残っていますが、たった今 Cursor に対して使用できませんでした。通常はセッションの期限切れです。再ログインするまでセッションは「Authentication required」で失敗します。この CLI はブラウザログインを自動更新できません。",
-      "authUnverifiedHintApiKey": "cursor-agent に API キーは保存されていますが、Cursor がたった今それを拒否しました。失効・期限切れ・入力ミスのいずれかが大半です。下で有効なキーを保存するまで、セッションは「Authentication required」で失敗します。",
-      "loginHint": "ターミナルで次のコマンドを実行して Cursor アカウントにログイン（ブラウザが開きます）し、完了後に更新を押してください：",
-      "loginHintRemote": "cursor-agent がインストールされている codeg ホスト側で実行してください（この端末ではありません）。完了後に更新を押します。そのホストには通常開けるブラウザがないため、NO_OPEN_BROWSER=1 を付けて実行してください。代わりにサインイン URL が表示されるので、自分のブラウザで開きます。無人のサーバーでは上の方式を API キーに切り替えてください。",
+      "authUnverifiedHint": "保存済みの Cursor ログインを確認できませんでした。セッションで「Authentication required」と表示される場合は、再ログインしてください。",
+      "authUnverifiedHintApiKey": "保存済みの Cursor API キーを確認できませんでした。セッションで「Authentication required」と表示される場合は、下で有効なキーを保存してください。",
+      "loginHint": "ターミナルで次を実行してログインし（ブラウザが開きます）、更新を押してください：",
+      "loginHintRemote": "この端末ではなく codeg ホストで実行し、更新を押してください。NO_OPEN_BROWSER=1 によりサインイン URL が表示されるので、自分のブラウザで開きます。無人のサーバーでは上で API キーを選んでください。",
       "apiKeyLabel": "Cursor API キー",
       "apiKeyPlaceholder": "cursor.com/dashboard で取得",
-      "apiKeyHint": "CURSOR_API_KEY —— Cursor ダッシュボードのアカウントキー。ヘッドレス/サーバー環境でブラウザログインの代わりに使用します。サードパーティや OpenAI のキーではありません。",
+      "apiKeyHint": "CURSOR_API_KEY —— Cursor ダッシュボードのアカウントキー（ヘッドレス/サーバー向け）。サードパーティや OpenAI のキーではありません。",
       "modelTitle": "デフォルトモデル",
       "loadModels": "モデル一覧を取得",
       "modelsUnavailable": "モデル一覧を取得できません",
-      "modelHint": "セッション開始時に --model として CLI に渡されます。既定のままなら Cursor が選択します。",
+      "modelHint": "セッション開始時に --model として渡されます。既定なら Cursor が選択します。",
       "modelThinkingLabel": "思考",
       "modelEffortLabel": "思考の強度",
       "modelFastLabel": "Fast",
       "variantOn": "オン",
       "variantOff": "オフ",
-      "modelVariantHint": "Cursor は組み合わせごとに個別のモデル ID を用意しており、これらのコントロールが該当する ID を選びます。ここで決まるのは起動時の既定値です。モデル・思考・Fast はセッション中いつでも入力欄から変更できます。",
+      "modelVariantHint": "対応する Cursor のモデル ID を選びます。起動時の既定値で、モデル・思考・Fast は入力欄からいつでも変更できます。",
       "permissionsTitle": "権限とサンドボックス",
-      "permissionsDescription": "CLI の権限ルール（cli-config.json）のビジュアルエディタ。許可ルールは確認なしで実行、拒否ルールは常にブロックされます。",
+      "permissionsDescription": "許可ルールは確認なしで実行、拒否ルールは常にブロックされます。",
       "permissionModeLabel": "権限モード",
       "permissionModeDefault": "実行前に確認（デフォルト）",
       "permissionModeForce": "Run Everything（--force）",
-      "permissionModeHint": "Run Everything は --force でセッションを起動します：deny ルール以外のツール呼び出しはすべて確認なしで自動許可されます（組織ポリシーにより allow ルール一致のみに制限される場合があります）。新しいセッションから有効です。",
-      "permissionModeAskHint": "「実行前に確認」は各ツール呼び出しを承認に回します。Cursor 自身の「常に許可」を選ぶと下の許可リストにルールが追加され、次回から同じ呼び出しは確認なしで実行されます。",
+      "permissionModeHint": "--force で起動：deny ルール以外のツール呼び出しはすべて確認なしで自動許可されます（組織ポリシーで allow ルールのみに制限される場合あり）。",
+      "permissionModeAskHint": "ツール呼び出しごとに確認します。Cursor の「常に許可」を選ぶと下の許可リストにルールが追加されます。",
       "optionDefault": "既定（未設定）",
       "sandboxLabel": "サンドボックス",
       "sandboxEnabled": "有効",
@@ -1043,41 +1097,41 @@
       "allowRulesLabel": "許可ルール",
       "denyRulesLabel": "拒否ルール",
       "addRule": "ルールを追加",
-      "rulesSyntaxHint": "ルール構文：Shell(コマンド)、Read(パス/グロブ)、Write(パス/グロブ)、WebFetch(ドメイン)、Mcp(サーバー:ツール)——deny ルールが常に優先されます。",
+      "rulesSyntaxHint": "構文：Shell(コマンド)、Read(パス/グロブ)、Write(パス/グロブ)、WebFetch(ドメイン)、Mcp(サーバー:ツール)。deny が優先。",
       "saveConfig": "設定を保存",
       "advancedToggle": "詳細：cli-config.json（生ファイル）",
-      "advancedHint": "~/.cursor/cli-config.json の全文です。ここでの保存はそのまま書き込み、上の構造化コントロールはマージして書き込みます。",
+      "advancedHint": "~/.cursor/cli-config.json の全文をそのまま保存します。上のコントロールはマージして書き込みます。",
       "saveRawConfig": "ファイルを保存",
       "authMode": "認証方式",
       "subscriptionHint": "Cursor アカウントでサインインし、Cursor のモデルを使用します。",
       "customApiKeyRequired": "Cursor API キーが必要です。",
       "authModeApiKey": "Cursor API キー（ヘッドレス/サーバー）",
-      "authModeApiKeyHint": "Cursor ダッシュボードで発行したアカウント API キーで認証します（ヘッドレス/サーバー環境向け）。これは Cursor アカウントのキーであり、サードパーティ/OpenAI エンドポイントではありません——cursor-agent は Cursor 自身のバックエンドにのみ接続します。codex/OpenAI 互換エンドポイントを使うには、代わりに Codex エージェントを使用してください。",
+      "authModeApiKeyHint": "Cursor ダッシュボードで発行したアカウントキー（ヘッドレス/サーバー向け）。OpenAI 互換エンドポイントには使えません。その場合は Codex エージェントを使ってください。",
       "modelPickerPlaceholder": "モデルを検索…",
       "modelNoMatch": "一致するモデルがありません",
       "modelsNeedAuth": "サインインするとモデル一覧を読み込みます。",
       "modelDefaultBadge": "既定"
     },
     "qoder": {
-      "configDescription": "ここで Qoder にサインインします。CLI が読む残りの設定はすべて 1 つのファイル、$QODER_CONFIG_DIR/settings.json（既定は ~/.qoder、qoder CLI と共有）にあり、下でそのまま編集します。モデルと推論強度はここにはありません。Qoder が ACP 経由で通知するため、入力欄のセレクターがセッションごとに決めます。",
+      "configDescription": "ここでサインインします。その他は $QODER_CONFIG_DIR/settings.json（既定は ~/.qoder、qoder CLI と共有）にあり、下でそのまま編集します。モデルと推論強度は入力欄でセッションごとに設定します。",
       "authTitle": "アカウント",
       "authChecking": "確認中…",
       "authNotInstalled": "qoder がインストールされていません",
       "authUnknown": "状態を取得できません",
       "authLoggedIn": "サインイン済み",
       "authNotLoggedIn": "未サインイン",
-      "loginHint": "ターミナルで次を実行して Qoder アカウントにサインインし（ブラウザーが開きます）、更新を押してください：",
+      "loginHint": "ターミナルで次を実行してサインインし（ブラウザーが開きます）、更新を押してください：",
       "authMethodLabel": "認証方式",
       "tokenLabel": "パーソナルアクセストークン",
       "tokenPlaceholder": "ヘッドレス / サーバー環境向け",
-      "tokenHint": "QODER_PERSONAL_ACCESS_TOKEN — ブラウザーサインインが使えない環境向けの非対話的な資格情報。空欄なら qoder アカウントのログインを使います。",
+      "tokenHint": "QODER_PERSONAL_ACCESS_TOKEN — ブラウザーサインインが使えない環境向け。空欄なら qoder アカウントのログインを使います。",
       "saveToken": "トークンを保存",
       "advancedToggle": "詳細：生の settings.json",
-      "advancedHint": "settings.json 全体です。保存するとそのまま書き込まれ、キーを削除できる唯一の手段でもあります。",
+      "advancedHint": "settings.json 全体をそのまま保存します。キーを削除できる唯一の手段です。",
       "saveRawConfig": "ファイルを保存"
     },
     "antigravity": {
-      "configDescription": "Antigravity needs an authentication method before it can start a session. The choice is written to auth.type in $GEMINI_HOME/antigravity-acp/settings.json, which is the only place the ACP server looks — without it every new session fails with \"Authentication required\". Model and session mode are not here: Antigravity reports them over ACP, so the composer's own selectors own them per session.",
+      "configDescription": "認証方式（auth.type に保存）を設定しないとセッションは「Authentication required」で失敗します。モデルとモードは入力欄で選びます。",
       "methodLabel": "Authentication method",
       "methods": {
         "oauth-personal": "Sign in with Google",
@@ -1086,14 +1140,14 @@
         "agent-platform": "Gemini Enterprise Agent Platform"
       },
       "methodHints": {
-        "oauth-personal": "Your Google account, on any Antigravity plan including the free tier. The first new session opens a browser to finish signing in; the token is then cached and reused. このマシンにブラウザがない場合は、下のブラウザ不要のサインインを使ってください。",
-        "oauth-business": "Your Gemini Enterprise account. Needs a GCP project and location, and the first new session opens a browser. このマシンにブラウザがない場合は、下のブラウザ不要のサインインを使ってください。",
+        "oauth-personal": "Google アカウント（無料版を含む全プラン）。最初のセッションでブラウザが開きます。ブラウザがない場合は下のブラウザ不要のサインインを。",
+        "oauth-business": "Gemini Enterprise アカウント。GCP のプロジェクトとロケーションが必要です。最初のセッションでブラウザが開きます。ブラウザがない場合は下のブラウザ不要のサインインを。",
         "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
-        "agent-platform": "Formerly Vertex AI. Use an API key, or a project and location with Application Default Credentials (gcloud auth application-default login)."
+        "agent-platform": "API キー、またはプロジェクトとロケーションをアプリケーションのデフォルト認証情報と併用します。必要なら gcloud auth application-default login を実行してください。"
       },
       "geminiApiKeyLabel": "Gemini API key",
       "googleApiKeyLabel": "Google API key",
-      "googleApiKeyHint": "Optional. When set it is used on its own — the project and location below are ignored. Leave it empty to authenticate with Application Default Credentials instead.",
+      "googleApiKeyHint": "任意。設定すると下のプロジェクトとロケーションは無視され、空欄ならアプリケーションのデフォルト認証情報を使います。",
       "gcpProjectLabel": "GCP project",
       "gcpLocationLabel": "GCP location",
       "missingGeminiApiKey": "Enter a Gemini API key, or pick a different authentication method — sessions will fail to start without it.",
@@ -1104,11 +1158,11 @@
       "save": "Save",
       "headless": {
         "title": "ブラウザのないマシンでサインイン",
-        "description": "Antigravity の Google サインインはエージェント自身が実行するため、ブラウザはエージェントが動くマシンで開く必要があります。デスクトップのないサーバーに置いた codeg にはブラウザがなく、最初のセッション作成は 5 分待ってから失敗します。代わりにここからサインインしてください。リンクを任意の端末で開き、移動先のアドレスを貼り戻します。",
+        "description": "エージェントが動くマシンにブラウザがない（サーバーなど）場合、最初のセッションは 5 分待って失敗します。代わりに任意の端末でリンクを開き、移動先のアドレスを貼り戻してください。",
         "start": "サインインリンクを取得",
         "saveFirst": "先に保存してください。サインインは保存済みの設定を使用し、上の入力内容は参照しません。",
         "step1": "1. このリンクを開いて Google にサインインします。",
-        "step2": "2. ブラウザは最終的に {redirectUri} へ移動し、接続できないと表示されます（想定どおりです）。アドレスバーのアドレス全体をコピーしてここに貼り付けてください。",
+        "step2": "2. ブラウザは {redirectUri} に移動して接続できません（想定どおり）。そのアドレス全体をここに貼り付けます。",
         "copyLink": "リンクをコピー",
         "openLink": "新しいタブで開く",
         "complete": "サインインを完了",
@@ -1117,17 +1171,17 @@
         "alreadySignedIn": "Antigravity は有効なトークンを既に保持していたため、リンクなしでサインインしました。",
         "failed": "サインインが完了しませんでした。",
         "startFailed": "サインインを開始できませんでした",
-        "credentialHint": "トークンはここにキャッシュされます。このファイルを別のデスクトップなしマシンにコピーすれば、そちらもサインイン済みになります。"
+        "credentialHint": "トークンはここにキャッシュ。このファイルを別のデスクトップなしマシンにコピーすればサインイン済みに。"
       },
       "signOut": {
         "title": "間違ったアカウントでサインインしましたか？",
-        "description": "Antigravity はサインインした Google アカウントをキャッシュして黙って再利用するため、再度サインインしても別のアカウントには切り替わりません。サインアウトすると保存された認証情報が破棄されます。実行中の Antigravity セッションは先に終了します。そのままだと古いアカウントが書き戻されるためです。",
+        "description": "Antigravity はキャッシュしたアカウントを黙って再利用するため、再サインインでは切り替わりません。サインアウトすると認証情報を削除し、実行中の Antigravity セッションを先に終了します。",
         "action": "サインアウト",
         "done": "サインアウトしました。サインインし直すと別のアカウントを選べます。",
         "failed": "サインアウトできませんでした"
       },
       "tempReclaimTitle": "残存した一時領域",
-      "tempReclaimHint": "以前のバージョンの codeg は、このエージェントが起動のたびに展開する一時ディレクトリを削除できませんでした。システムの一時フォルダーからその残存物を検索します。このフォルダーは他のアプリケーションと共有されているため、確認するまで何も削除されず、使用中の項目はスキップされます。",
+      "tempReclaimHint": "以前の codeg でこのエージェントが残した一時ディレクトリを探します。確認するまで何も削除されず、使用中の項目はスキップされます。",
       "tempReclaimScan": "スキャン",
       "tempReclaimDelete": "残存物を削除",
       "tempReclaimNone": "回収できるものはありません。",
@@ -1143,52 +1197,52 @@
     },
     "kiro": {
       "configManagement": "設定管理",
-      "configDescription": "Kiro CLI のサインイン状態、agent、MCP サーバーは ~/.kiro に保存されます。モデル、agent、thinking、思考レベルはここにはありません。Kiro が ACP で報告するため、入力欄のセレクターがセッションごとに管理します。",
+      "configDescription": "サインイン状態、agent、MCP サーバーは ~/.kiro に保存されます。モデル、agent、thinking、思考レベルは入力欄でセッションごとに設定します。",
       "permissionsTitle": "権限",
       "permissionModeLabel": "権限モード",
       "permissionModeAsk": "ツール実行前に確認（既定）",
       "permissionModeTrustAll": "すべてのツールを信頼（--trust-all-tools）",
-      "permissionModeAskHint": "承認が必要なツール呼び出し（コマンド実行、ファイル書き込みなど）は先に確認を求めます。読み取り専用ツールは確認なしで実行されます。",
-      "permissionModeTrustAllHint": "--trust-all-tools でセッションを起動します。コマンド実行やファイル書き込みを含め、すべてのツール呼び出しが確認なしで実行されます。新しいセッションから適用されます。",
+      "permissionModeAskHint": "承認が必要なツール呼び出し（コマンド実行、ファイル書き込みなど）は先に確認します。読み取り専用ツールはそのまま実行。",
+      "permissionModeTrustAllHint": "--trust-all-tools で起動：コマンド実行やファイル書き込みを含め、すべてのツール呼び出しが確認なしで実行されます。",
       "apiKeyLabel": "API キー（任意）",
-      "apiKeyHint": "KIRO_API_KEY として CLI に渡されます。空欄なら kiro-cli login でサインインしたアカウントを使います。ブラウザでサインインできない環境（サーバー、Docker）でのみ必要です。",
+      "apiKeyHint": "KIRO_API_KEY として渡されます。ブラウザでサインインできない環境（サーバー、Docker）でのみ必要。空欄なら kiro-cli login のアカウントを使います。",
       "saveConfig": "Kiro 設定を保存"
     },
     "trae": {
       "configManagement": "設定管理",
-      "configDescription": "TRAE CLI 2.0 は TRAE エンタープライズ版のフラッグシッププランのお客様のみ利用できます。Codeg はインストール済みの traecli を実行し、サインイン情報・スキル・MCP サーバーは ~/.trae に保存されます。モデル、モード、推論レベルはここにはありません。TRAE CLI が ACP で報告するため、入力欄のセレクターがセッションごとに管理します。",
+      "configDescription": "TRAE CLI 2.0 は TRAE エンタープライズ版フラッグシッププラン限定です。サインイン情報・スキル・MCP サーバーは ~/.trae に保存。モデル、モード、推論レベルは入力欄でセッションごとに設定します。",
       "signInTitle": "サインイン",
-      "signInHint": "ターミナルでこのコマンドを一度実行し、エンタープライズ SSO でサインインしてください。Codeg のセッションはそのサインインを再利用します。",
+      "signInHint": "ターミナルでこのコマンドを一度実行し、エンタープライズ SSO でサインインしてください。",
       "copyCommand": "コマンドをコピー",
       "commandCopied": "コマンドをコピーしました",
       "patLabel": "個人アクセストークン（任意）",
-      "patHint": "サーバーや Docker など、ブラウザでサインインできないマシン向けです。Codeg は TRAECLI_PERSONAL_ACCESS_TOKEN として TRAE CLI に渡し、セッション開始時にこのトークンでサインインします。空欄なら traecli login のサインインを使います。",
+      "patHint": "ブラウザでサインインできないマシン（サーバー、Docker）向けに TRAECLI_PERSONAL_ACCESS_TOKEN として渡されます。空欄なら traecli login を使います。",
       "hostLabel": "エンタープライズ API URL（任意）",
-      "hostHint": "組織が独自ドメインで TRAE を運用している場合のみ入力します。TRAECLI_HOST として渡されます。空欄なら TRAE の公式サービスを使います。",
+      "hostHint": "組織が独自ドメインで TRAE を運用している場合のみ（TRAECLI_HOST）。空欄なら TRAE の公式サービスを使います。",
       "saveConfig": "TRAE CLI 設定を保存"
     },
     "commandCode": {
       "configManagement": "設定管理",
-      "configDescription": "Codeg は command-code npm パッケージの Command Code CLI を実行し、サインイン情報・スキル・MCP サーバーは ~/.commandcode に保存されます。モデル、モード、推論レベルはここにはありません。Command Code が ACP で報告するため、入力欄のセレクターがセッションごとに管理します。",
+      "configDescription": "サインイン情報・スキル・MCP サーバーは ~/.commandcode に保存されます。モデル、モード、推論レベルは入力欄で選びます。",
       "signInTitle": "サインイン",
-      "signInHint": "ターミナルでこのコマンドを一度実行し、Command Code アカウントでサインインしてください。Codeg のセッションはそのサインインを再利用します。",
+      "signInHint": "ターミナルで一度実行してサインイン。Codeg のセッションはそれを再利用します。",
       "copyCommand": "コマンドをコピー",
       "commandCopied": "コマンドをコピーしました",
       "apiKeyLabel": "API キー（任意）",
-      "apiKeyHint": "サーバーや Docker など、ブラウザでサインインできないマシン向けです。COMMAND_CODE_API_KEY として Command Code に渡され、command-code login のサインインより優先されます。空欄ならそのサインインを使います。",
+      "apiKeyHint": "ブラウザでサインインできないサーバー/Docker 向け。COMMAND_CODE_API_KEY として渡され、command-code login より優先。空欄ならそのサインインを使用。",
       "saveConfig": "Command Code 設定を保存"
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness の設定",
-      "configDescription": "エンドポイントと API キーは deepseek-acp が起動時に読み込む環境変数です。モデルと推論レベルはセッションごとのセレクターなので、入力欄で切り替えます。",
+      "configDescription": "エンドポイントとキーは起動時に読まれる環境変数です。モデルと推論レベルは入力欄で選びます。",
       "baseUrlLabel": "API エンドポイント",
-      "baseUrlHint": "空欄なら公式エンドポイントを使います。独自のエンドポイントは DeepSeek の Anthropic 互換 Messages API を提供している必要があります。保存後に開始したセッションから有効になります。実行中のセッションは再接続してください。",
+      "baseUrlHint": "空欄なら公式エンドポイント。独自のものは DeepSeek の Anthropic 互換 Messages API が必要です。",
       "baseUrlInvalid": "クエリ文字列を含まない完全な http(s) URL を入力してください（例：https://api.deepseek.com/anthropic）",
       "apiKeyLabel": "API キー",
-      "apiKeyHint": "DEEPSEEK_API_KEY としてエージェントに渡されます。ターミナルでのログイン（deepseek-acp --setup）で保存したキーがこちらより優先されるため、その方法でログインした場合は、もう一度ログインしてキーを変更してください。"
+      "apiKeyHint": "DEEPSEEK_API_KEY として渡されます。deepseek-acp --setup で保存したキーが優先されるため、変更するにはそちらで再ログインしてください。"
     },
     "codex": {
-      "configDescription": "API URL、API Key、モデル名を素早く設定でき、`auth.json` / `config.toml` と同期します。",
+      "configDescription": "API URL・API キー・モデルをすばやく設定し、`auth.json` / `config.toml` と同期します。",
       "authMode": "認証方式",
       "chatgptSubscription": "公式サブスクリプション",
       "chatgptSubscriptionHint": "ChatGPT 公式サブスクリプションでログイン、API Key 不要",
@@ -1197,21 +1251,24 @@
       "modelName": "モデル名",
       "enableWebsocket": "WebSocket を有効化",
       "enableWebsocketAria": "Codex Provider の WebSocket を有効化",
-      "enableWebsocketHint": "エンドポイントが Responses API の WebSocket モードに対応している場合（OpenAI 公式 API は対応）にのみオンにしてください。非対応のエンドポイントでは、codex がそのターンを失敗させるか、最大 5 回再接続してから HTTPS にフォールバックすることがあり、新しいセッションのたびに繰り返します。~/.codex/config.toml のこのプロバイダーに supports_websockets を書き込み、次のセッションから有効になります。",
+      "enableWebsocketHint": "Responses API の WebSocket 対応先のみ。非対応だと失敗することがあります。",
       "enableDefaultModeRequestUserInput": "デフォルトモードでの質問を許可",
       "enableDefaultModeRequestUserInputAria": "デフォルトモードで Codex が質問できるようにする",
-      "enableDefaultModeRequestUserInputHint": "Codex の request_user_input ツールは既定では Plan モードでしか使えません。有効にすると通常のターンでも質問できるようになります。~/.codex/config.toml の [features].default_mode_request_user_input に書き込まれます。このフラグは上流ではまだ開発中です。次のセッションから反映されます。",
+      "enableDefaultModeRequestUserInputHint": "開発中：Plan モード以外でも codex が質問できます。",
+      "suppressUnstableFeaturesWarning": "開発中機能の警告を非表示",
+      "suppressUnstableFeaturesWarningAria": "Codex の開発中機能の警告を非表示にする",
+      "suppressUnstableFeaturesWarningHint": "接続時の「Under-development features enabled」通知を隠します。",
       "sandboxGroupTitle": "サンドボックスと承認",
-      "sandboxGroupHint": "グローバルの ~/.codex/config.toml に書き込むため、codex CLI や IDE のセッションにも反映されます。これはスレッドの既定値で、codex 自身が開始するターン（/goal、/review、/compact）にのみ適用されます。通常のプロンプトは入力欄の承認プリセットを使います。変更はセッションを再起動すると有効になります。",
-      "sandboxShadowedWarning": "config.toml に default_permissions が設定されているため、codex は権限プロファイル経由で解決し sandbox_mode を完全に無視します。以下の設定を使うには default_permissions を削除してください。",
-      "sandboxPermissionsTableWarning": "config.toml に [permissions] プロファイルがありますが default_permissions が未設定のため、codex は起動を拒否します。下の生エディタで設定してください。",
+      "sandboxGroupHint": "グローバルな ~/.codex/config.toml のスレッド既定値で、codex CLI・IDE と共有されます。codex が自ら始めるターン（/goal・/review・/compact）にのみ適用され、通常のプロンプトは入力欄のプリセットに従います。セッションを再起動すると反映。",
+      "sandboxShadowedWarning": "config.toml に default_permissions があるため、codex はその権限プロファイルを使い sandbox_mode を無視します。下の設定を使うには default_permissions を削除してください。",
+      "sandboxPermissionsTableWarning": "config.toml に [permissions] プロファイルがあるのに default_permissions がなく、codex が起動しません。下の生エディタで default_permissions を設定してください。",
       "approvalPolicyLabel": "承認ポリシー",
       "approvalPolicyUnset": "未設定（codex の既定: 要求時）",
       "approvalPolicy_on-request": "要求時 — モデルが確認のタイミングを判断",
       "approvalPolicy_untrusted": "未信頼 — codex ではサポート終了",
       "approvalPolicy_never": "確認しない — 承認プロンプトを一切出さない",
       "approvalPolicy_granular": "詳細設定 — プロンプト種別ごとに指定",
-      "approvalPolicyUntrustedRetired": "codex は untrusted を受け付けなくなりました。config.toml にこの値があると、codex は起動を拒否します（codeg でも codex CLI や IDE のセッションでも同じです）。別の承認ポリシーを選んで保存してください。",
+      "approvalPolicyUntrustedRetired": "codex は untrusted を受け付けなくなりました。config.toml にあると codex は起動しません（codeg・CLI・IDE 共通）。別のポリシーを選んで保存してください。",
       "granularHint": "オフにすると、その種類の要求は表示されずに自動で拒否されます。",
       "granular_sandbox_approval": "シェルコマンドの権限昇格",
       "granular_rules": "Execpolicy ルールのプロンプト",
@@ -1223,9 +1280,9 @@
       "sandboxMode_read-only": "読み取り専用",
       "sandboxMode_workspace-write": "ワークスペース書き込み",
       "sandboxMode_danger-full-access": "フルアクセス（サンドボックスなし）",
-      "sandboxModeReadOnlyAcpWarning": "codex-acp 1.7〜1.13 には読み取り専用のサンドボックスがありません。これらのアダプタでは、ここでの選択にかかわらず codeg のセッションはワークスペース書き込み可で動きます（権限昇格は引き続きすべてあなたの承認を求めます）。codex-acp 2.0 で復活したので、古いアダプタが入っている場合は更新してください。codex CLI と IDE のセッションは常に読み取り専用に従います。",
+      "sandboxModeReadOnlyAcpWarning": "codex-acp 1.7–1.13 には読み取り専用サンドボックスがなく、codeg のセッションはワークスペース書き込み可で動きます（権限昇格はすべて引き続きあなたに届きます）。codex-acp 2.0 以降に更新してください。codex CLI・IDE は常に読み取り専用を守ります。",
       "sandboxModeHint": "Windows では、codex の実験的 Windows サンドボックスが無効な場合、ワークスペース書き込みは読み取り専用に降格されます。",
-      "sandboxModeSeedsPresetHint": "codeg はこれをセッション開始時の承認プリセットにも対応づけるため、承認ポリシーとは違って通常のプロンプトにも効きます。読み取り専用は「Read-only」で始まります。承認ポリシーが never のとき、フルアクセスは「Full access」、ワークスペース書き込み可は「Auto review」で始まります（モデルが権限昇格を先に選別し、危険と判断したものだけを転送します）。それ以外の承認ポリシーでは、ワークスペース書き込み可とフルアクセスは codex-acp 2.0 以降なら「Workspace access」で始まり、権限昇格をすべてあなたの承認に回します。それより古いアダプタでは「Auto review」で始まります。未設定ならアダプタ既定の「Auto review」のままです。入力欄のプリセットが常に優先されます。",
+      "sandboxModeSeedsPresetHint": "セッション開始時の承認プリセットも決めるため、通常のプロンプトにも効きます：読み取り専用 →「Read-only」。承認ポリシーが never なら、フルアクセス →「Full access」、ワークスペース書き込み可 →「Auto review」（モデルが危険と判断した権限昇格だけを転送）。それ以外では両方 →「Workspace access」（権限昇格はすべてあなたへ。codex-acp 2.0 より前は「Auto review」）。sandbox_mode 未設定 →「Auto review」。入力欄のプリセットが常に優先されます。",
       "writableRootsLabel": "追加の書き込み可能フォルダ",
       "writableRootsHint": "作業ディレクトリに加えて許可する絶対パスを 1 行に 1 つ。",
       "sandboxRootsRelativeError": "絶対パスである必要があります — codex は相対パスを ~/.codex 基準で解決します: {path}",
@@ -1250,11 +1307,11 @@
       "loginSaveFailed": "ログインは成功しましたが、設定の保存に失敗しました",
       "apiUrlLabel": "API URL",
       "apiKeyLabel": "API キー",
-      "managedKeysHint": "codeg がモデル一覧を公開している間は、ここの model_catalog_json とルートの model を codeg が管理します。上のモデル一覧で変更してください。"
+      "managedKeysHint": "モデル一覧の公開中は codeg が model_catalog_json とルートの model を管理します。上のモデル一覧で変更してください。"
     },
     "gemini": {
       "authConfig": "Gemini 認証設定",
-      "authConfigDescription": "Gemini CLI の認証ドキュメントに準拠し、カスタムエンドポイント、Google ログイン、Gemini API Key、Vertex AI（ADC / サービスアカウント / API Key）をサポートします。",
+      "authConfigDescription": "カスタムエンドポイント、Google ログイン、Gemini API Key、Vertex AI（ADC / サービスアカウント / API Key）に対応。",
       "authMode": "認証モード",
       "selectAuthMode": "認証モードを選択",
       "viewAuthDoc": "認証ドキュメントを見る",
@@ -1264,7 +1321,7 @@
         "vertexServiceAccount": "Vertex AI（サービスアカウント）"
       },
       "hint": {
-        "custom": "API URL、API Key、Model を入力してください。GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY / GEMINI_MODEL に対応します。",
+        "custom": "GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY / GEMINI_MODEL に対応します。",
         "loginGoogle": "先にターミナルで gemini を実行して Google ログインを完了してください。API key は不要です。",
         "geminiApiKey": "Gemini API を使う場合は GEMINI_API_KEY を入力してください。",
         "vertexAdc": "gcloud ADC を使用します。GOOGLE_CLOUD_PROJECT と GOOGLE_CLOUD_LOCATION の設定を推奨します。",
@@ -1274,7 +1331,7 @@
     },
     "openCode": {
       "configManagement": "OpenCode 設定管理",
-      "configDescription": "OpenCode 2 の設定ファイル（opencode.jsonc または opencode.json）と独自の認証情報ストアを管理します。プロバイダー、モデル、権限、動作を下のネイティブ JSON と同期します。",
+      "configDescription": "OpenCode 2 の設定と認証情報ストアを管理し、下のネイティブ JSON と同期します。",
       "providerManagement": "プロバイダー管理",
       "providerCount": "{count} 個のプロバイダー",
       "emptyProvider": "カスタムプロバイダーはまだありません。「カスタムプロバイダーを追加」をクリックして作成してください。",
@@ -1282,7 +1339,7 @@
       "selectProviderNpm": "provider.npm を選択",
       "modelManagement": "モデル管理",
       "modelCount": "{count} 個のモデル",
-      "modelDescription": "プロバイダーの `models`。クイック編集ではモデル ID と `name` を扱います。その他のフィールドは保持され、下のネイティブ JSON で編集できます。",
+      "modelDescription": "クイック編集はモデル ID と `name` のみ。`models` の他のフィールドは下の JSON で編集できます。",
       "addModel": "モデルを追加",
       "emptyModel": "まだモデルがありません。model id を入力して「モデルを追加」をクリックしてください。",
       "modelId": "モデル ID",
@@ -1296,7 +1353,7 @@
       "connectedProviders": "接続済みプロバイダー",
       "noConnectedProviders": "カタログのプロバイダーはまだ接続されていません。",
       "advancedProviderConfig": "カスタムプロバイダー",
-      "customProviderConfigHint": "自分で定義するエンドポイントです。プロバイダーブロックは OpenCode の設定に、API キーは OpenCode の認証情報ストアに保存されます。",
+      "customProviderConfigHint": "独自のエンドポイント。プロバイダーブロックは OpenCode の設定に、API キーは認証情報ストアに保存。",
       "addCustomProvider": "カスタムプロバイダーを追加",
       "disconnect": "切断",
       "editConfig": "編集",
@@ -1309,7 +1366,7 @@
       "keyStored": "キーは OpenCode に保存済み",
       "keyMissing": "キー未保存",
       "setApiKey": "API キーを設定",
-      "credentialsNeedInstall": "OpenCode はプロバイダーのキーを独自の認証情報ストアに保存するため、プロバイダーの接続には OpenCode のインストールが必要です。先に上でインストールしてください。",
+      "credentialsNeedInstall": "先に上で OpenCode をインストールしてください。プロバイダーのキーは OpenCode の認証情報ストアに保存されます。",
       "connect": {
         "title": "プロバイダーを接続",
         "description": "OpenCode が対応するプロバイダーを選びます。キーは OpenCode 独自の認証情報ストアに保存されます。",
@@ -1318,10 +1375,10 @@
         "loading": "プロバイダーを読み込み中…",
         "modelsAvailable": "{count} 個のモデルが利用可能",
         "connectedBadge": "接続済み",
-        "noKeyMethod": "OpenCode はこのプロバイダーを API キーで接続しません。ターミナルで opencode auth login を実行してサインインしてください。",
+        "noKeyMethod": "このプロバイダーは API キーを使いません。ターミナルで opencode auth login を実行してサインインしてください。",
         "getKey": "API キーを取得",
         "apiKey": "API キー",
-        "apiKeyHint": "OpenCode の認証情報ストアに保存され、設定ファイルには書かれません。Codeg が再表示することはありません。",
+        "apiKeyHint": "設定ファイルではなく OpenCode の認証情報ストアに保存。Codeg は再表示しません。",
         "apiKeyEditHint": "空欄なら保存済みのキーを維持します。新しいキーを入力すると置き換えます。",
         "baseUrlOptional": "Base URL の上書き（任意）",
         "providerId": "プロバイダー ID",
@@ -1336,7 +1393,7 @@
       },
       "customProvider": {
         "title": "カスタムプロバイダーを追加",
-        "description": "独自のエンドポイントを定義します。プロバイダーブロックは OpenCode の設定に、API キーは OpenCode の認証情報ストアに保存されます。",
+        "description": "独自のエンドポイント。プロバイダーブロックは OpenCode の設定に、API キーは認証情報ストアに保存。",
         "action": "プロバイダーを追加",
         "idInCatalog": "{providerId} は既知のプロバイダーです。「プロバイダーを接続」から接続してください。"
       },
@@ -1345,18 +1402,18 @@
       "contextWindow": "コンテキストウィンドウ",
       "permissions": {
         "title": "権限",
-        "description": "どの操作をそのまま実行し、確認を求め、あるいはブロックするかを決めます。OpenCode の設定の permissions ルールに書き込まれ、下の保存で反映されます。",
+        "description": "どの操作をそのまま実行し、確認を求め、ブロックするかを決めます。",
         "docsLink": "権限のドキュメント",
         "unparsableConfig": "下のネイティブ JSON が解析できないため、ビジュアル編集を停止しています。JSON を修正すると再開します。",
-        "invalidBlock": "permissions ルールの形式を認識できません。下のネイティブ JSON で編集するか、「リセット」でやり直してください。",
-        "orderingUnsafe": "ルールが下に表示した順序で書かれていません（ツールのルールが分かれている、基本ルールがパターンの後にある、またはグローバルルールが最後にある）。そのため OpenCode の実際の適用は下の表示と異なります。「順序を修正」で値を変えずに表示どおりの順序へ書き直します。",
-        "orderingUnsafeManual": "あるルールが後方のより広いパターンに隠されており、OpenCode は決して適用しません。下の各行は実際に有効な設定ではありません。重なり合う 2 つのパターンに唯一の正しい順序はないため、下のネイティブ JSON で広いほうを先に並べ替えてください。",
-        "orderingLocked": "順序が修正されるまで下の編集は一時停止します。ここでの変更がこれらのルールの順序を知らないうちに変えないようにするためです。",
+        "invalidBlock": "permissions ルールを認識できません。下のネイティブ JSON で編集するか、「リセット」でやり直してください。",
+        "orderingUnsafe": "ルールが表示どおりの順序でないため、OpenCode の実際の適用は下の行と異なります。「順序を修正」は値を変えずに並べ替えます。",
+        "orderingUnsafeManual": "あるルールが後方のより広いパターンに隠され、適用されません。ネイティブ JSON で広いほうを先に並べ替えてください。",
+        "orderingLocked": "順序が修正されるまで編集は一時停止します。",
         "fixOrder": "順序を修正",
-        "agentOverrides": "次のエージェントは権限を個別に上書きしており、最後に適用されるためここの設定より優先されます: {agents}。下のネイティブ JSON で編集するか、自動承認をオンにして削除してください。",
-        "legacyRules": "これらのルールは OpenCode 1 の permission と tools の設定に由来し、OpenCode 2 も引き続き読み込みます。ここで次に変更すると、OpenCode 2 の permissions ルールとして書き直されます。",
+        "agentOverrides": "次のエージェントの上書きがここの設定より優先されます: {agents}。ネイティブ JSON で編集するか、自動承認をオンにして削除してください。",
+        "legacyRules": "OpenCode 1 の permission と tools の設定由来（引き続き読み込まれます）。次の変更で permissions ルールに書き直されます。",
         "autoAcceptTitle": "すべての権限を自動承認",
-        "autoAcceptHint": "シェルコマンド、ファイル編集、プロジェクト外のパスを含むすべてのツール呼び出しを確認なしで実行します。オンにすると、下のツール別設定は 1 つの全許可ルールに置き換わり、そのままではブロックし続けるエージェントごとのルールと旧 tools 設定も削除されます。policies の強制拒否は引き続き適用されます。",
+        "autoAcceptHint": "シェルコマンドやプロジェクト外のファイル編集を含め、すべてのツールを自動承認します。ツールルールを全許可に置き換え、エージェントごとのルールと旧 tools 設定を削除します。policies の強制拒否は引き続き適用されます。",
         "globalLabel": "全体のデフォルト",
         "globalHint": "* ルールです。下のツールで上書きされていないものすべてに適用されます。",
         "actionUnset": "未設定（OpenCode のデフォルト）",
@@ -1368,7 +1425,7 @@
         "reset": "リセット",
         "ruleCount": "ルール: {count}",
         "rulesToggle": "{tool} の詳細ルール",
-        "rulesHint": "ツールの対象（コマンド、パス、URL、検索語など）に対して照合し、最後に一致したルールが優先されます。広いパターンを先に書いてください。* は任意の文字列、? はちょうど 1 文字に一致し、パスの先頭の ~ はホームディレクトリに展開されます。",
+        "rulesHint": "最後に一致したルールが優先されるため、広いパターンを先に書いてください。* は任意の文字列、? は 1 文字、パスパターン先頭の ~ はホームディレクトリに展開されます。",
         "noRules": "詳細ルールはまだありません。",
         "addRule": "ルールを追加",
         "deleteRule": "ルール {pattern} を削除",
@@ -1395,7 +1452,7 @@
       },
       "behavior": {
         "title": "動作とコンパクション",
-        "description": "セッションの既定値、コンテキストのコンパクション、実験的ツール、ツール出力の上限。OpenCode の設定に書き込まれ、下の保存で反映されます。",
+        "description": "セッションの既定値、コンテキストのコンパクション、実験的ツール、ツール出力の上限。",
         "docsLink": "設定ドキュメント",
         "unset": "未設定",
         "ignoredLegacyKeys": "ファイル内の次の設定は OpenCode で読み込まれなくなりました：{keys}。",
@@ -1403,16 +1460,16 @@
         "defaultAgent": "既定エージェント",
         "defaultAgentHint": "新しいセッションで使うプライマリエージェント。空または不明な場合は build に戻ります。",
         "autoUpdate": "更新（TUI）",
-        "autoUpdateHint": "OpenCode のターミナルアプリがどのように自己更新するか。Codeg が実行する OpenCode（opencode acp）は自己更新しません。",
+        "autoUpdateHint": "OpenCode のターミナルアプリ向け。Codeg が実行する OpenCode（opencode acp）は自己更新しません。",
         "autoUpdateOn": "自動的に更新",
         "autoUpdateNotify": "通知のみ",
         "autoUpdateOff": "更新しない",
         "snapshot": "ファイルシステムのスナップショット",
-        "snapshotHint": "各ステップの前にスナップショットを記録します。オフにすると取り消しと復元でファイルを戻せなくなります。",
+        "snapshotHint": "各ステップ前にスナップショットを記録。オフにすると取り消しと復元でファイルを戻せません。",
         "compactionAuto": "自動コンパクション",
         "compactionAutoHint": "コンテキストウィンドウが埋まったら会話を自動的に要約します。",
         "backgroundCompaction": "バックグラウンドコンパクション",
-        "backgroundCompactionHint": "既定でオン：コンテキストが上限に近づくとバックグラウンドで要約を作成し、自動コンパクションの待ち時間をなくします。使われなかった要約もトークンを消費します。",
+        "backgroundCompactionHint": "既定でオン。バックグラウンドで要約を準備します。使われない要約もトークンを消費します。",
         "todo": "ToDo リストツール",
         "todoHint": "実験的機能：エージェントに todowrite ツールを与え、Codeg がその計画を ToDo リストとして表示できるようにします。",
         "fields": {
@@ -1423,9 +1480,9 @@
           "maxBytes": "ツール出力のバイト数上限"
         },
         "hints": {
-          "subagentDepth": "サブエージェントを何段までネストできるか（experimental.subagent_depth）。1 ならサブエージェントはさらに別のサブエージェントを起動できません。",
-          "preserveRecentTokens": "コンパクション後も原文のまま残す直近ターンのトークン予算（compaction.keep.tokens）。既定値 15000。",
-          "reserved": "自動コンパクションの前にコンテキストウィンドウで空けておく領域（compaction.buffer）。トークン数（例: <code>20000</code>）か、ウィンドウに対する割合（<code>1%</code>〜<code>99%</code>、例: <code>20%</code>）で指定します。未設定ならウィンドウの <code>15%</code>（最低 <code>16000</code> トークン）を空けます。",
+          "subagentDepth": "サブエージェントの最大ネスト数（experimental.subagent_depth）。1 なら別のサブエージェントを起動できません。",
+          "preserveRecentTokens": "コンパクション後も原文のまま残す直近ターンのトークン数（compaction.keep.tokens）。既定 15000。",
+          "reserved": "自動コンパクション前に空けておくコンテキスト（compaction.buffer）。トークン数（例: <code>20000</code>）か <code>1%</code>〜<code>99%</code>（例: <code>20%</code>）。未設定は <code>15%</code>（最低 <code>16000</code> トークン）。",
           "maxLines": "これを超える出力はディスクに書き出され、プレビューだけが残ります。既定 2000。",
           "maxBytes": "これを超える出力はディスクに書き出され、プレビューだけが残ります。既定 51200。"
         }
@@ -1441,19 +1498,19 @@
     },
     "hermes": {
       "configManagement": "Hermes 設定",
-      "configDescription": "Hermes は認証情報を ~/.hermes/.env に、設定を ~/.hermes/config.yaml に独自に管理します。プロバイダーを選択し、API キーとモデルを設定してください。codeg が両方のファイルを書き込みます。",
+      "configDescription": "プロバイダーを選び、API キーとモデルを設定してください。codeg が ~/.hermes/.env と config.yaml に書き込みます。",
       "providerLabel": "プロバイダー",
-      "providerHint": "プロバイダーによって、Hermes が使用する API キー変数と model.provider が決まります。OAuth プロバイダーは下のターミナルセットアップから設定します。",
+      "providerHint": "Hermes が使う API キー変数と model.provider を決めます。OAuth プロバイダーは下のターミナルセットアップで設定します。",
       "groupApiKey": "API キー プロバイダー",
       "groupOauth": "OAuth プロバイダー",
       "groupAws": "AWS",
-      "apiKeyHint": "~/.hermes/.env に保存されます。プロセスには注入されません。Hermes が独自の設定から読み取ります。",
+      "apiKeyHint": "~/.hermes/.env に保存され、Hermes が自分で読み取ります。プロセスには注入されません。",
       "modelName": "モデル",
       "oauthHint": "このプロバイダーは OAuth を使用します。下のセットアップを実行し、ターミナルで認証してください。",
-      "awsHint": "Bedrock は AWS の認証情報（環境変数または共有設定）を使用します。上でモデル ID を設定し、環境で AWS アクセスを構成してください。",
-      "unsupportedProvider": "このプロバイダーは構造化フィールドでは編集できません。下の config.yaml 直接編集またはターミナルセットアップを使用してください。",
+      "awsHint": "Bedrock は環境変数または共有設定の AWS 認証情報を使います。上でモデル ID を設定してください。",
+      "unsupportedProvider": "このプロバイダーはフィールドで編集できません。下の config.yaml 直接編集かターミナルセットアップを使ってください。",
       "setupTitle": "自己管理セットアップ",
-      "setupHint": "Hermes の対話型セットアップにはターミナルが必要です。下から起動するか、コマンドをコピーして自分で実行してください。",
+      "setupHint": "対話型セットアップにはターミナルが必要です。下から起動するか、コマンドをコピーしてください。",
       "runSetup": "Hermes セットアップを実行",
       "configureModel": "モデルを設定",
       "openConfigFolder": "~/.hermes を開く",
@@ -1465,32 +1522,32 @@
     },
     "codebuddy": {
       "configManagement": "CodeBuddy の設定",
-      "configDescription": "CodeBuddy は API キーで認証します。中国版では環境を「中国版（internal）」に設定する必要があります。iOA 版は「iOA」を使用し、海外版は未設定のままにします。",
+      "configDescription": "API キーで認証します。中国版は環境を「中国版（internal）」、iOA 版は「iOA」に設定し、海外版は未設定のままです。",
       "apiKeyLabel": "API キー",
-      "apiKeyHint": "このエージェントの CODEBUDDY_API_KEY として保存されます。または、ターミナルで CodeBuddy CLI からサインインすることもできます。",
-      "apiKeyHintSelfHosted": "このエージェントの CODEBUDDY_API_KEY として保存されます。プライベート展開で発行されたキーを使用してください。",
+      "apiKeyHint": "このエージェント用に CODEBUDDY_API_KEY として保存されます。ターミナルで CodeBuddy CLI からサインインも可能です。",
+      "apiKeyHintSelfHosted": "このエージェント用に CODEBUDDY_API_KEY として保存されます。プライベート展開のキーを使用してください。",
       "environmentLabel": "環境",
-      "environmentHint": "CODEBUDDY_INTERNET_ENVIRONMENT を設定します。中国本土では「中国版（internal）」を使用する必要があります。海外版は未設定のままにします。",
+      "environmentHint": "CODEBUDDY_INTERNET_ENVIRONMENT を設定。中国本土は「中国版（internal）」が必須、海外版は未設定。",
       "envOverseas": "海外版（デフォルト）",
       "envChina": "中国版（internal）",
       "envIoa": "iOA",
       "envSelfHosted": "プライベート展開（セルフホスト）",
       "baseUrlLabel": "デプロイ URL",
       "baseUrlPlaceholder": "https://codebuddy.your-company.com",
-      "baseUrlHint": "CODEBUDDY_BASE_URL として保存され、CodeBuddy をプライベートエンドポイントに向けます。セルフホストではネットワーク環境（CODEBUDDY_INTERNET_ENVIRONMENT）は設定しません。",
+      "baseUrlHint": "CODEBUDDY_BASE_URL として保存し、プライベートエンドポイントに接続。ネットワーク環境は未設定。",
       "baseUrlInvalid": "有効な http(s) URL を入力してください。",
-      "loginHint": "API キーがない場合は、ターミナルで「codebuddy」を実行して Tencent アカウントでサインインすることもできます。"
+      "loginHint": "API キーがない場合は、ターミナルで「codebuddy」を実行して Tencent でサインイン。"
     },
     "minimaxCode": {
       "title": "MiniMax Code の設定",
-      "description": "codeg は mcode の認証情報と選択済みプロバイダーを再利用します。API キーはここではなく mcode で設定してください。既存の BYOK 設定では追加のログインは不要です。",
-      "loginHint": "MiniMax サブスクリプションでは、codeg を実行するマシンのターミナルで実行してください（中国リージョン）：",
+      "description": "mcode 自身の認証情報とプロバイダーを使用。API キーはここではなく mcode で設定。BYOK なら追加ログイン不要。",
+      "loginHint": "MiniMax サブスクリプション（中国リージョン）は codeg のマシンのターミナルで実行：",
       "globalHint": "グローバルアカウントの場合：",
-      "modelHint": "設定後、エージェントに再接続してください。利用可能なモデルと権限モードは mcode が ACP を通じて会話内に提供します。"
+      "modelHint": "設定後に再接続してください。モデルと権限モードは mcode が会話内で提供します。"
     },
     "kimiCode": {
       "configManagement": "Kimi Code の設定",
-      "configDescription": "`kimi acp` は保存済みのログイントークンしか受け付けないため、codeg は ~/.kimi-code/config.toml に管理対象プロバイダーを書き込み、ローカルにゲートトークンを配置します。推論は引き続きご自身のキーで実行されます。",
+      "configDescription": "`kimi acp` は保存済みログインが必要なため、codeg が管理対象プロバイダーとローカルのゲートトークンを書き込みます。推論はご自身のキーで実行されます。",
       "statusUnconfigured": "未設定",
       "statusDirty": "未保存の変更あり",
       "summaryLabel": "有効な設定",
@@ -1501,37 +1558,37 @@
       "authModeLabel": "認証方式",
       "authModeApiKey": "API キー",
       "authModeLogin": "Kimi アカウントログイン（サブスクリプション）",
-      "authModeApiKeyHint": "config.toml に管理対象プロバイダーを書き込み、セッションを開けるようゲートトークンを配置します。",
-      "loginHint": "ターミナルで `kimi login` を実行し、Kimi サブスクリプションアカウントでログインしてください。Kimi 0.39.0 以降、kimi.ai のアカウントには `--region global` を付けます（既定は kimi.com へのログインです）。codeg は資格情報を保存せず、Kimi 自身のログインを再利用します。ここで保存すると codeg の API キー用ゲートトークンが削除されます。",
+      "authModeApiKeyHint": "config.toml に管理対象プロバイダーとゲートトークンを書き込み、セッションを開けるようにします。",
+      "loginHint": "codeg は Kimi の保存済みログインを再利用します。`kimi login` で Kimi サブスクリプションにログイン（0.39.0 以降、kimi.ai は `--region global` を付与）。ここで保存すると codeg の API キー用ゲートトークンが削除されます。",
       "credentialTitle": "資格情報",
       "interfaceTypeLabel": "プロバイダー種別",
-      "interfaceTypeHint": "Kimi が話すプロバイダープロトコル（config.toml の `type`）。Moonshot / platform.kimi.com のキーには「Kimi / Moonshot」を選びます。",
+      "interfaceTypeHint": "プロバイダープロトコル（config.toml の `type`）。Moonshot / platform.kimi.com のキーは「Kimi / Moonshot」。",
       "endpointLabel": "エンドポイント",
       "endpointCustom": "カスタム（OpenAI 互換）",
-      "endpointHint": "国際 = api.moonshot.ai、中国（platform.kimi.com のキー）= api.moonshot.cn。カスタムは任意の OpenAI 互換エンドポイントを指定できます。",
+      "endpointHint": "国際 = api.moonshot.ai、中国（platform.kimi.com）= api.moonshot.cn、カスタム = 任意の OpenAI 互換 URL。",
       "regionInternational": "国際（api.moonshot.ai）",
       "regionChina": "中国（api.moonshot.cn）",
       "baseUrlLabel": "Base URL",
       "baseUrlHint": "空欄の場合はプロバイダー SDK の既定値を使用します。",
       "apiKeyLabel": "API キー",
-      "apiKeyHint": "~/.kimi-code/config.toml に書き込まれ、推論に使用されます。platform.kimi.com または platform.kimi.ai で取得できます。",
+      "apiKeyHint": "config.toml に保存され推論に使用。platform.kimi.com または platform.kimi.ai で取得します。",
       "vertexProjectLabel": "GCP プロジェクト（GOOGLE_CLOUD_PROJECT）",
       "vertexLocationLabel": "GCP リージョン（GOOGLE_CLOUD_LOCATION）",
-      "vertexHint": "Vertex AI は Google のアプリケーションデフォルト認証情報を使用します。`gcloud auth application-default login` を実行してください（API キー不要）。",
+      "vertexHint": "Vertex AI は API キーなしでアプリケーションのデフォルト認証情報を使います。必要なら `gcloud auth application-default login` を実行してください。",
       "modelTitle": "モデル",
       "modelLabel": "モデル",
-      "modelHint": "config.toml に書き込まれるモデル id。入力欄の右端から一覧を開くと、キーが実際にアクセスできるモデルを確認できます。",
+      "modelHint": "モデル id。入力欄の一覧を開くと、キーでアクセスできるモデルを確認できます。",
       "maxContextLabel": "最大コンテキスト長",
-      "maxContextHint": "Kimi のスキーマ上必須です。未指定だと Kimi がモデルブロック全体を破棄し、どのプロンプトも応答が返らなくなります。既定値は 262144。",
+      "maxContextHint": "必須：未指定だと Kimi がモデルブロックを破棄し、すべての応答が空になります。既定値 262144。",
       "fetchModelsOk": "キーは有効です — {count} 件のモデルが利用可能",
       "fetchModelsEmpty": "キーは有効ですが、モデルが返されませんでした",
       "fetchModelsFailed": "テストに失敗しました",
       "modelNotInList": "このモデルはキーがアクセスできる一覧に含まれていません。Kimi は「モデルが見つかりません」で失敗します。",
       "reasoningTitle": "推論",
       "reasoningEnableLabel": "有効にする",
-      "reasoningDescription": "モデルが推論機能を宣言している場合にのみ Kimi は入力欄に「Thinking」ピッカーを表示するため、その宣言を codeg がここで書き込みます。新しいセッションから有効になります。",
+      "reasoningDescription": "推論機能を宣言し、Kimi の入力欄に「Thinking」ピッカーを表示させます。",
       "effortsLabel": "選択できるレベル",
-      "effortsHint": "ここで選んだ値が入力欄の「Thinking」ピッカーの項目になります。Kimi はレベルをそのままプロバイダーへ渡すので、モデルが受け付ける値を選んでください。",
+      "effortsHint": "「Thinking」ピッカーの項目です。Kimi はそのままプロバイダーへ渡すため、モデルが受け付ける値を選んでください。",
       "effortsEmptyHint": "レベルを 1 つも選ばない場合、入力欄は Off / On の 2 段トグルに退化します。",
       "effortsCustomPlaceholder": "他のレベルを追加",
       "effortsAdd": "追加",
@@ -1578,7 +1635,7 @@
       "customModelOption": "カスタムモデル ID",
       "customModelOptionName": "カスタムモデル名",
       "customModelOptionDescription": "カスタムモデルの説明",
-      "customModelOptionHint": "Claude のモデル選択メニューにカスタム項目を1つ追加します（例: カスタムゲートウェイ/プロキシ経由のモデル）。名前と説明は任意の表示用設定です。",
+      "customModelOptionHint": "Claude のモデル選択メニューに項目を1つ追加します（例: ゲートウェイ経由のモデル）。名前と説明は任意です。",
       "sendAttributionHeader": "API に帰属/課金識別子を送信",
       "sendAttributionHeaderAria": "API に Claude Code の帰属/課金識別子を送信",
       "disableNonessentialTraffic": "テレメトリや不要なネットワークリクエストを無効化",
@@ -1586,12 +1643,12 @@
       "promptCacheMode": "キャッシュモード",
       "promptCacheMain": "メインエージェントで 1 時間キャッシュを使用",
       "promptCacheSubagent": "サブエージェントで 1 時間キャッシュを使用",
-      "promptCacheHint": "オンにすると settings.json に \"1h\" を書き込み、オフにするとその項目を削除して Claude Code は既定のキャッシュ期間を使います。1 時間キャッシュは長めの中断後も有効ですが、キャッシュ書き込みの料金は 5 分キャッシュより高くなります。",
+      "promptCacheHint": "1 時間キャッシュは長めの中断後も有効ですが、書き込み料金は 5 分キャッシュより高くなります。",
       "gatewayDiscovery": "ゲートウェイの Claude モデルを Claude に一覧させる",
       "gatewayDiscoveryAria": "ゲートウェイの Claude モデルを Claude Code に一覧させる",
-      "gatewayDiscoveryHint": "Claude 自身が API の URL にモデルを問い合わせ、「claude」または「anthropic」を含む ID だけを残します。次のセッションから表示されます。",
+      "gatewayDiscoveryHint": "Claude が API の URL に問い合わせ、「claude」か「anthropic」を含むモデル ID を残します。",
       "thinkingSummaries": "Claude の思考の要約を表示",
-      "thinkingSummariesHint": "Claude Code は既定で、ツール呼び出しの合間に Claude が書くメモだけを表示します。オンにすると推論の要約も表示されます。追加のトークンは消費しません。claude-agent-acp 0.99.0 以降が必要です。"
+      "thinkingSummariesHint": "追加のトークンは消費しません。claude-agent-acp 0.99.0 以降が必要です。"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} を削除しますか？",
@@ -1706,15 +1763,15 @@
       "localOnly": "ローカル：{localVersion}",
       "localUndetected": "ローカル：バージョンを検出できません",
       "localInstalled": "{versionText}。インストール済みです。",
-      "systemInstalled": "{versionText}。公式インストーラーでインストール・更新され、Codeg はそのまま起動します。",
-      "systemInstalledUpdatable": "{versionText}。公式インストーラーでインストール済み。「アップグレード」で同梱のアップデーターを実行します。",
+      "systemInstalled": "{versionText}。公式インストーラーで管理され、Codeg はそのまま起動します。",
+      "systemInstalledUpdatable": "{versionText}。公式インストール。「アップグレード」で同梱のアップデーターを実行。",
       "systemMissing": "このマシンに見つかりません。公式インストーラーでインストールしてから更新してください。",
       "platformUnsupported": "{versionText}。現在のプラットフォームではこのエージェントをサポートしていません。",
-      "uvxNotReady": "{versionText}。uv ランタイムが未インストールです。下の uv チェックからインストールするとこのエージェントを使用できます。",
+      "uvxNotReady": "{versionText}。uv が未インストールです。下の uv チェックからインストールしてください。",
       "clickInstall": "{versionText}。右側の「インストール」をクリックしてください。",
-      "localUnrecognized": "{versionText}。ローカルバージョンは比較できません。上書きインストールのためアップグレードを試してください。",
+      "localUnrecognized": "{versionText}。ローカルバージョンを比較できません。アップグレードで上書きインストールできます。",
       "upgradeAvailable": "{versionText}。アップグレード可能です。",
-      "openCodeV1Unsupported": "{versionText}。Codeg は OpenCode 2 に移行したため、OpenCode 1.x はサポートされなくなりました。セッションを開くにはアップグレードしてください。",
+      "openCodeV1Unsupported": "{versionText}。OpenCode 1.x は非対応です。セッションを開くには OpenCode 2 にアップグレードしてください。",
       "recommendedUnavailable": "{versionText}。推奨バージョンはありません。",
       "latest": "{versionText}。すでに最新です。",
       "unreviewedAvailable": "{versionText}。未レビューの新しいリリースがあります。"
@@ -1722,23 +1779,23 @@
     "adapter": {
       "label": "ACP アダプター",
       "badge": "ACP アダプター",
-      "badgeHint": "このエージェントで Codeg がインストールするのはベンダー CLI ではなく ACP アダプターのパッケージです。両者は独立しており、設定は共有されます。",
+      "badgeHint": "Codeg が入れるのはベンダー CLI ではなく ACP アダプターです。両者は独立し、設定を共有します。",
       "learnMore": "詳細",
-      "missingWithNative": "お使いの {nativeLabel} を {nativePath} で検出しました。Codeg はエージェントを ACP で駆動しますが、この CLI 自体は ACP に対応していないため、別パッケージのアダプター {adapterPackage}（Agent Client Protocol プロジェクトが保守。当初は Zed チーム）が必要です。独自のランタイムを同梱しており、既存の {nativeCmd} コマンドを変更も置き換えもしません。読み込む設定は同じ {configDir} なので、ログインと設定はそのまま引き継がれます。下のボタンからインストールしてください。",
-      "missing": "Codeg はエージェントを ACP で駆動しますが、{nativeLabel} 自体は ACP に対応していないため、別パッケージのアダプター {adapterPackage}（Agent Client Protocol プロジェクトが保守。当初は Zed チーム）が必要です。独自のランタイムを同梱しているので {nativeCmd} CLI を先に入れる必要はありません。すでにお持ちの場合も両者は共存し、{configDir} のログインと設定を共有します。下のボタンからインストールしてください。",
-      "readyWithNative": "アダプター {adapterCmd} はインストール済みです。Codeg が起動するのはこちらで、あなたの {nativeCmd}（{nativePath}）ではありません。両者は独立したパッケージとして共存し、どちらも {configDir} を読むためログインと設定は共有されます。",
-      "ready": "アダプター {adapterCmd} はインストール済みで、Codeg が起動するのはこれです。独自のランタイムを同梱しているため {nativeLabel} は不要です。後から入れても両者は共存し、{configDir} を共有します。"
+      "missingWithNative": "{nativeLabel} を {nativePath} で検出しましたが ACP 非対応のため、アダプター {adapterPackage} が必要です。{nativeCmd} は変更せず、{configDir} のログインと設定を共有します。下からインストールしてください。",
+      "missing": "{nativeLabel} は ACP 非対応のため、アダプター {adapterPackage} が必要です。ランタイム同梱なので {nativeCmd} は不要。既にあれば両者は {configDir} の同じサインインと設定を使います。下からインストールしてください。",
+      "readyWithNative": "アダプター {adapterCmd} はインストール済み。Codeg が起動するのはこちらで、{nativePath} の {nativeCmd} ではありません。両者は {configDir} の同じサインインと設定を使います。",
+      "ready": "アダプター {adapterCmd} はインストール済みで、Codeg はこれを起動します。{nativeLabel} は不要。入れた場合は {configDir} を共有します。"
     },
     "cline": {
-      "configDescription": "Cline API プロバイダーと認証情報を設定します。設定は ~/.cline/data/ に保存されます。",
+      "configDescription": "Cline API プロバイダーと認証情報。~/.cline/data/ に保存されます。",
       "signInGroup": "Cline アカウントでサインイン",
       "byoGroup": "自分のプロバイダーを使う",
       "externalGroup": "codeg の外で設定済み",
-      "signInHint": "この資格情報は cline 自身が保持します。ターミナルで下のコマンドを実行してサインインしてください。コードが表示され、ブラウザで確認するページが開きます。"
+      "signInHint": "下のコマンドを実行し、表示されたコードをブラウザで入力してください。資格情報は cline 自身が保持します。"
     },
     "opencodePlugins": {
       "title": "OpenCode プラグイン",
-      "description": "OpenCode は次回のセッション開始時にパッケージプラグインを自動でインストールします。OpenCode 1 向けに作られたプラグインは OpenCode 2 では動作しません。",
+      "description": "OpenCode は次回セッション開始時にパッケージプラグインをインストールします。OpenCode 1 のプラグインは OpenCode 2 では動作しません。",
       "configPath": "設定ファイル：{path}",
       "declared": "宣言済みのプラグイン",
       "noPlugins": "プラグインは宣言されていません。",
@@ -1748,13 +1805,13 @@
         "directive": "ディレクティブ"
       },
       "legacy": "OpenCode 1 のリスト",
-      "legacyNote": "「OpenCode 1 のリスト」と表示された項目は OpenCode 1 の `plugin` キーで宣言されています。OpenCode 2 も引き続き読み込みます。次にプラグインを追加または削除すると、`plugins` に移されます。",
+      "legacyNote": "「OpenCode 1 のリスト」の項目は旧 `plugin` キーにあり、引き続き読み込まれます。次の追加・削除で `plugins` に移されます。",
       "pathState": {
         "missing": "見つかりません",
         "not_directory": "ディレクトリではありません"
       },
       "addPlaceholder": "npm パッケージまたは ./プラグインディレクトリ",
-      "addHint": "例：opencode-wakatime@1.2.0。ローカルプラグインはディレクトリで指定します。./ と ../ はこの設定ファイルのあるフォルダーからの相対パスです。",
+      "addHint": "例：opencode-wakatime@1.2.0、またはローカルディレクトリ（./ と ../ はこの設定ファイル基準）。",
       "add": "追加",
       "remove": "削除",
       "refresh": "更新",
@@ -1763,7 +1820,7 @@
     },
     "pi": {
       "configManagement": "Pi 設定",
-      "configDescription": "Pi はモデルプロバイダーの API キーで認証します。キーは ~/.pi/agent/auth.json に、モデル選択は settings.json に書き込まれます。",
+      "configDescription": "Pi はモデルプロバイダーの API キーで認証します（~/.pi/agent/auth.json に保存）。",
       "providerLabel": "プロバイダー",
       "modelLabel": "モデル",
       "thinkingLabel": "思考",
@@ -1784,7 +1841,7 @@
       "runtimeTitle": "ランタイム",
       "runtimeDescription": "どの pi を実行するか選択します。デフォルト、または自分の pi ビルドを指定します。",
       "modeDefault": "デフォルト pi",
-      "modeDefaultHint": "内蔵の pi-acp アダプターで PATH 上の pi を起動します。 pi のインストール：npm install -g @earendil-works/pi-coding-agent",
+      "modeDefaultHint": "内蔵 pi-acp と PATH 上の pi を使用。インストール：npm install -g @earendil-works/pi-coding-agent",
       "modeCustom": "カスタム pi",
       "modeCustomHint": "自分の pi ビルド・インストール・ラッパーを実行します。",
       "commandLabel": "pi コマンドまたはパス",
@@ -1796,7 +1853,7 @@
       "advanced": "詳細設定",
       "configDirLabel": "設定ディレクトリ (PI_CODING_AGENT_DIR)",
       "sessionDirLabel": "セッションディレクトリ (PI_CODING_AGENT_SESSION_DIR)",
-      "flagsHint": "pi-acp はカスタム pi フラグ（--approve、-e など）を転送しません。pi をスクリプトでラップしてコマンドに指定してください。",
+      "flagsHint": "pi-acp はカスタム pi フラグ（--approve、-e など）を転送しません。ラッパースクリプトをコマンドに指定してください。",
       "customIncomplete": "保存するには pi コマンドを入力してください",
       "saveRuntime": "ランタイムを保存",
       "providerPlaceholder": "プロバイダーを選択",
@@ -1804,20 +1861,20 @@
       "providerIdLabel": "プロバイダー ID",
       "apiProtocolLabel": "API プロトコル",
       "baseUrlLabel": "API エンドポイント（Base URL）",
-      "customProviderHint": "~/.pi/agent/models.json にエンドポイント向けのプロバイダーを定義します。多くのセルフホスト／プロキシは openai-completions を使用します。",
+      "customProviderHint": "エンドポイントを models.json にプロバイダーとして追加します。多くのセルフホスト／プロキシは openai-completions です。",
       "baseUrlRequired": "API エンドポイント（Base URL）は必須です",
       "binaryTitle": "pi バイナリ (pi-coding-agent)",
-      "binaryDescription": "pi-acp はこの pi バイナリを実行します。ここでインストールするか、下で独自のビルドを指定できます。",
+      "binaryDescription": "pi-acp が実行する pi バイナリです。ここでインストールするか、下で独自ビルドを指定します。",
       "binaryInstalled": "インストール済み",
       "binaryMissing": "未インストール",
       "binaryChecking": "確認中…",
       "installBinary": "pi をインストール",
       "installing": "インストール中…",
       "recheck": "再確認",
-      "configDirSkillsNote": "カスタム設定ディレクトリを指定すると、ハーネスエンジニアリングで管理するスキル・エキスパート・オフィスツールはこの pi に適用されません。スキルはそのフォルダー内で直接管理してください。",
-      "dirHistoryNote": "これらのディレクトリは pi プロセスにのみ適用されます。codeg の会話履歴は pi の既定の場所を読むため、カスタムディレクトリに書き込まれたセッションは一覧に表示されません。",
+      "configDirSkillsNote": "カスタム設定ディレクトリではハーネスエンジニアリングのスキル・エキスパート・オフィスツールは適用されません。スキルはそこで管理してください。",
+      "dirHistoryNote": "これらのディレクトリは pi にのみ適用されます。カスタムディレクトリのセッションは codeg の会話履歴に表示されません。",
       "projectTrustTitle": "プロジェクトの信頼",
-      "projectTrustDescription": "pi にプロジェクトファイルの読み込みを許可したフォルダーです。信頼したフォルダーでは、そのリポジトリの .pi/extensions が pi の起動時にコードを実行します。配下のすべてのフォルダーに適用され、ターミナルで pi を実行するときにも使われます。",
+      "projectTrustDescription": "pi がプロジェクトファイルを読み込めるフォルダーです。信頼すると .pi/extensions が pi 起動時にコードを実行します（配下のフォルダーとターミナルでの実行も対象）。",
       "projectTrustLoading": "読み込み中…",
       "projectTrustEmpty": "まだ判断したフォルダーはありません。",
       "projectTrustTrusted": "信頼済み",
@@ -1825,12 +1882,12 @@
       "projectTrustRevoke": "取り消す",
       "reasoningTitle": "推論",
       "reasoningEnableLabel": "有効にする",
-      "reasoningDescription": "モデルが推論能力を宣言している場合にのみ、pi は推論強度を送信します。未宣言のモデルではすべてのレベルが Off に丸められるため、入力欄のセレクターは触れた瞬間に戻ってしまいます。models.json のこのモデルの項目に書き込まれます。",
+      "reasoningDescription": "pi は推論能力を宣言したモデルにのみ推論強度を送信します。未宣言ではすべて Off に丸められます。",
       "levelsLabel": "選択できるレベル",
-      "levelsHint": "入力欄の推論セレクターの項目になります。エンドポイントが受け付ける値を選んでください。ここにないレベルは pi が拒否します。",
+      "levelsHint": "入力欄の推論セレクターの項目です。エンドポイントが受け付ける値を選んでください。未掲載のレベルは pi が拒否します。",
       "levelsEmptyError": "レベルを 1 つ以上選んでください。1 つも選ばないと pi は Off に戻ります。",
       "wireValuesTitle": "詳細: プロバイダーに送る値",
-      "wireValuesHint": "空欄ならレベル名をそのまま送信します。エンドポイントが別の表記を求める場合のみ設定してください（Google 系は LOW / HIGH）。",
+      "wireValuesHint": "空欄ならレベル名をそのまま送信。表記が異なる場合のみ設定（Google 系は LOW / HIGH）。",
       "defaultLevelUnlisted": "このレベルは上の選択リストにありません。pi が丸めてしまいます。",
       "modelLevels": "{model} の思考レベル：{levels}。",
       "modelNoThinking": "{model} には思考レベルがありません。Pi は常に思考オフで実行します。",
@@ -1841,7 +1898,7 @@
       "runtimeTooOld": "この Pi は古すぎます。Codeg でセッションを開くには Pi {min} 以降が必要です。先に Pi を更新してください。"
     },
     "addCustomAgent": "カスタムエージェントを追加",
-    "addCustomAgentHint": "ACP 対応のエージェントを追加できます。公開 ACP レジストリから選ぶか、レジストリ情報を貼り付けてください。",
+    "addCustomAgentHint": "公開 ACP レジストリから ACP 対応エージェントを選ぶか、レジストリ情報を貼り付けます。",
     "customAgentFromRegistry": "ACP レジストリ",
     "customAgentManual": "手動入力",
     "customAgentSearchPlaceholder": "エージェントを検索…",
@@ -1856,7 +1913,7 @@
     "customAgentNameLabel": "表示名",
     "customAgentVersionLabel": "バージョン",
     "customAgentSpecLabel": "配布情報（JSON）",
-    "customAgentSpecHint": "ACP レジストリの distribution オブジェクトと同じ形式です。npx・uvx・binary の各チャネルに対応し、レジストリ項目全体の貼り付けも可能です。npx/uvx の cmd はパッケージがインストールする実行コマンド名で、省略時はパッケージ名から導出されるため、異なる場合は指定してください。binary はプラットフォームキーごとに指定し（このマシンは {platform}）、cmd はアーカイブ内の起動パス、sha256 は任意でダウンロードを検証します。",
+    "customAgentSpecHint": "ACP レジストリの distribution 形式（npx・uvx・binary）、またはレジストリ項目全体を貼り付けます。npx/uvx は、実行ファイルがパッケージ名から導かれる既定値と異なる場合に cmd を設定します。binary はプラットフォームキー別（このマシン: {platform}）で、cmd はアーカイブ内のパス、sha256 は任意です。",
     "customAgentTemplateLabel": "テンプレート",
     "customAgentKindLabel": "起動方法",
     "customAgentInvalidJson": "JSON として不正です",
@@ -1865,24 +1922,24 @@
     "customAgentSave": "エージェントを追加",
     "customAgentSaveChanges": "変更を保存",
     "customAgentEdit": "エージェントを編集",
-    "customAgentEditHint": "名前・アイコン・配布情報・スキル宣言を変更できます。エージェント ID は変更できません。",
+    "customAgentEditHint": "名前・アイコン・配布・スキルを変更できます。エージェント ID は変更不可です。",
     "customAgentEditNotFound": "カスタムエージェント {id} が見つかりません",
     "customAgentSaved": "{name} を保存しました",
     "customAgentVersionProbeLabel": "バージョン確認コマンド（任意）",
-    "customAgentVersionProbeHint": "ローカルにインストールされたバージョンを表示するコマンドです。空欄の場合はエージェントコマンドに --version を付けて実行します。",
+    "customAgentVersionProbeHint": "インストール済みバージョンを表示するコマンド。空欄ならエージェントコマンドに --version を付けて実行します。",
     "customAgentRemove": "エージェントを削除",
-    "customAgentRemoveHint": "エージェント定義を削除します。既存の会話の履歴は残り、エージェントを起動できなくなるだけです。",
+    "customAgentRemoveHint": "エージェント定義を削除します。既存の会話履歴は残ります。",
     "customAgentIconLabel": "アイコン（任意）",
     "customAgentIconUpload": "アップロード",
     "customAgentIconReplace": "変更",
     "customAgentIconClear": "アイコンを削除",
     "customAgentIconHint": "エージェントと共に保存されるためオフラインでも表示できます。指定しない場合は色付きの頭文字を使います。",
     "customAgentSkillsLabel": "Skills（共有 .agents/skills）",
-    "customAgentSkillsHint": "このエージェントが共有の .agents/skills ディレクトリ（グローバルおよびプロジェクト）を読み取ることを宣言し、すべてのスキルマトリクスに追加します。共有ディレクトリにリンクしたスキルは、同じディレクトリを読むほかのエージェントからも見えます。",
+    "customAgentSkillsHint": "共有の .agents/skills（グローバルとプロジェクト）を読み取ります。ここにリンクしたスキルは、これを読む全エージェントに見えます。",
     "customAgentSkillsDirLabel": "専用スキルディレクトリ",
-    "customAgentSkillsDirHint": "このエージェントがスキルを読み込むディレクトリの絶対パスです。共有ストアと併用も単独利用も可能です。~ はホームディレクトリに展開され、リンクしたスキルはまずここに配置されます。",
+    "customAgentSkillsDirHint": "このエージェント独自のスキルディレクトリの絶対パス。共有ストアと併用も置き換えも可。~ はホーム、リンクしたスキルはまずここに置かれます。",
     "customAgentMcpLabel": "MCP サポート",
-    "customAgentMcpHint": "セッション開始時に codeg 内蔵の codeg-mcp コンパニオンをこのエージェントへ渡します。委任・リアルタイムフィードバック・タスクツールはこの経路を使います。MCP サーバーを受け付けず接続に失敗するエージェントではオフにしてください。設定は次回の接続から有効になります。",
+    "customAgentMcpHint": "セッション開始時に codeg-mcp コンパニオンを渡します（委任・リアルタイムフィードバック・タスクツール用）。MCP サーバーを拒否して接続に失敗するならオフに。",
     "customAgentIconNotAnImage": "画像ファイルを選んでください。",
     "customAgentIconTooLarge": "アイコンは {limit} KB 未満にしてください。",
     "customAgentIconReadFailed": "その画像を読み込めませんでした。",
@@ -1893,7 +1950,7 @@
     "customAgentNotLaunchable": "この環境では起動できません: {reason}",
     "zcode": {
       "adapterInfo": "Codeg は {adapterPackage} を ACP ブリッジとして起動します。先に公式 ZCode をインストールしてログインしてください。既存の実行環境と設定を使用します。",
-      "runtimeHint": "先に公式 ZCode をインストールしてログインしてください。Codeg は ACP ブリッジのみをインストールします。自動検出に失敗した場合は ZCODE_BIN で CLI、ZCODE_NODE で Node.js を指定できます。モデルと認証情報は ZCode で管理します。"
+      "runtimeHint": "先に公式 ZCode をインストールしてログインしてください。Codeg は ACP ブリッジのみ入れます。検出に失敗したら ZCODE_BIN（CLI）と ZCODE_NODE（Node.js）を指定します。"
     }
   },
   "AgentVocabulary": {
@@ -2214,6 +2271,7 @@
       "viewOptions": "表示オプション",
       "listOptions": "会話リスト",
       "showCompleted": "完了した会話を表示",
+      "showAssistant": "アシスタントの会話を表示",
       "showWorktrees": "ワークツリーブランチを表示",
       "showRecent": "「最近」グループを表示",
       "tabsFollowFolder": "タブをフォルダーに追従",
@@ -2286,6 +2344,12 @@
       "sectionFolders": "フォルダ",
       "sectionChats": "チャット",
       "sectionRecent": "最近",
+      "timeGroupPriorities": "進行中",
+      "timeGroupToday": "今日",
+      "timeGroupYesterday": "昨日",
+      "timeGroupPrevious7Days": "過去 7 日間",
+      "timeGroupPrevious30Days": "過去 30 日間",
+      "timeGroupOlder": "それ以前",
       "noChats": "チャットがありません",
       "noRecent": "最近の会話はありません",
       "showMoreRecent": "さらに表示（{count}）",
@@ -2321,7 +2385,14 @@
       "noRecentChats": "最近のチャットはありません",
       "noRecentFolders": "最近のフォルダー会話はありません",
       "noRecentCli": "コマンドラインからの最近の会話はありません",
-      "recentFilterMenuLabel": "最近の表示"
+      "recentFilterMenuLabel": "最近の表示",
+      "personalAgent": "パーソナルエージェント",
+      "personalAgentUnreadBots": "未読のあるアシスタント {count} 人",
+      "personalAgentBadge": "パーソナルエージェントが依頼",
+      "sectionAssistants": "アシスタント",
+      "timeGroupPrioritiesTooltip": "現在実行中のセッションが含まれます",
+      "recentGroupingModeTime": "時間グループ表示に切り替え",
+      "recentGroupingModeFlat": "フラットリストに切り替え"
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",
@@ -2336,6 +2407,10 @@
       "forkSessionSuccess": "セッションのフォークに成功しました",
       "forkSessionFailed": "セッションのフォークに失敗しました：{error}",
       "forkSessionBusy": "分岐に失敗しました: ターンの実行中です",
+      "editMessageRefused": "メッセージを編集できません：{reason, select, busy {エージェントがまだ作業中です} backgroundWork {バックグラウンド処理が実行中です} beforeCompaction {会話の圧縮より前のメッセージです} clearedContext {このメッセージの後に会話がクリアされています} unavailable {エージェントはこのメッセージに戻れません} other {エージェントが拒否しました}}",
+      "editMessageBusy": "メッセージを編集できません：ターンが実行中です",
+      "editMessageFailed": "メッセージを編集できません：{error}",
+      "editMessageQueued": "メッセージを編集できません：先にキュー内のメッセージを送信または削除してください",
       "exportConversation": "会話をエクスポート",
       "exportImage": "画像",
       "exportMarkdown": "Markdown",
@@ -2368,6 +2443,10 @@
     "sessionDetails": {
       "menuLabel": "セッション詳細",
       "noActiveSession": "アクティブなセッションがありません",
+      "noActiveSessionHint": "セッションを開くか新しく作成すると、その詳細・プラン・メッセージがここに表示されます。",
+      "draftTitle": "新しいセッション",
+      "draftWaiting": "最初のメッセージを待っています",
+      "draftHint": "最初のメッセージを送信すると、セッション ID、エージェントのプラン、メッセージナビがここに表示されます。",
       "title": "セッション詳細",
       "subtitle": "セッションのメタデータとトークン使用量",
       "fieldTitle": "タイトル",
@@ -2400,6 +2479,26 @@
       "copyField": "{field}をコピー",
       "copiedField": "{field}をコピーしました",
       "assistant": "アシスタント"
+    },
+    "askConversations": {
+      "title": "質問の会話",
+      "total": "{count} 件",
+      "untitled": "新しい質問",
+      "convertToRegular": "通常の会話に変換",
+      "convertConfirmTitle": "通常の会話に変換しますか？",
+      "convertConfirmDescription": "「{title}」はこの会話とのリンクが解除され、通常の会話として表示されます。この操作は元に戻せません。",
+      "convertConfirm": "変換",
+      "cancel": "キャンセル",
+      "converted": "通常の会話に変換しました",
+      "convertFailed": "通常の会話に変換できませんでした",
+      "drawerTitle": "質問の会話",
+      "drawerDescription": "この会話の選択内容から始めた質問の会話",
+      "pendingFirstMessage": "質問はエージェントの準備ができ次第送信されます。もう一度操作すると破棄されます。"
+    },
+    "checkConversations": {
+      "title": "確認会話",
+      "untitled": "確認",
+      "drawerDescription": "この会話のメッセージをパーソナルエージェントが確認した過程"
     },
     "conversationCard": {
       "untitledConversation": "無題の会話",
@@ -3564,7 +3663,8 @@
         "mentionGroupSession": "セッション",
         "mentionGroupCommit": "コミット",
         "mentionGroupSkill": "スキル",
-        "mentionGroupAssistant": "アシスタント"
+        "mentionGroupAssistant": "アシスタント",
+        "mentionManageAssistants": "アシスタントを管理…"
       },
       "messageQueue": {
         "addToQueue": "キューに追加",
@@ -3813,6 +3913,11 @@
         "systemMessage": "システムメッセージ",
         "turnFailed": "このターンは失敗しました：{message}",
         "copyMessage": "コピー",
+        "editMessage": "メッセージを編集",
+        "editMessageBusy": "返信が終わってから編集してください",
+        "editMessageHint": "このメッセージ以降の内容は置き換えられます",
+        "editMessageCancel": "キャンセル",
+        "editMessageSend": "送信",
         "forkFromHere": "ここから分岐",
         "forkBusy": "ターンの実行中は分岐できません",
         "forkNotReady": "この返信からはまだ分岐できません。少し待ってからお試しください",
@@ -3825,7 +3930,7 @@
         "selectionSaveAsNote": "メモに保存",
         "selectionAsk": "質問",
         "selectionAskPlaceholder": "選択範囲について質問…",
-        "selectionAskSubmit": "新規会話で質問する",
+        "selectionAskClose": "閉じる",
         "downloadImage": "画像をダウンロード",
         "copyImage": "画像をコピー",
         "copiedImage": "画像をコピーしました",
@@ -3906,7 +4011,7 @@
             "child_rejected": "サブエージェント: 要求拒否",
             "child_unknown": "サブエージェント: エラー",
             "unknown": "不明なタスク",
-            "assistant_not_found": "アシスタントなし",
+            "assistant_not_found": "アシスタントが見つかりません",
             "assistants_unsupported": "再起動が必要",
             "assistant_support_unknown": "応答なし"
           }
@@ -4151,7 +4256,8 @@
           "allowAlways": "常に許可",
           "rejected": "拒否",
           "viaChatChannel": "チャットチャネル経由",
-          "byPolicy": "実行の権限ポリシーによる"
+          "byPolicy": "実行の権限ポリシーによる",
+          "byAssistant": "アシスタントが代わりに回答"
         }
       },
       "messageNav": {
@@ -4164,6 +4270,7 @@
         "hideDiff": "{filePath} の変更を隠す",
         "openFile": "{filePath} を開く",
         "collapse": "折りたたむ",
+        "expand": "展開",
         "currentMessage": "現在のメッセージ",
         "scrollToCurrent": "現在のメッセージ（#{ordinal}）へスクロール",
         "running": "実行中",
@@ -5126,7 +5233,9 @@
       "statusRunning": "実行中",
       "statusWaiting": "待機中",
       "statusError": "エラー",
-      "subAgentOf": "サブエージェント"
+      "subAgentOf": "サブエージェント",
+      "askQuestion": "あなたへの質問",
+      "askPlan": "承認待ちのプラン"
     },
     "menu": {
       "scale": "拡大率",
@@ -5479,7 +5588,7 @@
       "quickMessages": "クイックメッセージ {count} 件",
       "taskTemplates": "タスクテンプレート {count} 件",
       "preferences": "アプリ設定 {count} 件",
-      "assistants": "アシスタント {count} 件",
+      "assistants": "{count} 件のアシスタント",
       "appearance": "外観設定 {count} 件"
     },
     "rollbackTitle": "インポートを元に戻す",
@@ -5497,7 +5606,8 @@
     "passphraseKeep": "空のままにすると保存済みのパスフレーズを使います",
     "passphrasePlaceholder": "暗号化パスフレーズ",
     "passphraseHint": "このマシンのキーチェーンにのみ保存され、アップロードされません。他のマシンでも同じパスフレーズを入力してください。",
-    "assistantsRenamed": "このマシンに同じ名前のアシスタントがあったため、{count} 件の名前を変更しました。",
+    "assistantsRenamed": "{count} 件のアシスタントがこの端末の既存のものと同名だったため、名前を変更しました。",
+    "assistantsPersonaKept": "{count} 件のアシスタントはこの端末の人設をそのまま残しました。すでにこの端末で人設ファイルを書いているため、インポートでは上書きしません。",
     "conflictTitle": "自動アップロードを一時停止しています",
     "conflictBody": "サーバーには {device} が {time} に作成した、このマシンでまだ復元していないスナップショットがあります。アップロードするとそれを置き換え、サーバーには以前のコピーが残りません。",
     "conflictRestore": "復元する",
@@ -6579,6 +6689,8 @@
     "deliverPrBackSubmit": "push",
     "deliverPrBackDone": "プルリクエストに push しました",
     "deliverPrBackDoneMr": "マージリクエストに push しました",
+    "badgePersonalAgent": "パーソナルエージェント",
+    "badgePersonalAgentExecutor": "パーソナルエージェント · {executor}",
     "deliverPrUncommitted": "タスクのワークツリーに未コミットのファイルが {count} 件あります。先に {branch} にコミットしてから、ほかの変更と一緒に push します。",
     "deliverPrUncommittedFiles": "コミットするファイル",
     "deliverPrCommitMessageLabel": "コミットメッセージ",
@@ -6683,7 +6795,7 @@
     }
   },
   "CodexModelEditor": {
-    "customizedNotice": "モデル一覧をカスタマイズしたため、codeg が codex のモデル表全体を管理します。codex が今後追加する公式モデルは自動では表示されません。下の更新をクリックして保存し直すと同期できます。カスタマイズをすべて削除すると codex の自動更新に戻ります。",
+    "customizedNotice": "モデル一覧をカスタマイズしたため、codeg が codex のモデル表全体を管理し、新しい公式モデルは自動では現れません。下で更新して保存すると同期され、カスタマイズを消すと codex の自動更新に戻ります。",
     "modelsTitle": "モデル",
     "officialsHint": "起動する codex の公式モデルを自動的に含めます。不要なものは削除できます。",
     "builtinSummary": "{count} 個のモデル · codex から",
@@ -6705,7 +6817,7 @@
     "presetLabel": "テンプレート",
     "presetGpt": "ネイティブ GPT",
     "presetCompat": "OpenAI 互換",
-    "presetHint": "互換モードでは codex が標準の OpenAI Responses リクエストを送信します（code mode ツール・マルチエージェント・responses-lite・カスタム apply patch ツールを使いません）。公開 API のみ実装したサードパーティのゲートウェイに使ってください。",
+    "presetHint": "「OpenAI 互換」は標準的な OpenAI Responses リクエストを送ります（code mode・マルチエージェント・responses-lite・カスタム apply patch ツールなし）。公開 API だけを実装したサードパーティゲートウェイ向けです。",
     "baseTemplate": "ベーステンプレート",
     "baseTemplateHint": "必須フィールド（システムプロンプト、ツール、制限）を複製する公式モデル。",
     "groupProtocol": "ワイヤープロトコル",
@@ -6785,9 +6897,9 @@
       "refreshFailed": "更新に失敗しました：{reason}",
       "refreshFailedAt": "自動更新に失敗しました（{time}）：{reason}",
       "stillUsing": "{time} に確認した一覧を引き続き使用しています。",
-      "catalogUrlHint": "config.toml に model_catalog_url が設定されています。codeg がモデル一覧ファイルを生成している間は効果がありません。生成していない場合は Codex 自身がその URL を取得するため、新しいセッションはエンドポイントの稼働に依存します（codex 0.160.x では api_key_model_discovery 機能も必要です）。",
-      "savePreviewManaged": "保存すると codeg はルートの model を「{model}」、model_catalog_json を codeg-model-catalog.json に設定し、この一覧を公開している間は管理し続けます。",
-      "savePreviewManagedNoModel": "保存すると codeg は model_catalog_json を codeg-model-catalog.json に設定し、この一覧を公開している間は管理し続けます。",
+      "catalogUrlHint": "config.toml に model_catalog_url があります。codeg がモデル一覧を公開している間は無効で、そうでなければ codex が新しいセッションごとに取得し、失敗するとモデルがなくセッションを開けません（0.160.x では api_key_model_discovery も必要）。",
+      "savePreviewManaged": "保存後は codeg が model（“{model}”）と model_catalog_json を管理。",
+      "savePreviewManagedNoModel": "保存後は codeg が model_catalog_json を管理。",
       "savePreviewError": "このままでは保存できません：{message}",
       "codexCatalog": {
         "missing_api_key": "先に API キーを入力してください。モデル一覧の取得に使います。",
@@ -10108,6 +10220,2988 @@
         "probeFailed": "内蔵ブラウザーがトンネル経由でリモートホストに届くことを確認できませんでした。しばらくしてからもう一度お試しください。"
       }
     }
+  },
+  "PersonalAgent": {
+    "title": "パーソナルエージェント",
+    "readOnly": "パーソナルエージェントはこのデータディレクトリを使う別の codeg プロセスで動作しているため、ここではこのページは読み取り専用です。",
+    "viewSession": "セッションを表示",
+    "viewSessionHint": "現在のセッションの全記録をリアルタイムで表示します。",
+    "sessionTitle": "セッション {seq} · 全記録",
+    "errors": {
+      "engineElsewhere": "パーソナルエージェントはこのデータディレクトリを使う別の codeg プロセスで動作しています。ここではこのページは読み取り専用です。"
+    },
+    "state": {
+      "queued": "待機中",
+      "running": "実行中",
+      "waiting_input": "あなたの対応待ち",
+      "review": "レビュー待ち",
+      "completed": "完了",
+      "failed": "失敗",
+      "canceled": "キャンセル済み",
+      "interrupted": "中断",
+      "handed_over": "引き継ぎ済み"
+    },
+    "mode": {
+      "task": "ボードタスク",
+      "chat": "チャット",
+      "session": "作業セッション"
+    },
+    "reason": {
+      "first": "最初のセッション",
+      "switch": "頭脳を切り替え",
+      "option_restart": "起動設定を変更",
+      "workdir": "作業ディレクトリを移動",
+      "manual": "新しいセッション",
+      "recovery": "元のセッションを再開できず",
+      "overflow": "コンテキスト超過"
+    },
+    "timeline": {
+      "loadOlder": "以前の記録を読み込む",
+      "empty": "あいさつするか、何か任せてみましょう。",
+      "newMessages": "ここから新着メッセージ",
+      "openTask": "ボードで開く",
+      "openConversation": "会話を開く",
+      "viewSession": "会話を表示",
+      "loading": "会話を読み込んでいます…"
+    },
+    "work": {
+      "taskNotStarted": "このタスクはまだ始まっていません。始まるとここに会話が表示されます。",
+      "taskGone": "このタスクが見つかりません。削除された可能性があります。"
+    },
+    "composer": {
+      "placeholder": "{name}にメッセージ…",
+      "placeholderBusy": "{name}は作業中です。メッセージはこのあとに処理されます",
+      "readOnly": "このプロセスでは読み取り専用",
+      "ariaLabel": "パーソナルエージェントへのメッセージ",
+      "send": "送信",
+      "queue": "キューに追加",
+      "waitForUpload": "画像のアップロードが終わるまでお待ちください。"
+    },
+    "aux": {
+      "rename": "クリックして名前を変更",
+      "title": "アシスタントパネル",
+      "waiting": "{count} 件があなたの対応待ち"
+    },
+    "status": {
+      "thresholdMark": "{percent}% で自動圧縮",
+      "elsewhere": "エージェントは別の codeg プロセスで動作しています。ここに表示される内容はデータベースから読み取ったものです。",
+      "model": "モデル",
+      "mode": "モード",
+      "session": "セッション",
+      "started": "開始",
+      "connection": "接続",
+      "segmentValue": "#{seq} · {reason}",
+      "noSegment": "まだ開始していません",
+      "connected": "接続中",
+      "disconnected": "未接続（次のメッセージで再接続します）",
+      "handoff": "引き継ぎカード",
+      "handoffSize": "{size} 文字",
+      "handoffTrimmed": "切り詰め済み",
+      "context": "コンテキスト",
+      "usageValue": "{percent}% 使用（{source}）",
+      "usageSource": {
+        "live": "リアルタイム",
+        "transcript": "セッションファイルから"
+      },
+      "usageUnknown": "使用量不明 — このエージェントは使用量を報告しません",
+      "threshold": "{percent}% で自動圧縮",
+      "thresholdOff": "自動圧縮オフ",
+      "noCommand": "このエージェントの圧縮コマンドが不明です",
+      "compactions": "圧縮回数",
+      "compactionCounts": "codeg {auto} · 手動 {manual} · エージェント {agent}",
+      "lastCheck": "前回のチェック",
+      "check": {
+        "below": "しきい値未満",
+        "compacted": "送信前に圧縮しました",
+        "disabled": "自動圧縮オフ",
+        "usage_unknown": "スキップ：使用量不明",
+        "no_command": "スキップ：圧縮コマンドなし",
+        "paused": "スキップ：このセッションでは一時停止中",
+        "skipped_after_attempt": "圧縮直後のため、そのまま送信"
+      },
+      "paused": "このセッションの自動圧縮は一時停止中です",
+      "resume": "再開",
+      "queued": "待機中",
+      "queuedValue": "メッセージ {messages} 件 · 進捗 {events} 件",
+      "dispatchSlots": "依頼した会話",
+      "slotsValue": "実行中 {running}/{limit} · 待機 {queued}",
+      "slotsUnlimited": "実行中 {running} · 待機 {queued}",
+      "engine": "実行場所",
+      "engineHere": "このプロセス",
+      "engineElsewhere": "別の codeg プロセス",
+      "workdir": "作業ディレクトリ",
+      "lastError": "直近のエラー",
+      "compactionStatus": {
+        "ok": "完了",
+        "failed": "失敗",
+        "canceled": "キャンセル",
+        "running": "実行中"
+      },
+      "usageUnknownOffline": "使用量不明 — 再接続後に読み取ります",
+      "copyPath": "パスをコピー",
+      "copied": "コピーしました",
+      "startedValue": "{when} に開始",
+      "pendingValue": "次のメッセージで新しいセッション：{reason}",
+      "agent": "エージェント",
+      "state": "状態"
+    },
+    "items": {
+      "waitingAnswer": "{name} の返事待ち：{text}",
+      "wroteToYou": "{name} からのメッセージ：{text}",
+      "kind": {
+        "dispatch": "依頼",
+        "reminder": "リマインダー",
+        "followup": "フォローアップ",
+        "question": "質問",
+        "when_mentioned": "言及時",
+        "message": "メッセージ"
+      },
+      "onDone": "完了後：{text}",
+      "mention": "{words} と言ったときに知らせる · {times}/{max} 回 · {until} まで"
+    },
+    "data": {
+      "inDays": "{days} 日間で {count} 回",
+      "smallSample": "サンプルは {count} 件のみ。参考程度に",
+      "rangeMenu": "期間",
+      "interactions": "日別の会話",
+      "messages": "あなたのメッセージ",
+      "replies": "返信",
+      "dispatches": "日別の依頼",
+      "completed": "完了",
+      "other": "その他",
+      "failed": "失敗",
+      "completedHint": "{count} 件完了",
+      "tokens": "日別のトークン",
+      "agentTokens": "パーソナルエージェント",
+      "dispatchTokens": "依頼した作業",
+      "syncedAt": "トークン数は前回の使用量同期（{when}）時点のものです",
+      "notSynced": "トークン数は使用量を同期すると表示されます（トークン使用量ページ）。",
+      "usageCurve": "コンテキスト使用量",
+      "noUsage": "まだ測定値がありません。",
+      "empty": "まだデータがありません",
+      "range": "直近 {days} 日",
+      "figure": {
+        "conversation": "会話",
+        "conversationSub": "あなた {owner} · 返信 {replies}",
+        "dispatches": "依頼",
+        "dispatchesSub": "完了 {completed} · 失敗 {failed}",
+        "completion": "完了率",
+        "completionSub": "依頼した仕事のうち",
+        "tokens": "トークン",
+        "tokensSub": "エージェント {agent} · 依頼 {dispatch}",
+        "tokensUnsynced": "使用量の同期後に表示"
+      },
+      "agents": "エージェント別"
+    },
+    "settings": {
+      "setupStart": "エージェントと話す",
+      "setupAskName": "名前をつけてくれる？",
+      "setupHello": "こんにちは、{name} です！",
+      "setupRandomName": "名前をおまかせ",
+      "setupNames": "ノヴァ|ミロ|モチ|ルナ|キキ|ピクセル|アトラス|ジュノ|モモ|ポポ|ソラマメ|コロ",
+      "setupMoreAgents": "さらに表示（{count}）",
+      "setupFewerAgents": "閉じる",
+      "setupNoAgents": "使えるエージェントがまだありません。先に設定でインストールしてください。",
+      "setupMissing": "エージェントの未選択の項目があと {count} 件あります",
+      "setupBrainAgent": "頭脳に使うエージェント",
+      "tabPersona": "ペルソナとメモリ",
+      "name": "名前",
+      "nameHint": "ページとメッセージに表示される名前とアイコンです。エージェント自身もこの名前を知っています。名前が空欄なら既定の名前を使います。",
+      "namePlaceholder": "パーソナルエージェント",
+      "agentHint": "あなたと話したり考えたりするときに使うエージェント。",
+      "agentOptions": "モデルとオプション",
+      "switchNote": "別のエージェントに切り替えると、次のメッセージから新しいセッションが始まります。古いセッションは再開せず、代わりに codeg がタイムラインを新しいセッションに引き継ぎます。",
+      "autoCompact": "自動圧縮のしきい値",
+      "autoCompactHint": "コンテキストの使用率がこの値以上になると、codeg は次のメッセージの前に圧縮コマンドを送信します。0 でオフ。エージェント自身の自動圧縮が発動する値より低くしてください。",
+      "compactCommand": "圧縮コマンド",
+      "compactCommandHint": "入力したとおりに送信します。空欄ならエージェント独自のコマンド（/compact、/compress…）を使います。別のエージェントに切り替えるとクリアされます。",
+      "compactionNote": "圧縮してもセッションは変わりません。次のメッセージに、ペルソナ・ルール・未完了の案件をまとめた状態カードが付きます。2 回続けて圧縮の効果がなければ、そのセッションの自動圧縮は一時停止します。",
+      "concurrency": "依頼した会話の同時実行数",
+      "concurrencyHint": "同時に実行できるチャットと作業セッションの依頼の数です。超えた分は待機します。0 で無制限。ボードタスクはボード自体の上限に従います。",
+      "handoffBudget": "引き継ぎカードの文字数上限",
+      "handoffBudgetHint": "新しいセッションの引き継ぎカードに使える文字数です。切り詰められた部分は、エージェントがツールで読み返せます。",
+      "skill": "組み込みスキル",
+      "skillHint": "作業ディレクトリ内のスキルを使って、エージェントに決まりごと（依頼の方法、未完了の案件、メモリファイル）を教えます。",
+      "saveFile": "ファイルを保存",
+      "fileSaved": "{name} を保存しました。",
+      "cancel": "キャンセル",
+      "save": "保存",
+      "fileGroups": {
+        "persona": "ペルソナ",
+        "rules": "ルール",
+        "owner": "あなたについて",
+        "memory": "メモリ",
+        "skills": "手順スキル"
+      },
+      "byOwner": "あなたが管理",
+      "byAgent": "エージェントが管理",
+      "soulHint": "エージェントが何者で、どう話すか。あなたが書くもので、エージェントはあなたに頼まれたときだけ変更します。セッション開始のたびに全文を読み込みます。",
+      "rulesHint": "エージェントが常に守るルール。あなたが書くもので、エージェントはあなたに頼まれたときだけ変更します。セッション開始のたびに全文を読み込みます。",
+      "userHint": "エージェントが知っているあなたのこと（役割、プロジェクト、好み）。新しく分かったことはエージェントが自分で更新し、セッション開始のたびに全文を読み込みます。",
+      "memoryHint": "記憶のインデックス。1 件 1 行で、事実、参考情報、そして仕事の進め方の教訓（あなたが直したこと、認めたやり方）が並びます。各項目は memory/ 配下の個別ファイルで、種類はファイルの先頭に書かれます。どちらもアシスタントが管理します。各セッションの開始時にインデックスの先頭 200 行を読み込み、項目は必要なときに読みます。",
+      "entryHint": "1 件の項目で、エージェントが必要なときに読みます。削除すると、索引の該当行も一緒に削除されます。",
+      "entryType": {
+        "lesson": "教訓",
+        "fact": "事実",
+        "reference": "参考"
+      },
+      "deleteEntry": "削除",
+      "confirmDelete": "削除する",
+      "confirmDeleteHint": "この項目と索引の行を削除しますか？",
+      "entryDeleted": "{name} を削除しました。",
+      "saved": "保存しました。",
+      "saveFailed": "保存できませんでした",
+      "restoreDefaults": "既定に戻す",
+      "back": "会話に戻る",
+      "viewTitle": "アシスタントの設定",
+      "readOnly": "アシスタントは別の codeg プロセスで動作しているため、ここでの設定は読み取り専用です。",
+      "setUpFirst": "先にメインアシスタントを設定してください。",
+      "nav": {
+        "identity": "アイデンティティと頭脳",
+        "persona": "ペルソナとメモリ",
+        "notify": "通知",
+        "advanced": "詳細設定",
+        "communication": "コミュニケーション",
+        "proactive": "プロアクティブと通知",
+        "automation": "依頼と自動化",
+        "about": "あなたについて",
+        "projects": "あなたのプロジェクト"
+      },
+      "pages": {
+        "communicationNote": "口調や呼び方はここにはありません。各アシスタントの SOUL.md と、メインアシスタントの USER.md に書いてください。",
+        "proactiveNote": "アシスタントごとのスイッチ（通知する・ミュート・非表示）は、それぞれの「通知」ページにあります。codeg の通知のマスタースイッチと「内容を隠す」（設定 → 通知）もアシスタントに適用されます。",
+        "byKind": "種類ごとの調整",
+        "byKindHint": "知らせの種類ごとに、どこまで割り込んでよいか。緊急はすぐ届き、通常はよいタイミングを待ち、低は「今日」にだけ入ります。",
+        "automationNote": "あなたの確認を待つものは、実行する内容をそのまま載せたカードになり、クリックすると実行されます。"
+      },
+      "prefs": {
+        "default": "（既定）",
+        "reply_length": {
+          "title": "返信の長さ",
+          "hint": "アシスタントの返信の長さ。",
+          "short": "短め",
+          "medium": "普通",
+          "long": "詳しく"
+        },
+        "cards": {
+          "title": "カードで返信",
+          "hint": "アシスタントがカード（UI-render スキル）で答えるかどうか。",
+          "prefer": "役立つときはいつでも",
+          "decisions": "あなたが決めるときだけ",
+          "never": "カードを使わない"
+        },
+        "when_unsure": {
+          "title": "意図がはっきりしないとき",
+          "hint": "あなたの代わりに動くとき、アシスタントがあなたの言葉をどう解釈するか。実行者からの質問は別扱いです。",
+          "assume": "最もありそうな解釈で進め、前提を明記する",
+          "ask": "先に確認して"
+        },
+        "chat_changes": {
+          "title": "会話で頼んだ変更",
+          "hint": "アシスタントに変更するよう伝えた設定。",
+          "apply": "すぐ変更（カードで元に戻せる）",
+          "show": "先に見せて"
+        },
+        "confirm_dispatch": {
+          "title": "依頼前に確認",
+          "hint": "確認待ちの依頼は、内容をすべて載せたカードになり、クリックすると送られます。",
+          "never": "いいえ、直接依頼する",
+          "code": "コード変更は先に確認",
+          "always": "毎回"
+        },
+        "followups": {
+          "title": "自分の依頼のフォローアップと再試行",
+          "hint": "アシスタントが依頼した作業を続けたり再試行したりするとき。",
+          "auto": "直接行う",
+          "ask": "先に確認して"
+        },
+        "messages": {
+          "title": "他のアシスタントへのメッセージ",
+          "hint": "あるアシスタントが別のアシスタントに書くとき。",
+          "auto": "直接送る",
+          "ask": "先に確認して"
+        },
+        "loop_rounds": {
+          "title": "進展のないやり取りを止める往復数",
+          "hint": "2 つのアシスタントが進展なしに往復できるラウンド数（1 ラウンド＝メッセージ 2 通）。堂々巡りはすぐに止めます。0 で無制限。"
+        },
+        "automation_level": {
+          "title": "自動化レベル",
+          "standard": "標準",
+          "ask_more": "もっと確認して",
+          "custom": "カスタム",
+          "standardHint": "すべて自動で行い、カードで知らせます。",
+          "ask_moreHint": "フォローアップと再試行、再起動で中断した作業の再試行、他のアシスタントへのメッセージ、会話で頼んだ変更、コードを変更する依頼は、まずカードであなたに確認します。セッションからの質問とプラン承認はあなたに回ります。",
+          "customHint": "下の項目のいくつかを個別に設定しています。",
+          "confirmTitle": "「{level}」に切り替えますか？",
+          "confirmBody": "変更した {count} 項目が上書きされます。",
+          "confirm": "切り替える"
+        },
+        "interrupt_retry": {
+          "title": "再起動で中断した作業",
+          "hint": "アシスタントが依頼した作業の途中で codeg が再起動したとき。",
+          "auto": "自動で再試行",
+          "ask": "先に確認して"
+        },
+        "retry_rounds": {
+          "title": "同じ作業の自動再試行の回数",
+          "hint": "同じ作業を codeg が自分で再試行する回数。超えたらあなたの判断に任せます。0 で再試行しません。"
+        },
+        "exec_questions": {
+          "title": "依頼したセッションからの質問",
+          "hint": "アシスタントが依頼したセッションが止まって質問してきたとき。シークレットを求める質問は常にあなたに届きます。",
+          "assistant": "アシスタントが代わりに答え、迷うときは私に回す",
+          "owner": "常に私に回す"
+        },
+        "exec_plans": {
+          "title": "依頼したセッションからのプラン承認",
+          "hint": "アシスタントが依頼したセッションが、先へ進む前にプランの承認を求めてきたとき。",
+          "assistant": "アシスタントが代わりに答え、迷うときは私に回す",
+          "owner": "常に私に回す"
+        },
+        "time_zone": {
+          "title": "タイムゾーン",
+          "hint": "アシスタントが読み書きする時刻（リマインダー、「明日の朝」、伝えられる現在時刻）はすべてこのタイムゾーンです。",
+          "system": "システムに従う"
+        },
+        "presence": {
+          "title": "在席と生活リズムを記録",
+          "hint": "codeg で操作している分を記録し（60 日間保持）、1 日が普段何時に始まり何時に終わるかを学びます。オフにするとそれ以上記録せず、既定の時間帯を使います。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "disturb_level": {
+          "title": "割り込みの程度",
+          "quiet": "少なめ",
+          "standard": "標準",
+          "more": "多め",
+          "custom": "カスタム",
+          "quietHint": "緊急の知らせと設定したリマインダーだけ通知し、それ以外は「今日」に入ります。1 日のまとめは頼んだときだけ出ます。",
+          "standardHint": "通常の知らせは、あなたがいて入力していないときに通知します。入力中は手が止まるまで待ち、離席中は戻るまでまとめておきます。",
+          "moreHint": "通常の知らせは入力中でも通知し、低い知らせは最大 2 時間に 1 回、1 件にまとめて通知します。",
+          "customHint": "下の項目のいくつかは、あなた好みに設定されています。",
+          "confirmTitle": "「{level}」に切り替えますか？",
+          "confirmBody": "変更した {count} 項目が上書きされます。",
+          "confirm": "切り替える"
+        },
+        "level": {
+          "urgent": "緊急",
+          "normal": "通常",
+          "low": "低"
+        },
+        "proactive": {
+          "title": "プロアクティブ機能",
+          "hint": "オフにすると、話しかけたときにだけ応答します。設定したリマインダーは時間どおりに届きます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "urgent_via": {
+          "title": "緊急の知らせ",
+          "hint": "設定したリマインダー、アシスタントが回してきた質問、アシスタントがあなたの承認待ち、セッションが 10 分以上あなたを待っている。",
+          "system_attention": "システム通知と、Dock／タスクバーでの合図",
+          "system": "システム通知のみ",
+          "in_page": "codeg の中だけ"
+        },
+        "normal_via": {
+          "title": "通常の知らせ",
+          "hint": "依頼した作業の完了、頼んだことへの返事、あなたを待つカード。",
+          "system": "システム通知",
+          "in_page": "codeg の中だけ",
+          "today": "「今日」にだけ入れる"
+        },
+        "low_via": {
+          "title": "低い知らせ",
+          "hint": "進み具合、アシスタント同士のやりとり、頼まれたとおりに変えた設定。",
+          "today": "「今日」にだけ入れる",
+          "digest": "1 件にまとめて、最大 2 時間に 1 回通知"
+        },
+        "focus_wait": {
+          "title": "入力中",
+          "hint": "入力が止まってから何分待って、通常の知らせを 1 件にまとめて送るか。0 ならいつもどおり送ります。"
+        },
+        "quiet_hours": {
+          "title": "静かな時間帯",
+          "hint": "静かな時間帯は設定したリマインダーだけ届き、それ以外は戻ってくるまで待ちます。",
+          "auto": "いつもの時間帯の外（学習するまでは 22:00～08:00）",
+          "fixed": "固定の時間帯",
+          "none": "なし"
+        },
+        "quiet_from": {
+          "title": "静かな時間帯の開始",
+          "hint": "静かな時間帯が始まる時刻。"
+        },
+        "quiet_to": {
+          "title": "静かな時間帯の終了",
+          "hint": "静かな時間帯が終わる時刻。"
+        },
+        "quiet_lets": {
+          "title": "静かな時間帯に届くもの",
+          "hint": "その間も通知するもの。",
+          "reminders": "時間になったリマインダーだけ",
+          "urgent": "リマインダーと緊急の知らせ"
+        },
+        "morning": {
+          "title": "リマインダーの「明日の朝」",
+          "hint": "リマインダーを「明日の朝」に延ばしたとき、何時にまた届くか。",
+          "hours": "いつも一日を始める時刻",
+          "fixed": "固定の時刻"
+        },
+        "morning_at": {
+          "title": "「明日の朝」の時刻",
+          "hint": "「明日の朝」が指す時刻。"
+        },
+        "projects": {
+          "title": "あなたのプロジェクト",
+          "hint": "アシスタントが見ておくプロジェクト。",
+          "all": "すべてのプロジェクト",
+          "more": "{names} ほか {rest} 件",
+          "none": "なし"
+        },
+        "level_reminder": {
+          "title": "リマインダー",
+          "hint": "設定したリマインダーの時間になった。"
+        },
+        "level_forwarded": {
+          "title": "回されてきたもの",
+          "hint": "アシスタントが依頼したセッションからの質問や計画を、あなたに回してきた。"
+        },
+        "level_approval": {
+          "title": "アシスタントが承認待ち",
+          "hint": "あなたが承認するまで、アシスタントが先へ進めない。"
+        },
+        "level_waiting": {
+          "title": "10 分待ち",
+          "hint": "セッションや依頼した作業が 10 分間あなたの回答を待っている。"
+        },
+        "level_question": {
+          "title": "アシスタントからの質問",
+          "hint": "アシスタント自身の質問や、選択カード。"
+        },
+        "level_confirm": {
+          "title": "確認待ちのカード",
+          "hint": "先に確認すると決めたことや、先に見せるよう頼んだ変更。"
+        },
+        "level_stuck": {
+          "title": "行き詰まり",
+          "hint": "できたかわからない一歩や、進展がないまま止まったアシスタント同士のやりとり。"
+        },
+        "level_done": {
+          "title": "作業の完了",
+          "hint": "アシスタントが依頼した作業が終わった、失敗した、またはあなたの確認待ち。"
+        },
+        "level_reply": {
+          "title": "返事",
+          "hint": "アシスタントが頼んだことに答えた。"
+        },
+        "level_exchange": {
+          "title": "アシスタント同士",
+          "hint": "アシスタント同士のメッセージ。"
+        },
+        "level_changed": {
+          "title": "設定の変更",
+          "hint": "アシスタントが頼まれたとおりに設定を変えた。"
+        },
+        "level_answered": {
+          "title": "代わりに回答",
+          "hint": "依頼したセッションからの質問に、アシスタントが代わりに答えた。"
+        },
+        "auto_accept": {
+          "title": "自動検収",
+          "hint": "アシスタントが渡したコード変更の作業がレビュー待ちになると、作業に使うエージェントが読み取り専用で確認し、アシスタントが受け入れ基準に照らして判断します。オフにするとあなた自身がレビューします。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "accept_revise": {
+          "title": "確認後の差し戻し",
+          "hint": "確認のあとアシスタントが修正を求めるとき。",
+          "auto": "自動で差し戻す",
+          "ask": "先に確認して（検収カードで）"
+        },
+        "accept_rounds": {
+          "title": "検収の確認の回数",
+          "hint": "この回数を確認してもまだ差し戻すなら、あなたが判断します。0 は自動で差し戻しません。"
+        },
+        "level_acceptance": {
+          "title": "検収",
+          "hint": "出した作業が検収を通ってマージできる、マージした、またはあなたの判断が必要なとき。"
+        },
+        "level_used_up": {
+          "title": "回数を使い切っても不合格",
+          "hint": "許可された回数まで差し戻してもまだ通らないとき。"
+        },
+        "forge_comment": {
+          "title": "フォージへのコメント",
+          "hint": "アシスタントが Issue や PR にコメントするとき。",
+          "auto": "そのまま投稿",
+          "ask": "先に確認する（承認カード）"
+        },
+        "issue_close": {
+          "title": "Issue のクローズ",
+          "hint": "アシスタントがフォージで Issue をクローズするとき。",
+          "auto": "そのままクローズ",
+          "ask": "先に確認する（承認カード）"
+        },
+        "pr_merge": {
+          "title": "PR のマージ",
+          "hint": "ヘッドがマージすべきバージョン（受け入れが有効なら受け入れ済みのもの）で、チェックがすべて成功したときだけマージします。リポジトリのブランチ保護はそのまま有効です。CNB はチェックを読めずヘッドも固定できないため、常に確認します。",
+          "auto": "チェック成功時にマージ",
+          "ask": "先に確認する（承認カード）"
+        },
+        "ci_failure": {
+          "title": "見守り中の PR のチェック失敗",
+          "hint": "タスクが修正します。届けたタスクがまだレビュー待ちなら続きの作業で、そうでなければこの PR 上の新しいタスクで。受け入れ後に codeg が修正を push します。回数は下で設定した分まで。",
+          "fix": "自動で修正",
+          "ask": "先に確認する（カードで）",
+          "tell": "知らせるだけ"
+        },
+        "pr_conflict": {
+          "title": "見守り中の PR にコンフリクト",
+          "hint": "タスクがベースブランチをマージしてコンフリクトを解消します（rebase ではありません。codeg は PR に強制 push しません）。",
+          "auto": "自動で解消",
+          "ask": "先に確認する（カードで）"
+        },
+        "review_feedback": {
+          "title": "書き込み権限のある人のレビュー",
+          "hint": "リポジトリに書き込める人の変更依頼や行コメントは、原文のままタスクに渡し、1 点ずつ受け入れ・説明・理由付きの反論で対応させます。",
+          "auto": "タスクに渡す",
+          "ask": "先に確認する（カードで）"
+        },
+        "outsider_comments": {
+          "title": "書き込み権限のない人のコメント",
+          "hint": "誰が何を書いたかをアシスタントが見て判断します：タスクに渡す、あなたに知らせる、放っておく（ボットなど）。",
+          "auto": "アシスタントが判断",
+          "ask": "先に確認する（カードで）"
+        },
+        "ci_rounds": {
+          "title": "1 つの PR を自動で直す回数",
+          "hint": "チェック失敗とコンフリクトをタスクをまたいで数えます。この回数を超えたら次の失敗は緊急であなたに渡し、各回の変更内容を添えます。0 は自動で直しません。"
+        },
+        "level_forge": {
+          "title": "フォージでの操作",
+          "hint": "アシスタントのコメント、Issue のクローズ、PR のマージ。"
+        },
+        "level_pr_ready": {
+          "title": "マージできる PR",
+          "hint": "見守り中の PR のチェックがすべて通りマージできる状態、または codeg が自動でマージしたとき。"
+        },
+        "level_pr": {
+          "title": "PR のその他の動き",
+          "hint": "見守り中の PR：チェック失敗・再成功、コンフリクト、マージ、クローズ。"
+        },
+        "routine_dispatch": {
+          "title": "ルーティンの作業依頼",
+          "hint": "依頼型ルーティンが実行のたびに依頼する作業。",
+          "auto": "そのまま依頼",
+          "ask": "毎回先に確認（確認カード）"
+        },
+        "level_routine": {
+          "title": "ルーティンの報告",
+          "hint": "設定したルーティンが伝えることを見つけたとき。"
+        },
+        "level_routine_paused": {
+          "title": "ルーティンの一時停止",
+          "hint": "3 回続けて失敗したか、作業に使うエージェントが使えなくなりました。"
+        },
+        "level_proposal": {
+          "title": "提案：あなた待ちのもの",
+          "hint": "失敗して誰も対応していない、レビュー待ちが長い、PR があなたのレビュー待ち。"
+        },
+        "level_proposal_low": {
+          "title": "提案：その他",
+          "hint": "未コミットの変更、動きのない事項、遅れたブランチ、繰り返しの依頼。"
+        },
+        "rule_failed": {
+          "title": "失敗して誰も対応していない",
+          "hint": "依頼した作業やボードのタスクが失敗したまま誰も対応していないとき。依頼したアシスタントのところにカードが出ます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_review": {
+          "title": "レビュー待ちが長い",
+          "hint": "レビュー待ちのボードのタスクで、この回の検収がまだのもの。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_session": {
+          "title": "セッションがずっと待っている",
+          "hint": "どのセッションでも、あなたの承認や回答を待っていて、あなたがそこにいないとき。緊急。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_pr_review": {
+          "title": "PR があなたのレビュー待ち",
+          "hint": "見ているプロジェクトで。codeg が依頼を最初に見たときから数えます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_uncommitted": {
+          "title": "コミットされていない変更",
+          "hint": "プロジェクトやワークツリーに誰もコミットしていない変更があるとき。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_idle": {
+          "title": "長く動きのない事項",
+          "hint": "終わっていない事項に変化がないとき。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_behind": {
+          "title": "ブランチの遅れ",
+          "hint": "アシスタントが依頼したタスクのブランチがターゲットより遅れ、競合するとき。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_repeat": {
+          "title": "繰り返しの依頼",
+          "hint": "30 日以内に似た依頼がこの回数になったら、ルーティン化を提案します。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_suggest": {
+          "title": "アシスタントからの提案",
+          "hint": "オフにするとアシスタントは提案しません。suggest 付きの呼び出しには「今は提案を受け付けない」と伝えます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_undo": {
+          "title": "取り消しの多い変更",
+          "hint": "週の振り返りで：言われたとおりに行った変更を何度も取り消したとき、先に見せるようにするか尋ねます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_idle_bot": {
+          "title": "使われていないアシスタント",
+          "hint": "週次の振り返りで：2 週間起こされていないアシスタントを、非表示にするか削除するか尋ねます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_failed_hours": {
+          "title": "失敗カードまでの時間",
+          "hint": "失敗カードまでの時間"
+        },
+        "rule_review_hours": {
+          "title": "レビュー待ちカードまでの時間",
+          "hint": "レビュー待ちカードまでの時間"
+        },
+        "rule_session_minutes": {
+          "title": "セッションカードまでの分数",
+          "hint": "セッションカードまでの分数"
+        },
+        "rule_pr_review_days": {
+          "title": "レビュー依頼カードまでの日数",
+          "hint": "レビュー依頼カードまでの日数"
+        },
+        "rule_uncommitted_hours": {
+          "title": "未コミットカードまでの時間",
+          "hint": "未コミットカードまでの時間"
+        },
+        "rule_idle_days": {
+          "title": "動きのない事項カードまでの日数",
+          "hint": "動きのない事項カードまでの日数"
+        },
+        "rule_repeat_count": {
+          "title": "ルーティン提案までの依頼回数",
+          "hint": "ルーティン提案までの依頼回数"
+        },
+        "brief": {
+          "title": "朝のまとめ",
+          "hint": "メインアシスタントが毎日、あなたが必要なこと・前回からの動き・今日の予定をまとめ、その日最初に来たときに届けます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "brief_time": {
+          "title": "準備する時刻",
+          "hint": "どちらでも、届くのはあなたが来たときです。",
+          "hours": "いつもの開始の 15 分前",
+          "fixed": "固定の時刻"
+        },
+        "brief_at": {
+          "title": "準備する時刻",
+          "hint": "朝のまとめを準備する時刻です。"
+        },
+        "brief_needs": {
+          "title": "あなたが必要なこと",
+          "hint": "あなたを待っているすべて：どれだけ待ったか、なぜか。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "brief_night": {
+          "title": "前回からの動き",
+          "hint": "完了・失敗した作業、動きのあった PR、ルーティンの報告、アシスタントが代わりにしたこと、昨夜の作業の結果。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "brief_bots": {
+          "title": "各アシスタント",
+          "hint": "アシスタントごとに 1 行：終わったこと、取り組み中のこと、詰まっているところ。非表示のものは載せません。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "brief_schedule": {
+          "title": "今日の予定",
+          "hint": "今日これからのリマインダーとルーティン。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "brief_loose": {
+          "title": "やりかけのこと",
+          "hint": "1 週間動きのない項目、1 日以上未コミットの変更があるワークツリー、やりかけのセッション。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "brief_yesterday": {
+          "title": "昨日のあなた",
+          "hint": "昨日使ったプロジェクトとエージェント、開いたセッションの数。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "brief_suggestions": {
+          "title": "提案の上限",
+          "hint": "朝のまとめの提案数（それぞれ理由付き）。0 なら提案しません。"
+        },
+        "wrap": {
+          "title": "1 日のまとめ",
+          "hint": "終わったこと、まだ動いていること、明日あなたが必要なこと、今夜アシスタントにできること。「今日はここまで」と言えばいつでも出ます。",
+          "auto": "いつもの終業が近づいたら",
+          "ask": "「今日はここまで」と言ったときだけ",
+          "off": "オフ"
+        },
+        "wrap_tonight": {
+          "title": "「今夜できること」",
+          "hint": "まとめで今夜できる作業をカードで提案し、承認したものだけ行います。翌朝のまとめで結果を伝えます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "keep_awake": {
+          "title": "今夜の作業中はスリープさせない",
+          "hint": "今夜やると決めた作業が動いている間、自動でスリープしません（電源接続時のみ）。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "menubar": {
+          "title": "メニューバーに作業中のアシスタント",
+          "hint": "アシスタントが作業中は、codeg のメニューバーアイコンがその顔になり、ときどきまばたきします。横には未読のあるアシスタントの数、メニューには最近の 5 人が並びます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "dock_badge": {
+          "title": "Dock のバッジ",
+          "hint": "codeg の Dock やタスクバーのアイコンに出る数字：未読のあるアシスタントの数です（非表示・ミュート中は除く）。",
+          "on": "未読のあるアシスタント数",
+          "off": "オフ"
+        },
+        "history_sessions": {
+          "title": "すべての会話を検索",
+          "hint": "codeg のすべての会話も検索対象になります（あなたの入力と各ターン最後の回答）。オフにすると索引から削除します。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "history_tasks": {
+          "title": "ボードのタスクを検索",
+          "hint": "ボードのタスクも検索対象になります（タイトル、依頼内容、結果）。オフにすると索引から削除します。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "reactions": {
+          "title": "カードへの反応を記録",
+          "hint": "カードの種類ごとにあなたの対応を記録します。同じ提案カードを 3 回続けて閉じると 1 段階下げ、週の振り返りでお知らせします。オフにすると下げず、下げたものも元に戻します。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "weekly_review": {
+          "title": "週の振り返り",
+          "hint": "1 週間を数字で振り返ります：依頼した作業、代わりに答えた質問、日ごと・アシスタントごとの使用量、codeg が調整したこと。",
+          "brief": "週の最初の朝のブリーフィング",
+          "wrap": "金曜日のまとめ",
+          "off": "オフ"
+        },
+        "level_brief": {
+          "title": "朝のまとめと 1 日のまとめ",
+          "hint": "朝のまとめ、または 1 日のまとめができました。"
+        },
+        "flush": {
+          "title": "整理前にメモ",
+          "hint": "codeg がアシスタントのコンテキストを整理する前に、今日ここまでの要点をログに書き留めさせます。残すべきことが失われません。最長 2 分で、その後はいつもどおり整理します。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "level_memory": {
+          "title": "記憶の更新",
+          "hint": "アシスタントが記憶・ペルソナ・ルールを変えたとき。夜の整理と手順スキルも含みます。"
+        },
+        "plans": {
+          "title": "計画",
+          "hint": "アシスタントが大きな作業をステップに分けた計画。",
+          "auto": "組み立てたらすぐ開始",
+          "ask": "先に見せて（「開始」で進める）"
+        },
+        "level_plan": {
+          "title": "計画の完了",
+          "hint": "計画のステップがすべて終わりました。"
+        },
+        "level_plan_stuck": {
+          "title": "計画の停止",
+          "hint": "ステップが失敗し、そのままになっています。"
+        },
+        "tidy": {
+          "title": "記憶の整理と手順スキル",
+          "hint": "毎晩あなたが作業を終えたあと、各アシスタントが自分の記憶・ペルソナ・ルールを整理します。一連の仕事がうまくいったら、その進め方を手順スキルにまとめます。",
+          "auto": "すぐ反映（カードから元に戻せます）",
+          "draft": "先に見せて（下書きカード、承認してから反映）",
+          "off": "しない"
+        }
+      },
+      "workdir": {
+        "title": "作業ディレクトリ",
+        "hint": "ペルソナ、ルール、メモリを保存する場所で、git で管理されます。現在：{current}。移動すると新しいセッションが始まり、元のディレクトリはそのまま残ります。",
+        "placeholder": "既定：データディレクトリ内",
+        "useDefault": "既定を使う",
+        "apply": "移動",
+        "saved": "作業ディレクトリを移動しました。"
+      },
+      "changed": {
+        "on": "オン",
+        "off": "オフ",
+        "default": "既定"
+      },
+      "brain": "頭脳",
+      "about": {
+        "followSystem": "システムに従う",
+        "followSystemZone": "システムに従う（{zone}）",
+        "zoneSearch": "タイムゾーンを検索",
+        "zoneNoMatch": "一致するタイムゾーンがありません。",
+        "zoneNow": "現地は今 {time} です。",
+        "hoursTitle": "codeg が把握している生活リズム（直近 {days} 日）",
+        "workday": "平日",
+        "restday": "週末",
+        "span": "{start}–{end}",
+        "spanOvernight": "{start}–翌日 {end}",
+        "learnedFrom": "{count} 日分から",
+        "stillLearning": "学習中 — 当面は既定値",
+        "recordOff": "記録はオフ：既定の時間帯を使います。",
+        "presentNow": "今 codeg を使っています。",
+        "lastActive": "最後の操作：{time}。",
+        "notSeen": "codeg の起動以降、操作はまだありません。",
+        "note": "今いるかどうかは引き続きその場で判断します（フォーカスのあるウィンドウで直近 2 分以内に操作）。通知のタイミングを決めるためで、記録はしません。リマインダーの「明日の朝」は普段 1 日が始まる時刻です。",
+        "history": {
+          "title": "タイムマシン",
+          "hint": "これまでの発言や作業を検索できます（アシスタント名の横の検索から。アシスタント自身も検索します）。アシスタントの会話と互いのメッセージは常に対象です。",
+          "rebuild": "索引を作り直す",
+          "rebuilt": "索引を作り直しています…",
+          "reading": "会話を読み込み中：{done}/{total} 件（{documents} 項目）。",
+          "ready": "最新です：会話 {total} 件、{documents} 項目。",
+          "readyNoSessions": "{documents} 項目。"
+        },
+        "setByYou": "あなたが設定",
+        "change": "変更",
+        "backToLearned": "学習した時間に戻す（{span}）",
+        "backToLearning": "自動学習に戻す",
+        "start": "開始",
+        "end": "終了",
+        "save": "保存",
+        "cancel": "キャンセル",
+        "seen": {
+          "title": "codeg が見ていること",
+          "hint": "codeg の会話から集計します（アシスタント自身の会話は除く）。会話の中身は読みません。気にしないよう指定したプロジェクトはアシスタントに伝えず、「あなた待ち」では後ろに並びます。",
+          "projects": "プロジェクト（直近 7 / 30 日）",
+          "noProjects": "まだプロジェクトはありません。",
+          "projectCounts": "会話 {recent} / {all} 件",
+          "mind": "再び気にする",
+          "dontMind": "気にしない",
+          "agents": "エージェント（直近 30 日）"
+        },
+        "reactions": {
+          "none": "直近 30 日のカードはありません。",
+          "off": "記録しません：自動で下げることはありません。",
+          "kind": "カード",
+          "raised": "表示",
+          "acted": "対応",
+          "dismissed": "閉じた",
+          "undone": "取り消し",
+          "wait": "所要",
+          "minutes": "{n} 分",
+          "kinds": {
+            "proposal": "確認カード",
+            "uncertain": "不確かな手順",
+            "loop": "止めたやり取り",
+            "changed": "変更",
+            "choice": "選択",
+            "reminder": "リマインダー",
+            "acceptance": "受け入れ確認",
+            "forge": "フォージ操作",
+            "pr": "プルリクエスト",
+            "routine": "ルーチン",
+            "rule": "提案",
+            "memory": "メモリ",
+            "tidy": "記憶の整理",
+            "skill": "手順スキル"
+          }
+        },
+        "clear": {
+          "title": "学習内容を消去",
+          "hint": "記録した在席時間と自動で下げたカードを忘れ、プロジェクト・エージェント・カードへの反応は今から数え直します。あなたが設定したものは残ります。",
+          "clearedAt": "前回の消去：{when}。",
+          "button": "消去…",
+          "confirmTitle": "codeg の学習内容を消去しますか？",
+          "confirmBody": "作業時間は codeg が学び直すまで既定値に戻り（あなたが設定した時間は残ります）、自動で下げた提案カードは元に戻ります。元に戻せません。",
+          "cancel": "キャンセル",
+          "confirm": "消去"
+        }
+      },
+      "notifyPage": {
+        "notify": "通知する",
+        "notifyHint": "何かを終えたときや、あなたを待っているときに通知します",
+        "muted": "ミュート",
+        "mutedHint": "システム通知を出しません。発言は未読として数えます。",
+        "hidden": "非表示",
+        "hiddenHint": "これまでどおり動きますが、通知せず、名簿にも表示されず、バッジにも数えません。名簿の下の「非表示 N 人」から見られます。"
+      },
+      "grade": {
+        "firstPass": "一発合格 {rate}%（{pass}/{settled}）",
+        "average": "平均 {time}",
+        "minutes": "{n} 分",
+        "hours": "{h} 時間 {m} 分",
+        "apart": "エージェントと方法別",
+        "byBot": "アシスタント・方法別",
+        "someone": "以前の依頼",
+        "unjudged": "{count} 件依頼、まだ完了なし"
+      },
+      "processSkillHint": "アシスタントが書き留めた仕事の進め方です。頼まれたら、このとおりに進めます。ここで変えた内容は保存すると反映され、オフにすると読み込まれません。",
+      "skillOff": "オフ",
+      "skillTurnOn": "オンにする",
+      "skillTurnOff": "オフにする",
+      "skillTurnedOn": "{name} をオンにしました",
+      "skillTurnedOff": "{name} をオフにしました",
+      "deleteSkill": "スキルを削除",
+      "confirmDeleteSkillHint": "この手順スキルを削除しますか？作業ディレクトリからフォルダーごと削除されます。",
+      "skillDeleted": "{name} を削除しました",
+      "personaUnwritten": "ペルソナはまだ書かれていません。自己紹介のとき、あなたが仕事を任せたとき、毎晩の整理のときに自分で書き足します。ここで直接書くこともできます。",
+      "projects": {
+        "about": "アシスタントはこれらのプロジェクトでレビュー待ちの PR を見ておき、最初に手伝えることもここから探します。",
+        "scope": "見るプロジェクト",
+        "all": "すべてのプロジェクト",
+        "allHint": "あとで追加したものも含みます。",
+        "only": "選んだプロジェクトだけ",
+        "onlyHint": "新しいプロジェクトは自動では入りません。見るならここでチェックします。",
+        "loading": "プロジェクトを読み込み中…",
+        "empty": "codeg にはまだプロジェクトがありません。",
+        "openFolder": "プロジェクトフォルダーを開く",
+        "onForge": "{forge} 上",
+        "noAccount": "{forge} 上、アカウント未接続",
+        "noForge": "コードホスティングなし",
+        "connectAccount": "アカウントを接続",
+        "note": "閉じたプロジェクトは見ません。開き直せば自動で戻ります。"
+      },
+      "workTitle": "作業に使うエージェント",
+      "workHint": "任せた作業（コードを書く、コマンドを実行する）はこのエージェントで行います。",
+      "workSame": "頭脳と同じ",
+      "workOther": "別に選ぶ",
+      "workSameHint": "頭脳のエージェントとすべてのオプションをそのままコピーします。その後はそれぞれ独立します。",
+      "workUnavailable": "{agent} は使えません（未インストールか無効）。別のものを選んでください。",
+      "instructionsTitle": "作業時の常駐指示",
+      "instructionsHint": "作業セッションを始めるたび（仕事を渡すとき、会話で @ されたとき）に送られます。頭脳は読みません。",
+      "instructionsPlaceholder": "作業時の決まりごと、確認すること、避けること…",
+      "instructionsTooLong": "常駐指示は最大 {max} 文字です。",
+      "noBrainYet": "まだ頭脳がありません。メインアシスタントを設定すると、メインの頭脳のコピーを受け取ります。"
+    },
+    "statusWord": {
+      "idle": "待機中",
+      "replying": "返信中…",
+      "compacting": "コンテキストを整理中…",
+      "waiting": "あなたの確認待ち",
+      "elsewhere": "別のプロセスで実行中（読み取り専用）",
+      "open": "状態を表示",
+      "noting": "要点をメモ中…"
+    },
+    "menu": {
+      "more": "その他",
+      "showPanel": "サイドパネルを表示",
+      "hidePanel": "サイドパネルを隠す",
+      "settings": "パーソナルエージェントの設定",
+      "viewSession": "下層のセッションを表示",
+      "compact": "コンテキストを圧縮",
+      "compactHint": "セッションのコンテキストを今すぐ圧縮します",
+      "stopCompaction": "整理を停止",
+      "stopReply": "返信を停止",
+      "newSession": "新しいセッションを開始…",
+      "stopAll": "すべて停止",
+      "stopAllHint": "返信、送り出した作業、まだ誰も着手していないメッセージを止めます",
+      "stoppedAll": "このアシスタントの作業をすべて止めました"
+    },
+    "newSession": {
+      "title": "新しいセッションを開始しますか？",
+      "description": "次のメッセージから新しい下層セッションで続けます。人格・記憶・進行中の事項は引き継がれ、ここでの会話はそのまま残ります。",
+      "cancel": "キャンセル",
+      "confirm": "新しいセッションを開始",
+      "queued": "次のメッセージから新しいセッションで続けます。"
+    },
+    "time": {
+      "yesterday": "昨日 {time}"
+    },
+    "actions": {
+      "quote": "引用",
+      "copy": "コピー",
+      "copySelection": "選択部分をコピー",
+      "copied": "コピーしました",
+      "copyFailed": "コピーできませんでした",
+      "stop": "返信を停止",
+      "timeTook": "{time} · 所要 {took}"
+    },
+    "owner": {
+      "unread": "未読",
+      "unfinished": "未完了",
+      "resend": "再送信",
+      "resent": "再送信済み",
+      "merged": "進行中の返信に取り込まれました",
+      "received": "受け取り済み",
+      "mentioned": "「{keyword}」と言いました — リマインダー：{text}"
+    },
+    "quote": {
+      "you": "あなた",
+      "dispatch": "依頼：{title}",
+      "attachment": "[添付]",
+      "noText": "（テキストなし）",
+      "unavailable": "元のメッセージは利用できません",
+      "jump": "元のメッセージへ移動",
+      "dismiss": "引用を外す",
+      "preview": "元のメッセージ",
+      "previewHint": "引用されたメッセージ。古すぎるためここには読み込まれていません。",
+      "reminder": "リマインダー：{summary}"
+    },
+    "step": {
+      "awaiting": "確認待ち：{title}",
+      "anAction": "操作",
+      "thinking": "考え中…",
+      "compacting": "コンテキストを整理中…",
+      "plan": "計画を更新中",
+      "planNamed": "計画：{title}",
+      "own": {
+        "dispatch": "作業を依頼中",
+        "dispatch_followup": "作業をフォローアップ中",
+        "dispatch_wait": "任せた作業の結果を待っています",
+        "items": "進行中の事項を整理中",
+        "timeline_read": "会話をさかのぼって確認中",
+        "project_list": "プロジェクトを確認中"
+      },
+      "kind": {
+        "read": "ファイルを読み込み中",
+        "edit": "ファイルを編集中",
+        "delete": "ファイルを削除中",
+        "move": "ファイルを移動中",
+        "search": "検索中",
+        "execute": "コマンドを実行中",
+        "think": "考え中…",
+        "fetch": "Web ページを開いています",
+        "plan": "計画を更新中",
+        "compact": "コンテキストを整理中…",
+        "question": "あなたに質問中",
+        "other": "ツールを使用中"
+      }
+    },
+    "reply": {
+      "starting": "開始中",
+      "noteDispatched": "{count} 件の作業を依頼しました",
+      "noteContinued": "{count} 件の作業をフォローアップしました",
+      "noteNothing": "処理しました（テキストでの返信はありません）",
+      "answeredPermission": "あなたの選択：{option}",
+      "answeredQuestion": "あなたの回答：{answer}",
+      "answeredSkipped": "質問をスキップしました",
+      "answeredPlan": {
+        "approve": "計画を承認しました",
+        "request_changes": "計画の修正を依頼しました",
+        "abandon": "計画を取りやめました"
+      },
+      "stopped": "停止しました",
+      "errorMidway": "返信の途中でエラーが発生しました：{error}",
+      "interrupted": "この返信は完了しませんでした：{reason}",
+      "truncated": "返信が長さの上限に達し、途中で切れました",
+      "preempted": "あなたのメッセージに道を譲って止まりました",
+      "resend": "{count, plural, other {# 件のメッセージを再送信}}",
+      "why": {
+        "connection": "接続が切れました",
+        "overflow": "コンテキストがいっぱいになりました",
+        "rejected": "エージェントが拒否しました",
+        "error": "エラーが発生しました",
+        "restart": "codeg が再起動しました",
+        "unknown": "予期せず停止しました"
+      },
+      "requestInputs": "このターンは複数の件を扱っていました：{list}"
+    },
+    "dispatchCard": {
+      "continue": "続き：{title}",
+      "notSent": "送信されませんでした",
+      "more": "ほか {count} 件",
+      "doneWhen": "完了条件",
+      "check": "検収の確認",
+      "checkRound": "検収の確認 · {round} 回目"
+    },
+    "event": {
+      "acceptanceEvidence": "検収の根拠",
+      "someone": "アシスタント",
+      "replacedBy": "「{title}」が引き継ぎました",
+      "more": "すべて表示",
+      "less": "折りたたむ",
+      "source": "元のメッセージ",
+      "showText": "原文を表示",
+      "hideText": "原文を隠す",
+      "makeRoutine": "ルーティンにする…",
+      "note": {
+        "boot": "codeg が再起動しました",
+        "lost": "セッションの接続が切れました",
+        "gone": "ボードのタスクが削除されました"
+      },
+      "retry": {
+        "pending": "自動で再試行中（{max} 回中 {attempt} 回目）…",
+        "retried": "自動で再試行しました（{max} 回中 {attempt} 回目）",
+        "failed": "自動再試行に失敗しました：{error}",
+        "asked": "再試行するかあなたに確認しました",
+        "exhausted": "すでに {max} 回再試行しました。判断はあなたに任せます"
+      }
+    },
+    "overview": {
+      "editBrain": "実行するエージェントを変更",
+      "lastCompaction": "前回の整理：{when}、{outcome}{range}",
+      "runLog": "実行ログ",
+      "details": "詳細",
+      "command": "圧縮コマンド"
+    },
+    "runLog": {
+      "empty": "まだありません。",
+      "newSession": "{agent} で新しいセッションを開始（{reason}）",
+      "pendingSwitch": "次のメッセージから新しいセッション（{reason}）",
+      "reconnected": "同じセッションに再接続しました",
+      "optionsChanged": "オプションが変わりました",
+      "range": " · {before}% → {after}%",
+      "by": {
+        "auto": "（自動）",
+        "owner": "（あなた）",
+        "agent": "（エージェント自身）"
+      },
+      "compaction": {
+        "ok": "コンテキストを整理しました{who}{range}",
+        "failed": "コンテキストの整理に失敗しました{who}{range}",
+        "canceled": "コンテキストの整理を停止しました{who}{range}"
+      },
+      "compactionPaused": "2 回続けて効果がなかったため、このセッションの自動整理を一時停止しました",
+      "overflowNewSession": "整理後もコンテキストがあふれたため、新しいセッションを開始しました",
+      "overflowCompact": "コンテキストがあふれたため、自動で整理しました",
+      "turnStopped": "返信が停止されました",
+      "turnFailed": "返信に失敗しました：{error}",
+      "turnInterrupted": "返信が完了しませんでした",
+      "turnPreempted": "返信があなたのメッセージに道を譲りました",
+      "workdirChanged": "作業ディレクトリを {path} に移しました",
+      "notesFirst": "（先に要点をメモ）"
+    },
+    "matters": {
+      "noneOpen": "現在進行中のものはありません。",
+      "origin": "元のメッセージへ移動"
+    },
+    "notice": {
+      "open": "提案 · あなたの確認待ち",
+      "acted": "提案どおりに実行しました",
+      "dismissed": "この提案は見送りました",
+      "acting": "実行中…",
+      "unknown": "実行されたか不明",
+      "unknownHint": "実行の途中で中断されたため、反映されたかどうか codeg には分かりません。自動でやり直してはいません。",
+      "followupOf": "「{title}」を続ける",
+      "intent": {
+        "revise": "差し戻して修正",
+        "continue": "続けて進める",
+        "question": "質問する",
+        "verify": "セルフチェック"
+      },
+      "accept": "このとおりに実行",
+      "dismiss": "やめておく",
+      "again": "もう一度実行",
+      "failed": "実行できませんでした：{error}",
+      "uncertain": {
+        "open": "このステップが届いたか不明です",
+        "hint": "このフォローアップの送信中に中断されたため、実行者が受け取ったかどうか codeg には分かりません。再送はしていません。",
+        "look": "確認する",
+        "again": "もう一度送る",
+        "dismiss": "そのままにする",
+        "acting": "再送中…",
+        "acted": "再送しました",
+        "dismissed": "そのままにしました",
+        "resolved": "届いていました"
+      },
+      "loop": {
+        "open": "やり取りを停止 · 対応待ち",
+        "noProgress": "{a} と {b} が進展のないまま {count} 回やり取りしたため、codeg が止めました。",
+        "cycle": "{a} が {b} に送りましたが、{b} 自身もこのやり取りで返信を待っていました。堂々巡りのため codeg が止めました。",
+        "refused": "送られなかった内容：「{text}」",
+        "look": "やり取りを見る",
+        "goOn": "続けさせる",
+        "mine": "自分で対応する",
+        "continued": "続けさせました",
+        "takenOver": "あなたに任されました"
+      },
+      "stopped": {
+        "this": "停止しました（始めたことも含めて）",
+        "all": "すべて停止しました",
+        "work": "{count} 件の作業を停止",
+        "messages": "{count} 件のメッセージを取り消し",
+        "messageTo": "{name} 宛て：{text}",
+        "notStopped": "相手がすでに対応中のため停止していません：",
+        "onIt": "{name} が「{text}」に対応中",
+        "stopToo": "{name} の分も止める",
+        "alsoStopped": "こちらも停止"
+      },
+      "confirm": {
+        "open": "あなたの確認待ち",
+        "acted": "確認済み・送信しました",
+        "dismissed": "送信しませんでした",
+        "accept": "送信する",
+        "dismiss": "やめる",
+        "messageTo": "{name} へのメッセージ"
+      },
+      "changed": {
+        "applied": "指示どおりに変更しました",
+        "accepted": "変更しました",
+        "undone": "元に戻しました",
+        "dismissed": "変更しませんでした",
+        "suggested": "変更の提案",
+        "show": "指示どおりに変更予定 · あなたの確認待ち",
+        "line": "{name} が指示どおりに変更しました",
+        "quote": "あなたの発言：「{quote}」",
+        "reason": "理由：{reason}",
+        "kept": "その後また変更されたため、そのままにした項目：{items}",
+        "accept": "変更する",
+        "dismiss": "やめておく",
+        "undo": "元に戻す",
+        "seeSettings": "設定で見る",
+        "team": {
+          "of": "{name} · {field}",
+          "botField": {
+            "name": "名前",
+            "avatar": "顔",
+            "brain": "ブレイン",
+            "notify": "通知",
+            "muted": "ミュート",
+            "hidden": "非表示",
+            "persona": "ペルソナ",
+            "work_agent": "作業に使うエージェント"
+          },
+          "avatarOther": "カスタム画像",
+          "empty": "（空）",
+          "nothingSet": "未設定",
+          "personaNow": "現在",
+          "personaNew": "変更後"
+        },
+        "uncheckedQuote": "メインアシスタントはあなたの発言だとしています：「{quote}」。ただし今回あなたはこう入力していません"
+      },
+      "retryOf": "「{title}」を再試行",
+      "tonight": {
+        "open": "今夜できること",
+        "acted": "今夜やります",
+        "dismissed": "今夜はしない",
+        "accept": "今夜やる",
+        "dismiss": "やめておく",
+        "awake": "この作業が終わるまでコンピューターはスリープしません。"
+      }
+    },
+    "exchange": {
+      "sentTo": "<peer></peer> にメッセージを送信",
+      "from": "<peer></peer> からのメッセージ",
+      "exchanged": "{names} と {count} 件のやり取り",
+      "state": {
+        "stopped": "取り消し済み",
+        "looped": "堂々巡りで停止",
+        "canceled": "キャンセル済み"
+      },
+      "sheetTitle": "{a} ⇄ {b}",
+      "openPeer": "{name}の会話を開く",
+      "sheetHint": "このやり取りで 2 つのアシスタントが書いたすべてのメッセージ。",
+      "unavailable": "やり取りを読み込めませんでした：{error}"
+    },
+    "mirror": {
+      "question": "{name} からの質問",
+      "permission": "{name} が許可を求めています",
+      "answered": "回答済み",
+      "skipped": "スキップ済み",
+      "withdrawn": "不要になりました",
+      "resolved": "解決済み"
+    },
+    "bots": {
+      "new": "新しいアシスタント",
+      "copyName": "{name}（コピー）",
+      "copied": "{name} として複製しました",
+      "copy": "複製",
+      "deleteAction": "削除",
+      "face": {
+        "shape": "形",
+        "color": "色",
+        "tooLarge": "画像が大きすぎます。",
+        "unreadable": "このファイルは画像として読み込めませんでした。",
+        "shapes": {
+          "ring": "リング",
+          "terminal": "ターミナル",
+          "braces": "波かっこ",
+          "shield": "盾",
+          "chip": "チップ",
+          "bug": "虫",
+          "cursor": "マウスポインター",
+          "gear": "歯車",
+          "file": "コードファイル",
+          "magnifier": "虫めがね",
+          "package": "小包",
+          "rocket": "ロケット",
+          "mug": "マグカップ"
+        },
+        "colors": {
+          "black": "黒",
+          "brown": "茶",
+          "red": "赤",
+          "orange": "オレンジ",
+          "yellow": "黄",
+          "green": "緑",
+          "teal": "ティール",
+          "blue": "青",
+          "purple": "紫",
+          "magenta": "マゼンタ",
+          "gray": "グレー"
+        },
+        "edit": "アバターを編集",
+        "reset": "リセット",
+        "pages": {
+          "bot": "モデル",
+          "make": "テキスト",
+          "upload": "アップロード"
+        },
+        "dropHint": "画像をドラッグまたは貼り付け",
+        "or": "または",
+        "pickFile": "ローカルの画像を選択",
+        "dragHint": "ドラッグして位置を調整",
+        "zoom": "拡大縮小",
+        "zoomIn": "拡大",
+        "zoomOut": "縮小",
+        "restart": "やり直す",
+        "setAvatar": "アバターに設定",
+        "monogram": "名前の頭文字",
+        "typeOne": "文字か絵文字を入力",
+        "useIt": "使う"
+      },
+      "create": {
+        "title": "新しいアシスタント",
+        "description": "名前と、どんなアシスタントかを数行。頭脳はメインアシスタントと同じです。",
+        "name": "名前",
+        "namePlaceholder": "例：コードレビュー",
+        "cancel": "キャンセル",
+        "create": "作成",
+        "persona": "ペルソナ",
+        "personaPlaceholder": "例：コードの変更をレビューします。正しいか、テストは十分かを見ます。",
+        "personaHint": "1〜2行で：どんなアシスタントで、どんな仕事を任せるか。空欄でも構いません。まず自己紹介し、その後あなたの指示とこなした仕事から自分で書き足します。",
+        "workSameHint": "頭脳はメインと同じ。作業は頭脳をコピーし、オプションもすべて同じで、その後は独立します。どちらもそのページで変更できます。"
+      },
+      "roster": {
+        "title": "アシスタント",
+        "add": "新しいアシスタント",
+        "pinned": "ピン留め",
+        "others": "その他",
+        "muted": "ミュート中",
+        "handWork": "手持ちの作業",
+        "awaiting": "返信待ち",
+        "nothing": "手持ちの作業はありません",
+        "groupName": "グループ名",
+        "newGroupTitle": "新しいグループ",
+        "newGroupSave": "移動",
+        "collapse": "{name} を折りたたむ",
+        "expand": "{name} を展開",
+        "menu": {
+          "pin": "ピン留め",
+          "unpin": "ピン留めを解除",
+          "moveTo": "グループに移動",
+          "newGroup": "新しいグループ…",
+          "noGroup": "グループなし",
+          "hide": "非表示にする",
+          "show": "表示する",
+          "mute": "ミュート",
+          "unmute": "ミュートを解除",
+          "markUnread": "未読にする",
+          "markRead": "既読にする",
+          "notifyOn": "通知する",
+          "copy": "複製…",
+          "stopAll": "すべて停止",
+          "delete": "削除…",
+          "details": "詳細を表示"
+        },
+        "mergeable": "#{id} マージできます：{title}",
+        "prReady": "マージできます：{text}",
+        "prFailed": "#{id} チェック失敗：{title}",
+        "prStuck": "#{id} コンフリクトあり：{title}",
+        "prChecks": "#{id} チェック待ち {passed}/{total}",
+        "resize": "アシスタント一覧の幅を変更",
+        "dropNewGroup": "ここにドロップして新しいグループに",
+        "switch": "アシスタントを切り替え",
+        "addShort": "新しいアシスタント",
+        "opening": "{name} を開いています…",
+        "noBrainLine": "メインアシスタントを設定すると会話できます",
+        "hiddenMark": "非表示",
+        "setUpPrimary": "メインアシスタントを設定",
+        "filter": "フィルター",
+        "showHidden": "非表示のアシスタントを表示（{count}）"
+      },
+      "choice": {
+        "other": "その他",
+        "otherPlaceholder": "自由に入力…",
+        "send": "送信",
+        "answered": "あなたの選択：{choice}",
+        "answeredOwn": "あなたの入力：{text}",
+        "noProjects": "codeg で開いているプロジェクトはありません。",
+        "from": {
+          "given": "指示どおり",
+          "other_config": "別のアシスタントの作業設定から",
+          "agent": "エージェントの既定値"
+        },
+        "progress": "{at} / {total}",
+        "several": "複数選択可",
+        "back": "前へ",
+        "next": "次へ",
+        "submit": "送信",
+        "skip": "スキップ",
+        "noLongerAsked": "この質問はもう回答を待っていません",
+        "otherWrote": "その他：{text}"
+      },
+      "changed": {
+        "applied": "アシスタントを作成しました",
+        "show": "このアシスタントを作りますか？（この種の変更は先に見せるよう指定されています）",
+        "suggested": "提案：新しいアシスタントを作る",
+        "dismissed": "作成しませんでした",
+        "undone": "元に戻しました",
+        "open": "開く",
+        "undoOne": "元に戻す",
+        "undoneOne": "元に戻しました",
+        "quote": "あなたの発言：「{quote}」",
+        "reason": "理由：{reason}",
+        "accept": "作成する",
+        "dismiss": "やめておく",
+        "undo": "元に戻す",
+        "undoAll": "すべて元に戻す",
+        "uncheckedQuote": "メインアシスタントはあなたの発言だとしています：「{quote}」。ただし今回あなたはこう入力していません",
+        "persona": "ペルソナ",
+        "workFilled": "作業は {agent}、オプションを {count} 件補完",
+        "workOn": "作業は {agent}"
+      },
+      "delete": {
+        "title": "{name} を削除しますか？",
+        "description": "メモリと会話も一緒に削除されます。メインアシスタントは削除できません。",
+        "running": "依頼した作業 {count} 件がまだ実行中です：",
+        "handOver": "メインアシスタントに引き継いで追ってもらう（推奨）",
+        "stop": "停止する",
+        "messages": "このアシスタント宛てのメッセージ {count} 件が未返信です。送信元に戻されます。",
+        "listJoiner": "、",
+        "dropWorkdir": "作業ディレクトリも削除する",
+        "workdirCustom": "このディレクトリはあなたが選んだものなので、codeg は手を付けません。",
+        "cancel": "キャンセル",
+        "confirm": "削除",
+        "plans": "計画 {count} 件が止まります：{titles}。",
+        "planSteps": "他の計画の {count} ステップがこのアシスタントに割り当てられています：{steps}。その番が来たら、各計画のアシスタントが別の担当を選びます。"
+      },
+      "edit": {
+        "name": "名前"
+      },
+      "personaUnwritten": "ペルソナはまだ書かれていません"
+    },
+    "face": {
+      "idle": "待機中",
+      "thinking": "考え中",
+      "working": "作業中",
+      "waiting": "あなた待ち",
+      "stuck": "しばらくあなた待ち",
+      "done": "完了したばかり",
+      "failed": "問題が発生",
+      "sleeping": "おやすみ中",
+      "unread": "未読あり",
+      "stale": "今は状態を取得できません",
+      "label": "{name}、{state}",
+      "labelUnread": "{name}、{state}、未読あり"
+    },
+    "activity": {
+      "think0": "じっくり考え中",
+      "think1": "あれこれ思案中",
+      "think2": "進め方を検討中",
+      "work0": "進行中",
+      "work1": "作業中",
+      "work2": "処理中",
+      "work3": "少しずつ前進中",
+      "work4": "仕上げ中",
+      "reply": "返信を作成中",
+      "read": "{target} を読み込み中",
+      "readSome": "ファイルを読み込み中",
+      "edit": "{target} を編集中",
+      "editSome": "ファイルを編集中",
+      "search": "「{target}」を検索中",
+      "searchSome": "検索中",
+      "fetch": "下調べ中",
+      "execute": "コマンドをいくつか実行中",
+      "test": "テストを実行中",
+      "wait": "結果を待機中",
+      "commit": "コミット中",
+      "plan": "計画を作成中",
+      "compact": "コンテキストを整理中",
+      "dispatch": "{target} に依頼中",
+      "dispatchSome": "作業を依頼中",
+      "followup": "#{id} をフォローアップ中",
+      "followupSome": "フォローアップ中",
+      "message": "{target} に質問中",
+      "messageSome": "ほかのアシスタントに質問中",
+      "awaitingReply": "{name} の返信待ち",
+      "needsAnswer": "あなたの回答が必要",
+      "needsApproval": "あなたの承認が必要",
+      "workPrefix": "#{id} {title}：{activity}",
+      "notes": "整理の前に今日の要点をメモ"
+    },
+    "did": {
+      "edit": "{target} を編集しました +{added} −{removed}",
+      "editPlain": "{target} を編集しました",
+      "editSome": "ファイルを編集しました",
+      "test": "テストを実行しました（{passed} 件成功）",
+      "testFailed": "テストを実行しました（{passed} 件成功、{failed} 件失敗）",
+      "testExit": "テストを実行しました（終了コード {code}）",
+      "testBad": "テストを実行しましたが、通りませんでした",
+      "testPlain": "テストを実行しました",
+      "execute": "{target} を実行しました",
+      "executeExit": "{target} を実行しました（終了コード {code}）",
+      "executeBad": "{target} を実行しましたが、失敗しました",
+      "executeSome": "コマンドを実行しました",
+      "executeSomeBad": "コマンドを実行しましたが、失敗しました",
+      "read": "{target} を読みました",
+      "readSome": "ファイルを読みました",
+      "search": "「{target}」を検索しました",
+      "searchHits": "「{target}」を検索しました（{hits} 件）",
+      "searchSome": "検索しました",
+      "commit": "コミットしました：{target}",
+      "commitPlain": "コミットしました",
+      "dispatch": "{target} に依頼しました：#{id}",
+      "dispatchPlain": "#{id} を依頼しました",
+      "dispatchSome": "作業を依頼しました",
+      "followup": "#{id} をフォローアップしました",
+      "followupSome": "フォローアップしました",
+      "message": "{target} にメッセージを送りました",
+      "messageSome": "メッセージを送りました",
+      "think": "少し考えました",
+      "reply": "返信を書きました",
+      "plan": "計画を立てました",
+      "compact": "コンテキストを整理しました",
+      "fetch": "下調べしました",
+      "question": "あなたに質問しました：{target}",
+      "questionSome": "あなたに質問しました",
+      "other": "{target}",
+      "otherPlain": "1 ステップ進めました",
+      "notes": "今日の要点をメモした"
+    },
+    "needs": {
+      "answer": "あなたの回答が必要：{text}",
+      "approval": "あなたの承認が必要：{text}",
+      "you": "あなたの対応が必要：{text}",
+      "answerPlain": "あなたの回答が必要",
+      "approvalPlain": "あなたの承認が必要",
+      "youPlain": "あなたの対応が必要",
+      "acceptance": "検収の判断が必要：{text}",
+      "acceptancePlain": "検収の判断が必要"
+    },
+    "statusLine": {
+      "steps": "このターンのステップ",
+      "loading": "ステップを読み込み中…",
+      "empty": "まだステップはありません",
+      "fold": "ステップを折りたたむ",
+      "openWork": "この作業を開く",
+      "replied": "返信しました",
+      "workDone": "作業が完了しました",
+      "notFinished": "完了できませんでした"
+    },
+    "sending": {
+      "waking": "{name} を起こしています…",
+      "afterTurn": "このターンの終了を待っています",
+      "yielding": "道を譲っています"
+    },
+    "pills": {
+      "attention": "{count} 件があなたの対応待ち",
+      "dismissAttention": "新しい対応待ちが来るまで隠す",
+      "newMessages": "新着メッセージ",
+      "toBottom": "最新へ移動"
+    },
+    "detail": {
+      "title": "詳細",
+      "close": "詳細を隠す",
+      "tabs": {
+        "activity": "アクティビティ",
+        "output": "成果物",
+        "workspace": "ワークスペース",
+        "stats": "統計"
+      },
+      "sections": {
+        "today": "今日",
+        "matters": "事項",
+        "data": "データ",
+        "routines": "ルーティン"
+      },
+      "notify": "通知する",
+      "notifyHint": "何かを終えたときや、あなたを待っているときに通知します",
+      "item": {
+        "act": "時間になったら実行"
+      },
+      "output": {
+        "allTitle": "すべての成果物",
+        "clear": "すべて表示",
+        "tasksSummary": "直近のタスク {count} 件",
+        "outcomeDone": "完了",
+        "outcomeFailed": "失敗",
+        "outcomeClosed": "クローズ",
+        "outcomeOpen": "対応待ち",
+        "files": "{count} 個のファイル",
+        "moreFiles": "ほか {count} 個のファイル",
+        "all": "すべて",
+        "tasks": "タスク",
+        "reports": "レポート",
+        "docs": "ドキュメント",
+        "empty": "まだ成果物はありません",
+        "doc": "ドキュメント"
+      },
+      "workspace": {
+        "empty": "今は実行中のものはありません",
+        "open": "開く",
+        "emptyHint": "任せた作業の実行中は、そのセッションがここにライブ表示されます。",
+        "whose": "{name} のワークスペース"
+      },
+      "notifyOn": "オン",
+      "notifyOff": "オフ"
+    },
+    "ladder": {
+      "working": "作業中",
+      "waiting_you": "あなたの対応待ち",
+      "mergeable": "マージ可能",
+      "merging": "マージ中",
+      "pr_open": "PR 作成済み",
+      "merged": "マージ済み",
+      "done": "完了",
+      "failed": "失敗",
+      "paused": "保留",
+      "canceled": "キャンセル",
+      "handed_over": "引き継ぎ済み",
+      "checking": "検収中",
+      "waiting_checks": "チェック待ち",
+      "waiting_checks_n": "チェック {passed}/{total}",
+      "checks_failed": "チェック失敗",
+      "stuck": "停滞",
+      "pr_closed": "PR クローズ"
+    },
+    "taskCard": {
+      "diff": "<add>+{added}</add> <del>−{removed}</del>、{files} ファイル",
+      "diffOnly": "<add>+{added}</add> <del>−{removed}</del>",
+      "viewPr": "PR を表示",
+      "openSession": "会話を開く",
+      "stop": "停止",
+      "prOpened": "PR 作成済み",
+      "prNotTracked": "codeg は見守っていません",
+      "pastStopping": "完了済みかマージ中のため停止できません",
+      "prChecks": "チェック {passed}/{total} 成功",
+      "prChecksFailed": "{n} 件失敗",
+      "prChecksRunning": "{n} 件実行中",
+      "prChecksUnknown": "チェック状態は不明",
+      "prNoChecks": "チェックなし",
+      "prWaitsOnForge": "プラットフォームが保留中（{state}）",
+      "prNoConflict": "コンフリクトなし",
+      "prHead": "ヘッド {head}",
+      "prNotWatched": "見守りを終了",
+      "prStale": "PR の状態は古い可能性があります（最終確認 {time}）"
+    },
+    "ask": {
+      "heading": {
+        "question": "作業中の質問です",
+        "plan": "作業がプランの承認を求めています"
+      },
+      "someone": "実行者",
+      "mirror": "{name} があなたの代わりに引き受けた作業から",
+      "state": {
+        "asking": "{name} があなたの代わりに答えています…",
+        "forwarded": "あなたの回答待ち",
+        "submitting": "送信中…",
+        "withdrawn": "取り下げられました（もう回答を待っていません）"
+      },
+      "why": {
+        "assistant": "{name} が判断しきれず、あなたに回しました",
+        "settings": "設定でこの種の質問はあなたに回ります",
+        "secret": "シークレットを求める質問です",
+        "no_brain": "答えられるアシスタントが設定されていません",
+        "turn_ended": "{name} は答えずにターンを終えました",
+        "turn_failed": "{name} のターンが答える前に失敗しました",
+        "timeout": "{name} から 10 分間回答がありません",
+        "handed_over": "あなたがこの作業を引き継ぎました"
+      },
+      "suggestion": "{name} の見立て：{suggestion}",
+      "reason": "根拠：{reason}",
+      "openSession": "セッションを開く",
+      "answer": {
+        "skipped": "スキップ",
+        "empty": "回答なし",
+        "approved": "プランを承認",
+        "revised": "プランの修正を依頼",
+        "revisedWith": "修正を依頼：{feedback}",
+        "abandoned": "プランを破棄",
+        "approvedAs": "プランを承認（{option}）",
+        "sentBackAs": "プランを差し戻し（{option}）"
+      },
+      "by": {
+        "assistant": "{name} が代わりに回答：{answer}",
+        "ownerSession": "あなたがセッションで回答：{answer}",
+        "ownerPage": "あなたがアシスタントのページで回答：{answer}",
+        "owner": "あなたが回答：{answer}",
+        "channel": "チャットチャネルから回答：{answer}",
+        "policy": "実行のポリシーが回答：{answer}",
+        "someone": "回答済み：{answer}"
+      },
+      "toast": {
+        "already": "すでに回答済みです。採用された回答はカードに表示されます",
+        "withdrawn": "もう回答を待っていません"
+      },
+      "answeredForYou": "代わりに {count} 回回答"
+    },
+    "card": {
+      "stripped": "クリックなしで動くアクションを取り除きました",
+      "cancel": "キャンセル",
+      "confirm": "確認",
+      "notFound": "見つかりません",
+      "replyAssistant": "アシスタントに返信",
+      "reply": {
+        "title": "このメッセージを送信しますか？",
+        "description": "カードの「{label}」は次の内容をあなたのメッセージとして送ります：",
+        "send": "送信",
+        "toComposer": "入力欄に入れる"
+      },
+      "drop": {
+        "title": "この件を取りやめますか？",
+        "description": "「{summary}」は案件から外れます。",
+        "confirm": "取りやめる"
+      }
+    },
+    "due": {
+      "tomorrow": "明日 {time}",
+      "yesterday": "昨日 {time}",
+      "dayTime": "{day} {time}",
+      "duration": {
+        "minutes": "{n} 分",
+        "hours": "{n} 時間",
+        "hoursMinutes": "{h} 時間 {m} 分",
+        "days": "{n} 日"
+      },
+      "repeat": {
+        "daily": "毎日 {time}",
+        "weekdays": "平日毎日 {time}",
+        "weekly": "毎週{days} {time}",
+        "monthly": "毎月 {day} 日 {time}",
+        "until": "{rule}、{date} まで",
+        "sep": "・"
+      },
+      "dueAt": "{when} 期限",
+      "overdue": "期限切れ · {when} 期限",
+      "reminded": "通知済み · {when} 期限",
+      "late": "{duration} 遅れ",
+      "missed": "{count} 回逃しました"
+    },
+    "reminder": {
+      "title": "リマインダー",
+      "done": "完了",
+      "snooze15m": "15 分後",
+      "snooze1h": "1 時間後",
+      "snoozeTomorrow": "明日の午前",
+      "handOver": "{name}に任せる",
+      "handOverText": "このリマインダーを対応して：{summary}",
+      "state": {
+        "done": "完了しました",
+        "snoozed": "{when} に延期",
+        "handed": "アシスタントに任せました",
+        "dropped": "やめました",
+        "expired": "期限切れ（次の回が来ました）",
+        "closed": "対応済み",
+        "woke": "時間になり、アシスタントを起こして対応させました"
+      }
+    },
+    "notify": {
+      "open": "開く"
+    },
+    "feed": {
+      "groups": {
+        "needs": "あなた待ち",
+        "watching": "進行中",
+        "next": "これから",
+        "done": "今日完了"
+      },
+      "empty": "あなたのやることも、実行中のものもありません。",
+      "failed": "アクティビティを今は読み込めません。",
+      "handed": "{name}に任せました",
+      "checking": "検収中 · 第 {round} ラウンド",
+      "queued": "マージ待ち",
+      "routineRunning": "実行中",
+      "routineLast": "前回：{outcome}",
+      "fold": "詳細を閉じる",
+      "unfold": "詳細を表示",
+      "viewReminder": "リマインダーを見る",
+      "viewCheck": "検収セッションを見る",
+      "openTask": "タスクを開く",
+      "routineDeleted": "このルーティンは削除されています。"
+    },
+    "today": {
+      "title": "今日",
+      "empty": "今日あなたが対応することはありません",
+      "yours": "あなたの",
+      "open": "開く",
+      "undo": "元に戻す",
+      "more": "あと {count} 件を表示",
+      "groups": {
+        "needs": "あなたの対応待ち",
+        "watching": "見守り中",
+        "schedule": "今日の予定",
+        "done": "今日完了"
+      },
+      "kind": {
+        "approval": "承認待ち",
+        "forwarded": "あなたに質問",
+        "question": "あなたに質問",
+        "confirm": "確認待ち",
+        "stuck": "できたか不明",
+        "waiting": "依頼した作業が待っています",
+        "proposal": "提案",
+        "failed": "失敗",
+        "reminder": "リマインダー",
+        "finished": "完了",
+        "checked": "メッセージを確認",
+        "checkCanceled": "メッセージの確認を停止",
+        "canceled": "停止",
+        "answered": "代わりに回答",
+        "changed": "代わりに変更",
+        "undone": "変更後、元に戻した",
+        "acceptance": "検収の判断が必要",
+        "forge": "フォージでの操作",
+        "pr_ready": "マージ可能",
+        "pr_merged": "PR マージ済み",
+        "pr": "見守り中の PR",
+        "memory": "覚えました",
+        "memoryUndone": "覚えたが取り消し",
+        "plan_stuck": "計画が止まっています",
+        "routine_paused": "ルーティン停止中",
+        "used_up": "差し戻してもまだ不十分"
+      },
+      "reason": {
+        "failed": "失敗",
+        "accepted_queued": "受け入れ済み・マージ待ち",
+        "merge_queued": "マージ待ち",
+        "accepted_unchecked": "未確認のまま通過しました。確認してください",
+        "needs_delivery": "受け入れ済み・PR として提出待ち",
+        "merge_ready": "受け入れ済み・マージできます",
+        "review": "レビュー待ち",
+        "looking": "うまくいかず、{name}が確認中"
+      },
+      "go": {
+        "merge": "マージへ",
+        "board": "ボードで開く",
+        "review": "レビューへ"
+      },
+      "session": {
+        "permission": "承認待ち",
+        "question": "あなたに質問",
+        "plan": "プランの承認待ち"
+      },
+      "task": {
+        "awaiting_input": "入力待ち",
+        "review": "レビュー待ち",
+        "failed": "失敗",
+        "preparing": "準備中",
+        "running": "実行中",
+        "merging": "マージ中",
+        "checking": "検収中"
+      },
+      "dispatch": {
+        "queued": "待機中",
+        "running": "実行中",
+        "waiting_input": "アシスタントが回答中",
+        "review": "レビュー待ち",
+        "handed_over": "引き継ぎ済み"
+      },
+      "item": {
+        "notify": "{time} にリマインド",
+        "act": "{time} に実行"
+      },
+      "pr": {
+        "waiting_checks": "チェック待ち",
+        "checks_failed": "チェック失敗",
+        "conflict": "コンフリクトあり",
+        "mergeable": "マージ可能",
+        "no_conflict": "コンフリクトなし・チェック不明",
+        "open": "PR オープン",
+        "merged": "マージ済み",
+        "closed": "クローズ"
+      },
+      "routine": {
+        "at": "{time} にルーティン",
+        "running": "ルーティン実行中",
+        "asked": "ルーティンが確認待ち",
+        "reported": "ルーティンの報告",
+        "silent": "ルーティン：変化なし"
+      },
+      "preparingBrief": "朝のまとめを準備しています…",
+      "preparingWrap": "1 日のまとめを準備しています…",
+      "tidy": {
+        "acted": "記憶を整理",
+        "draft": "整理の下書きが確認待ち",
+        "applied": "整理を適用",
+        "undone": "整理を元に戻した",
+        "discarded": "整理を使わず",
+        "stale": "整理の下書きが古い"
+      },
+      "skill": {
+        "acted": "手順スキル",
+        "draft": "手順スキルの下書きが確認待ち",
+        "applied": "手順スキルをインストール",
+        "undone": "手順スキルの変更を元に戻した",
+        "discarded": "手順スキルを入れず",
+        "stale": "手順スキルの下書きが古い",
+        "deleted": "手順スキルを削除"
+      },
+      "apply": "適用",
+      "install": "インストール",
+      "notThis": "使わない"
+    },
+    "meet": {
+      "name": {
+        "heading": "はじめまして",
+        "call": "何とお呼びすればいいですか？",
+        "name": "私に名前をつけますか？",
+        "systemUser": "このコンピューターでのユーザー名",
+        "currentName": "今の名前",
+        "answered": "「{call}」とお呼びします。私は「{name}」です",
+        "answeredName": "私は「{name}」です",
+        "skipped": "呼び方はスキップしました"
+      },
+      "connect": {
+        "heading": "すぐにひとつ手伝います",
+        "about": "あなたのプロジェクトはすべて見ておき、レビュー待ちの PR があればお知らせします。",
+        "aboutOnly": "選んだプロジェクトを見ておき、レビュー待ちの PR があればお知らせします。",
+        "noProjects": "codeg にはまだプロジェクトがありません。開けば見ておきます。",
+        "ask": "今すぐ手伝えることをひとつ探しましょうか？",
+        "settingsHint": "見るプロジェクトは設定でいつでも変えられます。",
+        "settings": "設定",
+        "go": "今すぐ探す",
+        "notNow": "今はいい",
+        "openFolder": "プロジェクトフォルダーを開く",
+        "accountHint": "{forge} アカウントを接続すれば、PR・CI・Issue も見られます。",
+        "connectAccount": "アカウントを接続",
+        "went": "では、探してきます。",
+        "skipped": "今は探しません。いつでも声をかけてください。",
+        "connected": "つなぎました：{projects}",
+        "joiner": "、"
+      },
+      "starter": {
+        "heading": "まずこれを手伝えます",
+        "lookingHeading": "すぐに一つ",
+        "noneHeading": "今は何もありません",
+        "looking": "すぐに手伝えることを一つ探しています…",
+        "none": "今は赤いものはありません。見ておきます。",
+        "noMore": "今はほかにありません。見ておきます。",
+        "handed": "引き受けました：{what}",
+        "dismissed": "今はいい：{what}",
+        "handIt": "任せる",
+        "next": "別のもの",
+        "notNow": "今はいい",
+        "lead": {
+          "pr_ci": "PR #{number} の CI が赤です（{checks}）— {project}：{title}",
+          "review": "PR #{number} があなたのレビュー待ちです — {project}：{title}",
+          "issue": "Issue #{number} があなたに割り当てられています — {project}：{title}",
+          "task": "ボードのタスク「{title}」が失敗し、誰も対応していません",
+          "worktree": "ワークツリー {title} に一日以上コミットされていない変更があります"
+        },
+        "hand": {
+          "pr_ci": "{project} の PR #{number} の CI を直して：{url}",
+          "review": "{project} の PR #{number} をレビューして：{url}",
+          "issue": "{project} の Issue #{number} に対応して：{url}",
+          "task": "失敗したボードのタスク「{title}」（#{task}）に対応して",
+          "worktree": "ワークツリー {path} のコミットされていない変更を見て"
+        }
+      },
+      "promises": {
+        "heading": "自分から行うこと",
+        "intro": "どのくらい積極的に動きましょうか？ 以下はすべてオンです。自分でやりたいものはオフにしてください。",
+        "items": {
+          "proactive": {
+            "title": "あなたが必要なときに知らせる",
+            "hint": "質問・承認・終わった作業・設定したリマインダーを、届いたらすぐに。"
+          },
+          "brief": {
+            "title": "毎朝ブリーフを書く",
+            "hint": "一日の始まりに：あなた待ちのこと、夜のうちに終わった作業、今日の予定。"
+          },
+          "wrap": {
+            "title": "一日の締めくくり",
+            "hint": "終える前に：終わったこと、残っていること、今夜回せること。"
+          },
+          "exec_questions": {
+            "title": "任せたセッションの質問に答える",
+            "hint": "答えられるものは答え、迷うものはあなたに回します。"
+          },
+          "exec_plans": {
+            "title": "任せたセッションのプランを承認する",
+            "hint": "依頼内容と照らして確認し、はっきりしないものはあなたに回します。"
+          },
+          "followups": {
+            "title": "任せた作業のフォローと再試行",
+            "hint": "もう一巡必要なとき、そのまま続けます。"
+          },
+          "ci_failure": {
+            "title": "見守り中の PR が赤くなったら直す",
+            "hint": "チェック失敗やコンフリクトのある PR を、そのタスクが一回ずつ直す。"
+          },
+          "interrupt_retry": {
+            "title": "再起動で中断した作業を再試行",
+            "hint": "codeg が止まったときに動いていた作業を、戻ったらやり直します。"
+          },
+          "presence": {
+            "title": "あなたの生活リズムを学ぶ",
+            "hint": "codeg にいる時間から、ちょうどよいときに連絡します。"
+          },
+          "auto_accept": {
+            "title": "出したコード変更の作業を確認して検収する",
+            "hint": "作業に使うエージェントが読み取り専用で確認し、あなたの要望に照らして私が判断します。"
+          }
+        },
+        "prefs": "設定を調整",
+        "pet": "デスクトップに出す",
+        "petFailed": "デスクトップの相棒を開けませんでした",
+        "done": "完了",
+        "folded": "自分から行うこと · 通知の多さ：{level}",
+        "collapse": "たたむ",
+        "list": "具体的な内容：{total} 件中 {on} 件がオン",
+        "listShow": "表示",
+        "listHide": "たたむ",
+        "unavailable": "アシスタントが動いている側で変更できます。"
+      }
+    },
+    "acceptance": {
+      "title": "検収 · {round} 回目",
+      "titleMax": "検収 · {round} 回目（最大 {max} 回）",
+      "check": "確認：",
+      "verdict": {
+        "pass": "合格",
+        "fail": "不合格",
+        "unverified": "確認できず"
+      },
+      "unchecked": "独立した確認なし",
+      "notVerified": "未検証",
+      "decision": {
+        "accept": "合格",
+        "revise": "差し戻し",
+        "ask_owner": "あなたに確認"
+      },
+      "assistant": "アシスタント：{decision}",
+      "assistantWhy": "アシスタント：{decision}（理由：{reason}）",
+      "fallback": "アシスタントが結論を出さなかったため、確認結果に従いました",
+      "owner": "あなたの判断：{decision}",
+      "result": "結果",
+      "why": "理由",
+      "by": {
+        "owner": "あなたの判断",
+        "assistant": "アシスタントの判断"
+      },
+      "question": "質問：{question}",
+      "usedUp": "{count} 回確認しました。許可された回数に達しています",
+      "wouldSend": "差し戻すときに送る修正内容",
+      "revise": "この内容で差し戻す",
+      "accept": "合格にする",
+      "recheck": "もう一度確認",
+      "openTask": "タスクを開く",
+      "accepted": "合格",
+      "revised": "差し戻しました",
+      "void": "確認中にワークツリーが変更されたため、この回は無効です",
+      "changed": "確認後にワークツリーが変更されたため、検収は無効になりました",
+      "changedAfterAccept": "検収後にワークツリーが変わりました",
+      "superseded": "その後に再確認しました",
+      "stale": "無効になりました。実行していません",
+      "merged": "マージ済み {commit}",
+      "delivered": "納品済み、先頭コミット {head}",
+      "history": "これまでの回",
+      "historyRevised": "{round} 回目：差し戻し「{message}」",
+      "historyAccepted": "{round} 回目：合格",
+      "historyAsked": "{round} 回目：あなたに確認",
+      "historyChanged": "{round} 回目：合格後にワークツリーが変更",
+      "historyOpen": "{round} 回目：進行中"
+    },
+    "forge": {
+      "heading": {
+        "approve": "承認待ち",
+        "suggested": "提案（承認が必要）",
+        "cnb": "CNB でのマージ：常にあなたの承認が必要",
+        "acting": "実行中…",
+        "done": "{provider} で完了",
+        "refused": "実行しませんでした",
+        "notMerged": "マージしませんでした",
+        "failed": "実行できませんでした",
+        "unknown": "完了したか不明",
+        "not_run": "実行せず：状況が変わりました",
+        "dismissed": "実行しないことにしました"
+      },
+      "title": {
+        "comment": "{target} にコメント",
+        "close": "{target} をクローズ",
+        "merge": "{target} をマージ"
+      },
+      "merge": {
+        "head": "ヘッド {head}",
+        "method": {
+          "merge": "マージコミット",
+          "squash": "スカッシュ",
+          "rebase": "リベース"
+        },
+        "checks": {
+          "green": "チェック：すべて成功",
+          "none": "チェック：設定なし",
+          "unknown": "チェック：不明（CNB はチェックを読めません）"
+        },
+        "version": {
+          "accepted": "受け入れチェックに合格したバージョン",
+          "green": "このヘッドでチェックが成功"
+        },
+        "unguaranteed": "バージョン未保証（マージ時にヘッドを指定できません）",
+        "commit": "マージコミット {commit}"
+      },
+      "code": {
+        "merged": "すでにマージ済みです",
+        "closed": "クローズされています",
+        "draft": "ドラフトです",
+        "after_acceptance": "PR に受け入れ後のコミットがあります",
+        "not_accepted": "受け入れチェックに合格していません",
+        "not_delivered": "受け入れ済みのバージョンは codeg がこの PR に渡したものではありません",
+        "checks_unreadable": "codeg はチェックを読めません",
+        "checks_partial": "一部のチェックを読めませんでした",
+        "checks_running": "チェックがまだ実行中です",
+        "checks_failing": "失敗しているチェックがあります"
+      },
+      "notRun": "実行しませんでした：{error}",
+      "failed": "フォージに拒否されました：{error}",
+      "unknown": "フォージから応答がありません：{error}。codeg が自動でやり直すことはなく、やり直す前にフォージを確認します。",
+      "reason": "理由：{reason}",
+      "approve": "承認",
+      "decline": "却下",
+      "look": "確認する",
+      "again": "もう一度実行",
+      "letBe": "そのままにする",
+      "open": "開く"
+    },
+    "pr": {
+      "event": {
+        "checks_failed": "チェックが失敗",
+        "checks_passed": "チェックが再び成功",
+        "conflict": "ベースとコンフリクト",
+        "mergeable": "マージできます",
+        "no_conflict": "コンフリクトなし、チェック状態は不明",
+        "merged": "マージされました",
+        "closed": "マージされずにクローズ",
+        "feedback": "レビューの指摘"
+      },
+      "head": "ヘッド {head}",
+      "checks": {
+        "unknown": "チェック状態は不明",
+        "none": "チェックなし",
+        "passed": "チェック {passed}/{total} 成功",
+        "running": "{n} 件実行中",
+        "partial": "一部は読めませんでした"
+      },
+      "more": "…ほか {n} 件",
+      "noConflictNote": "このプラットフォームではチェックを読めないため、codeg は「マージできます」とは言いません。",
+      "mergeState": "プラットフォームの状態：{state}",
+      "state": {
+        "later": "その後、状況が変わりました。",
+        "stopped": "見守りを終了しました。"
+      },
+      "view": "PR を見る",
+      "gotIt": "了解",
+      "unwatch": "見守りをやめる",
+      "fix": {
+        "followup": {
+          "checks": "タスクが修正中 — {n} 回目（続きの作業）。",
+          "conflict": "タスクがベースをマージ中 — {n} 回目（続きの作業）。"
+        },
+        "task": {
+          "checks": "この PR 上の新しいタスクが修正中 — {n} 回目。",
+          "conflict": "この PR 上の新しいタスクがベースをマージ中 — {n} 回目。"
+        },
+        "failed": "codeg は修正を始められませんでした：{error}",
+        "none": "codeg は自分では直せません：{why}",
+        "busy": "この PR では作業が進行中です。終わったら codeg がもう一度見ます。",
+        "ask": {
+          "checks": "タスクに修正させますか？",
+          "conflict": "タスクにベースをマージさせますか？"
+        },
+        "told": "設定どおり、お知らせのみです。",
+        "off": "codeg は自動で直しません（設定は 0 回）。",
+        "gaveUpHeading": "上限まで直してもまだ失敗",
+        "gaveUp": "codeg は {n} 回直しました。ここからはあなたの番です。各回の内容：",
+        "round": "{n} 回目",
+        "cause": {
+          "checks": "チェック失敗",
+          "conflict": "コンフリクト"
+        },
+        "lines": "{files} ファイル、+{added} −{removed}",
+        "doChecks": "修正する",
+        "doConflict": "ベースをマージ"
+      },
+      "feedback": {
+        "kind": {
+          "changes": "変更を依頼",
+          "review": "レビュー",
+          "line": "行コメント",
+          "comment": "コメント"
+        },
+        "someone": "誰か",
+        "writer": "書き込み可",
+        "outsider": "書き込み不可",
+        "forward": "タスクに渡す",
+        "skip": "不要",
+        "forwarded": "タスクに渡しました。",
+        "waiting": "進行中の作業が終わったらタスクに渡します。"
+      },
+      "round": {
+        "checks": "チェックの修正 — {n} 回目",
+        "conflict": "ベースのマージ — {n} 回目",
+        "feedback": "レビュー指摘への対応"
+      },
+      "merge": {
+        "refused": "codeg は自動でマージしませんでした：{why}",
+        "unread": "codeg はフォージを読めずマージできませんでした：{why}"
+      }
+    },
+    "routines": {
+      "zone": "（{zone}）",
+      "onEvent": "トリガー：{event}",
+      "withLabel": "ラベル {label}",
+      "mineOnly": "自分の作業のみ",
+      "event": {
+        "dispatch_ended": "依頼した作業が終わったとき",
+        "task_status": "ボードのタスクの状態が変わったとき",
+        "session_waiting": "セッションがあなたを待っているとき",
+        "pr_checks_failed": "見守り中の PR のチェックが失敗",
+        "pr_checks_passed": "見守り中の PR のチェックが再び成功",
+        "pr_conflict": "見守り中の PR にコンフリクト",
+        "pr_mergeable": "見守り中の PR がマージ可能",
+        "pr_no_conflict": "見守り中の PR にコンフリクトなし（チェック不明）",
+        "pr_merged": "見守り中の PR がマージされた",
+        "pr_closed": "見守り中の PR がクローズ",
+        "pr_review": "見守り中の PR に新しいレビュー",
+        "forge_issue": "プラットフォームに新しい issue や PR"
+      },
+      "precheck": {
+        "commits": "{branch} に新しいコミットがあるときだけ",
+        "forgeIssue": "新しい issue があるときだけ",
+        "forgePr": "新しい PR があるときだけ",
+        "itemsWaiting": "{hours} 時間以上待っている事項があるときだけ",
+        "changes": "作業ツリーが変わったときだけ"
+      },
+      "outcome": {
+        "running": "実行中",
+        "skipped": "スキップ：新しいことなし",
+        "silent": "変化なし",
+        "reported": "報告あり",
+        "failed": "失敗",
+        "missed": "見送り",
+        "asked": "確認待ち",
+        "declined": "未確認",
+        "stopped": "停止"
+      },
+      "empty": "まだルーティンはありません。会話で設定を頼んでください。",
+      "new": "新しいルーティン",
+      "kind": {
+        "brain": "アシスタントが確認",
+        "dispatch": "作業を依頼"
+      },
+      "paused": {
+        "owner": "一時停止中"
+      },
+      "row": {
+        "when": "日時",
+        "trigger": "トリガー",
+        "how": "方法",
+        "next": "次回",
+        "last": "前回",
+        "why": "理由",
+        "runs": "計 {n} 回"
+      },
+      "runNow": "今すぐ実行",
+      "pause": "一時停止",
+      "resume": "再開",
+      "edit": "編集",
+      "delete": "削除",
+      "deleteTitle": "このルーティンを削除しますか？",
+      "deleteDescription": "「{title}」は実行されなくなります。すでに依頼した作業には影響しません。",
+      "cancel": "キャンセル",
+      "reply": "ルーティン「{title}」· {seq} 回目",
+      "editor": {
+        "titleNew": "新しいルーティン",
+        "titleEdit": "ルーティンを編集",
+        "trialNote": "保存するとすぐに 1 回試しに実行し、その後は codeg が予定どおり実行します。",
+        "editNote": "変更は次回の実行から反映されます。",
+        "name": "名前",
+        "what": "やること",
+        "whatHint": "例：夜間の CI で失敗がないか見て、あれば教えて",
+        "kind": "実行のしかた",
+        "kindBrain": "アシスタントを起こす",
+        "kindDispatch": "作業を直接依頼",
+        "kindBrainHint": "確認して報告します。伝えることがなければ黙っています。",
+        "kindDispatchHint": "codeg がアシスタントを起こさずに下の作業を依頼し、結果はいつもどおり戻ります。",
+        "mode": "方法",
+        "modeTask": "ボードのタスク",
+        "modeSession": "プロジェクトの作業セッション",
+        "modeChat": "チャット",
+        "deliverable": "成果",
+        "change": "コード変更",
+        "report": "レポート",
+        "project": "プロジェクト",
+        "pickProject": "プロジェクトを選択",
+        "anyProject": "すべてのプロジェクト",
+        "when": "いつ",
+        "schedule": "スケジュール",
+        "event": "イベント発生時",
+        "presetDaily": "毎日 9:00",
+        "presetWeekdays": "平日 9:00",
+        "presetWeekly": "毎週月曜 9:00",
+        "custom": "カスタム…",
+        "timezone": "タイムゾーン",
+        "ownerZone": "あなたと同じ（{zone}）",
+        "eventKind": "イベント",
+        "issueOrPr": "issue か PR か",
+        "issues": "issue",
+        "prs": "PR",
+        "label": "ラベル",
+        "states": "状態（カンマ区切り）",
+        "mine": "自分の作業のみ",
+        "precheck": "先に確認",
+        "check": {
+          "none": "毎回実行",
+          "commits": "新しいコミットがあるときだけ",
+          "forge_new": "新しい issue や PR があるときだけ",
+          "items_waiting": "長く待っている事項があるときだけ",
+          "changes": "作業ツリーが変わったときだけ"
+        },
+        "branch": "ブランチ（既定は HEAD）",
+        "hours": "時間",
+        "needTitle": "名前を付けてください。",
+        "needWhat": "やることを書いてください。",
+        "needCron": "スケジュールを設定してください。",
+        "made": "ルーティンを作成し、試しに実行しています",
+        "saved": "ルーティンを保存しました",
+        "cancel": "キャンセル",
+        "save": "保存",
+        "saveRun": "保存して 1 回実行"
+      },
+      "card": {
+        "made": "ルーティンを作成",
+        "changed": "ルーティンを変更",
+        "proposal": "提案されたルーティン",
+        "proposalChange": "ルーティン変更の提案",
+        "repeat": "ルーティンにしますか？",
+        "paused": "ルーティンを一時停止",
+        "undone": "取り消しました",
+        "dismissed": "見送りました",
+        "resumed": "再開しました",
+        "madeNote": "作成しました。ルーティン一覧にあります。",
+        "action": {
+          "pause": "一時停止",
+          "resume": "再開",
+          "delete": "削除",
+          "run_now": "今すぐ実行",
+          "edit": "変更"
+        },
+        "repeatBody": "30 日間で {count} 回、似たことを頼んでいます。",
+        "pausedWorkAgent": "作業に使うエージェントが使えません。未インストールか無効になっています。",
+        "pausedFailures": "3 回続けて失敗しました。",
+        "trial": "試しの実行を始めました。",
+        "reason": "理由：{reason}",
+        "undo": "元に戻す",
+        "edit": "編集",
+        "accept": "作成する",
+        "acceptChange": "変更する",
+        "dismiss": "今はいい",
+        "makeIt": "ルーティンにする",
+        "resume": "再開",
+        "open": "ルーティンを開く",
+        "confirm": "確認待ちのルーチン",
+        "confirmChange": "確認待ちのルーチン変更",
+        "setWorkAgent": "作業に使うエージェントを選ぶ"
+      },
+      "more": "その他の操作"
+    },
+    "rules": {
+      "mute": "この種類は今後提案しない",
+      "muted": "この種類は今後提案されません。",
+      "mutedRestore": "設定で再びオンにする",
+      "notNow": "今はいい",
+      "failed": "できませんでした：{error}",
+      "since": "{when} から",
+      "lowered": "この種類の提案は 3 回続けて使われなかったため、通知しなくなりました。",
+      "loweredNow": "閉じました。3 回続けて使われなかったため、今後は通知しません（設定で戻せます）。",
+      "dismissed": "閉じました。1 週間は再表示しません。",
+      "expired": "もう不要です：状況が変わりました。",
+      "openPr": "PR を開く",
+      "byAuthor": "作成者 {author}",
+      "worktreeOf": "{project} のワークツリー",
+      "behindDetail": "{branch} は {base} より遅れていて、マージすると競合します。",
+      "heading": {
+        "failed": "失敗したまま誰も対応していません",
+        "review": "レビュー待ちが長くなっています",
+        "session": "セッションがあなたを待っています",
+        "pr_review": "PR があなたのレビューを待っています",
+        "uncommitted": "コミットされていない変更",
+        "idle": "しばらく動きのない事項",
+        "behind": "ブランチが遅れていて競合あり",
+        "undo": "取り消した変更",
+        "idle_bot": "使われていないアシスタント"
+      },
+      "wait": {
+        "permission": "承認待ち",
+        "question": "質問中",
+        "plan": "計画の承認待ち"
+      },
+      "step": {
+        "failed": {
+          "retry": "再試行",
+          "hand": "アシスタントに見てもらう"
+        },
+        "review": {
+          "check": "先にアシスタントに検収させる",
+          "remind": "リマインドする"
+        },
+        "session": {
+          "open": "セッションを開く"
+        },
+        "pr_review": {
+          "summary": "まずレビュー要約を作る"
+        },
+        "uncommitted": {
+          "open": "開く",
+          "hand": "アシスタントにコミットしてもらう"
+        },
+        "idle": {
+          "hand": "引き続き追う",
+          "close": "閉じる"
+        },
+        "behind": {
+          "rebase": "rebase を依頼"
+        },
+        "undo": {
+          "ask_first": "先に見せるようにする"
+        },
+        "idle_bot": {
+          "hide": "非表示にする",
+          "delete": "削除…"
+        }
+      },
+      "done": {
+        "handed": "アシスタントに渡しました。",
+        "retried": "再試行しました。",
+        "checking": "検収中です。チェック後にアシスタントが結論を出します。",
+        "reminding": "明日の朝にリマインドします。",
+        "opened": "開きました。",
+        "closed": "事項を閉じました。",
+        "rebasing": "rebase を依頼しました。",
+        "asking_first": "今後の変更はまずカードでお見せします。",
+        "hidden": "非表示にしました。非表示のアシスタントから戻せます。",
+        "deleted": "削除しました。"
+      },
+      "hand": {
+        "failed": "「{title}」が失敗したまま誰も対応していません。何が起きたか調べて、どうするか提案して。",
+        "review": "ボードのタスク「{title}」がレビュー待ちのままです。先に検収して：誰かに変更を確認してもらい、結論を教えて。",
+        "remind": "ボードのタスク「{title}」をレビューする",
+        "prReview": "{project} の PR #{number} がしばらく私のレビューを待っています。まずレビュー要約を作って：{url}",
+        "uncommitted": "{name}（{path}）にしばらくコミットされていない変更があります。確認して、まとめてコミットして。",
+        "idle": "事項「{summary}」がしばらく動いていません。また追いかけて。"
+      },
+      "prefs": {
+        "title": "提案カード",
+        "hint": "codeg がモデルを使わずに自分で見つけ、根拠と次の一歩を書いたカードを出します。それぞれオフにしたり、しきい値を変えたりできます。",
+        "mutedMark": "カードの「この種類は今後提案しない」でオフになりました。",
+        "loweredMark": "3 回続けて使われなかったため、通知しなくなりました。",
+        "putBack": "元に戻す",
+        "counts": "過去 30 日：{raised} 枚、使用 {acted}、閉じた {dismissed}",
+        "unit": {
+          "hours": "時間",
+          "minutes": "分",
+          "days": "日",
+          "times": "回目"
+        },
+        "failed": {
+          "title": "失敗して誰も対応していない",
+          "hint": "依頼した作業やボードのタスクが失敗したまま誰も対応していないとき。依頼したアシスタントのところにカードが出ます。"
+        },
+        "review": {
+          "title": "レビュー待ちが長い",
+          "hint": "レビュー待ちのボードのタスクで、この回の検収がまだのもの。"
+        },
+        "session": {
+          "title": "セッションがずっと待っている",
+          "hint": "どのセッションでも、あなたの承認や回答を待っていて、あなたがそこにいないとき。緊急。"
+        },
+        "pr_review": {
+          "title": "PR があなたのレビュー待ち",
+          "hint": "見ているプロジェクトで。codeg が依頼を最初に見たときから数えます。"
+        },
+        "uncommitted": {
+          "title": "コミットされていない変更",
+          "hint": "プロジェクトやワークツリーに誰もコミットしていない変更があるとき。"
+        },
+        "idle": {
+          "title": "長く動きのない事項",
+          "hint": "終わっていない事項に変化がないとき。"
+        },
+        "behind": {
+          "title": "ブランチの遅れ",
+          "hint": "アシスタントが依頼したタスクのブランチがターゲットより遅れ、競合するとき。"
+        },
+        "repeat": {
+          "title": "繰り返しの依頼",
+          "hint": "30 日以内に似た依頼がこの回数になったら、ルーティン化を提案します。"
+        },
+        "suggest": {
+          "title": "アシスタントからの提案",
+          "hint": "オフにするとアシスタントは提案しません。suggest 付きの呼び出しには「今は提案を受け付けない」と伝えます。"
+        },
+        "undo": {
+          "title": "取り消しの多い変更",
+          "hint": "週の振り返りで：言われたとおりに行った変更を何度も取り消したとき、先に見せるようにするか尋ねます。"
+        },
+        "idle_bot": {
+          "title": "使われていないアシスタント",
+          "hint": "週次の振り返りで：2 週間起こされていないアシスタントを、非表示にするか削除するか尋ねます。"
+        }
+      },
+      "undoDetail": "この 2 週間、言われたとおりに行った変更 {made} 件のうち {undone} 件を取り消しました。",
+      "idleBotDetail": "2 週間誰も呼んでいません。"
+    },
+    "brief": {
+      "title": "朝のまとめ",
+      "byCodeg": "アシスタントが書けなかったため、codeg が記録から作成しました。",
+      "part": {
+        "needs": "あなたが必要なこと",
+        "tonight": "昨夜の作業",
+        "night": "前回のまとめから",
+        "running": "見守り中",
+        "schedule": "今日の予定",
+        "bots": "アシスタント",
+        "loose": "やりかけのこと",
+        "yesterday": "昨日のあなた"
+      },
+      "more": "…ほか {count} 件",
+      "bot": {
+        "done": "{count} 件完了（{titles}）",
+        "idle": "完了なし",
+        "doing": "取り組み中: {what}",
+        "stuck": "{count} 件があなた待ち"
+      },
+      "loose": {
+        "item": "{days} 日間そのまま",
+        "worktree": "未コミットの変更が {days} 日",
+        "session": "やりかけ"
+      },
+      "sessions": "{count} 件のセッション",
+      "nothing": "今日あなたが必要なことはありません。",
+      "replyBrief": "朝のまとめ",
+      "replyWrap": "1 日のまとめ",
+      "message": {
+        "to": "{name} へ：",
+        "answered": "返答: {text}",
+        "open": "まだ返答なし"
+      },
+      "week": {
+        "title": "先週（{first} – {last}）",
+        "titleSoFar": "今週ここまで（{first} – {last}）",
+        "mode": {
+          "task": "ボード",
+          "chat": "チャット",
+          "session": "セッション"
+        },
+        "work": "依頼 {count} 件（{modes}）· 完了 {completed}、失敗 {failed} · 一発合格 {firstPass}/{settled}",
+        "byBot": "アシスタント別：{list}",
+        "doneForYou": "代わりにやったこと：受け入れで差し戻し {caught} · 自動再試行 {retried} · CI 自動修正 {ciFixed} · ルーチン完了 {routines} · マージ {merged}",
+        "asks": "作業からの質問：{count} 件 · アシスタントが回答 {answered} · あなたへ {forwarded}",
+        "between": "アシスタント間：メッセージ {messages} 件、{threads} スレッド · 停止 {loops}",
+        "unblock": "あなた待ちへの対応は平均 {minutes} 分（{count} 件）",
+        "unblockBefore": "あなた待ちへの対応は平均 {minutes} 分（{count} 件、前週 {before} 分）",
+        "held": "防いだ割り込み：まとめた {merged} · 後回し {deferred} · 今日だけ {kept}",
+        "proposals": "提案：{count} 件 · 採用 {taken} · 見送り {dismissed}",
+        "undone": "取り消し：変更 {changesUndone}/{changes} · メモリ {memoryUndone}/{memory}",
+        "reminders": "リマインダー：{count} 件 · 完了 {done} · 延期 {snoozed}",
+        "lowered": "codeg が下げたもの：{rules}",
+        "tokens": "トークン：{total}",
+        "botTokens": "{total}（自身 {own}、依頼した作業 {handed}）"
+      }
+    },
+    "memory": {
+      "title": "覚えました",
+      "undoneTitle": "この記憶の更新を取り消しました",
+      "added": "{count} 件追加",
+      "updated": "{count} 件更新",
+      "removed": "{count} 件削除",
+      "changedFile": "{file}を変更",
+      "sep": "・",
+      "listSep": "、",
+      "file": {
+        "index": "記憶のインデックス",
+        "user": "あなたのプロフィール",
+        "soul": "人格設定",
+        "rules": "ルール"
+      },
+      "status": {
+        "added": "追加",
+        "modified": "更新",
+        "deleted": "削除"
+      },
+      "kept": "その後また変更されたため残しました：{files}",
+      "showDiff": "差分を表示",
+      "hideDiff": "差分を隠す",
+      "diffCut": "差分の先頭だけを表示しています。",
+      "undo": "元に戻す",
+      "used": "使った記憶："
+    },
+    "history": {
+      "open": "履歴を検索",
+      "title": "タイムマシン",
+      "description": "これまでの発言や作業を検索：アシスタントの会話、互いのメッセージ、すべての会話、ボードのタスク。",
+      "placeholder": "例：なぜ X を Y に変えたのか",
+      "hint": "すべての語を含むものを探します。1〜2 文字は直近 90 日だけを検索します。",
+      "none": "見つかりませんでした。",
+      "short": "1〜2 文字のため、直近 90 日だけを検索しました。",
+      "sessionsOff": "すべての会話は対象外です（「あなたについて」で設定）。",
+      "tasksOff": "ボードのタスクは対象外です（「あなたについて」で設定）。",
+      "reading": "会話を読み込み中（{done}/{total}）：古いものはまだ見つからないことがあります。",
+      "untitled": "会話 #{id}",
+      "task": "タスク #{id}",
+      "message": "{from} → {to}",
+      "timeline": "{name} との会話",
+      "handedOut": "{name} が依頼",
+      "matches": "{count} 件一致",
+      "role": {
+        "owner": "あなた",
+        "assistant": "アシスタント",
+        "agent": "エージェント"
+      },
+      "scope": {
+        "all": "すべて",
+        "timeline": "アシスタント",
+        "sessions": "会話",
+        "tasks": "タスク",
+        "messages": "メッセージ"
+      }
+    },
+    "plan": {
+      "title": "計画",
+      "progress": "{done}/{total} ステップ",
+      "sep": "、",
+      "after": "ステップ {steps} の後",
+      "doneWhen": "完了条件：",
+      "changes": "変更",
+      "undo": "元に戻す",
+      "undone": "元に戻しました",
+      "undoneKept": "元に戻しました——ステップ {steps} は始まっていたため、この変更のままです",
+      "state": {
+        "draft": "開始待ち",
+        "running": "進行中",
+        "stuck": "止まっています",
+        "stopped": "停止中",
+        "done": "完了",
+        "canceled": "終了"
+      },
+      "step": {
+        "pending": "前のステップ待ち",
+        "ready": "まもなく開始",
+        "confirm": "確認待ち",
+        "running": "実行中",
+        "done": "完了",
+        "failed": "失敗",
+        "canceled": "キャンセル",
+        "stopped": "未開始"
+      },
+      "hint": {
+        "draft": "「開始」を押すまで何も渡しません。開始後、codeg が依存関係に沿って一つずつ渡します。",
+        "stopped": "停止中：新しいステップは渡しません。実行中のものは最後まで続きます。",
+        "stuck": "ステップ {seq}「{title}」で止まっています：失敗し、アシスタントも立て直せませんでした。これに依存しないステップは進みます。",
+        "stuckCanceled": "ステップ {seq}「{title}」はキャンセルされました：これに依存するステップは始まりません。"
+      },
+      "act": {
+        "start": "開始",
+        "change": "変更を頼む",
+        "cancel": "キャンセル",
+        "stop": "停止",
+        "resume": "再開",
+        "end": "計画を終了",
+        "open": "開く",
+        "confirm": "確認",
+        "cancelStep": "キャンセル"
+      },
+      "change": {
+        "added": "ステップ {seq}「{title}」を追加",
+        "removed": "ステップ {seq}「{title}」を削除",
+        "retry": "ステップ {seq}「{title}」をやり直し",
+        "changed": "ステップ {seq}「{title}」を変更：{fields}",
+        "title": "名前を「{title}」に変更",
+        "goal": "目標を変更"
+      },
+      "field": {
+        "title": "タイトル",
+        "who": "担当",
+        "mode": "方式",
+        "project": "プロジェクト",
+        "deliverable": "成果物",
+        "prompt": "内容",
+        "done_when": "完了条件",
+        "depends_on": "依存",
+        "kind": "仕事の種類"
+      },
+      "self": "自分"
+    },
+    "tidy": {
+      "title": {
+        "acted": "記憶を整理しました（{day}）",
+        "draft": "{day} の整理（下書き）",
+        "applied": "{day} の整理（適用済み）",
+        "undone": "{day} の整理（まとめて元に戻しました）",
+        "discarded": "{day} の整理（使いません）",
+        "stale": "{day} の整理（古くなりました）"
+      },
+      "note": {
+        "draft": "整理の結果は下書きとして保存しました。今の記憶はそのままで、「適用」すると反映されます。",
+        "applied": "適用しました。記憶はこの整理のとおりです。",
+        "discarded": "この整理は使いませんでした。記憶はそのままです。",
+        "stale": "下書きのあとで記憶が変わり、合わせられなくなりました。次の夜にもう一度整理します。",
+        "notAside": "下書きとして保存できませんでした（{why}）。すでに反映されています。「まとめて元に戻す」で戻せます。"
+      },
+      "undoAll": "まとめて元に戻す",
+      "apply": "適用",
+      "dismiss": "使わない",
+      "lines": "昨夜の整理",
+      "view": "見る",
+      "line": {
+        "done": "{name} が記憶を整理しました",
+        "draft": "{name} が記憶を整理しました（下書き）"
+      },
+      "state": {
+        "applied": "適用済み",
+        "undone": "元に戻しました",
+        "discarded": "使いません",
+        "stale": "古くなりました。今夜もう一度整理します"
+      }
+    },
+    "skill": {
+      "heading": {
+        "added": "新しい手順スキル",
+        "modified": "手順スキルを変更",
+        "deleted": "手順スキルを削除",
+        "draft": "手順スキルの下書き"
+      },
+      "line": {
+        "learned": "「{title}」を手順スキルにまとめました。次に頼まれたら、このとおりに進めます。",
+        "changed": "手順スキル「{title}」を変更しました。もう反映されています。",
+        "removed": "手順スキル「{title}」を削除しました。",
+        "draft": "手順スキル「{title}」を書きました。「インストール」すると反映されます。"
+      },
+      "when": "使う場面：{text}",
+      "note": {
+        "off": "オフ：読み込まれません。",
+        "draft": "まだ何も変わっていません。",
+        "applied": "インストールしました。",
+        "undone": "この変更を元に戻しました。",
+        "discarded": "インストールしませんでした。元のままです。",
+        "stale": "そのあと変更されたため、この下書きは使えません。",
+        "deleted": "削除しました。",
+        "notAside": "下書きとして保存できませんでした（{why}）。オフにしてあります。「オンにする」と読み込まれます。",
+        "notAsideOn": "下書きとして保存できず（{why}）、オフにもできませんでした。すでに反映されています。オフにするか元に戻してください。"
+      },
+      "show": "内容を見る",
+      "hide": "閉じる",
+      "view": "見る",
+      "disable": "オフにする",
+      "enable": "オンにする",
+      "undo": "元に戻す",
+      "delete": "削除",
+      "confirmDelete": "削除する",
+      "cancel": "キャンセル",
+      "install": "インストール",
+      "dismiss": "使わない"
+    },
+    "botPage": {
+      "primary": "メインアシスタント",
+      "worker": "アシスタント",
+      "chat": "話しかける"
+    },
+    "workRanOn": "{agent} で作業",
+    "workOff": "{agent}（作業に使うエージェント）が使えません。未インストールか無効になっているため、今は自分で作業できません。",
+    "setWork": "別のものを選ぶ",
+    "noBrain": {
+      "title": "{name} にはまだ頭脳がありません",
+      "body": "コラボレーション設定から移行したアシスタントです。メインアシスタントを設定すると、メインの頭脳のコピーを受け取り、会話できるようになります。それまでも会話で @ することはできます。",
+      "setUp": "メインアシスタントを設定"
+    },
+    "matter": {
+      "act": {
+        "done": "完了",
+        "doneThis": "今回は完了",
+        "doneEarly": "前倒しで完了",
+        "skipThis": "今回はスキップ",
+        "merged": "マージ済み",
+        "ack": "了解",
+        "snooze": "延期",
+        "setTime": "時間を設定",
+        "in15m": "15 分後",
+        "in1h": "1 時間後",
+        "tomorrow": "明日の午前",
+        "handOver": "{name}に任せる",
+        "answer": "回答する",
+        "drop": "不要",
+        "stop": "今後は知らせない",
+        "undo": "元に戻す"
+      },
+      "hint": {
+        "doneNext": "今回は完了、以降はいつもどおり：{rule}",
+        "skipNext": "今回はスキップ、以降はいつもどおり：{rule}",
+        "snoozeNotify": "その時間にもう一度知らせます",
+        "snoozeAct": "その時間に{name}が対応します",
+        "setTimeNotify": "その時間に知らせます",
+        "setTimeAct": "その時間に{name}が対応します",
+        "handOver": "{name}に対応してもらいます",
+        "answer": "{name}との会話で回答します",
+        "drop": "リストから外し、{name}は追わなくなります",
+        "dropQuestion": "この質問には答えなくて大丈夫です。{name}に伝えます",
+        "dropMessage": "メッセージを取り消します。間に合わない場合、{name}は{peer}の返事を待たなくなります",
+        "stop": "今後は知らせません",
+        "merged": "この PR がマージされたことを{name}に伝えます",
+        "ack": "リストから外します"
+      },
+      "toast": {
+        "done": "完了しました：{title}",
+        "doneNext": "今回は完了、次は {when}",
+        "doneEnded": "完了しました。このリマインダーはこれで終わりです",
+        "skipNext": "今回はスキップ、次は {when}",
+        "skipEnded": "スキップしました。このリマインダーはこれで終わりです",
+        "snoozeNotify": "{when} に知らせます",
+        "snoozeAct": "{name}が {when} に対応します",
+        "dropped": "外しました：{title}",
+        "withdrawn": "{peer}へのメッセージを取り消しました",
+        "notWithdrawn": "メッセージは取り消せませんでした。{name}は{peer}の返事を待たなくなりました",
+        "stopped": "今後は知らせません：{title}",
+        "handed": "{name}に任せました",
+        "undone": "元に戻しました"
+      },
+      "meta": {
+        "reminds": "{name}からのお知らせ · {when} の予定",
+        "remindsLate": "{name}からのお知らせ · {when} の予定、{late} 経過",
+        "willRemind": "{name}が {when} に知らせます",
+        "willDo": "{name}が {when} に対応します",
+        "repeats": "{name}からのお知らせ：{rule} · 次は {when}",
+        "asks": "{name}からの質問 · {wait} 待っています",
+        "asked": "{name}からの質問",
+        "answered": "回答済み · {name}が読むのを待っています",
+        "interrupted": "{name}のターンが終わらず、回答を読めていないかもしれません · 必要ならもう一度回答してください",
+        "needsYou": "{name}があなたの対応を待っています · {wait}",
+        "following": "{name}がフォロー中 · {wait}",
+        "external": "{name}が外部の結果を待っています · {wait}",
+        "message": "{name}が{peer}の返事を待っています · {wait}",
+        "setAside": "保留中 · 時間未設定",
+        "mention": "{words}と言ったときに{name}が知らせます · {times}/{max} 回 · {until} まで",
+        "justNow": "たった今",
+        "someone": "相手"
+      },
+      "closed": {
+        "done": "あなたが完了 · {time}",
+        "dropped": "あなたが外しました · {time}",
+        "withdrawn": "{peer}へのメッセージを取り消しました · {time}",
+        "stoppedWaiting": "{peer}の返事を待つのをやめました · {time}",
+        "agentDone": "{name}が完了 · {time}",
+        "agentDropped": "{name}が追うのをやめました · {time}",
+        "answered": "{name}があなたの回答を読みました · {time}",
+        "replied": "{peer}が返事をしました · {time}",
+        "gone": "{peer}は削除されたため、返事は来ません · {time}",
+        "planCanceled": "計画が取り消され、{name}は{peer}の返事を待たなくなりました · {time}",
+        "usedUp": "言及時のリマインダーを使い切りました · {time}",
+        "expired": "言及時のリマインダーの期限が切れました · {time}",
+        "ended": "終了 · {time}"
+      }
+    },
+    "matterErrors": {
+      "gone": "これはもうありません",
+      "settled": "これはもう終わっています",
+      "changed": "これはさっき変わりました。もう一度確認してください",
+      "workRunning": "この作業はまだ進行中です。止めるにはタスクバーの「停止」を使ってください",
+      "workNoTime": "任せた作業は時間で延期できません",
+      "messageNoTime": "これは{peer}の返事待ちなので、時間で延期できません",
+      "mentionNoTime": "これは言及したときに出てくるもので、時間では知らせません",
+      "notEarlier": "これはもともと {when} に設定されています。延期は後ろにしかできません",
+      "hasTime": "これはもう {when} に設定されています",
+      "inOtherHands": "これは{bot}が対応中なので、時間で延期できません",
+      "badTime": "その時間がわかりませんでした",
+      "undoNone": "この操作は元に戻せません",
+      "undoExpired": "10 分以上たったので、元に戻せません",
+      "undoFired": "さっき知らせたので、元に戻せません",
+      "undoChanged": "これはさっき変わったので、元に戻せません",
+      "undoReplied": "{peer}がもう返事をしたので、元に戻せません",
+      "undoPeerGone": "{peer}は削除されたので、元に戻せません",
+      "undoAnswerRead": "{bot}がもう回答を読んだので、元に戻せません",
+      "answerChanged": "この質問はさっき変わりました。メッセージは送られず、内容は入力欄に残っています",
+      "answerQueued": "この質問は{bot}の対応待ちに入りました。補足するには「回答」を外してそのまま送ってください",
+      "reminderAnswered": "このリマインダーはもう対応済みです"
+    },
+    "answer": {
+      "bar": "回答：{question}",
+      "dismiss": "回答として送らない",
+      "label": "回答：{question}",
+      "ended": "この質問はもう終わっています。回答は不要です",
+      "alreadyAnswered": "この質問はもう{name}が読むのを待っています。回答は不要です"
+    }
+  },
+  "MessageCheck": {
+    "action": "アシスタントに確認してもらう",
+    "selection": "確認",
+    "verdict": {
+      "true": "正しい",
+      "false": "正しくない",
+      "partly": "一部正しい",
+      "unsure": "判断できない"
+    },
+    "checking": "確認中…",
+    "unfinished": "確認が終わっていません",
+    "mark": "アシスタントの確認：{verdict}",
+    "markQuote": "「{quote}」の確認：{verdict}",
+    "again": "もう一度確認",
+    "inAssistant": "アシスタントの会話で見る",
+    "process": "確認の様子を見る",
+    "openConversation": "元の会話を開く",
+    "sentNoName": "確認を始めました。結果はこのメッセージの下に出ます",
+    "startFailed": "確認を始められませんでした：{message}",
+    "evidence": "根拠",
+    "noEvidence": "根拠は示されていません。",
+    "checkedMessage": "確認したメッセージ",
+    "checkedSentence": "確認した一文",
+    "asked": "答えていた質問",
+    "note": {
+      "no_verdict": "確認は結論を出しませんでした。",
+      "no_evidence": "結論はあっても根拠がないため、判断できない扱いです。",
+      "restarted": "codeg の再起動で中断されました。",
+      "stopped": "停止されました。",
+      "taken_over": "あなたがそのセッションを引き継ぎました。",
+      "failed": "失敗しました：{error}"
+    },
+    "heading": {
+      "checking": "確認中",
+      "done": "確認結果",
+      "failed": "確認が終わっていません"
+    },
+    "cardLine": {
+      "checking": "{title}のメッセージを確認しています",
+      "checkingSentence": "{title}の一文を確認しています",
+      "done": "{title}のメッセージを確認しました：{verdict}",
+      "doneSentence": "{title}の一文を確認しました：{verdict}",
+      "failed": "{title}のメッセージの確認が終わりませんでした",
+      "failedSentence": "{title}の一文の確認が終わりませんでした"
+    },
+    "titleQuoted": "「{title}」",
+    "untitled": "ある会話",
+    "expand": "すべて表示",
+    "collapse": "折りたたむ"
   },
   "SrnAccount": {
     "name": "SRN",

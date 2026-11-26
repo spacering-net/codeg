@@ -22,6 +22,9 @@ import {
   ChevronRight,
   SquareTerminal,
   ListChecks,
+  MessageCircleQuestionMark,
+  ShieldCheck,
+  Unlink,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
@@ -79,9 +82,10 @@ import {
 } from "./conversation-tag-picker"
 import { MoveToFolderContextSubmenu } from "./move-to-folder-menu"
 import { AgentIcon } from "@/components/agent-icon"
-import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
+import { useIdentityAssistant } from "@/components/message/delegation-identity"
+import { BotAvatar } from "@/components/personal-agent/bot-avatar"
 import { useBranchChip, useResolvedTags } from "@/hooks/use-conversation-tags"
-import { useAssistant } from "@/stores/assistants-store"
+import { useDetachAskConversation } from "./use-detach-ask-conversation"
 
 /**
  * Horizontal indent added per delegation-nesting level. Chosen so a child's
@@ -95,8 +99,28 @@ import { useAssistant } from "@/stores/assistants-store"
 export const CONV_RAIL_DEPTH_STEP = "1.25rem"
 
 /**
+ * One look for every rail of the list, the message steps' timeline's: a 1px
+ * hairline in `--activity-rail` — px, not rem, so the app zoom (which scales
+ * the root font size) moves it with the rows but never thickens it. Each rail
+ * sits at `axis − 0.5px`, so its centre is the axis the row's icon is centred
+ * on.
+ */
+const CONV_RAIL_CLASS = "pointer-events-none absolute z-0 w-px bg-activity-rail"
+
+/**
+ * A rail's run down its row: exactly the row's 2rem slot, no more. Drawn in a
+ * row's pill (1.9375rem, at the top of its slot), it reaches the 1px under
+ * the pill; drawn in a box that is the whole slot (`fullHeight`), it is that
+ * box. Never past it: the rail is translucent, so where two rows' rails
+ * overlapped the join would show as a darker dot down the line.
+ */
+function railSpan(fullHeight: boolean): CSSProperties {
+  return { top: 0, bottom: fullHeight ? 0 : "-0.0625rem" }
+}
+
+/**
  * Vertical guide rails for a delegation sub-session's ANCESTORS. A row at `depth`
- * draws one rail per ancestor level (axis 0 … depth−1), each a 2px line at
+ * draws one rail per ancestor level (axis 0 … depth−1), each a 1px line centred on
  * `axis(level) = 0.875rem + level·CONV_RAIL_DEPTH_STEP` from the row's left edge
  * — the same x as that ancestor row's own rail. Stacked across a contiguous
  * subtree they render each parent's rail as a single continuous vertical line
@@ -108,7 +132,14 @@ export const CONV_RAIL_DEPTH_STEP = "1.25rem"
  * Renders nothing for a root (depth 0). Shared with the list's sub-session
  * loading placeholder so the spine stays continuous while children are fetched.
  */
-export function SubsessionAncestorRails({ depth }: { depth: number }) {
+export function SubsessionAncestorRails({
+  depth,
+  fullHeight = false,
+}: {
+  depth: number
+  /** Drawn in a box that is the row's whole slot (not in its pill). */
+  fullHeight?: boolean
+}) {
   if (depth <= 0) return null
   return (
     <>
@@ -117,13 +148,10 @@ export function SubsessionAncestorRails({ depth }: { depth: number }) {
           key={level}
           aria-hidden
           data-subsession-rail
-          className="pointer-events-none absolute z-0 bg-sidebar-border"
+          className={CONV_RAIL_CLASS}
           style={{
-            top: "-0.0625rem",
-            bottom: "-0.0625rem",
-            left: `calc(0.875rem + ${level} * ${CONV_RAIL_DEPTH_STEP})`,
-            width: "0.125rem",
-            transform: "translateX(-50%)",
+            ...railSpan(fullHeight),
+            left: `calc(0.875rem + ${level} * ${CONV_RAIL_DEPTH_STEP} - 0.5px)`,
           }}
         />
       ))}
@@ -251,6 +279,9 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   const tSidebar = useTranslations("Folder.sidebar")
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
+  const tAsk = useTranslations("Folder.askConversations")
+  const tCheck = useTranslations("Folder.checkConversations")
+  const detachAsk = useDetachAskConversation()
   const timeLabelClassName = cn(
     "relative shrink-0 tabular-nums text-[0.71875rem]",
     isSelected
@@ -273,6 +304,12 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   // time / running badge then stays visible on hover (nothing swaps in for it).
   // Nor a branch chip, like they get no tags: their parent row carries it.
   const isSubsession = conversation.parent_id != null
+  // An ask conversation ("ask about this selection") nests under the
+  // conversation it was asked from like a sub-agent run, and can be turned
+  // into an ordinary conversation from its menu. So does a check of one of
+  // its messages, under the conversation it checks.
+  const isAsk = conversation.kind === "ask"
+  const isCheck = conversation.kind === "check"
   const branch = useBranchChip(isSubsession ? null : conversation.git_branch)
 
   const handleClick = useCallback(() => {
@@ -429,15 +466,10 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     shifted) rail axis. */}
                     <span
                       aria-hidden
-                      className={cn(
-                        "pointer-events-none absolute z-0 bg-sidebar-border"
-                      )}
+                      className={CONV_RAIL_CLASS}
                       style={{
-                        top: "-0.0625rem",
-                        bottom: "-0.0625rem",
-                        left: "var(--conv-rail-axis, 0.875rem)",
-                        width: "0.125rem",
-                        transform: "translateX(-50%)",
+                        ...railSpan(false),
+                        left: "calc(var(--conv-rail-axis, 0.875rem) - 0.5px)",
                       }}
                     />
                     <div
@@ -459,9 +491,11 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       }}
                       aria-hidden
                     >
-                      {conversation.assistant_id != null ? (
+                      {conversation.assistant_id != null ||
+                      conversation.bot_uid != null ? (
                         <SubsessionAssistantAvatar
-                          id={conversation.assistant_id}
+                          id={conversation.assistant_id ?? null}
+                          botUid={conversation.bot_uid ?? null}
                           name={conversation.assistant_name ?? ""}
                         />
                       ) : (
@@ -506,7 +540,9 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       className="relative -ml-[0.25rem] max-w-[calc(100%-3.875rem)] shrink overflow-hidden"
                     />
                     {/* Started by `codeg-cli`: told apart from the window's
-                    own, and found again with the Recent filter. */}
+                    own, and found again with the Recent filter. An ask or a
+                    check conversation is told apart from the sub-agent runs
+                    it nests beside. */}
                     {conversation.source === "cli" ? (
                       <span
                         className="ml-auto inline-flex shrink-0 items-center"
@@ -517,6 +553,28 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                           aria-hidden
                         />
                         <span className="sr-only">{tSidebar("cliBadge")}</span>
+                      </span>
+                    ) : isAsk ? (
+                      <span
+                        className="ml-auto inline-flex shrink-0 items-center"
+                        title={tAsk("title")}
+                      >
+                        <MessageCircleQuestionMark
+                          className="h-3 w-3 text-muted-foreground/60"
+                          aria-hidden
+                        />
+                        <span className="sr-only">{tAsk("title")}</span>
+                      </span>
+                    ) : isCheck ? (
+                      <span
+                        className="ml-auto inline-flex shrink-0 items-center"
+                        title={tCheck("title")}
+                      >
+                        <ShieldCheck
+                          className="h-3 w-3 text-muted-foreground/60"
+                          aria-hidden
+                        />
+                        <span className="sr-only">{tCheck("title")}</span>
                       </span>
                     ) : null}
                     {/* No mark for a conversation re-parented out of a removed
@@ -747,6 +805,12 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
               <AtSign className="h-4 w-4" />
               {t("attachToCurrentSession")}
             </ContextMenuItem>
+            {(isAsk || isCheck) && (
+              <ContextMenuItem onSelect={() => detachAsk(conversation.id)}>
+                <Unlink className="h-4 w-4" />
+                {tAsk("convertToRegular")}
+              </ContextMenuItem>
+            )}
             <ContextMenuSeparator />
             {/* Sub-sessions opt out like they do of pinning: a sub-agent run
                 is not a conversation the user files away, and the sidebar
@@ -900,10 +964,18 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
 /** A sub-session run as an assistant shows the assistant's avatar where the
  *  agent icon goes: its current look from the store, or the generic assistant
  *  glyph for a row the store does not hold. */
-function SubsessionAssistantAvatar({ id, name }: { id: number; name: string }) {
-  const assistant = useAssistant(id)
+function SubsessionAssistantAvatar({
+  id,
+  botUid,
+  name,
+}: {
+  id: number | null
+  botUid: string | null
+  name: string
+}) {
+  const assistant = useIdentityAssistant({ assistantId: id, botUid })
   return (
-    <AssistantAvatar
+    <BotAvatar
       avatar={assistant?.avatar ?? null}
       name={assistant?.name ?? name}
       size={14}

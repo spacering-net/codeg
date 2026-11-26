@@ -18,6 +18,7 @@ import {
   codexWebsocketSwitchApplies,
   extractCodexImportantValues,
   patchCodexConfigTomlText,
+  patchCodexSuppressUnstableFeaturesWarning,
   tomlLinesInsideMultilineString,
 } from "./acp-agent-settings"
 
@@ -238,5 +239,182 @@ describe("codexWebsocketSwitchApplies", () => {
     ]) {
       expect(codexWebsocketSwitchApplies("api_key", id)).toBe(false)
     }
+  })
+})
+
+// Root `suppress_unstable_features_warning` — the key codex's own
+// "Under-development features enabled" warning tells the user to set. It is a
+// top-level `ConfigToml` field (codex-cli 0.170.0), so it must land in the
+// ROOT table: written below a `[section]` header it would become that
+// section's key and silence nothing.
+describe("codex suppress_unstable_features_warning toggle", () => {
+  const KEY = "suppress_unstable_features_warning"
+
+  function readsBackAs(configTomlText: string): boolean {
+    return extractCodexImportantValues("", configTomlText)
+      .suppressUnstableFeaturesWarning
+  }
+
+  function rootValue(configTomlText: string): unknown {
+    return (parseTomlDocument(configTomlText) as Record<string, unknown>)[KEY]
+  }
+
+  it("is off for a config that never mentions it", () => {
+    expect(readsBackAs("")).toBe(false)
+    expect(readsBackAs('model = "gpt-5"')).toBe(false)
+  })
+
+  it("is not injected by any other control", () => {
+    for (const patch of [
+      {},
+      { model: "gpt-5.5" },
+      { apiBaseUrl: "https://api.example/v1" },
+      { supportsWebsockets: true },
+      { defaultModeRequestUserInput: true },
+    ]) {
+      expect(patchCodexConfigTomlText("", patch)).not.toContain(KEY)
+    }
+  })
+
+  it("writes a root key and reads it straight back", () => {
+    const on = patchCodexSuppressUnstableFeaturesWarning("", true)
+    expect(rootValue(on)).toBe(true)
+    expect(readsBackAs(on)).toBe(true)
+  })
+
+  it("stays in the root table when the file has sections", () => {
+    const toml = [
+      'model = "gpt-5"',
+      "",
+      "[features]",
+      "default_mode_request_user_input = true",
+      "",
+      "[model_providers.codeg]",
+      'base_url = "https://api.example/v1"',
+    ].join("\n")
+    const on = patchCodexSuppressUnstableFeaturesWarning(toml, true)
+    const doc = parseTomlDocument(on) as {
+      features: Record<string, unknown>
+      model_providers: { codeg: Record<string, unknown> }
+    }
+    expect(doc[KEY as keyof typeof doc]).toBe(true)
+    expect(doc.features).toEqual({ default_mode_request_user_input: true })
+    expect(doc.model_providers.codeg).not.toHaveProperty(KEY)
+    expect(readsBackAs(on)).toBe(true)
+  })
+
+  it("stays in the root table when the file opens with a section", () => {
+    const toml = "[features]\ndefault_mode_request_user_input = true\n"
+    const on = patchCodexSuppressUnstableFeaturesWarning(toml, true)
+    expect(rootValue(on)).toBe(true)
+    expect(
+      (parseTomlDocument(on) as { features: Record<string, unknown> }).features
+    ).toEqual({ default_mode_request_user_input: true })
+    // On then off is a no-op: no separator line is left behind.
+    expect(patchCodexSuppressUnstableFeaturesWarning(on, false)).toBe(toml)
+  })
+
+  it("does not duplicate the key when switched on twice", () => {
+    const once = patchCodexSuppressUnstableFeaturesWarning(
+      'model = "gpt-5"\n',
+      true
+    )
+    const twice = patchCodexSuppressUnstableFeaturesWarning(once, true)
+    expect(twice).toBe(once)
+    expect(() => parseTomlDocument(twice)).not.toThrow()
+  })
+
+  it("flips a hand-written false instead of adding a second line", () => {
+    const on = patchCodexSuppressUnstableFeaturesWarning(
+      `${KEY} = false\nmodel = "gpt-5"\n`,
+      true
+    )
+    expect(on.match(new RegExp(KEY, "g"))).toHaveLength(1)
+    expect(rootValue(on)).toBe(true)
+  })
+
+  it("removes the key when switched off and leaves the rest alone", () => {
+    const toml = `model = "gpt-5"\n${KEY} = true\n\n[features]\ndefault_mode_request_user_input = true\n`
+    const off = patchCodexSuppressUnstableFeaturesWarning(toml, false)
+    expect(off).not.toContain(KEY)
+    expect(off).toContain("default_mode_request_user_input = true")
+    expect(readsBackAs(off)).toBe(false)
+  })
+
+  // `"x" = true` and `'x' = true` are the same TOML key as `x = true`. Missing
+  // them showed the switch off, and switching it on appended a bare duplicate
+  // that made the whole save fail to parse.
+  it("treats a quoted spelling as the same key", () => {
+    for (const spelling of [`"${KEY}"`, `'${KEY}'`]) {
+      const toml = `model = "gpt-5"\n${spelling} = true\n`
+      expect(readsBackAs(toml)).toBe(true)
+      const on = patchCodexSuppressUnstableFeaturesWarning(
+        toml.replace("= true", "= false"),
+        true
+      )
+      expect(() => parseTomlDocument(on)).not.toThrow()
+      expect(rootValue(on)).toBe(true)
+      const off = patchCodexSuppressUnstableFeaturesWarning(toml, false)
+      expect(off).not.toContain(KEY)
+    }
+  })
+
+  // A quoted key containing a dot is ONE key, not the dotted path.
+  it("does not read a quoted dotted key as a dotted path", () => {
+    const toml = `"features.default_mode_request_user_input" = true\n`
+    expect(
+      extractCodexImportantValues("", toml).defaultModeRequestUserInput
+    ).toBe(false)
+  })
+
+  it("reads a value with a comment hard against it", () => {
+    expect(readsBackAs(`${KEY} = true# quiet\n`)).toBe(true)
+    const off = patchCodexSuppressUnstableFeaturesWarning(
+      `${KEY} = true# quiet\n`,
+      false
+    )
+    expect(off).not.toContain(KEY)
+  })
+
+  // patchCodexConfigTomlText re-serializes `model` on every call; this switch
+  // must not go through it and touch a line the user did not ask to change.
+  it("leaves every other line byte-for-byte as written", () => {
+    const toml = [
+      '  model = "\\U00000067pt-5"  # escaped on purpose  ',
+      "",
+      "[features]",
+      "default_mode_request_user_input = true",
+      "",
+    ].join("\n")
+    const on = patchCodexSuppressUnstableFeaturesWarning(toml, true)
+    expect(on.split("\n").filter((line) => !line.includes(KEY))).toEqual(
+      toml.split("\n")
+    )
+    expect(rootValue(on)).toBe(true)
+    expect(patchCodexSuppressUnstableFeaturesWarning(on, false)).toBe(toml)
+  })
+
+  it("keeps CRLF line endings", () => {
+    const toml = 'model = "gpt-5"\r\n\r\n[features]\r\nx = true\r\n'
+    const on = patchCodexSuppressUnstableFeaturesWarning(toml, true)
+    expect(on.replace(/\r\n/g, "")).not.toContain("\n")
+    expect(rootValue(on)).toBe(true)
+    expect(patchCodexSuppressUnstableFeaturesWarning(on, false)).toBe(toml)
+  })
+
+  it("reads a comment holding a Unicode line separator", () => {
+    const toml = `${KEY} = true # a\u2028b\n`
+    expect(readsBackAs(toml)).toBe(true)
+    expect(
+      patchCodexSuppressUnstableFeaturesWarning(toml, false)
+    ).not.toContain(KEY)
+  })
+
+  // Under `[profiles.x]` the key applies to that profile only, and inside any
+  // other table it is not the root key at all; the writer never edits either,
+  // so reading them would show a value no save could clear.
+  it("ignores the same key outside the root table", () => {
+    expect(readsBackAs(`[profiles.fast]\n${KEY} = true\n`)).toBe(false)
+    expect(readsBackAs(`[features]\n${KEY} = true\n`)).toBe(false)
   })
 })

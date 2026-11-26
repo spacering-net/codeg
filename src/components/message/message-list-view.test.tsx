@@ -9,6 +9,7 @@ import {
   extractMessageDelegationSources,
   groupDelegationSources,
   hoistedCompaction,
+  isEditableUserTurn,
   isForkPointUnnamed,
   markThreadTail,
   mergeConsecutiveAssistantTurns,
@@ -53,6 +54,7 @@ function assistantItem(
     showStats: false,
     isRoleTransition: false,
     previousUserIndex: null,
+    previousUserGroup: null,
     isLastAssistantRun: false,
     isThreadTail: false,
     sourceTurns: [],
@@ -346,6 +348,7 @@ function makeItem(
     showStats: false,
     isRoleTransition: false,
     previousUserIndex: null,
+    previousUserGroup: null,
     isLastAssistantRun: false,
     isThreadTail: false,
     sourceTurns: singletonSourceTurns(turn(group.id)),
@@ -929,6 +932,42 @@ describe("currentNavTurnIdAt", () => {
  * settled and non-tail with a fork button while the parser's name is still a
  * reparse away.
  */
+describe("isEditableUserTurn", () => {
+  function userTurn(id: string, agentMessageId?: string): MessageTurn {
+    return {
+      id,
+      role: "user",
+      blocks: [{ type: "text", text: "hi" }],
+      timestamp: "",
+      ...(agentMessageId ? { agent_message_id: agentMessageId } : {}),
+    }
+  }
+
+  it("offers a parsed message the agent can name", () => {
+    expect(isEditableUserTurn(userTurn("turn-2", "u2"), "turn-0")).toBe(true)
+  })
+
+  it("offers a message this session sent once the reparse named it", () => {
+    expect(isEditableUserTurn(userTurn("optimistic-abc"), "turn-0")).toBe(false)
+    expect(isEditableUserTurn(userTurn("optimistic-abc", "u7"), "turn-0")).toBe(
+      true
+    )
+  })
+
+  it("withholds the first message — there is nothing before it", () => {
+    expect(isEditableUserTurn(userTurn("turn-0", "u1"), "turn-0")).toBe(false)
+  })
+
+  it("withholds a parsed message the agent has no id for", () => {
+    expect(isEditableUserTurn(userTurn("turn-2"), "turn-0")).toBe(false)
+  })
+
+  it("withholds assistant turns", () => {
+    expect(isEditableUserTurn(turn("turn-1"), null)).toBe(false)
+    expect(isEditableUserTurn(null, null)).toBe(false)
+  })
+})
+
 describe("isForkPointUnnamed", () => {
   function forkTurn(id: string, sourceTurnId?: string | null): MessageTurn {
     return {

@@ -368,11 +368,14 @@ async fn async_main(
         chat_authoring_config,
         browser_tools_config,
         computer_tools_config,
-    ) = codeg_lib::app_state::build_delegation_stack(
-        &connection_manager,
-        db.conn.clone(),
-        data_dir.clone(),
-    );
+    ) = {
+        codeg_lib::personal_agent::host::pin_data_dir(data_dir.clone());
+        codeg_lib::app_state::build_delegation_stack(
+            &connection_manager,
+            db.conn.clone(),
+            data_dir.clone(),
+        )
+    };
     let state = Arc::new(AppState {
         db,
         connection_manager,
@@ -674,6 +677,19 @@ async fn async_main(
         state.data_dir.clone(),
     ) {
         tokio::spawn(codeg_lib::work_task::run_task_engine(engine));
+        // The personal agent (mirrors lib.rs setup): next to the task engine
+        // whose tasks it dispatches.
+        if let Some(host) = codeg_lib::personal_agent::host::build(
+            codeg_lib::db::AppDatabase {
+                conn: state.db.conn.clone(),
+            },
+            state.connection_manager.clone_ref(),
+            state.emitter.clone(),
+            state.acp_event_bus.clone(),
+            state.data_dir.clone(),
+        ) {
+            tokio::spawn(codeg_lib::personal_agent::host::run(host));
+        }
         // Repository-panel auto-processing (mirrors lib.rs setup): only where
         // the task engine runs, since it mints tasks unattended.
         if let Some(processor) = codeg_lib::forge::auto::build(

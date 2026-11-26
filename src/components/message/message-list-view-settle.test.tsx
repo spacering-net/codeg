@@ -30,6 +30,14 @@ vi.mock("next-intl", () => ({
   useTranslations: () => stableT,
   useLocale: () => "en",
 }))
+// No assistants' roster read here: whether a reply can be checked (10.3)
+// is not what this file is about.
+vi.mock("@/stores/personal-agent-roster-store", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/stores/personal-agent-roster-store")
+  >()),
+  useRoster: () => null,
+}))
 vi.mock("@/lib/api", () => ({
   getFolderConversation: vi.fn(() => new Promise(() => {})),
   getFolderConversationTurns: vi.fn(),

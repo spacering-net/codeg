@@ -897,3 +897,375 @@ describe("historyAssistantBaseline capture", () => {
     expect(baseline()).toBe(2)
   })
 })
+
+describe("computeTurnMetadataPatches — a user turn's rewind point", () => {
+  function prompt(id: string, text: string, agentId?: string): MessageTurn {
+    return {
+      id,
+      role: "user",
+      blocks: [{ type: "text", text }],
+      timestamp: "2026-01-01T00:00:00Z",
+      ...(agentId ? { agent_message_id: agentId } : {}),
+    }
+  }
+  const local = [
+    prompt("optimistic-1", "first question"),
+    live("live-1"),
+    prompt("optimistic-2", "second  question"),
+    live("live-2"),
+  ]
+  const parsed = [
+    prompt("turn-6", "first question", "uuid-1"),
+    asst({ id: "turn-7" }),
+    prompt("turn-8", "second question", "uuid-2"),
+    asst({ id: "turn-9" }),
+  ]
+  const userPatches = (
+    patches: ReturnType<typeof computeTurnMetadataPatches>
+  ) => patches.filter((p) => p.agent_message_id !== undefined)
+
+  it("names every prompt of the batch when the parse holds exactly them", () => {
+    const patches = computeTurnMetadataPatches({
+      localTurns: local,
+      parsedTurns: parsed,
+      persistedAssistantCount: 0,
+      parseOpensAtBatch: true,
+      parseEndsWithAssistant: true,
+    })
+    expect(userPatches(patches)).toEqual([
+      { index: 0, source_turn_id: "turn-6", agent_message_id: "uuid-1" },
+      { index: 2, source_turn_id: "turn-8", agent_message_id: "uuid-2" },
+    ])
+  })
+
+  it("names none when a prompt's text differs (the parser merged or rewrote one)", () => {
+    const patches = computeTurnMetadataPatches({
+      localTurns: local,
+      parsedTurns: [
+        parsed[0],
+        parsed[1],
+        prompt("turn-8", "other", "uuid-2"),
+        parsed[3],
+      ],
+      persistedAssistantCount: 0,
+      parseOpensAtBatch: true,
+      parseEndsWithAssistant: true,
+    })
+    expect(userPatches(patches)).toEqual([])
+  })
+
+  it("names none when the parse holds one prompt fewer", () => {
+    const patches = computeTurnMetadataPatches({
+      localTurns: local,
+      parsedTurns: [parsed[0], parsed[1], parsed[3]],
+      persistedAssistantCount: 0,
+      parseOpensAtBatch: true,
+      parseEndsWithAssistant: true,
+    })
+    expect(userPatches(patches)).toEqual([])
+  })
+
+  it("names none while the parse is behind or not cut at the batch", () => {
+    for (const [opens, ends] of [
+      [false, true],
+      [true, false],
+    ] as const) {
+      const patches = computeTurnMetadataPatches({
+        localTurns: local,
+        parsedTurns: parsed,
+        persistedAssistantCount: 0,
+        parseOpensAtBatch: opens,
+        parseEndsWithAssistant: ends,
+      })
+      expect(userPatches(patches)).toEqual([])
+    }
+  })
+})
+
+describe("truncateAtTurn — an edited message's cut", () => {
+  afterEach(() => resetConversationRuntimeStore())
+
+  function userWithId(id: string, agentId: string): MessageTurn {
+    return { ...user(id), agent_message_id: agentId }
+  }
+  const SIX = () => [
+    userWithId("turn-0", "uuid-0"),
+    asst({ id: "turn-1" }),
+    userWithId("turn-2", "uuid-2"),
+    asst({ id: "turn-3" }),
+    userWithId("turn-4", "uuid-4"),
+    asst({ id: "turn-5" }),
+  ]
+  const session = () =>
+    useConversationRuntimeStore.getState().byConversationId.get(CID)
+
+  it("cuts the history at the message and re-anchors the edited send on what is left", () => {
+    seedDetail(SIX())
+    const { actions } = useConversationRuntimeStore.getState()
+    // The edited prompt went out (optimistic) before the cut: anchored on the
+    // full history first…
+    actions.appendOptimisticTurn(CID, user("optimistic-new"), "tok-1")
+    expect(baseline()).toBe(3)
+    expect(
+      actions.truncateAtTurn(CID, {
+        turnId: "turn-2",
+        agentMessageId: "uuid-2",
+        keepFromTurnId: "optimistic-new",
+        staleLiveTurnIds: [],
+      })
+    ).toBe(true)
+    expect(session()?.detail?.turns.map((t) => t.id)).toEqual([
+      "turn-0",
+      "turn-1",
+    ])
+    // …then on the cut history: one reply before it, not three.
+    expect(baseline()).toBe(1)
+    expect(session()?.batchBoundaryIndex).toBe(2)
+    expect(session()?.optimisticTurns.map((t) => t.id)).toEqual([
+      "optimistic-new",
+    ])
+  })
+
+  it("finds the message by the agent's id when a reload renamed it", () => {
+    seedDetail(SIX())
+    const { actions } = useConversationRuntimeStore.getState()
+    expect(
+      actions.truncateAtTurn(CID, {
+        turnId: "optimistic-old",
+        agentMessageId: "uuid-4",
+        keepFromTurnId: "optimistic-new",
+        staleLiveTurnIds: [],
+      })
+    ).toBe(true)
+    expect(session()?.detail?.turns.map((t) => t.id)).toEqual([
+      "turn-0",
+      "turn-1",
+      "turn-2",
+      "turn-3",
+    ])
+    // Nothing to cut at: nothing changes, and the caller is told.
+    expect(
+      actions.truncateAtTurn(CID, {
+        turnId: "gone",
+        agentMessageId: "gone",
+        keepFromTurnId: "optimistic-new",
+        staleLiveTurnIds: [],
+      })
+    ).toBe(false)
+  })
+
+  it("keeps the edited prompt and its reply when they completed before the cut", () => {
+    seedDetail(SIX())
+    const { actions } = useConversationRuntimeStore.getState()
+    actions.appendOptimisticTurn(CID, user("optimistic-new"), "tok-1")
+    actions.completeTurn(CID, {
+      id: "live-new",
+      role: "assistant",
+      content: [],
+      startedAt: 0,
+    })
+    const local = session()?.localTurns.map((t) => t.id) ?? []
+    expect(local).toContain("optimistic-new")
+    actions.truncateAtTurn(CID, {
+      turnId: "turn-2",
+      agentMessageId: "uuid-2",
+      keepFromTurnId: "optimistic-new",
+      staleLiveTurnIds: [],
+    })
+    expect(session()?.localTurns.map((t) => t.id)).toEqual(
+      local.slice(local.indexOf("optimistic-new"))
+    )
+    expect(session()?.detail?.turns.map((t) => t.id)).toEqual([
+      "turn-0",
+      "turn-1",
+    ])
+  })
+
+  it("cuts a live message, keeping the turns before it and their batch", () => {
+    seedDetail([user("turn-0"), asst({ id: "turn-1" })])
+    const { actions } = useConversationRuntimeStore.getState()
+    actions.appendOptimisticTurn(CID, user("optimistic-a"), "tok-1")
+    actions.completeTurn(CID, {
+      id: "live-a",
+      role: "assistant",
+      content: [],
+      startedAt: 0,
+    })
+    actions.appendOptimisticTurn(CID, user("optimistic-b"), "tok-2")
+    actions.completeTurn(CID, {
+      id: "live-b",
+      role: "assistant",
+      content: [],
+      startedAt: 0,
+    })
+    const before = session()
+    const ids = before?.localTurns.map((t) => t.id) ?? []
+    const cutAt = ids.indexOf("optimistic-b")
+    expect(cutAt).toBeGreaterThan(0)
+    actions.truncateAtTurn(CID, {
+      turnId: "optimistic-b",
+      agentMessageId: "uuid-b",
+      keepFromTurnId: "optimistic-new",
+      staleLiveTurnIds: [],
+    })
+    const after = session()
+    expect(after?.localTurns.map((t) => t.id)).toEqual(ids.slice(0, cutAt))
+    expect(after?.detail?.turns.map((t) => t.id)).toEqual(["turn-0", "turn-1"])
+    expect(after?.historyAssistantBaseline).toBe(
+      before?.historyAssistantBaseline
+    )
+  })
+
+  it("does not take a reused positional id for the edited message", () => {
+    // The parse already holds the replacement under the original's ordinal:
+    // `turn-2`, but a different message (another agent id).
+    seedDetail([
+      userWithId("turn-0", "uuid-0"),
+      asst({ id: "turn-1" }),
+      userWithId("turn-2", "uuid-new"),
+      asst({ id: "turn-3" }),
+    ])
+    const { actions } = useConversationRuntimeStore.getState()
+    expect(
+      actions.truncateAtTurn(CID, {
+        turnId: "turn-2",
+        agentMessageId: "uuid-2",
+        keepFromTurnId: "optimistic-new",
+        staleLiveTurnIds: [],
+      })
+    ).toBe(false)
+    expect(session()?.detail?.turns).toHaveLength(4)
+    // …and the next load re-anchors the batch instead.
+    expect(session()?.rebaseBatchOnNextLoad).toBe(true)
+  })
+
+  it("drops a stale in-flight stamp on a turn that is not the new prompt", () => {
+    const detail = [
+      userWithId("turn-0", "uuid-0"),
+      asst({ id: "turn-1" }),
+      userWithId("turn-2", "uuid-2"),
+      asst({ id: "turn-3" }),
+      {
+        ...userWithId("turn-4", "uuid-4"),
+        blocks: [{ type: "text" as const, text: "C" }],
+      },
+      asst({ id: "turn-5" }),
+    ]
+    seedDetail(detail, "turn-4")
+    const { actions } = useConversationRuntimeStore.getState()
+    actions.truncateAtTurn(CID, {
+      turnId: "turn-2",
+      agentMessageId: "uuid-2",
+      keepFromTurnId: "optimistic-new",
+      staleLiveTurnIds: [],
+    })
+    expect(session()?.detail?.turns.map((t) => t.id)).toEqual([
+      "turn-0",
+      "turn-1",
+    ])
+    expect(session()?.detail?.in_flight_user_turn_id).toBeNull()
+  })
+
+  it("keeps the new prompt when a reload already stamped it in flight", () => {
+    seedDetail(
+      [
+        userWithId("turn-0", "uuid-0"),
+        asst({ id: "turn-1" }),
+        userWithId("turn-2", "uuid-2"),
+        asst({ id: "turn-3" }),
+        {
+          ...userWithId("optimistic-new", "uuid-new"),
+          blocks: [{ type: "text" as const, text: "edited" }],
+        },
+      ],
+      // The backend stamps the in-flight prompt with its client message id.
+      "optimistic-new"
+    )
+    const { actions } = useConversationRuntimeStore.getState()
+    actions.truncateAtTurn(CID, {
+      turnId: "turn-2",
+      agentMessageId: "uuid-2",
+      keepFromTurnId: "optimistic-new",
+      staleLiveTurnIds: [],
+    })
+    expect(session()?.detail?.turns.map((t) => t.id)).toEqual([
+      "turn-0",
+      "turn-1",
+      "optimistic-new",
+    ])
+    expect(session()?.batchBoundaryIndex).toBe(3)
+  })
+
+  it("cuts the earlier copy when a mid-turn reload put the message in both places", () => {
+    seedDetail([
+      userWithId("turn-0", "uuid-0"),
+      asst({ id: "turn-1" }),
+      userWithId("turn-2", "uuid-2"),
+    ])
+    const { actions } = useConversationRuntimeStore.getState()
+    actions.appendOptimisticTurn(CID, userWithId("turn-2", "uuid-2"), "tok-1")
+    actions.completeTurn(CID, {
+      id: "live-2",
+      role: "assistant",
+      content: [],
+      startedAt: 0,
+    })
+    actions.truncateAtTurn(CID, {
+      turnId: "turn-2",
+      agentMessageId: "uuid-2",
+      keepFromTurnId: "optimistic-new",
+      staleLiveTurnIds: [],
+    })
+    expect(session()?.detail?.turns.map((t) => t.id)).toEqual([
+      "turn-0",
+      "turn-1",
+    ])
+    expect(session()?.localTurns).toEqual([])
+  })
+})
+
+describe("computeTurnMetadataPatches — a failed attempt the tab does not hold", () => {
+  it("names no prompt when the parse's batch holds an error line the tab lacks", () => {
+    const prompt = (id: string, agentId?: string): MessageTurn => ({
+      id,
+      role: "user",
+      blocks: [{ type: "text", text: "look at this" }],
+      timestamp: "2026-01-01T00:00:00Z",
+      ...(agentId ? { agent_message_id: agentId } : {}),
+    })
+    // Prompt A failed before any reply and the retry B (same caption and
+    // image) was folded into A by the parser's duplicate filter; a stale
+    // reload dropped A from the tab.
+    const patches = computeTurnMetadataPatches({
+      localTurns: [prompt("optimistic-b"), live("live-b")],
+      parsedTurns: [
+        prompt("turn-6", "turn-a"),
+        system("turn-7"),
+        asst({ id: "turn-8" }),
+      ],
+      persistedAssistantCount: 0,
+      parseOpensAtBatch: true,
+      parseEndsWithAssistant: true,
+    })
+    expect(patches.filter((p) => p.agent_message_id !== undefined)).toEqual([])
+  })
+})
+
+describe("markOptimisticUnsent — a send that never went out", () => {
+  afterEach(() => resetConversationRuntimeStore())
+
+  it("keeps the bubble, notes it, and forgets it once the bubble goes", () => {
+    seedDetail([user("turn-0"), asst({ id: "turn-1" })])
+    const { actions } = useConversationRuntimeStore.getState()
+    actions.appendOptimisticTurn(CID, user("optimistic-a"), "tok-1")
+    actions.markOptimisticUnsent(CID, "optimistic-a")
+    // An id with no bubble is not recorded.
+    actions.markOptimisticUnsent(CID, "optimistic-gone")
+    let s = useConversationRuntimeStore.getState().byConversationId.get(CID)
+    expect(s?.optimisticTurns.map((t) => t.id)).toEqual(["optimistic-a"])
+    expect(s?.unsentOptimisticIds).toEqual(["optimistic-a"])
+    actions.removeOptimisticTurn(CID, "optimistic-a")
+    s = useConversationRuntimeStore.getState().byConversationId.get(CID)
+    expect(s?.unsentOptimisticIds).toEqual([])
+  })
+})

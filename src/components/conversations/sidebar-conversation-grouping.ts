@@ -8,6 +8,7 @@ import {
   DEFAULT_SECTION_ORDER,
   normalizeSectionOrder,
   type SidebarRecentFilter,
+  type SidebarRecentGroupingMode,
   type SidebarSortMode,
   type SidebarSectionKey,
   type SidebarSectionOrder,
@@ -308,6 +309,59 @@ export function selectChatConversationsWithReuse(
   next.sort(compareByUpdatedAtDesc)
   return arraysShallowEqual(prev, next) ? prev : next
 }
+
+/**
+ * Which time group of the "Recent" section a conversation lands in when the
+ * section is grouped by time (see `recentGroupingMode` on {@link buildRows}).
+ *
+ * - A RUNNING conversation (`in_progress`, the same status the card spins on)
+ *   goes to "priorities" whatever its stamp says, so work under way sits on
+ *   top. A `pending_review` one has finished its turn and is dated like any
+ *   other.
+ * - Everything else is dated by `updated_at`, the stamp the section is ordered
+ *   and labelled by (see {@link selectRecentConversationsWithReuse}), so each
+ *   group is a contiguous run of the flat order.
+ * - Day boundaries are LOCAL midnights, built from calendar fields rather than
+ *   by subtracting 24 h multiples, so a DST change never shifts a boundary by
+ *   an hour. "previous7Days" / "previous30Days" cover the 7 / 30 calendar days
+ *   ending today (today and yesterday are claimed first).
+ */
+export function classifyRecentConversation(
+  conv: DbConversationSummary,
+  now: number
+): RecentTimeGroupId {
+  if (conv.status === "in_progress") return "priorities"
+  const ts = parseTimestamp(conv.updated_at || conv.created_at)
+  if (!ts) return "older"
+  const today = new Date(now)
+  const dayStart = (daysAgo: number) =>
+    new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate() - daysAgo
+    ).getTime()
+  if (ts >= dayStart(0)) return "today"
+  if (ts >= dayStart(1)) return "yesterday"
+  if (ts >= dayStart(6)) return "previous7Days"
+  if (ts >= dayStart(29)) return "previous30Days"
+  return "older"
+}
+
+/** Local midnight starting the calendar day `now` falls on. */
+export function localDayStart(now: number = Date.now()): number {
+  const d = new Date(now)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+}
+
+/** Display order of the time groups; an empty group is omitted. */
+const RECENT_TIME_GROUP_ORDER: readonly RecentTimeGroupId[] = [
+  "priorities",
+  "today",
+  "yesterday",
+  "previous7Days",
+  "previous30Days",
+  "older",
+]
 
 /**
  * Select the flat "Recent" bucket: every conversation the sidebar can reach,
@@ -1000,6 +1054,28 @@ export interface RecentEmptyRow {
   kind: "recent-empty"
 }
 
+/** A time group of the "Recent" section (see
+ *  {@link classifyRecentConversation}). */
+export type RecentTimeGroupId =
+  | "priorities"
+  | "today"
+  | "yesterday"
+  | "previous7Days"
+  | "previous30Days"
+  | "older"
+
+/**
+ * The heading of one time group inside the "Recent" section, emitted only when
+ * the section is grouped by time and the group has rows on the current page.
+ * `count` is how many of the SHOWN rows the group holds; rows still behind the
+ * paging footer are not counted (the section header carries the total).
+ */
+export interface RecentTimeGroupRow {
+  kind: "recent-time-group"
+  groupId: RecentTimeGroupId
+  count: number
+}
+
 /**
  * The paging footer of the "Recent" section. Recent re-lists every reachable
  * conversation, so an untruncated one buries the sections below it; the list
@@ -1084,8 +1160,30 @@ export interface SubsessionLoadingRow {
   recent?: true
 }
 
+/**
+ * The owner's personal assistants, under the "assistants" section header:
+ * one row holding all of them (the roster, drawn whole — a few dozen at
+ * most), so its own groups, its dragging between them and its hover cards
+ * work as one piece; `virtua` measures it like any other row, so it scrolls
+ * with the rest of the list.
+ */
+export interface AssistantsRow {
+  kind: "assistants"
+}
+
+/**
+ * The fully empty workspace's "open a folder" actions — no folders and no
+ * conversations — drawn as a row of the list, under the assistants, so the
+ * way to set the primary assistant up is there from the first start.
+ */
+export interface WorkspaceEmptyRow {
+  kind: "workspace-empty"
+}
+
 export type SidebarRow =
   | SectionHeaderRow
+  | AssistantsRow
+  | WorkspaceEmptyRow
   | FolderGroupHeaderRow
   | GroupEmptyRow
   | FolderHeaderRow
@@ -1095,6 +1193,7 @@ export type SidebarRow =
   | ChatsEmptyRow
   | FoldersEmptyRow
   | RecentEmptyRow
+  | RecentTimeGroupRow
   | RecentMoreRow
   | SubsessionLoadingRow
 
@@ -1206,10 +1305,12 @@ function pushConversationRow(
  * linear row list for windowing by the one Virtualizer — pinned conversations
  * are ordinary conversation rows in the SAME array, never a separate list.
  *
- * Pure and deliberately **does not take `now`**: the per-minute clock tick that
+ * Deliberately **does not take the minute clock**: the per-minute tick that
  * refreshes relative time labels must not rebuild this array (that would defeat
  * the Phase 1 memo chain). The row renderer passes only the row's timestamp;
- * each card's `SidebarRelativeTime` formats it against the shared clock.
+ * each card's `SidebarRelativeTime` formats it against the shared clock. The
+ * one time input is `currentTime`, which only Recent's time groups read and
+ * whose caller passes the local day's start, so it changes once a day.
  *
  * Structure (top to bottom): the "Pinned" section (when present) is always
  * first; the "Folders", "Chat" and "Recent" sections follow in the order set by
@@ -1239,7 +1340,9 @@ function pushConversationRow(
  *   `showRecent` — it is the one section the user can switch off, and a
  *   permanently-visible header for a hidden section would defeat that. When
  *   shown it mirrors the Chat section: header always, then either a single
- *   `recent-empty` hint or its flat conversation rows. Its rows are tagged
+ *   `recent-empty` hint or its conversation rows — under time-group headings
+ *   (`recent-time-group`) unless `recentGroupingMode` is `"flat"`, see
+ *   {@link classifyRecentConversation}. Its rows are tagged
  *   `recent` because they intentionally duplicate rows already emitted by
  *   Folders / Chat (see {@link ConversationRow.recent}).
  */
@@ -1323,6 +1426,19 @@ export function buildRows(args: {
    * omitted keeps every folder, as before.
    */
   hideEmptyFolders?: boolean
+  /** The assistants' section: its header's count and whether it is open.
+   *  Optional — omitted (e.g. in tests) emits no assistants rows, matching
+   *  the row model from before them. */
+  assistants?: { expanded: boolean; count: number }
+  /**
+   * How the "Recent" section lays out its page: under time-group headings
+   * (`"time"`, the default) or as one flat `updated_at`-ordered run
+   * (`"flat"`). See {@link classifyRecentConversation}.
+   */
+  recentGroupingMode?: SidebarRecentGroupingMode
+  /** The instant the time groups are measured from; only its local calendar
+   *  day matters. Defaults to `Date.now()`. */
+  currentTime?: number
 }): SidebarRow[] {
   const {
     pinned,
@@ -1347,6 +1463,9 @@ export function buildRows(args: {
     layout,
     groupExpanded = EMPTY_GROUP_EXPANDED,
     hideEmptyFolders = false,
+    assistants,
+    recentGroupingMode = "time",
+    currentTime = Date.now(),
   } = args
   const rows: SidebarRow[] = []
 
@@ -1547,17 +1666,52 @@ export function buildRows(args: {
       recentLimit == null
         ? recentConversations
         : recentConversations.slice(0, Math.max(0, recentLimit))
-    for (const conv of shown) {
-      pushConversationRow(
-        rows,
-        conv,
-        0,
-        conversationExpanded,
-        childrenByParent,
-        childrenLoading,
-        true
-      )
+
+    if (recentGroupingMode === "flat") {
+      for (const conv of shown) {
+        pushConversationRow(
+          rows,
+          conv,
+          0,
+          conversationExpanded,
+          childrenByParent,
+          childrenLoading,
+          true
+        )
+      }
+    } else {
+      // Grouped by time. `shown` is ordered by `updated_at`, so each date
+      // group is a contiguous run of it; only "priorities" pulls rows (the
+      // running ones) out of place, and only from the page being shown.
+      const buckets = new Map<RecentTimeGroupId, DbConversationSummary[]>()
+      for (const conv of shown) {
+        const gid = classifyRecentConversation(conv, currentTime)
+        const bucket = buckets.get(gid)
+        if (bucket) bucket.push(conv)
+        else buckets.set(gid, [conv])
+      }
+      for (const gid of RECENT_TIME_GROUP_ORDER) {
+        const bucket = buckets.get(gid)
+        if (!bucket) continue
+        rows.push({
+          kind: "recent-time-group",
+          groupId: gid,
+          count: bucket.length,
+        })
+        for (const conv of bucket) {
+          pushConversationRow(
+            rows,
+            conv,
+            0,
+            conversationExpanded,
+            childrenByParent,
+            childrenLoading,
+            true
+          )
+        }
+      }
     }
+
     const remaining = recentConversations.length - shown.length
     // The gate is "more than a page is on screen", not "recentLimit is past a
     // page": a raised limit outlives the conversations it revealed (delete them
@@ -1575,9 +1729,18 @@ export function buildRows(args: {
   // Normalized (not consumed raw) so a truncated / repeated / unknown-entry
   // order can never drop a section off the sidebar or emit one twice.
   for (const section of normalizeSectionOrder(sectionOrder)) {
-    if (section === "folders") pushFolders()
+    if (section === "assistants") {
+      if (!assistants) continue
+      rows.push({
+        kind: "section",
+        section: "assistants",
+        expanded: assistants.expanded,
+        count: assistants.count,
+      })
+      if (assistants.expanded) rows.push({ kind: "assistants" })
+    } else if (section === "folders") pushFolders()
     else if (section === "chats") pushChats()
-    else if (showRecent) pushRecent()
+    else if (section === "recent" && showRecent) pushRecent()
   }
 
   return rows

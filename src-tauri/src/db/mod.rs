@@ -53,6 +53,14 @@ pub async fn init_database(
         urlencoding::encode(&db_path.to_string_lossy())
     );
 
+    // Two processes opening one database at once (the desktop app and a
+    // server on the same data dir) can both read the same list of pending
+    // migrations before either registers what it ran: the second then fails
+    // to register one the first did, and its start aborts. One at a time —
+    // held from the read of the pending list until the last registration is
+    // written, so the one that waited finds nothing left to run.
+    let migrate_lock = migrate_lock(app_data_dir).await?;
+
     // Apply migrations on a dedicated single connection. The runtime pool below
     // keeps several connections open for read concurrency, but sea-orm spreads a
     // migration's statements across whichever pooled connections are free. A
@@ -73,6 +81,7 @@ pub async fn init_database(
         .await
         .map_err(|e| DbError::Migration(e.to_string()))?;
     migrate_conn.close().await?;
+    drop(migrate_lock);
 
     // Runtime connection pool. Migrations are already applied above, so the
     // schema is stable and spreading queries across pooled connections is safe.
@@ -109,6 +118,24 @@ pub async fn init_database(
     }
 
     Ok(AppDatabase { conn })
+}
+
+/// `<db file>.migrate.lock` next to the database, held exclusively: waits
+/// while another process runs the migrations.
+async fn migrate_lock(app_data_dir: &Path) -> Result<std::fs::File, DbError> {
+    let path = app_data_dir.join(format!("{}.migrate.lock", database_file_name()));
+    let locked = tokio::task::spawn_blocking(move || -> std::io::Result<std::fs::File> {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        file.lock()?;
+        Ok(file)
+    })
+    .await
+    .map_err(|e| DbError::Io(std::io::Error::other(e.to_string())))?;
+    Ok(locked?)
 }
 
 /// Apply SQLite performance and reliability pragmas to a freshly opened
