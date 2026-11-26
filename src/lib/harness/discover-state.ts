@@ -27,11 +27,13 @@ import {
   harnessList,
   harnessPrompt,
   harnessReadme,
+  harnessReleases,
   harnessVersions,
 } from "./api"
 import { harnessFailureOf, type HarnessFailure } from "./errors"
 import { parseItemRef } from "./item-ref"
 import { promptTextOf } from "./prompt"
+import type { HarnessPluginRelease } from "./plugin-install-types"
 import { refreshHarnessStatus } from "./status"
 import {
   HARNESS_LIST_KINDS,
@@ -169,11 +171,17 @@ export interface DiscoverDetailState {
    * for every other item.
    */
   prompt: Loadable<string>
+  /** A plugin's releases (`harness_releases`); idle for every other item. */
+  releases: Loadable<HarnessPluginRelease[]>
   request: number
 }
 
 /** The parts of the open item that are fetched on their own after it. */
-export type DiscoverDetailLoadPart = "versions" | "readme" | "prompt"
+export type DiscoverDetailLoadPart =
+  | "versions"
+  | "readme"
+  | "prompt"
+  | "releases"
 
 export const DISCOVER_FILTERS = defineHarnessSlot<DiscoverFilters>(
   "discover",
@@ -226,6 +234,8 @@ export type DiscoverDetailPart =
   | "versions"
   | "prompt"
   | "showcases"
+  | "members"
+  | "releases"
   | `why-${number}`
 
 /**
@@ -582,10 +592,25 @@ function loadPromptText(
   )
 }
 
+function loadReleases(
+  slots: HarnessSlotStore,
+  detailRequest: number,
+  ref: string
+): Promise<void> {
+  return loadDetailPart(slots, detailRequest, "releases", () =>
+    harnessReleases(ref)
+  )
+}
+
 const PART_LOADS: Record<
   DiscoverDetailLoadPart,
   (slots: HarnessSlotStore, detailRequest: number, ref: string) => Promise<void>
-> = { versions: loadVersions, readme: loadReadme, prompt: loadPromptText }
+> = {
+  versions: loadVersions,
+  readme: loadReadme,
+  prompt: loadPromptText,
+  releases: loadReleases,
+}
 
 export interface OpenDiscoverItemOptions {
   /**
@@ -621,6 +646,7 @@ export async function openDiscoverItem(
     versions: idle(),
     readme: idle(),
     prompt: idle(),
+    releases: idle(),
     request,
   }
   // Before the offset and the unfolded parts are reset: they are part of
@@ -667,6 +693,7 @@ export async function openDiscoverItem(
     if (item.kind === "prompt" && promptTextOf(item) === null) {
       void loadPromptText(slots, request, item.ref)
     }
+    if (item.kind === "plugin") void loadReleases(slots, request, item.ref)
   } catch (error) {
     if (!current()) return
     const failure = harnessFailureOf(error)
@@ -710,7 +737,7 @@ function resumeDetail(
     return
   }
   if (!detail.item) return
-  for (const part of ["versions", "readme", "prompt"] as const) {
+  for (const part of ["versions", "readme", "prompt", "releases"] as const) {
     if (detail[part].phase === "loading") retryDiscoverPart(slots, part)
   }
 }

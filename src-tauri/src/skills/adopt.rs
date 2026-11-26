@@ -129,6 +129,17 @@ pub(crate) fn adopt_blocking(
         Err(issue) => return refuse(out, issue),
     };
     out.source = Some(source.to_string_lossy().into_owned());
+    // A plugin's copy (where no link could be made) is the plugin's, not
+    // the agent's own.
+    let owner = World::load(ctx).entry(&source).plugin().map(str::to_string);
+    if let Some(plugin) = owner {
+        return refuse(
+            out,
+            SkillsIssue::new(codes::PLUGIN_OWNED)
+                .path(&source)
+                .detail(plugin),
+        );
+    }
     let central = ctx.skill_path(&id);
     if fs::symlink_metadata(&central).is_ok() {
         return refuse(out, SkillsIssue::new(codes::ID_TAKEN).path(&central));

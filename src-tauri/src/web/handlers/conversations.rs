@@ -306,6 +306,76 @@ pub async fn create_conversation(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CreateAskConversationParams {
+    pub parent_conversation_id: i32,
+    pub folder_id: i32,
+    pub agent_type: AgentType,
+    pub title: Option<String>,
+}
+
+pub async fn create_ask_conversation(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<CreateAskConversationParams>,
+) -> Result<Json<conv_commands::AskConversationCreated>, AppCommandError> {
+    let created = conv_commands::create_ask_conversation_core(
+        &state.emitter,
+        &state.db.conn,
+        params.parent_conversation_id,
+        params.folder_id,
+        params.agent_type,
+        params.title,
+    )
+    .await?;
+    Ok(Json(created))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListAskConversationsParams {
+    pub parent_conversation_id: i32,
+}
+
+pub async fn list_ask_conversations(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ListAskConversationsParams>,
+) -> Result<Json<Vec<DbConversationSummary>>, AppCommandError> {
+    let rows =
+        conv_commands::list_ask_conversations_core(&state.db.conn, params.parent_conversation_id)
+            .await?;
+    Ok(Json(rows))
+}
+
+pub async fn list_check_conversations(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ListAskConversationsParams>,
+) -> Result<Json<Vec<DbConversationSummary>>, AppCommandError> {
+    let rows =
+        conv_commands::list_check_conversations_core(&state.db.conn, params.parent_conversation_id)
+            .await?;
+    Ok(Json(rows))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetachAskConversationParams {
+    pub conversation_id: i32,
+}
+
+pub async fn detach_ask_conversation(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<DetachAskConversationParams>,
+) -> Result<Json<()>, AppCommandError> {
+    conv_commands::detach_ask_conversation_core(
+        &state.emitter,
+        &state.db.conn,
+        params.conversation_id,
+    )
+    .await?;
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateChatConversationParams {
     pub agent_type: AgentType,
     pub title: Option<String>,

@@ -9,6 +9,7 @@ pub mod auto;
 pub mod cnb;
 pub mod deliver;
 pub mod envelope;
+pub mod feedback;
 pub mod gitea;
 pub mod github;
 pub mod gitlab;
@@ -795,6 +796,12 @@ pub struct ListIssuesRequest {
     pub state: String,
     #[serde(default)]
     pub assigned_me: bool,
+    /// Only the changes whose review is requested of the signed-in account —
+    /// set by codeg itself (the personal agent looking for a first thing to
+    /// help with), never by a client. GitHub and GitLab filter by it; the
+    /// others refuse it rather than list everything.
+    #[serde(default)]
+    pub review_requested_me: bool,
     /// Label names, ANDed. Already normalized (see [`normalize_labels`]).
     #[serde(default)]
     pub labels: Vec<String>,
@@ -824,6 +831,7 @@ impl ListIssuesRequest {
             tab: filters.tab,
             state: filters.state,
             assigned_me: filters.assigned_me,
+            review_requested_me: false,
             labels: normalize_labels(filters.labels),
             search: normalize_search(filters.search.as_deref()),
             sort: filters.sort,
@@ -1631,7 +1639,7 @@ fn default_files_per_page() -> u32 {
 /// only sometimes a `changes_count` (and that one as a STRING, "12+" once the
 /// diff is truncated). Showing a zero where the forge said nothing would claim
 /// a change touches nothing, so absent stays absent.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ForgeChangeDetail {
     pub number: i64,
     /// Where it would land — `main`, `release/1.2`.
@@ -1667,6 +1675,12 @@ pub struct ForgeChangeDetail {
     /// CI as the forge reports it for the head commit. Empty means the forge
     /// answered and there is nothing running; see [`ForgeCheckList`].
     pub checks: ForgeCheckList,
+    /// When the forge last saw anything happen on it — a push, a review, a
+    /// comment — as it spells it. What tells a watcher there may be new
+    /// review feedback to read (7.4) without reading it every time. `None`
+    /// where the forge does not say (CNB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
     /// Workflow runs that will not start until a maintainer approves them —
     /// GitHub holds a fork's first contributions this way. `None` whenever
     /// there is nothing to say: not GitHub, not a fork (a same-repository
@@ -1686,7 +1700,7 @@ pub struct ForgeChangeDetail {
 /// skipped/manual/waiting_for_resource). Three vocabularies, one strip of
 /// indicators — so they are folded here, at the boundary, and the UI switches
 /// on five values instead of eighteen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ForgeCheckState {
     /// Not started yet.
@@ -1709,7 +1723,7 @@ impl ForgeCheckState {
 }
 
 /// One CI check on a change's head commit.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ForgeCheck {
     /// Stable within one response — the forge's own id where there is one, so
     /// React keys survive a refresh that reorders the strip.
@@ -1740,7 +1754,7 @@ pub struct ForgeCheck {
 /// gets a 403 from one and an empty `200 []` from the other. Reporting that as
 /// a complete empty list is the original bug wearing a disguise — the pipeline
 /// is red, and the panel says nothing ran.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ForgeCheckList {
     pub checks: Vec<ForgeCheck>,
     pub available: bool,
@@ -1773,6 +1787,54 @@ impl ForgeCheckList {
             checks,
             available: true,
             partial: true,
+        }
+    }
+}
+
+/// One item as an action taken on it is checked against afterwards: its
+/// state, and the commit a merged change landed as when the forge says. Read
+/// from the item's own JSON, which every forge serves at its own address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemFacts {
+    /// `open` / `closed` / `merged`, as [`ForgeIssueRow::state`].
+    pub state: String,
+    pub merge_commit: Option<String>,
+}
+
+impl ItemFacts {
+    /// GitHub marks a merged pull request with `merged_at` (or `merged`),
+    /// Gitea with `merged`, CNB with `is_merged` beside `state: closed`,
+    /// GitLab with `state: merged`; a GitLab merge request being merged is
+    /// `locked`, still open. The commit is `merge_commit_sha`, or GitLab's
+    /// `squash_commit_sha` for a squash.
+    pub fn from_json(v: &serde_json::Value) -> Self {
+        let text = |k: &str| {
+            v.get(k)
+                .and_then(|x| x.as_str())
+                .map(str::trim)
+                .filter(|x| !x.is_empty())
+        };
+        let raw = text("state").unwrap_or("open").to_ascii_lowercase();
+        let flag = |k: &str| v.get(k).and_then(|m| m.as_bool()) == Some(true);
+        let merged =
+            raw == "merged" || flag("merged") || flag("is_merged") || text("merged_at").is_some();
+        let state = if merged {
+            "merged"
+        } else if raw == "closed" {
+            "closed"
+        } else {
+            "open"
+        };
+        let merge_commit = if merged {
+            text("merge_commit_sha")
+                .or_else(|| text("squash_commit_sha"))
+                .map(str::to_string)
+        } else {
+            None
+        };
+        Self {
+            state: state.to_string(),
+            merge_commit,
         }
     }
 }
@@ -1920,7 +1982,7 @@ impl CheckSummariesQuery {
 }
 
 /// A workflow run held for approval.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ForgePendingRun {
     /// The run id, as a string (64-bit on GitHub).
     pub id: String,
@@ -1931,7 +1993,7 @@ pub struct ForgePendingRun {
 
 /// The runs a change is waiting on a maintainer for, and whether this panel
 /// can let one approve them.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ForgeWorkflowApproval {
     pub runs: Vec<ForgePendingRun>,
     /// The search was cut short (page budget, or a page that failed), so there
@@ -2491,6 +2553,7 @@ mod tests {
             tab: ForgeTab::Issues,
             state: "open".into(),
             assigned_me: false,
+            review_requested_me: false,
             labels: vec![],
             search: None,
             sort: ForgeSort::default(),

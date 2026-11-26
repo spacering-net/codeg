@@ -1,18 +1,33 @@
 //! The update check: whether what was installed from Harness has news — a
-//! newer version, a version withdrawn, the item stopped by its author or
-//! taken down by Harness (plan §7.7).
+//! newer version, a version withdrawn, the item stopped by its author,
+//! taken down by Harness, no longer on SRN, or (a plugin installed whole)
+//! no longer approved (plan §7.7; docs/harness-plugins.md §7 「更新」).
 //!
-//! It reads the two records of what was installed (H4's
-//! `~/.codeg/harness/mcp.json`, H3's `~/.codeg/skills/.manifest.harness.json`),
-//! asks `POST /resolve` about each installed `(item, revision)` — in batches
-//! of at most [`MAX_RESOLVE_ITEMS`](super::MAX_RESOLVE_ITEMS), through the
-//! one client and its rules —
-//! and keeps the answers in `<data dir>/cache/harness/updates.json`
-//! (`store.rs`). What the answers come to per item is `model::derive`.
+//! It reads the three records of what was installed (H4's
+//! `~/.codeg/harness/mcp.json`, H3's `~/.codeg/skills/.manifest.harness.json`,
+//! the plugins record `~/.codeg/harness/plugins.json`), asks `POST /resolve`
+//! about each installed `(item, revision)` — in batches of at most
+//! [`MAX_RESOLVE_ITEMS`](super::MAX_RESOLVE_ITEMS), through the one client
+//! and its rules — and keeps the answers in
+//! `<data dir>/cache/harness/updates.json` (`store.rs`). What the answers
+//! come to per item is `model::derive`; a plugin any agent has whole is
+//! measured against `full` (the revision to install whole), else against
+//! the latest.
 //!
-//! **It only tells.** Nothing here installs, updates, disables or removes
-//! anything, or writes an agent's config or a skill: the records are read,
-//! never written, and the one file written is the cache.
+//! **It tells, and acts in one case only.** Nothing here installs, updates
+//! or removes anything, or writes a skill or an MCP entry. The one thing it
+//! does: right after a check that got an answer, and on that answer only,
+//! the plugins guard (`plugins::guard::enforce`) switches off — never on —
+//! what runs on its own in a plugin some agent has whole when SRN no longer
+//! vouches for the installed revision (the item gone, stopped or taken
+//! down; the revision withdrawn, blocked or no longer approved; an advisory
+//! asking for it). Files stay; the agent is `Suspended`, and only an update
+//! the user agrees to turns it on again. `full` moving on to a newer
+//! approved revision is an update to offer, never a reason to switch off.
+//! A check that failed, or an answer that does not tell, switches nothing
+//! off; nor does the server's adapter switch (only new installs and updates
+//! follow it). Otherwise the records are read, never written, and the one
+//! file written is the cache.
 //!
 //! # When it asks
 //!
@@ -23,7 +38,9 @@
 //!   known of it yet), and after a failure at 5 min, 30 min, 2 h, then
 //!   every 6 h (or later, if a 429 asked for longer). It looks at least
 //!   hourly, and at once when an install, update or uninstall changed the
-//!   records ([`records_changed`]).
+//!   records ([`records_changed`]). After a guard that could not act yet
+//!   (the plugins lock held, the record not readable or writable) it checks
+//!   again at its next look, and the guard acts on that newer answer.
 //! - **A section opening** (`harness_check_updates` without `explicit`): runs
 //!   only if no check was tried in the last hour.
 //! - **The user asking** (`explicit: true`): runs now, whatever the time
@@ -41,7 +58,8 @@
 //!
 //! [`UPDATES_CHANGED_EVENT`] with `{ count, item_ids }` — the number of
 //! items with an update and which items changed — after a check that
-//! changed what the check says, and after the records changed it.
+//! changed what the check says, and after the records changed it. The
+//! guard announces what it switched off as the plugin operations do.
 
 mod model;
 mod store;
@@ -59,13 +77,16 @@ use tokio::sync::mpsc;
 
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
+use super::plugins::guard::{self, Guard};
+use super::plugins::PluginsCtx;
 use super::Harness;
 
-use model::{Answer, InstalledRevisions, Summary};
+pub(crate) use model::Answer;
 pub use model::{
-    CheckError, HarnessUpdates, LatestRevision, UnknownReason, UpdateItem, UpdateState,
-    UpdatesChanged, UPDATES_CHANGED_EVENT,
+    CheckError, HarnessUpdates, LatestRevision, UnknownReason, UpdateItem, UpdatePlugin,
+    UpdateState, UpdatesChanged, UPDATES_CHANGED_EVENT,
 };
+use model::{InstalledRevisions, PluginModes, PluginsModes, Summary};
 use store::{Kept, Outcome};
 
 /// The scheduler's first look after the process starts.
@@ -92,6 +113,8 @@ pub(crate) struct Paths {
     pub mcp_record: PathBuf,
     /// The skill store, where H3's manifest is.
     pub skills_store: PathBuf,
+    /// Where the plugins record is.
+    pub plugins: PluginsCtx,
 }
 
 impl Paths {
@@ -101,6 +124,7 @@ impl Paths {
             cache: store::path_in(data_dir),
             mcp_record: super::mcp::record::default_record_path(),
             skills_store: crate::commands::experts::central_experts_dir(),
+            plugins: PluginsCtx::user(),
         }
     }
 }
@@ -119,6 +143,14 @@ pub struct UpdateChecker {
     finished: AtomicU64,
     /// What was last announced, or taken as the baseline.
     announced: Mutex<Option<Summary>>,
+    /// The plugins guard: what a check that got an answer switches off.
+    /// `None`: a checker that only tells (one built on request).
+    guard: Option<Guard>,
+    /// The guard could not act on a check's answer (all of it) yet: the
+    /// scheduler's next look checks again, and the guard acts on that newer
+    /// answer — never on an older one, which an update the user agreed to
+    /// since may have answered already.
+    guard_again: AtomicBool,
     kicks: Option<mpsc::UnboundedSender<()>>,
     receiver: Mutex<Option<mpsc::UnboundedReceiver<()>>>,
 }
@@ -128,13 +160,20 @@ static CHECKER: OnceLock<Arc<UpdateChecker>> = OnceLock::new();
 /// Builds this process's checker and publishes it; spawn [`run`] with it.
 /// The desktop app and `codeg-server` each do this once. `None` under
 /// `CODEG_HARNESS=off` (nothing is checked, ever) and on a second call.
-pub fn build(data_dir: &Path, emitter: EventEmitter) -> Option<Arc<UpdateChecker>> {
+/// `db`: where each agent's launch environment is read from (the plugins
+/// guard switches a plugin off in the host the agent's sessions run).
+pub fn build(
+    data_dir: &Path,
+    emitter: EventEmitter,
+    db: &crate::db::AppDatabase,
+) -> Option<Arc<UpdateChecker>> {
     if !super::enabled() {
         tracing::info!("[harness] update check off ({}=off)", super::SWITCH_ENV);
         return None;
     }
     let (kicks, receiver) = mpsc::unbounded_channel();
     let data_dir = data_dir.to_path_buf();
+    let guard = guard::here(db, &data_dir);
     let checker = Arc::new(UpdateChecker {
         paths: Paths::here(&data_dir),
         harness: Box::new(move || Harness::from_env(&data_dir)),
@@ -143,6 +182,8 @@ pub fn build(data_dir: &Path, emitter: EventEmitter) -> Option<Arc<UpdateChecker
         checking: AtomicBool::new(false),
         finished: AtomicU64::new(0),
         announced: Mutex::new(None),
+        guard: Some(guard),
+        guard_again: AtomicBool::new(false),
         kicks: Some(kicks),
         receiver: Mutex::new(Some(receiver)),
     });
@@ -152,7 +193,7 @@ pub fn build(data_dir: &Path, emitter: EventEmitter) -> Option<Arc<UpdateChecker
 
 /// The checker the commands use: the process's own when it was built for
 /// `data_dir`; otherwise (switched off, or a process without one) one that
-/// reads and checks on request only.
+/// reads and checks on request only, and never switches anything off.
 pub fn checker_for(data_dir: &Path, emitter: &EventEmitter) -> Arc<UpdateChecker> {
     let paths = Paths::here(data_dir);
     if let Some(checker) = CHECKER.get() {
@@ -236,8 +277,9 @@ fn asked_due(kept: &Kept, now: DateTime<Utc>, explicit: bool) -> bool {
 
 /// The records as they are now. One that cannot be read adds nothing: its
 /// part of `harness_installed` says why, and the check asks about the rest.
-fn read_installed(paths: &Paths) -> InstalledRevisions {
+fn read_installed(paths: &Paths) -> (InstalledRevisions, PluginsModes) {
     let mut installed = InstalledRevisions::new();
+    let mut plugins = PluginsModes::new();
     match super::mcp::record::load(&paths.mcp_record) {
         Ok(record) => {
             for (id, item) in record.items {
@@ -249,7 +291,9 @@ fn read_installed(paths: &Paths) -> InstalledRevisions {
     }
     match super::skills::manifest::load(&paths.skills_store) {
         Ok(manifest) => {
-            for entry in manifest.skills.into_values() {
+            // A plugin's member skill is the plugin's: its record is what
+            // the plugin's update goes by.
+            for entry in manifest.skills.into_values().filter(|e| e.plugin.is_none()) {
                 installed
                     .entry(entry.item_id)
                     .or_default()
@@ -258,13 +302,32 @@ fn read_installed(paths: &Paths) -> InstalledRevisions {
         }
         Err(error) => tracing::debug!("[harness] update check: {}", error.detail()),
     }
+    match super::plugins::record::load(&paths.plugins) {
+        Ok(record) => {
+            for entry in record.plugins.into_values() {
+                installed
+                    .entry(entry.item_id.clone())
+                    .or_default()
+                    .insert(entry.revision);
+                plugins.insert(entry.item_id.clone(), PluginModes::of(&entry));
+            }
+        }
+        Err(error) => tracing::debug!("[harness] update check: {}", error.detail()),
+    }
     installed.retain(|_, revisions| !revisions.is_empty());
-    installed
+    (installed, plugins)
 }
 
 struct Read {
     installed: InstalledRevisions,
+    plugins: PluginsModes,
     kept: Kept,
+}
+
+impl Read {
+    fn items(&self) -> Vec<UpdateItem> {
+        model::derive(&self.installed, &self.plugins, &self.kept.answers)
+    }
 }
 
 impl UpdateChecker {
@@ -282,9 +345,18 @@ impl UpdateChecker {
             checking: AtomicBool::new(false),
             finished: AtomicU64::new(0),
             announced: Mutex::new(None),
+            guard: None,
+            guard_again: AtomicBool::new(false),
             kicks: None,
             receiver: Mutex::new(None),
         }
+    }
+
+    /// With the plugins guard `guard` (tests: stand-in hosts).
+    #[cfg(all(test, unix))]
+    pub(crate) fn with_guard(mut self, guard: Guard) -> Self {
+        self.guard = Some(guard);
+        self
     }
 
     fn kick(&self) {
@@ -295,16 +367,20 @@ impl UpdateChecker {
 
     async fn read(&self) -> Option<Read> {
         let paths = self.paths.clone();
-        tokio::task::spawn_blocking(move || Read {
-            installed: read_installed(&paths),
-            kept: store::load(&paths.cache),
+        tokio::task::spawn_blocking(move || {
+            let (installed, plugins) = read_installed(&paths);
+            Read {
+                installed,
+                plugins,
+                kept: store::load(&paths.cache),
+            }
         })
         .await
         .ok()
     }
 
     fn view(&self, read: &Read) -> HarnessUpdates {
-        let items = model::derive(&read.installed, &read.kept.answers);
+        let items = read.items();
         HarnessUpdates {
             enabled: true,
             checking: self.checking.load(Ordering::SeqCst),
@@ -345,8 +421,9 @@ impl UpdateChecker {
         Some(self.view(&read))
     }
 
-    /// Asks about every installed pair, keeps what came of it, and announces
-    /// what changed. With nothing installed, asks nothing.
+    /// Asks about every installed pair, keeps what came of it, lets the
+    /// plugins guard act on an answer, and announces what changed. With
+    /// nothing installed, asks nothing.
     async fn check(&self, read: Read, now: DateTime<Utc>) -> Option<Read> {
         self.settle(&read);
         let asked = model::pairs(&read.installed);
@@ -361,17 +438,18 @@ impl UpdateChecker {
         let answer = harness.resolve(&asked).await;
         self.checking.store(false, Ordering::SeqCst);
         self.finished.fetch_add(1, Ordering::SeqCst);
-        let outcome = match answer {
-            Ok(resolved) => Outcome::Answered(
-                asked
+        let (outcome, answers) = match answer {
+            Ok(resolved) => {
+                let answers: Vec<Answer> = asked
                     .iter()
                     .zip(resolved)
                     .map(|(asked, resolved)| Answer::of(asked, resolved))
-                    .collect(),
-            ),
+                    .collect();
+                (Outcome::Answered(answers.clone()), Some(answers))
+            }
             Err(error) => {
                 tracing::info!("[harness] update check got no answer: {error}");
-                Outcome::Failed(CheckError::from(&error))
+                (Outcome::Failed(CheckError::from(&error)), None)
             }
         };
         // Merged into the file as it is by now, under its lock: another
@@ -380,12 +458,49 @@ impl UpdateChecker {
         let kept = tokio::task::spawn_blocking(move || store::record(&path, now, outcome))
             .await
             .ok()?;
-        let read = Read {
-            installed: read.installed,
-            kept,
-        };
+        let mut read = Read { kept, ..read };
+        // This check's own answer, and only one that came: a failed check
+        // switches nothing off.
+        if let Some(answers) = answers {
+            if self.enforce(answers).await {
+                read = self.reread(read).await;
+            }
+        }
         self.announce(&read);
         Some(read)
+    }
+
+    /// The plugins guard on a check's answer. Whether it may have changed
+    /// the record. When it could not act on all of it, the scheduler's next
+    /// look checks again.
+    async fn enforce(&self, answers: Vec<Answer>) -> bool {
+        let Some(guard) = &self.guard else {
+            return false;
+        };
+        match guard.enforce(&self.emitter, &answers).await {
+            Ok(disabled) => {
+                self.guard_again.store(false, Ordering::SeqCst);
+                !disabled.is_empty()
+            }
+            Err(deferred) => {
+                tracing::info!("[harness] plugins guard deferred: {deferred}");
+                self.guard_again.store(true, Ordering::SeqCst);
+                true
+            }
+        }
+    }
+
+    /// The records read again, with the answers kept as they are.
+    async fn reread(&self, read: Read) -> Read {
+        let paths = self.paths.clone();
+        match tokio::task::spawn_blocking(move || read_installed(&paths)).await {
+            Ok((installed, plugins)) => Read {
+                installed,
+                plugins,
+                ..read
+            },
+            Err(_) => read,
+        }
     }
 
     /// Takes what the files say now as the baseline, if there is none yet:
@@ -396,14 +511,13 @@ impl UpdateChecker {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if announced.is_none() {
-            let items = model::derive(&read.installed, &read.kept.answers);
-            *announced = Some(model::summary(&items));
+            *announced = Some(model::summary(&read.items()));
         }
     }
 
     /// Announces the items whose state changed since the last announcement.
     fn announce(&self, read: &Read) {
-        let items = model::derive(&read.installed, &read.kept.answers);
+        let items = read.items();
         let now = model::summary(&items);
         let before = self
             .announced
@@ -424,19 +538,48 @@ impl UpdateChecker {
         }
     }
 
-    /// One look of the scheduler at `now`: announce what the records changed,
-    /// check if due, and say when to look next.
+    /// One look of the scheduler now (tests outside this module).
+    #[cfg(all(test, unix))]
+    pub(crate) async fn look(&self) -> DateTime<Utc> {
+        self.turn_now().await
+    }
+
+    /// One look of the scheduler, at the moment it gets its turn: a check
+    /// that ran while it waited for the gate is earlier than this look, so
+    /// what this look asks is never taken for an older answer.
+    async fn turn_now(&self) -> DateTime<Utc> {
+        if !(self.harness)().enabled() {
+            return now() + MAX_SLEEP;
+        }
+        let _gate = self.gate.lock().await;
+        self.turn_locked(now()).await
+    }
+
+    /// One look of the scheduler at `now` (tests: a moment of their own).
+    #[cfg(test)]
     async fn turn(&self, now: DateTime<Utc>) -> DateTime<Utc> {
         if !(self.harness)().enabled() {
             return now + MAX_SLEEP;
         }
         let _gate = self.gate.lock().await;
+        self.turn_locked(now).await
+    }
+
+    /// One look of the scheduler at `now`, holding the gate: announce what
+    /// the records changed, check if due (or if the plugins guard could not
+    /// act on the last answer), and say when to look next.
+    async fn turn_locked(&self, now: DateTime<Utc>) -> DateTime<Utc> {
         let Some(read) = self.read().await else {
             return now + MAX_SLEEP;
         };
         self.settle(&read);
         self.announce(&read);
-        if !scheduled_due(&read.installed, &read.kept, now) {
+        // The guard could not act on the last answer: ask again (a pause
+        // SpaceRing asked for still holds).
+        let guard_again = self.guard_again.load(Ordering::SeqCst)
+            && !model::pairs(&read.installed).is_empty()
+            && retry_at(&read.kept, now).is_none_or(|at| at <= now);
+        if !guard_again && !scheduled_due(&read.installed, &read.kept, now) {
             return next_look(&read.kept, now);
         }
         match self.check(read, now).await {
@@ -446,8 +589,8 @@ impl UpdateChecker {
     }
 }
 
-/// The scheduler: a minute after start, then whenever [`UpdateChecker::turn`]
-/// says, or at once when the records change.
+/// The scheduler: a minute after start, then whenever
+/// [`UpdateChecker::turn_now`] says, or at once when the records change.
 pub async fn run(checker: Arc<UpdateChecker>) {
     let Some(mut receiver) = checker
         .receiver
@@ -467,7 +610,7 @@ pub async fn run(checker: Arc<UpdateChecker>) {
             _ = tokio::time::sleep_until(wake) => {}
         }
         while receiver.try_recv().is_ok() {}
-        let next = checker.turn(now()).await;
+        let next = checker.turn_now().await;
         let sleep = (next - Utc::now())
             .to_std()
             .unwrap_or(Duration::ZERO)

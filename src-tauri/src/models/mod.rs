@@ -8,6 +8,11 @@ pub mod conversation;
 pub mod folder;
 pub mod message;
 pub mod model_provider;
+pub mod personal_agent;
+pub mod personal_agent_bots;
+pub mod personal_agent_overview;
+pub mod personal_agent_prefs;
+pub mod personal_agent_roster;
 pub mod pet;
 pub mod quick_message;
 pub mod remote_workspace_connection;
@@ -29,6 +34,7 @@ pub use canvas::{CanvasBoard, CanvasBoardSummary, CanvasMutation, CanvasNode, Ca
 pub use chat_channel::{ChannelStatusInfo, ChatChannelInfo, ChatChannelMessageLogInfo};
 pub use conversation::{
     AgentConversationCount, AgentStats, ConversationBranchTag, ConversationDetail,
+    ConversationSelection,
     ConversationOutline, ConversationSummary, ConversationTagDetail, ConversationTurnsPage,
     DbConversationDetail, DbConversationSummary, FolderInfo, ImportFolderOutcome, ImportResult,
     ImportSelectedResult, ScanFolder, ScanResult, ScanSession, ScanSessionStatus,

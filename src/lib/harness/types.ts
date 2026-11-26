@@ -91,6 +91,7 @@ export const HARNESS_LIST_KINDS = [
   "mcp",
   "prompt",
   "assistant",
+  "plugin",
 ] as const
 
 export type HarnessListKind = (typeof HARNESS_LIST_KINDS)[number]

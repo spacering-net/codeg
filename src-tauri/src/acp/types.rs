@@ -155,6 +155,14 @@ pub struct SessionFailureRecord {
     /// Emitted `false` from the parser; flipped by the two stores.
     #[serde(default)]
     pub resolved: bool,
+    /// codeg's own (never on an adapter's wire): this terminal record's
+    /// `title` also streamed as one whole reply chunk of the turn it ended —
+    /// Antigravity tells a dead executor that way (see
+    /// `connection::antigravity_turn_failure`). Those words are no reply, so
+    /// the failure line takes their place in the live message, here
+    /// (`SessionState::apply_event`) and in the frontend reducer alike.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub echoed_in_reply: bool,
 }
 
 /// Cumulative cost of one async task, as the adapter last reported it
@@ -577,8 +585,21 @@ pub enum AcpEvent {
     },
     /// Whether the agent supports session/fork
     ForkSupported { supported: bool },
+    /// Whether the agent offers `_session/rewind` (the "edit and resend" of a
+    /// user message; see `crate::acp::rewind`).
+    RewindSupported { supported: bool },
     /// Current session mode changed
     ModeChanged { mode_id: String },
+    /// The composer's pending mode pick for this connection changed (see
+    /// `SessionState::composer_mode_id`). Never sent to the agent: a tab
+    /// applies it at its next send. `mode_id: None` clears it — emitted once
+    /// the agent's current mode reached the pick. `explicit` marks a user's
+    /// own pick (vs a draft's one-time hand-over or a reconnect's restore).
+    ComposerModeChanged {
+        mode_id: Option<String>,
+        #[serde(default)]
+        explicit: bool,
+    },
     /// Agent reported plan update for current turn
     PlanUpdate { entries: Vec<PlanEntryInfo> },
     /// Connection status changed
@@ -834,6 +855,10 @@ pub enum AcpEvent {
         assistant_id: Option<i32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assistant_name: Option<String>,
+        /// The owner's assistant it runs as (its uid); with it, `assistant_id`
+        /// is that assistant's row. Absent for one from before them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bot_uid: Option<String>,
     },
     /// The child sub-session has finished (or errored / timed out / been
     /// canceled). The MCP tool_result has been delivered to the parent agent.
@@ -855,6 +880,10 @@ pub enum AcpEvent {
         assistant_id: Option<i32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assistant_name: Option<String>,
+        /// The owner's assistant it runs as (its uid); with it, `assistant_id`
+        /// is that assistant's row. Absent for one from before them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bot_uid: Option<String>,
     },
     /// A codeg delegation of this (parent) connection started (`running`) or
     /// reached a terminal state. Lifecycle accounting only, so unlike
@@ -915,9 +944,16 @@ pub enum AcpEvent {
         questions: Vec<crate::acp::question::QuestionSpec>,
     },
     /// A previously-pending question was answered (from any client) or canceled
-    /// (the tool call was aborted / the connection drained). Carries only the
-    /// `question_id`; clients clear the matching card. Idempotent on apply.
-    QuestionResolved { question_id: String },
+    /// (the tool call was aborted / the connection drained). Clients clear the
+    /// matching card by `question_id`. Idempotent on apply.
+    QuestionResolved {
+        question_id: String,
+        /// Whose answer took effect and what it was — or, with no answer,
+        /// that it was withdrawn (7.3.1). Additive: older clients read the id
+        /// alone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolution: Option<AnswerResolution>,
+    },
     /// A Grok `exit_plan_mode` call: the agent finished planning and is BLOCKED
     /// on the user's approval of the plan before it leaves plan mode and starts
     /// implementing (Grok's native `_x.ai/exit_plan_mode` ext request). Broadcast
@@ -932,9 +968,30 @@ pub enum AcpEvent {
         plan_markdown: String,
     },
     /// A previously-pending plan approval was answered (from any client) or
-    /// canceled (the connection drained). Carries only the `approval_id`; clients
-    /// clear the matching card. Idempotent on apply.
-    PlanApprovalResolved { approval_id: String },
+    /// canceled (the connection drained). Clients clear the matching card by
+    /// `approval_id`. Idempotent on apply.
+    PlanApprovalResolved {
+        approval_id: String,
+        /// As on [`AcpEvent::QuestionResolved`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolution: Option<AnswerResolution>,
+    },
+    /// The assistant that dispatched this session answers its questions and
+    /// plan approvals for the owner (7.3.1): a window does not notify the
+    /// owner of those at once, only when one is forwarded to them
+    /// ([`AcpEvent::AskForwarded`]). Kept in `SessionState.ask_delegate`.
+    AskDelegate {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delegate: Option<AskDelegate>,
+    },
+    /// A question or plan approval of this session the dispatching assistant
+    /// was answering is now the owner's to answer: notify them.
+    AskForwarded {
+        request_id: String,
+        /// `question`, `plan` or `permission` (a plan approval that arrived
+        /// as a permission request).
+        kind: String,
+    },
     /// The agent's effective settings (env vars / model provider / native config
     /// files) changed AFTER this connection was spawned, so the running process
     /// is still using its launch-time config. Emitted by
@@ -1518,6 +1575,14 @@ pub enum PermissionAnswerOrigin {
     ChatChannel,
     /// The permission policy of a headless `codeg-cli` run.
     CliPolicy { run_id: String },
+    /// An assistant answering a plan approval that arrived as a permission
+    /// request, for the owner (7.3.1). Only plan approvals: an executor's
+    /// other permission requests are the owner's.
+    Assistant { bot_id: i32 },
+    /// The owner, answering such a plan approval on an assistant's page —
+    /// told apart from the session's card so the page's own submission is
+    /// recognised when it is the one that took effect.
+    AssistantPage,
 }
 
 impl PermissionAnswerOrigin {
@@ -1528,7 +1593,105 @@ impl PermissionAnswerOrigin {
             Self::User => "user",
             Self::ChatChannel => "chat_channel",
             Self::CliPolicy { .. } => "cli_policy",
+            Self::Assistant { .. } => "assistant",
+            Self::AssistantPage => "assistant_page",
         }
+    }
+}
+
+/// Who answered a question or a plan approval (7.3.1). The first answer
+/// wins; this names whose that was.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AnswerOrigin {
+    /// A person, on the card in the session (any Codeg window).
+    User,
+    /// The owner, on an assistant's page.
+    AssistantPage,
+    /// An assistant, answering for the owner.
+    Assistant { bot_id: i32 },
+    /// A chat channel.
+    ChatChannel,
+    /// The policy of a headless `codeg-cli` run.
+    CliPolicy,
+}
+
+/// How a question or plan approval was settled: the answer that took effect
+/// and whose it was, or — with neither — that it was withdrawn before any
+/// answer (the tool call aborted, the connection drained).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnswerResolution {
+    /// What the agent got: a `QuestionOutcome` or a `PlanApprovalAnswer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<AnswerOrigin>,
+    pub at: chrono::DateTime<chrono::Utc>,
+}
+
+impl AnswerResolution {
+    pub fn withdrawn() -> Self {
+        Self {
+            answer: None,
+            origin: None,
+            at: chrono::Utc::now(),
+        }
+    }
+
+    pub fn is_answer(&self) -> bool {
+        self.answer.is_some()
+    }
+}
+
+/// What an answer to a question or plan approval came to (7.3.1): taken, too
+/// late (another answer took effect first: that one), or the request is gone.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnswerOutcome {
+    Answered(AnswerResolution),
+    AlreadyAnswered(AnswerResolution),
+    Withdrawn,
+}
+
+/// What the dispatching assistant answers for the owner on a session (7.3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskDelegate {
+    pub bot_id: i32,
+    /// Questions (except those asking for a secret).
+    pub questions: bool,
+    /// Plan approvals: extension requests and the plan-approval permission
+    /// requests of Claude Code and Codex.
+    pub plans: bool,
+}
+
+/// Which plan approval a permission request is, when it is one (7.3.1):
+/// Claude Code's `ExitPlanMode` or a Codex plan review. Any other
+/// permission request is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanPermission {
+    ClaudeExitPlan,
+    CodexPlanReview,
+}
+
+impl PlanPermission {
+    /// Read off the request: Claude Code offers `exit-plan-*` options, a
+    /// Codex review is the `plan-review:<item>` call offering
+    /// `implement_plan`.
+    pub fn of(tool_call: &serde_json::Value, options: &[PermissionOptionInfo]) -> Option<Self> {
+        if options.iter().any(|o| o.option_id.starts_with("exit-plan-")) {
+            return Some(Self::ClaudeExitPlan);
+        }
+        let call_id = tool_call
+            .get("toolCallId")
+            .or_else(|| tool_call.get("tool_call_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if call_id.starts_with("plan-review:")
+            || options.iter().any(|o| o.option_id == "implement_plan")
+        {
+            return Some(Self::CodexPlanReview);
+        }
+        None
     }
 }
 
@@ -1567,6 +1730,30 @@ pub struct SessionConfigSelectOptionInfo {
     pub value: String,
     pub name: String,
     pub description: Option<String>,
+    /// What the agent says about this entry's model's reasoning efforts —
+    /// only on an entry of the model option, and only where the agent names
+    /// them (see [`ModelReasoningEffortsInfo`]). Left off the wire when
+    /// absent, and `#[serde(default)]` so snapshots written before the field
+    /// existed still deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_efforts: Option<ModelReasoningEffortsInfo>,
+}
+
+/// One model's reasoning efforts, as its entry of the `model` option names
+/// them: JetBrains AIR's `reasoningEfforts` (claude-agent-acp 0.110.0,
+/// codex-acp 2.10.0). It lets a model's effort levels be known before that
+/// model is current — the effort option itself lists only the current
+/// model's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelReasoningEffortsInfo {
+    /// The model's effort ids, in the order the agent's effort option lists
+    /// them once the model is current. Never empty.
+    pub values: Vec<String>,
+    /// The one the agent recommends for the model — one of `values`, or
+    /// `None` when the agent names none (codex-acp, when the model's default
+    /// effort is not in its list).
+    #[serde(default)]
+    pub recommended: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2336,6 +2523,9 @@ pub struct AgentSkillItem {
     /// A copy Codeg made where no link could be made (Windows); `owner` names
     /// what it is a copy of.
     pub codeg_copy: bool,
+    /// A Harness plugin's member skill (`owner` is `harness`): the plugin's
+    /// install name.
+    pub plugin: Option<String>,
 }
 
 /// Whose skill an agent's listed skill is.
@@ -2405,6 +2595,10 @@ pub struct RemoteControlInfo {
 pub struct ForkProtocolResult {
     pub forked_session_id: String,
     pub original_session_id: String,
+    /// The selection the fork actually inherited, read in the connection loop
+    /// after every setter queued before the fork was applied. Written to both
+    /// the re-pointed row and the sibling (`persist_fork_outcome`).
+    pub inherited_selection: crate::models::ConversationSelection,
 }
 
 #[derive(Debug, Clone, Serialize)]

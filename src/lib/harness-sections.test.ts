@@ -17,8 +17,14 @@ import {
 const SECTION_KEY = "workspace:harness-section"
 
 describe("SRN Harness sections", () => {
-  it("lists Discover, MCP, Skills, Skill packs — in that order", () => {
-    expect(HARNESS_SECTION_IDS).toEqual(["discover", "mcp", "skills", "packs"])
+  it("lists Discover, MCP, Skills, Plugins, Skill packs — in that order", () => {
+    expect(HARNESS_SECTION_IDS).toEqual([
+      "discover",
+      "mcp",
+      "skills",
+      "plugins",
+      "packs",
+    ])
   })
 
   it("offers every section while the catalog is on", () => {
@@ -26,12 +32,18 @@ describe("SRN Harness sections", () => {
       "discover",
       "mcp",
       "skills",
+      "plugins",
       "packs",
     ])
   })
 
   it("drops only Discover when the catalog is switched off", () => {
-    expect(harnessSectionsFor(false)).toEqual(["mcp", "skills", "packs"])
+    expect(harnessSectionsFor(false)).toEqual([
+      "mcp",
+      "skills",
+      "plugins",
+      "packs",
+    ])
   })
 
   it("hands back the same list for the same answer", () => {
@@ -114,6 +126,9 @@ describe("harnessTargetOf", () => {
       section: "packs",
       tab: "office",
     })
+    expect(
+      harnessTargetOf({ section: "plugins", itemId: "itm_superpowers" })
+    ).toEqual({ section: "plugins", itemId: "itm_superpowers" })
   })
 
   it("is null for a request that only names a section", () => {
@@ -135,6 +150,7 @@ describe("harnessTargetOf", () => {
     expect(harnessTargetOf({ section: "discover", itemRef: "" })).toBeNull()
     expect(harnessTargetOf({ section: "mcp", serverKey: "" })).toBeNull()
     expect(harnessTargetOf({ section: "skills", skillId: "" })).toBeNull()
+    expect(harnessTargetOf({ section: "plugins", itemId: "" })).toBeNull()
     // A request built from a link can carry anything.
     for (const tab of ["nope", ""]) {
       expect(

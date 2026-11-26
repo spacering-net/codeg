@@ -37,6 +37,8 @@ export type ParsedInput = {
   /** The assistant the call names (`assistant_id`). When set, the call's
    *  `agent_type` is not evidence of anything: the backend ignores it. */
   assistantId: number | null
+  /** The owner's assistant the call names (`bot`, its uid) — likewise. */
+  botUid: string | null
   task: string | null
   workingDir: string | null
 }
@@ -63,6 +65,16 @@ export function coerceAssistantId(value: unknown): number | null {
 /** A non-empty assistant name snapshot off the wire, or `null`. */
 function coerceAssistantName(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null
+}
+
+/**
+ * Narrow an untrusted wire value to an owner's assistant uid, or `null`: the
+ * shape the backend accepts for `bot` (`delegation_target_from_args`).
+ */
+export function coerceBotUid(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  const uid = value.trim()
+  return /^[0-9a-z_-]{1,64}$/.test(uid) ? uid : null
 }
 
 // Derived from the canonical `ALL_AGENT_TYPES` so a newly added agent is
@@ -113,6 +125,9 @@ export type ParsedMeta = {
    *  broker write and on the historical injection alike. */
   assistantId: number | null
   assistantName: string | null
+  /** The owner's assistant it ran as (its uid); with it, `assistantId` is
+   *  that assistant's row, not a collaboration settings' assistant. */
+  botUid: string | null
 }
 
 /**
@@ -167,12 +182,14 @@ export function parseDelegationMeta(
     agentType: coerceAgentType(obj["agent_type"]),
     assistantId: coerceAssistantId(obj["assistant_id"]),
     assistantName: coerceAssistantName(obj["assistant_name"]),
+    botUid: coerceBotUid(obj["bot_uid"]),
   }
 }
 
 const EMPTY_PARSED_INPUT: ParsedInput = {
   agentType: null,
   assistantId: null,
+  botUid: null,
   task: null,
   workingDir: null,
 }
@@ -217,7 +234,8 @@ function findDelegationArgs(
     typeof obj.task === "string" ||
     typeof obj.agent_type === "string" ||
     typeof obj.working_dir === "string" ||
-    coerceAssistantId(obj.assistant_id) !== null
+    coerceAssistantId(obj.assistant_id) !== null ||
+    coerceBotUid(obj.bot) !== null
   ) {
     return obj
   }
@@ -891,7 +909,13 @@ function codeModeCallOf(parsed: unknown): {
  *  SHORTHAND property (or a variable in value position) — either way its
  *  value is a runtime value, and a shorthand after an explicit spelling
  *  overrides it. */
-const CODE_MODE_ARG_KEYS = ["agent_type", "task", "working_dir", "assistant_id"]
+const CODE_MODE_ARG_KEYS = [
+  "agent_type",
+  "task",
+  "working_dir",
+  "assistant_id",
+  "bot",
+]
 
 /** Conservative pre-pass over the argument region: `false` when the region
  *  contains syntax whose effect the scanner cannot evaluate. Spread
@@ -994,18 +1018,24 @@ function parseCodeModeInput(parsed: unknown): ParsedInput | null {
     return EMPTY_PARSED_INPUT
   }
   const assistantAt = codeModeFindKey(code, start, close, "assistant_id")
+  const botAt = codeModeFindKey(code, start, close, "bot")
   const agentAt = codeModeFindKey(code, start, close, "agent_type")
   const workingAt = codeModeFindKey(code, start, close, "working_dir")
   const taskAt = codeModeFindKey(code, start, close, "task")
+  // A `bot` wins over `assistant_id` and `agent_type`, as on the backend
+  // (`delegation_target_from_args`) — even one that cannot be read, which
+  // the backend refuses: never drawn as whoever the others name.
   return {
     agentType:
-      agentAt !== null
+      agentAt !== null && botAt === null
         ? coerceAgentType(objectStringValue(code, agentAt))
         : null,
     assistantId:
-      assistantAt !== null
+      assistantAt !== null && botAt === null
         ? coerceAssistantId(readAssistantIdValue(code, assistantAt))
         : null,
+    botUid:
+      botAt !== null ? coerceBotUid(objectStringValue(code, botAt)) : null,
     task: taskAt !== null ? objectTaskValue(code, taskAt) : null,
     workingDir: workingAt !== null ? objectStringValue(code, workingAt) : null,
   }
@@ -1122,9 +1152,14 @@ export function parseInput(raw: string | null | undefined): ParsedInput {
     }
     return EMPTY_PARSED_INPUT
   }
+  // A `bot` wins over `assistant_id` and `agent_type`, as on the backend
+  // (`delegation_target_from_args`) — even one that cannot be read, which
+  // the backend refuses: never drawn as whoever the others name.
+  const namesBot = obj.bot !== undefined && obj.bot !== null
   return {
-    agentType: coerceAgentType(obj.agent_type),
-    assistantId: coerceAssistantId(obj.assistant_id),
+    agentType: namesBot ? null : coerceAgentType(obj.agent_type),
+    assistantId: namesBot ? null : coerceAssistantId(obj.assistant_id),
+    botUid: coerceBotUid(obj.bot),
     task: typeof obj.task === "string" ? obj.task : null,
     workingDir: typeof obj.working_dir === "string" ? obj.working_dir : null,
   }
@@ -1166,6 +1201,8 @@ export type ParsedToolOutput =
 type ReportedAssistant = {
   assistantId?: number | null
   assistantName?: string | null
+  /** `DelegationTaskReport.bot`: the owner's assistant it runs as. */
+  botUid?: string | null
 }
 
 /**
@@ -1320,6 +1357,7 @@ function interpretReport(
   const assistant: ReportedAssistant = {
     assistantId: coerceAssistantId(obj.assistant_id),
     assistantName: coerceAssistantName(obj.assistant_name),
+    botUid: coerceBotUid(obj.bot),
   }
   // Carried on EVERY variant, not just the failed ones: a refused resume pairs
   // `not_resumable` with the task's real status, so the code is the only thing

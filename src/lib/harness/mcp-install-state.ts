@@ -48,6 +48,12 @@ import type {
   HarnessMcpUninstallResult,
   HarnessReason,
 } from "./mcp-install-types"
+import type { PluginInstallDialog } from "./plugin-install-state"
+import type {
+  PluginChangeDialog,
+  PluginUninstallDialog,
+  PluginUpdateDialog,
+} from "./plugin-manage-state"
 import type { SkillHarnessDialog } from "./skill-install-state"
 
 // One counter for every request here, outside the slots for the reason
@@ -188,6 +194,10 @@ export type McpHarnessDialog =
   | McpInstallDialog
   | McpUninstallDialog
   | SkillHarnessDialog
+  | PluginInstallDialog
+  | PluginUpdateDialog
+  | PluginChangeDialog
+  | PluginUninstallDialog
 
 export const MCP_HARNESS_DIALOG = defineHarnessSlot<McpHarnessDialog | null>(
   "mcp",
@@ -231,7 +241,11 @@ function isWriting(dialog: McpHarnessDialog | null): boolean {
     (dialog?.kind === "install" && dialog.step === "installing") ||
     (dialog?.kind === "uninstall" && dialog.phase === "uninstalling") ||
     (dialog?.kind === "skillInstall" && dialog.step === "installing") ||
-    (dialog?.kind === "skillUninstall" && dialog.phase === "uninstalling")
+    (dialog?.kind === "skillUninstall" && dialog.phase === "uninstalling") ||
+    (dialog?.kind === "pluginInstall" && dialog.step === "installing") ||
+    (dialog?.kind === "pluginUpdate" && dialog.step === "updating") ||
+    (dialog?.kind === "pluginChange" && dialog.phase === "writing") ||
+    (dialog?.kind === "pluginUninstall" && dialog.phase === "uninstalling")
   )
 }
 

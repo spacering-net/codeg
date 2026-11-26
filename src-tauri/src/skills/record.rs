@@ -125,6 +125,19 @@ impl LinkRecord {
         removed
     }
 
+    /// Take in the copies `other` records that this record does not list
+    /// (a plugin's own record, `super::owned`) — for reading only: `changed`
+    /// stays as it was, and such a record is never saved.
+    pub(crate) fn borrow_copies(&mut self, other: &LinkRecord) {
+        for (key, entry) in &other.entries {
+            if entry.mode == LinkMode::Copy {
+                self.entries
+                    .entry(key.clone())
+                    .or_insert_with(|| entry.clone());
+            }
+        }
+    }
+
     /// Write the record when it changed. An unreadable record is kept as
     /// `.links.json.unreadable` too rather than lost, and stays in place
     /// until the new one is renamed over it (never no record at all).

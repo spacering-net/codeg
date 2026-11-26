@@ -13,6 +13,8 @@ import {
 } from "@/lib/connection-teardown"
 import { TurnBusyError } from "@/lib/turn-busy"
 import { ConversationMovedError } from "@/lib/conversation-moved"
+import { RewindRefusedError } from "@/lib/rewind-refused"
+import type { PromptRewindTarget } from "@/lib/api"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { type AgentType, type PromptDraft } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
@@ -71,6 +73,18 @@ export interface UseConnectionLifecycleReturn {
       folderId?: number | null
       conversationId?: number | null
       clientMessageId?: string | null
+      /** An edited message's rewind, done with the send (`acpPrompt`). */
+      rewind?: PromptRewindTarget | null
+      /**
+       * Called instead of the error toast when the agent declined the
+       * `rewind`: nothing changed and nothing was sent.
+       */
+      onRewindRefused?: (reason: string) => void
+      /**
+       * Called when nothing was sent because there was no connection to send
+       * on (a reconnect removed it while the send waited for a setter).
+       */
+      onNotSent?: () => void
       /**
        * Called when the backend rejected the send because a turn was already
        * in flight (a second, concurrent prompt). The caller re-queues the
@@ -88,8 +102,14 @@ export interface UseConnectionLifecycleReturn {
        */
       onSendFailed?: (error: unknown) => void
     }
+  ) => Promise<void>
+  /** `saveAsDefault`: the pick also becomes the new-conversation default —
+   *  only for an explicit pick in a draft (codeg#1179). */
+  handleSetConfigOption: (
+    configId: string,
+    valueId: string,
+    opts?: { saveAsDefault?: boolean }
   ) => void
-  handleSetConfigOption: (configId: string, valueId: string) => void
   handleCancel: () => void
   handleRespondPermission: (requestId: string, optionId: string) => void
 }
@@ -443,7 +463,7 @@ export function useConnectionLifecycle({
           transientUnmount,
         })
       ) {
-        connDisconnectRef.current().catch(() => {})
+        connDisconnectRef.current(true).catch(() => {})
       }
       // The active key names the view on screen, and this one is gone. Left
       // claimed, it would hold the busy owner kept running above out of both
@@ -517,6 +537,9 @@ export function useConnectionLifecycle({
         folderId?: number | null
         conversationId?: number | null
         clientMessageId?: string | null
+        rewind?: PromptRewindTarget | null
+        onRewindRefused?: (reason: string) => void
+        onNotSent?: () => void
         onTurnInProgress?: () => void
         onSendFailed?: (error: unknown) => void
       }
@@ -524,7 +547,9 @@ export function useConnectionLifecycle({
       touchActivity(contextKey)
       const onTurnInProgress = opts?.onTurnInProgress
       const onSendFailed = opts?.onSendFailed
-      void (async () => {
+      // Returned (handled: it never rejects) so a draft's first send can hold
+      // its selector lock until the prompt was acknowledged or failed.
+      return (async () => {
         const currentModeId = modeIdRef.current
         if (modeId && modeId !== currentModeId) {
           await connSetMode(modeId)
@@ -532,8 +557,12 @@ export function useConnectionLifecycle({
           // calls before CurrentModeUpdate arrives from the agent.
           modeIdRef.current = modeId
         }
-        await sendPrompt(draft.blocks, opts)
+        if (!(await sendPrompt(draft.blocks, opts))) opts?.onNotSent?.()
       })().catch((e: unknown) => {
+        if (e instanceof RewindRefusedError && opts?.onRewindRefused) {
+          opts.onRewindRefused(e.reason)
+          return
+        }
         if (e instanceof TurnBusyError) {
           // A turn was already in flight on the connection (another
           // co-controlling client, or a "prompting" status this client hadn't
@@ -595,7 +624,7 @@ export function useConnectionLifecycle({
   }, [connCancel])
 
   const handleSetConfigOption = useCallback(
-    (configId: string, valueId: string) => {
+    (configId: string, valueId: string, opts?: { saveAsDefault?: boolean }) => {
       // The connection here still belongs to another agent (a draft mid-switch,
       // or one whose new pick could not connect), so the options on screen are
       // the selected agent's cached ones. Applying the edit would hand the
@@ -604,7 +633,7 @@ export function useConnectionLifecycle({
       // no connection here at all.
       if (connAgentType != null && connAgentType !== agentType) return
       touchActivity(contextKey)
-      connSetConfigOption(configId, valueId).catch((e: unknown) =>
+      connSetConfigOption(configId, valueId, opts).catch((e: unknown) =>
         console.error("[ConnLifecycle] setConfigOption:", e)
       )
     },

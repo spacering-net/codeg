@@ -7,13 +7,17 @@ import {
   Hash,
   MessageSquare,
 } from "lucide-react"
+import { useTranslations } from "next-intl"
 import type { ReactNode } from "react"
 
 import { AgentIcon } from "@/components/agent-icon"
 import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
-import { type AgentType } from "@/lib/types"
+import { BotAvatar } from "@/components/personal-agent/bot-avatar"
+import { followPersonalAgentLink } from "@/lib/personal-agent-notify"
+import { type AgentType, type RosterEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useAssistant } from "@/stores/assistants-store"
+import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
 
 import type { ReferenceAttrs } from "../types"
 
@@ -21,9 +25,26 @@ const ICON_CLASS = "size-3.5 shrink-0"
 /** `ICON_CLASS` in pixels, for the avatar, which takes a size. */
 const ICON_PX = 14
 
-/** An assistant's avatar, looked up by id in the store: its current look on
- *  every badge, the generic glyph for an id this window does not know. */
-function AssistantReferenceIcon({ id, name }: { id: number; name: string }) {
+/** The personal assistant an assistant reference names, on the roster: by
+ *  its uid (`codeg://bot/<uid>`), or — an old `codeg://assistant/<id>`
+ *  link — the one converted from that assistant. `undefined` until the
+ *  roster is read, `null` for one not on it (deleted, another device's). */
+function useReferencedBot(
+  data: ReferenceAttrs
+): RosterEntry | null | undefined {
+  // Read, not held: the workspace holds the roster (its sidebar, the open
+  // bridge); a pill anywhere must not start reading it.
+  const roster = usePersonalAgentRoster((s) => s.entries)
+  if (!roster) return undefined
+  const uid = data.meta?.botUid
+  if (uid) return roster.find((e) => e.uid === uid) ?? null
+  const legacy = data.meta?.assistantId ?? Number(data.id)
+  return roster.find((e) => e.legacy_assistant_id === legacy) ?? null
+}
+
+/** An old link's assistant as the collaboration settings had it, where no
+ *  personal assistant was converted from it. */
+function LegacyAssistantIcon({ id, name }: { id: number; name: string }) {
   const assistant = useAssistant(id)
   return (
     <AssistantAvatar
@@ -32,6 +53,31 @@ function AssistantReferenceIcon({ id, name }: { id: number; name: string }) {
       size={ICON_PX}
     />
   )
+}
+
+/** An assistant's face, looked up on the roster: its current look on every
+ *  badge; a grey glyph for one not there. */
+function AssistantReferenceIcon({ data }: { data: ReferenceAttrs }) {
+  const bot = useReferencedBot(data)
+  if (bot) {
+    return (
+      <BotAvatar
+        avatar={bot.avatar}
+        name={bot.name}
+        size={ICON_PX}
+        star={bot.kind === "primary"}
+      />
+    )
+  }
+  if (!data.meta?.botUid && bot === null) {
+    return (
+      <LegacyAssistantIcon
+        id={data.meta?.assistantId ?? Number(data.id)}
+        name={data.label}
+      />
+    )
+  }
+  return <Bot className={cn(ICON_CLASS, "text-muted-foreground")} />
 }
 
 export function ReferenceIcon({
@@ -67,12 +113,7 @@ export function ReferenceIcon({
       break
     }
     case "assistant":
-      icon = (
-        <AssistantReferenceIcon
-          id={meta?.assistantId ?? Number(data.id)}
-          name={data.label}
-        />
-      )
+      icon = <AssistantReferenceIcon data={data} />
       break
     case "session":
       // The inline badge (composer + transcript) shows a neutral conversation
@@ -143,6 +184,9 @@ function badgeColorClass(data: ReferenceAttrs): string {
 export interface ReferenceBadgeProps {
   data: ReferenceAttrs
   className?: string
+  /** Outside the editor (a sent message, a reply): an assistant's badge
+   *  opens its conversation when clicked. */
+  openable?: boolean
 }
 
 /**
@@ -150,7 +194,77 @@ export interface ReferenceBadgeProps {
  * the message-transcript rendering (markdown-link → here). Purely visual — no
  * editor coupling.
  */
-export function ReferenceBadge({ data, className }: ReferenceBadgeProps) {
+export function ReferenceBadge({
+  data,
+  className,
+  openable,
+}: ReferenceBadgeProps) {
+  if (data.refType === "assistant") {
+    return (
+      <AssistantReferenceBadge
+        data={data}
+        className={className}
+        openable={openable}
+      />
+    )
+  }
+  return (
+    <BadgeChip
+      data={data}
+      className={className}
+      colorClass={badgeColorClass(data)}
+    />
+  )
+}
+
+/** An assistant's pill (D8): its face and its name now on the roster — the
+ *  one a click opens, whatever it was called when the link was written —
+ *  the name the link has, grey, when it is not there; opens its
+ *  conversation when `openable`. */
+function AssistantReferenceBadge({
+  data,
+  className,
+  openable,
+}: ReferenceBadgeProps) {
+  const t = useTranslations("PersonalAgent")
+  const bot = useReferencedBot(data)
+  const gone = bot === null && !!data.meta?.botUid
+  // As its page names it: the primary with no name of its own by its role,
+  // a work assistant with none by its number.
+  const shown = bot
+    ? {
+        ...data,
+        label:
+          bot.name.trim() ||
+          (bot.kind === "primary" ? t("title") : `#${bot.id}`),
+      }
+    : data
+  const open =
+    openable && bot
+      ? () =>
+          followPersonalAgentLink({ kind: "bot", bot_id: bot.id, row_id: null })
+      : undefined
+  return (
+    <BadgeChip
+      data={shown}
+      className={cn(open && "cursor-pointer hover:underline", className)}
+      colorClass={gone ? "text-muted-foreground" : badgeColorClass(data)}
+      onOpen={open}
+    />
+  )
+}
+
+function BadgeChip({
+  data,
+  className,
+  colorClass,
+  onOpen,
+}: {
+  data: ReferenceAttrs
+  className?: string
+  colorClass: string
+  onOpen?: () => void
+}) {
   return (
     <span
       data-reference-badge=""
@@ -160,13 +274,33 @@ export function ReferenceBadge({ data, className }: ReferenceBadgeProps) {
       // a single named unit so `aria-label` is a reliable accessible name (a
       // bare span's aria-label is not), and collapses the decorative icon —
       // including AgentIcon's titled <svg> — into that one name.
-      role="img"
+      // One that opens something is a link to it, reached by Tab and Enter.
+      role={onOpen ? "link" : "img"}
+      tabIndex={onOpen ? 0 : undefined}
       aria-label={`${data.refType}: ${data.label || data.id}`}
       className={cn(
         "inline-flex max-w-[18rem] items-center gap-0.5 align-middle text-[0.85em] font-medium leading-snug",
-        badgeColorClass(data),
+        colorClass,
         className
       )}
+      onClick={
+        onOpen
+          ? (e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onOpen()
+            }
+          : undefined
+      }
+      onKeyDown={
+        onOpen
+          ? (e) => {
+              if (e.key !== "Enter") return
+              e.preventDefault()
+              onOpen()
+            }
+          : undefined
+      }
     >
       <ReferenceIcon data={data} />
       <span className="truncate">{data.label || data.id}</span>

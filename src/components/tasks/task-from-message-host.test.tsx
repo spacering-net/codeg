@@ -30,6 +30,7 @@ vi.mock("@/contexts/tasks-view-context", () => ({
   useTasksView: () => ({ refetch: scene.refetch }),
 }))
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskCreate: (draft: WorkTaskDraft) => scene.create(draft),
 }))
 vi.mock("sonner", () => ({

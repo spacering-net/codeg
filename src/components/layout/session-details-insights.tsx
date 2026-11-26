@@ -1,21 +1,51 @@
 "use client"
 
-import { useEffect, type ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
+import { toast } from "sonner"
 import {
   Check,
   ChevronDown,
   ListChecks,
   Loader2,
+  MessageCircleQuestionMark,
   MessagesSquare,
+  ShieldCheck,
+  Unlink,
 } from "lucide-react"
 
+import { AgentIcon } from "@/components/agent-icon"
+import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
+import { useDetachAskConversation } from "@/components/conversations/use-detach-ask-conversation"
 import { MessageNavList } from "@/components/message/conversation-message-nav"
+import { useIdentityAssistant } from "@/components/message/delegation-identity"
+import { BotAvatar } from "@/components/personal-agent/bot-avatar"
 import { getPriorityKey, getStatusKey } from "@/components/message/plan-card"
 import { SessionViewerHost } from "@/components/message/session-viewer-host"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
+  useLinkedConversations,
+  type LinkedConversationKind,
+} from "@/hooks/use-ask-conversations"
+import { formatConversationTitle } from "@/lib/conversation-title"
 import { useSessionDetailsSectionOpen } from "@/lib/session-details-prefs"
-import type { PlanEntryInfo } from "@/lib/types"
+import type {
+  ConversationStatus,
+  DbConversationSummary,
+  PlanEntryInfo,
+} from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { useAskConversationDrawerStore } from "@/stores/ask-conversation-drawer-store"
 import {
   demandTranscriptNav,
   useTranscriptInsightsPart,
@@ -25,6 +55,9 @@ interface SessionDetailsInsightsProps {
   /** The active tab's runtime conversation id (`runtimeConversationId ??
    *  conversationId`) — the key its transcript publishes under. */
   conversationId: number | null
+  /** The active tab's persisted conversation id — what its ask and check
+   *  conversations are linked to. */
+  dbConversationId: number | null
   /** The panel and this tab are on screen. The navigator's rows are only
    *  computed while they are. */
   active: boolean
@@ -32,8 +65,10 @@ interface SessionDetailsInsightsProps {
 
 /**
  * The part of the Session Details side panel that follows the conversation's
- * transcript, each part a card like the summary above it: the agent's plan
- * and the message navigator, whose messages carry
+ * transcript, each part a card like the summary above it: the agent's plan,
+ * the ask conversations opened from it ("ask about this selection"), the
+ * personal agent's checks of its messages ("is this right?") and the message
+ * navigator, whose messages carry
  * the sub-agents they started and the files they changed — what the
  * conversation page used to stack as chips over the messages' top inline-start
  * corner. The transcript derives them and publishes them to the insights store
@@ -52,12 +87,21 @@ interface SessionDetailsInsightsProps {
  */
 export function SessionDetailsInsights({
   conversationId,
+  dbConversationId,
   active,
 }: SessionDetailsInsightsProps) {
   return (
     // The sections are the tab's own children, spaced like the rest of it.
     <SessionViewerHost>
       <PlanSection conversationId={conversationId} />
+      <LinkedConversationsSection
+        kind="ask"
+        parentConversationId={dbConversationId}
+      />
+      <LinkedConversationsSection
+        kind="check"
+        parentConversationId={dbConversationId}
+      />
       <MessageNavSection conversationId={conversationId} active={active} />
     </SessionViewerHost>
   )
@@ -65,6 +109,11 @@ export function SessionDetailsInsights({
 
 /** The panel's cards: the summary card's tint, hairline and corners. */
 const CARD = "min-w-0 rounded-xl border border-border/70 bg-muted/40"
+
+/** A card's own colour (its `bg-muted/40` over the page), for the ring that
+ *  cuts a status dot out of the icon it sits on. */
+const CARD_RING =
+  "ring-[color-mix(in_oklab,var(--muted)_40%,var(--background))]"
 
 /**
  * A section of the panel, as a card: a header row — the section's icon and
@@ -279,6 +328,215 @@ function PlanSection({ conversationId }: { conversationId: number | null }) {
         <PlanSteps entries={steps} streaming={plan.streaming} />
       )}
     </InsightsSection>
+  )
+}
+
+/** What each list of `LinkedConversationsSection` is called and drawn by. */
+const LINKED_SECTION = {
+  ask: {
+    namespace: "Folder.askConversations",
+    icon: <MessageCircleQuestionMark />,
+    pref: "askConversations",
+  },
+  check: {
+    namespace: "Folder.checkConversations",
+    icon: <ShieldCheck />,
+    pref: "checkConversations",
+  },
+} as const
+
+/**
+ * The conversations linked to this one, newest first — the same rows the
+ * sidebar nests under it: the asks opened from its transcript ("ask about this
+ * selection"), or the personal agent's checks of its messages ("is this
+ * right?"), a card each. A row opens its conversation in the ask drawer to go
+ * on with it (or watch it), and its button turns it into an ordinary
+ * conversation, which moves it to the root of the sidebar. Renders nothing
+ * while there are none.
+ */
+function LinkedConversationsSection({
+  kind,
+  parentConversationId,
+}: {
+  kind: LinkedConversationKind
+  parentConversationId: number | null
+}) {
+  const section = LINKED_SECTION[kind]
+  // The words of converting, and its dialog's, are the asks' for both.
+  const t = useTranslations("Folder.askConversations")
+  const tSection = useTranslations(section.namespace)
+  const asks = useLinkedConversations(parentConversationId, kind)
+  const [open, setOpen] = useSessionDetailsSectionOpen(section.pref)
+  const openExisting = useAskConversationDrawerStore((s) => s.openExisting)
+  const openId = useAskConversationDrawerStore(
+    (s) => s.target?.conversationId ?? null
+  )
+  const detach = useDetachAskConversation()
+  // The row to confirm converting, kept after the dialog closes so its text
+  // doesn't empty out while it animates away.
+  const [confirming, setConfirming] = useState<{
+    id: number
+    title: string
+  } | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  // The section outlives a switch to another tab — it is handed the new
+  // tab's conversation — so a confirmation left open belongs to the last
+  // one: drop it rather than let it convert that conversation's row from here.
+  const [confirmParentId, setConfirmParentId] = useState(parentConversationId)
+  if (confirmParentId !== parentConversationId) {
+    setConfirmParentId(parentConversationId)
+    setConfirmOpen(false)
+    setConfirming(null)
+  }
+  if (parentConversationId == null || asks == null || asks.length === 0) {
+    return null
+  }
+  const handleOpen = (ask: DbConversationSummary) => {
+    const opened = openExisting({
+      kind,
+      parentConversationId,
+      conversationId: ask.id,
+      agentType: ask.agent_type,
+      folderId: ask.folder_id,
+      // The folder list resolves the cwd by id; this is only its fallback.
+      workingDir:
+        useAppWorkspaceStore
+          .getState()
+          .allFolders.find((folder) => folder.id === ask.folder_id)?.path ??
+        null,
+    })
+    if (!opened) toast.warning(t("pendingFirstMessage"))
+  }
+  return (
+    <InsightsSection
+      icon={section.icon}
+      title={tSection("title")}
+      summary={t("total", { count: asks.length })}
+      open={open}
+      onOpenChange={setOpen}
+    >
+      {open && (
+        <ul className="space-y-px">
+          {asks.map((ask) => {
+            const title =
+              formatConversationTitle(ask.title) || tSection("untitled")
+            const status = ask.status as ConversationStatus
+            return (
+              <li
+                key={ask.id}
+                className={cn(
+                  "group/ask -mx-1.5 flex h-7 min-w-0 items-center rounded-md transition-colors hover:bg-foreground/[0.06]",
+                  openId === ask.id && "bg-foreground/[0.06]"
+                )}
+              >
+                {/* The agent's icon — the assistant's avatar, for a row run as
+                    one — takes the header icon's column, its status a dot on
+                    its corner as the summary card draws it, so the title lines
+                    up with the section's. */}
+                <button
+                  type="button"
+                  title={title}
+                  onClick={() => handleOpen(ask)}
+                  className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md ps-1.5 text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="flex w-7 shrink-0 justify-center"
+                  >
+                    <span className="relative flex">
+                      <LinkedRowIcon conversation={ask} />
+                      <ConversationStatusDot
+                        status={status}
+                        size="sm"
+                        className={cn(
+                          "absolute -end-0.5 -bottom-0.5 ring-2",
+                          CARD_RING,
+                          status === "in_progress" &&
+                            "motion-safe:animate-pulse"
+                        )}
+                      />
+                    </span>
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground/85">
+                    {title}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  aria-label={t("convertToRegular")}
+                  title={t("convertToRegular")}
+                  onClick={() => {
+                    setConfirming({ id: ask.id, title })
+                    setConfirmOpen(true)
+                  }}
+                  className="me-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity outline-none group-hover/ask:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 [@media(hover:none)]:opacity-100"
+                >
+                  <Unlink className="size-3.5" />
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      <AlertDialog
+        open={confirmOpen && confirming != null}
+        onOpenChange={setConfirmOpen}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("convertConfirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("convertConfirmDescription", {
+                title: confirming?.title ?? "",
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (confirming) detach(confirming.id)
+              }}
+            >
+              {t("convertConfirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </InsightsSection>
+  )
+}
+
+/** A linked conversation's icon: the assistant it ran as, else its agent. */
+function LinkedRowIcon({
+  conversation,
+}: {
+  conversation: DbConversationSummary
+}) {
+  const ranAs =
+    conversation.assistant_id != null || conversation.bot_uid != null
+  return ranAs ? (
+    <LinkedRowAssistantAvatar conversation={conversation} />
+  ) : (
+    <AgentIcon agentType={conversation.agent_type} className="size-4" />
+  )
+}
+
+function LinkedRowAssistantAvatar({
+  conversation,
+}: {
+  conversation: DbConversationSummary
+}) {
+  const assistant = useIdentityAssistant({
+    assistantId: conversation.assistant_id ?? null,
+    botUid: conversation.bot_uid ?? null,
+  })
+  return (
+    <BotAvatar
+      avatar={assistant?.avatar ?? null}
+      name={assistant?.name ?? conversation.assistant_name ?? ""}
+      size={16}
+    />
   )
 }
 

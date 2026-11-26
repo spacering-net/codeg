@@ -75,6 +75,9 @@ export interface GridRow {
   notReady?: string
   /** Marks beside its name: where it comes from, what is wrong. */
   marks?: ReactNode
+  /** By agent: the Harness plugin that gives that agent this skill's name
+   *  (its install name). The row cannot be switched on there. */
+  providers?: Readonly<Record<string, string>>
 }
 
 export interface GridGroups {
@@ -88,22 +91,50 @@ export function rowCell(
   agent: SkillsAgent
 ): { view: CellView; dir: string | null; state: string } {
   const cell = row.skill?.cells.find((item) => item.agent === agent.agent)
-  return {
-    view: cellView(cell, agent, row.ready),
-    dir: cell?.dir ?? null,
-    state: cell?.state ?? "not_linked",
+  let view = cellView(cell, agent, row.ready)
+  // A plugin gives the agent this name (installed whole, under its own
+  // name, or its skills only): off here, and not to be switched on — the
+  // same skill twice is wrong. Codeg's own link, should one be there, can
+  // still be switched off.
+  const provider = row.providers?.[agent.agent]
+  if (provider && view.kind === "off" && !view.on) {
+    view = {
+      ...view,
+      toggle: null,
+      check: false,
+      why: "plugin",
+      plugin: view.plugin ?? provider,
+    }
   }
+  return { view, dir: cell?.dir ?? null, state: cell?.state ?? "not_linked" }
+}
+
+/** Whether a row may be switched on for an agent: it is ready, and no
+ *  plugin gives that agent its name. */
+export function rowReadyFor(row: GridRow, agent: string): boolean {
+  return row.ready && !row.providers?.[agent]
 }
 
 export function onCount(row: GridRow, agents: readonly SkillsAgent[]) {
-  return agents.filter(
-    (agent) =>
-      cellView(
-        row.skill?.cells.find((cell) => cell.agent === agent.agent),
-        agent,
-        row.ready
-      ).on
-  ).length
+  return agents.filter((agent) => rowCell(row, agent).view.on).length
+}
+
+/** Whether a plugin holds every agent's cell of a row, and the row names it
+ *  for each (`providers`, said beside it as "provided by") — each off, and
+ *  not to be switched on: the row's count of agents it is on for then says
+ *  nothing its mark does not. */
+export function heldByPlugins(
+  row: GridRow,
+  agents: readonly SkillsAgent[]
+): boolean {
+  return (
+    agents.length > 0 &&
+    agents.every(
+      (agent) =>
+        row.providers?.[agent.agent] !== undefined &&
+        rowCell(row, agent).view.why === "plugin"
+    )
+  )
 }
 
 const CELL_ICONS: Partial<Record<CellKind, LucideIcon>> = {
@@ -128,14 +159,17 @@ export function cellLabel(
   noDirectory: string,
   row: GridRow,
   agent: string,
-  cell: { view: CellView; dir: string | null; state: string }
+  cell: { view: CellView; dir: string | null; state: string },
+  providedBy?: (plugin: string) => string
 ): string {
   const why =
     cell.view.why === "notReady" && row.notReady
       ? ` · ${row.notReady}`
       : cell.view.why === "noDirectory"
         ? ` · ${noDirectory}`
-        : ""
+        : cell.view.why === "plugin" && cell.view.plugin && providedBy
+          ? ` · ${providedBy(cell.view.plugin)}`
+          : ""
   return `${row.name}, ${labels.agent(agent)}: ${labels.cellText(
     cell.view.kind,
     cell.dir,
@@ -374,14 +408,17 @@ export function SkillGrid({
   const [writes] = useHarnessSlot(links.writes)
   const sections = useMemo(() => grouped(rows, groups), [rows, groups])
   const noDirectory = t("noDirectory")
+  const providedBy = (plugin: string) => t("providedBy", { plugin })
 
-  const ready = (id: string) =>
-    rows.find((row) => row.id === id)?.ready ?? false
+  const ready = (id: string, agent: string) => {
+    const row = rows.find((item) => item.id === id)
+    return row ? rowReadyFor(row, agent) : false
+  }
   const switchable = rows.filter((row) => row.skill !== null)
   const batch = (targets: CellTarget[], on: boolean) =>
     requestBatch(slots, links, targets, on, ready)
   const toggle = (row: GridRow, agent: string) =>
-    requestToggle(slots, links, row.id, agent, row.ready)
+    requestToggle(slots, links, row.id, agent, rowReadyFor(row, agent))
 
   if (form === "list") {
     return (
@@ -431,19 +468,24 @@ export function SkillGrid({
                               </span>
                             )}
                           </span>
-                          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                            <span>
-                              {row.skill || row.ready
-                                ? t("onFor", {
-                                    count: on.length,
-                                    total: agents.length,
-                                  })
-                                : (row.notReady ?? t("notReady"))}
+                          {/* Why it cannot be switched on, always; how many
+                              agents have it, unless a plugin holds them all. */}
+                          {(!(row.skill || row.ready) ||
+                            !heldByPlugins(row, agents)) && (
+                            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                              <span>
+                                {row.skill || row.ready
+                                  ? t("onFor", {
+                                      count: on.length,
+                                      total: agents.length,
+                                    })
+                                  : (row.notReady ?? t("notReady"))}
+                              </span>
+                              <AgentStrip
+                                agents={on.map((agent) => agent.agent)}
+                              />
                             </span>
-                            <AgentStrip
-                              agents={on.map((agent) => agent.agent)}
-                            />
-                          </span>
+                          )}
                           <span className="sr-only">
                             {on.length > 0
                               ? t("onIn", {
@@ -691,9 +733,11 @@ export function SkillGrid({
                               </span>
                             )}
                           </span>
-                          <DiscoverMark className="shrink-0 tabular-nums">
-                            {onCount(row, agents)}/{agents.length}
-                          </DiscoverMark>
+                          {!heldByPlugins(row, agents) && (
+                            <DiscoverMark className="shrink-0 tabular-nums">
+                              {onCount(row, agents)}/{agents.length}
+                            </DiscoverMark>
+                          )}
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <Button
@@ -755,7 +799,8 @@ export function SkillGrid({
                                 noDirectory,
                                 row,
                                 agent.agent,
-                                cell
+                                cell,
+                                providedBy
                               )}
                               busy={skillBusy}
                               write={writes[cellKey(row.id, agent.agent)]}

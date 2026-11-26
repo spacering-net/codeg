@@ -4,6 +4,12 @@
 //! new manifest, extracting the bundled Experts and Science skills, and
 //! bringing the link record in line with the disk.
 //!
+//! First of all, under the plugins lock and then the skills lock (the order
+//! every plugin operation takes them in), the Harness plugins' journals are
+//! finished or rolled back (`harness::plugins::journal::recover`, which
+//! never runs a host command) — before the skills journals, among them those
+//! of the plugins' own skill stores.
+//!
 //! Restoring Codeg's backup over the store happens earlier, before anything
 //! else runs (`commands::backup::restore`); it takes the same lock and hands
 //! the record from before the restore to [`absorb_record_after_restore`]:
@@ -14,6 +20,8 @@
 use std::path::Path;
 
 use crate::web::event_bridge::EventEmitter;
+
+use crate::harness::plugins::PluginsCtx;
 
 use super::model::ChangedKind;
 use super::packs::InstallReport;
@@ -32,6 +40,12 @@ pub struct StartupReport {
     pub backups_moved: usize,
     pub backups_kept: usize,
     pub changed: bool,
+    /// The plugins' journals: `None` when the plugins lock could not be had
+    /// (the next start tries again; a problem says so).
+    pub plugins: Option<crate::harness::plugins::journal::RecoveryReport>,
+    /// The order the recoveries ran in.
+    #[cfg(test)]
+    pub order: Vec<&'static str>,
 }
 
 /// Remove what the store's staging holds without an `op.json` (those are a
@@ -64,16 +78,30 @@ pub(crate) fn clear_store_staging(ctx: &SkillsCtx) -> Vec<String> {
 }
 
 fn maintenance(ctx: &SkillsCtx, report: &mut StartupReport) {
-    let record = LinkRecord::load(&ctx.store);
+    #[cfg(test)]
+    report.order.push("skills");
+    // The agent-side copy operations of Codeg's store and of every plugin's
+    // own store share one staging: their records are read together.
+    let record = super::owned::record_with_owned_copies(ctx);
     report.problems.extend(super::copies::recover(ctx, &record));
     // Harness's journals (`op.json`) first: finished or rolled back before
-    // the staging without one is cleared.
+    // the staging without one is cleared — in Codeg's store and in each
+    // plugin's own.
     let harness = crate::harness::skills::recover_journals(ctx);
     if harness.changed {
         report.changed = true;
     }
     report.problems.extend(harness.problems);
     report.problems.extend(clear_store_staging(ctx));
+    for plugin in super::owned::plugin_stores(ctx) {
+        let owned = ctx.over_plugin_store(&plugin);
+        let harness = crate::harness::skills::recover_journals(&owned);
+        if harness.changed {
+            report.changed = true;
+        }
+        report.problems.extend(harness.problems);
+        report.problems.extend(clear_store_staging(&owned));
+    }
     let (moved, kept, problems) = super::backups::migrate_legacy(ctx);
     report.backups_moved = moved;
     report.backups_kept = kept;
@@ -88,15 +116,50 @@ fn maintenance(ctx: &SkillsCtx, report: &mut StartupReport) {
     }
 }
 
-/// Everything above, blocking. `install` extracts the two bundled packs.
-pub(crate) fn run_blocking(ctx: &SkillsCtx) -> StartupReport {
+/// A backup restore's mark (`journal::RESTORED_MARK`; the rollbacks just
+/// run marked their agents as restored with it): it goes once none of its
+/// operations is left.
+fn restored_again(plugins: &PluginsCtx, problems: &mut Vec<String>) {
+    if let Err(err) = crate::harness::plugins::journal::clear_restored_mark(plugins) {
+        problems.push(format!("plugins restore mark: {err}"));
+    }
+}
+
+/// Everything above, blocking, over Codeg's skill store `ctx` and the
+/// plugin store `plugins`.
+pub(crate) fn run_blocking(ctx: &SkillsCtx, plugins: &PluginsCtx) -> StartupReport {
     let mut report = StartupReport::default();
     let mut ctx = ctx.clone();
     ctx.lock_wait = STARTUP_LOCK_WAIT;
+    let mut plugins = plugins.clone();
+    plugins.lock_wait = STARTUP_LOCK_WAIT;
+    // Plugins → skills, as every plugin operation takes them. Without the
+    // plugins lock the skills are still seen to (no plugin journal is
+    // touched).
+    let plugins_guard = match plugins.lock_blocking() {
+        Ok(guard) => Some(guard),
+        Err(err) => {
+            report
+                .problems
+                .push(format!("plugin journals skipped: {err}"));
+            None
+        }
+    };
     match ctx.lock_blocking() {
-        Ok(_guard) => maintenance(&ctx, &mut report),
+        Ok(_guard) => {
+            if let Some(guard) = &plugins_guard {
+                #[cfg(test)]
+                report.order.push("plugins");
+                let recovered = crate::harness::plugins::journal::recover(&plugins, guard);
+                report.problems.extend(recovered.problems.iter().cloned());
+                restored_again(&plugins, &mut report.problems);
+                report.plugins = Some(recovered);
+            }
+            maintenance(&ctx, &mut report);
+        }
         Err(err) => report.problems.push(format!("maintenance skipped: {err}")),
     }
+    drop(plugins_guard);
     report.experts = crate::commands::experts::install_in(&ctx);
     report.science = crate::commands::science::install_in(&ctx);
     if report.experts.installed_count + report.experts.updated_count > 0
@@ -106,10 +169,18 @@ pub(crate) fn run_blocking(ctx: &SkillsCtx) -> StartupReport {
     }
     match ctx.lock_blocking() {
         Ok(_guard) => {
-            let mut record = LinkRecord::load(&ctx.store);
-            if reconcile(&ctx, &mut record) {
-                if let Err(err) = record.save(&ctx.store) {
-                    report.problems.push(format!("link record: {err}"));
+            let mut stores = vec![ctx.clone()];
+            stores.extend(
+                super::owned::plugin_stores(&ctx)
+                    .into_iter()
+                    .map(|plugin| ctx.over_plugin_store(&plugin)),
+            );
+            for store in stores {
+                let mut record = LinkRecord::load(&store.store);
+                if reconcile(&store, &mut record) {
+                    if let Err(err) = record.save(&store.store) {
+                        report.problems.push(format!("link record: {err}"));
+                    }
                 }
             }
         }
@@ -139,7 +210,8 @@ fn log_pack(name: &str, report: &InstallReport) {
 /// The startup task of both runtimes. Never fails; problems are logged.
 pub async fn run(emitter: EventEmitter) {
     let ctx = SkillsCtx::user();
-    let report = match tokio::task::spawn_blocking(move || run_blocking(&ctx)).await {
+    let plugins = PluginsCtx::user();
+    let report = match tokio::task::spawn_blocking(move || run_blocking(&ctx, &plugins)).await {
         Ok(report) => report,
         Err(err) => {
             tracing::error!("[Skills] startup task failed: {err}");
@@ -161,6 +233,25 @@ pub async fn run(emitter: EventEmitter) {
     if report.changed {
         let agents: Vec<_> = SkillsCtx::user().agents.iter().map(|a| a.agent).collect();
         super::announce(&emitter, [ChangedKind::Store, ChangedKind::Backups], agents);
+    }
+    if let Some(plugins) = &report.plugins {
+        if plugins.finished + plugins.rolled_back > 0 {
+            tracing::info!(
+                "[Harness plugins] startup: {} operation(s) finished, {} rolled back, needing repair: {:?}",
+                plugins.finished,
+                plugins.rolled_back,
+                plugins.needs_repair
+            );
+            crate::web::event_bridge::emit_event(
+                &emitter,
+                crate::harness::mcp::model::INSTALLED_CHANGED_EVENT,
+                crate::harness::skills::SkillsInstalledChanged {
+                    item_ids: Vec::new(),
+                    agents: Vec::new(),
+                },
+            );
+            crate::harness::updates::records_changed();
+        }
     }
 }
 

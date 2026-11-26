@@ -26,7 +26,8 @@ expression: detail
         }
       ],
       "timestamp": "[ts]",
-      "completed_at": "[ts]"
+      "completed_at": "[ts]",
+      "agent_message_id": "u1"
     },
     {
       "id": "turn-1",

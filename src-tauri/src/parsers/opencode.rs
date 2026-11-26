@@ -2747,7 +2747,8 @@ fn splice_v2_parts(message: &mut serde_json::Value, parts: Option<Vec<serde_json
 /// notice a background sub-agent's result arrives in: OpenCode delivers that
 /// result to the parent session as a synthetic message tagged
 /// `metadata: { source: "subagent", childID, agent, state }`, its text the
-/// child's answer wrapped in `<subagent sessionID=… state=…>`
+/// child's answer wrapped in `<subagent sessionID=… state=…>`, since 2.4.0 in
+/// `<background-result kind="subagent" sessionID=… state=…>`
 /// (`core/src/session/subagent-completion.ts`, `deliver`).
 fn background_subagent_child(message: &serde_json::Value) -> Option<&str> {
     let metadata = message.get("metadata");
@@ -2763,16 +2764,20 @@ fn background_subagent_child(message: &serde_json::Value) -> Option<&str> {
 /// once with `metadata: { status: "running", shellID }` and only says so
 /// (`core/src/tool/plugin/shell.ts`, `backgroundResult`); an image request
 /// (2.2.2 on) always does, with `metadata.jobID`
-/// (`core/src/tool/plugin/image-generate.ts`).
+/// (`core/src/tool/plugin/image-generate.ts`), and so does a video request
+/// (`generate_video`, 2.4.0 on, `video-generate.ts`). The image tool was
+/// `experimental_image_generate` until 2.4.0 renamed it `generate_image`;
+/// sessions written before keep the old name.
 fn background_job_of_call(tool_name: &str, state: Option<&serde_json::Value>) -> Option<String> {
     let metadata = state.and_then(|s| s.get("metadata"));
     match tool_name {
         "shell" | "bash" if pick_str(metadata, &["status"]) == Some("running") => {
             pick_str(metadata, &["shellID"]).map(|id| format!("shell:{id}"))
         }
-        "experimental_image_generate" => {
+        "experimental_image_generate" | "generate_image" => {
             pick_str(metadata, &["jobID"]).map(|id| format!("image:{id}"))
         }
+        "generate_video" => pick_str(metadata, &["jobID"]).map(|id| format!("video:{id}")),
         _ => None,
     }
 }
@@ -2785,41 +2790,69 @@ fn background_job_of_call(tool_name: &str, state: Option<&serde_json::Value>) ->
 /// "experimental_image_generate", jobID, state, path }`, wrapped in
 /// `<image id=… state=…>` (`core/src/image/notice.ts`). A command the user ran
 /// themselves gets a `shell` notice without a `jobID`, and no tool call to settle.
+///
+/// 2.4.0 renamed the image tool, so its notices say `source: "generate_image"`,
+/// added `generate_video` (`source: "generate_video"`), and wraps every such
+/// notice in one tag, `<background-result kind=… …>`
+/// (`core/src/session/background-result.ts`); the metadata is unchanged.
 fn background_job_notice_key(message: &serde_json::Value) -> Option<String> {
     let metadata = message.get("metadata");
     let job = pick_str(metadata, &["jobID"])?;
     match pick_str(metadata, &["source"])? {
         "shell" => pick_str(metadata, &["shellID"]).map(|id| format!("shell:{id}")),
-        "experimental_image_generate" => Some(format!("image:{job}")),
+        "experimental_image_generate" | "generate_image" => Some(format!("image:{job}")),
+        "generate_video" => Some(format!("video:{job}")),
         _ => None,
     }
 }
 
-/// The text of a background job's notice without the `<shell …>` / `<image …>`
-/// tag around it. The tag is matched whole, as OpenCode writes it, since a
-/// command's `command` attribute is the command as typed, `>` and newlines
-/// included; a notice in any other form is kept as it is.
+/// The text of a background job's notice without the tag around it: through
+/// 2.3.x `<shell …>` / `<image …>`, since 2.4.0 `<background-result kind="shell"
+/// …>` / `kind="image"` / `kind="video"`, with the same attributes after the
+/// kind. The tag is matched whole, as OpenCode writes it, since a command's
+/// `command` attribute is the command as typed, `>` and newlines included; a
+/// notice in any other form is kept as it is.
 fn background_job_notice_text(notice: &serde_json::Value) -> Option<String> {
     let text = pick_str_verbatim(Some(notice), &["text"])?;
     let metadata = notice.get("metadata");
     let job = pick_str(metadata, &["jobID"]).unwrap_or("");
     let state = pick_str(metadata, &["state"]).unwrap_or("");
-    let (open, close) = match pick_str(metadata, &["source"]) {
+    // (2.3.x tag name, 2.4.0 kind, the attributes after the id)
+    let (tag, kind, attributes) = match pick_str(metadata, &["source"]) {
         Some("shell") => {
             let command = pick_str_verbatim(Some(notice), &["description"]).unwrap_or("");
             (
-                format!("<shell id=\"{job}\" state=\"{state}\" command=\"{command}\">\n"),
-                "\n</shell>",
+                "shell",
+                "shell",
+                format!(" state=\"{state}\" command=\"{command}\""),
             )
         }
-        _ => (
-            format!("<image id=\"{job}\" state=\"{state}\">\n"),
-            "\n</image>",
-        ),
+        Some("generate_video") => ("video", "video", format!(" state=\"{state}\"")),
+        _ => ("image", "image", format!(" state=\"{state}\"")),
     };
-    let body = text
-        .strip_prefix(open.as_str())
-        .and_then(|rest| rest.strip_suffix(close))
+    // A shell notice's id is its `jobID` (2.4.0 falls back to the shell id
+    // when there is none, which a keyed notice always has).
+    let id = if job.is_empty() {
+        pick_str(metadata, &["shellID"]).unwrap_or("")
+    } else {
+        job
+    };
+    let wrapped = [
+        (
+            format!("<background-result kind=\"{kind}\" id=\"{id}\"{attributes}>\n"),
+            "\n</background-result>".to_string(),
+        ),
+        (
+            format!("<{tag} id=\"{job}\"{attributes}>\n"),
+            format!("\n</{tag}>"),
+        ),
+    ];
+    let body = wrapped
+        .iter()
+        .find_map(|(open, close)| {
+            text.strip_prefix(open.as_str())
+                .and_then(|rest| rest.strip_suffix(close.as_str()))
+        })
         .unwrap_or(text)
         .trim();
     (!body.is_empty()).then(|| body.to_string())
@@ -3125,20 +3158,37 @@ fn v2_shell_blocks(id: &str, shell: &serde_json::Value) -> Option<Vec<ContentBlo
 
 /// The sub-agent's answer out of a 2.x launch result. A migrated `task` wraps
 /// it in `<task_result>` (see `extract_task_result_content`); 2.x's
-/// `subagent` in `<subagent sessionID="…" state="completed">…</subagent>`.
-/// Anything else, such as a background launch's notice, is returned as-is.
+/// `subagent` in `<subagent sessionID="…" state="completed">…</subagent>`,
+/// and since 2.4.0 in `<background-result kind="subagent" sessionID="…"
+/// state="…" description="…">…</background-result>`
+/// (`core/src/session/background-result.ts`). Anything else, such as a
+/// background launch's notice, is returned as-is.
 pub(crate) fn extract_subagent_result(raw: &str) -> String {
     if raw.contains("<task_result>") {
         return extract_task_result_content(raw);
     }
     let trimmed = raw.trim();
-    if let Some(rest) = trimmed
+    let wrapped = trimmed
         .strip_prefix("<subagent")
         .filter(|rest| rest.starts_with([' ', '>']))
-    {
-        if let Some(open_end) = rest.find('>') {
+        .map(|rest| (rest, "</subagent>"))
+        .or_else(|| {
+            trimmed
+                .strip_prefix("<background-result kind=\"subagent\"")
+                .filter(|rest| rest.starts_with([' ', '>']))
+                .map(|rest| (rest, "</background-result>"))
+        });
+    if let Some((rest, close)) = wrapped {
+        // OpenCode ends the opening tag with `">` and a newline, and the
+        // `description` attribute is the launch's own text, which may hold a
+        // `>`; only a tag without that ending falls back to its first `>`.
+        let open_end = rest
+            .find("\">\n")
+            .map(|at| at + 1)
+            .or_else(|| rest.find('>'));
+        if let Some(open_end) = open_end {
             let body = &rest[open_end + 1..];
-            let body = body.strip_suffix("</subagent>").unwrap_or(body).trim();
+            let body = body.strip_suffix(close).unwrap_or(body).trim();
             if !body.is_empty() {
                 return body.to_string();
             }
@@ -5175,6 +5225,187 @@ mod tests {
         assert_eq!(detail.turns.len(), 2);
     }
 
+    /// OpenCode 2.4.0 renamed the image tool `generate_image`, added
+    /// `generate_video`, and wraps every background notice in
+    /// `<background-result kind=… …>`. The texts and metadata are the ones
+    /// 2.4.1 stored live (ids and paths shortened); the video job's are its
+    /// source's (`core/src/tool/plugin/video-generate.ts`).
+    #[test]
+    fn background_jobs_in_the_2_4_notice_wrapper_report_their_end() {
+        use crate::parsers::AgentParser;
+
+        let t0: i64 = 1_795_494_400_000;
+        let model = serde_json::json!({ "id": "test-model", "providerID": "test" });
+        let tricky = "echo \"x>\" && exit 3";
+        let notice = |source: serde_json::Value, text: String, description: &str| {
+            serde_json::json!({
+                "metadata": source,
+                "time": { "created": t0 + 50 },
+                "text": text,
+                "description": description
+            })
+        };
+        let mut fx = DbFixture::new(&V2_TABLES);
+        fx.v2_session("ses_main", None, Some("Jobs"), t0, t0 + 900);
+        fx.v2_message(
+            "ses_main",
+            "msg_u1",
+            0,
+            "user",
+            t0,
+            serde_json::json!({ "time": { "created": t0 }, "text": "go" }),
+        );
+        fx.v2_message("ses_main", "msg_a1", 1, "assistant", t0 + 10, serde_json::json!({
+            "time": { "created": t0 + 10, "completed": t0 + 20 },
+            "agent": "build",
+            "model": model,
+            "content": [
+                {
+                    "type": "tool",
+                    "id": "call_sh",
+                    "name": "shell",
+                    "state": {
+                        "status": "completed",
+                        "input": { "command": tricky, "background": true },
+                        "content": [{ "type": "text", "text": "Command moved to the background (shell ID: sh_1)." }],
+                        "metadata": { "status": "running", "truncated": false, "shellID": "sh_1" }
+                    }
+                },
+                {
+                    "type": "tool",
+                    "id": "call_img",
+                    "name": "generate_image",
+                    "state": {
+                        "status": "completed",
+                        "input": { "prompt": "a red square" },
+                        "content": [{ "type": "text", "text": "Image job image_1 started in the background with fake/img-model." }],
+                        "metadata": { "path": "/tmp/images/image_1", "model": "fake/img-model", "jobID": "image_1", "truncated": false }
+                    }
+                },
+                {
+                    "type": "tool",
+                    "id": "call_vid",
+                    "name": "generate_video",
+                    "state": {
+                        "status": "completed",
+                        "input": { "prompt": "a red square, spinning" },
+                        "content": [{ "type": "text", "text": "Video job video_1 started in the background with fake/vid-model." }],
+                        "metadata": { "path": "/tmp/videos/video_1", "model": "fake/vid-model", "jobID": "video_1", "truncated": false }
+                    }
+                }
+            ]
+        }));
+        fx.v2_message(
+            "ses_main",
+            "msg_n1",
+            2,
+            "synthetic",
+            t0 + 50,
+            notice(
+                serde_json::json!({ "source": "shell", "shellID": "sh_1", "jobID": "sh_1", "state": "completed", "truncated": false, "exit": 3 }),
+                format!("<background-result kind=\"shell\" id=\"sh_1\" state=\"completed\" command=\"{tricky}\">\noops\n\nExit code: 3\n</background-result>"),
+                tricky,
+            ),
+        );
+        fx.v2_message(
+            "ses_main",
+            "msg_n2",
+            3,
+            "synthetic",
+            t0 + 51,
+            notice(
+                serde_json::json!({ "source": "generate_image", "jobID": "image_1", "state": "error", "path": "/tmp/images/image_1" }),
+                "<background-result kind=\"image\" id=\"image_1\" state=\"error\">\nImage request failed for /tmp/images/image_1: fake/img-model has no image API opencode can call\n</background-result>".to_string(),
+                "Image generation",
+            ),
+        );
+        fx.v2_message(
+            "ses_main",
+            "msg_n3",
+            4,
+            "synthetic",
+            t0 + 52,
+            notice(
+                serde_json::json!({ "source": "generate_video", "jobID": "video_1", "state": "completed", "path": "/tmp/videos/video_1" }),
+                "<background-result kind=\"video\" id=\"video_1\" state=\"completed\">\nSaved video: /tmp/videos/video_1.mp4\n</background-result>".to_string(),
+                "Video generation",
+            ),
+        );
+        let (_dir, parser) = fx.build();
+
+        let detail = parser.get_conversation("ses_main").expect("detail");
+        let result = |id: &str| {
+            detail
+                .turns
+                .iter()
+                .flat_map(|t| &t.blocks)
+                .find_map(|block| match block {
+                    ContentBlock::ToolResult {
+                        tool_use_id: Some(use_id),
+                        output_preview,
+                        is_error,
+                        exit_code,
+                        ..
+                    } if use_id == id => Some((
+                        output_preview.clone().unwrap_or_default(),
+                        *is_error,
+                        *exit_code,
+                    )),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no result for {id}"))
+        };
+        assert_eq!(
+            result("call_sh"),
+            ("oops\n\nExit code: 3".to_string(), false, Some(3))
+        );
+        assert_eq!(
+            result("call_img"),
+            (
+                "Image request failed for /tmp/images/image_1: fake/img-model has no image API opencode can call".to_string(),
+                true,
+                None
+            )
+        );
+        assert_eq!(
+            result("call_vid"),
+            (
+                "Saved video: /tmp/videos/video_1.mp4".to_string(),
+                false,
+                None
+            )
+        );
+        assert_eq!(detail.turns.len(), 2);
+    }
+
+    /// A sub-agent's report comes out of 2.4.0's `<background-result
+    /// kind="subagent">` as out of 2.x's `<subagent>`, even when the launch's
+    /// description (an attribute of the tag) holds a `>`.
+    #[test]
+    fn sub_agent_reports_come_out_of_either_wrapper() {
+        assert_eq!(
+            super::extract_subagent_result(
+                "<background-result kind=\"subagent\" sessionID=\"ses_1\" state=\"completed\" description=\"Probe child task\">\nChild report: hello.txt read.\n</background-result>"
+            ),
+            "Child report: hello.txt read."
+        );
+        assert_eq!(
+            super::extract_subagent_result(
+                "<background-result kind=\"subagent\" sessionID=\"ses_1\" state=\"completed\" description=\"a -> b\">\nmoved\n</background-result>"
+            ),
+            "moved"
+        );
+        assert_eq!(
+            super::extract_subagent_result(
+                "<subagent sessionID=\"ses_1\" state=\"completed\" description=\"a -> b\">\nmoved\n</subagent>"
+            ),
+            "moved"
+        );
+        // Another kind's notice is not a report.
+        let shell = "<background-result kind=\"shell\" id=\"sh_1\" state=\"completed\" command=\"ls\">\nx\n</background-result>";
+        assert_eq!(super::extract_subagent_result(shell), shell);
+    }
+
     /// Only a background job's notice is keyed: a command the user ran gets a
     /// `shell` notice without a `jobID`, and a sub-agent's has its own reader.
     #[test]
@@ -5189,6 +5420,14 @@ mod tests {
         assert_eq!(
             key(serde_json::json!({ "source": "experimental_image_generate", "jobID": "image_1" })),
             Some("image:image_1".to_string())
+        );
+        assert_eq!(
+            key(serde_json::json!({ "source": "generate_image", "jobID": "image_1" })),
+            Some("image:image_1".to_string())
+        );
+        assert_eq!(
+            key(serde_json::json!({ "source": "generate_video", "jobID": "video_1" })),
+            Some("video:video_1".to_string())
         );
         assert_eq!(
             key(serde_json::json!({ "source": "shell", "shellID": "sh_u" })),

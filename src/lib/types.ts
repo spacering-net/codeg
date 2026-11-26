@@ -341,9 +341,8 @@ export interface MessageTurn {
    * nothing an agent could look up.
    *
    * Present only where the turn can be a fork point ("fork from here"), which
-   * today means Claude and DeepSeek assistant turns. Its absence does NOT mean
-   * the turn cannot be forked at: codex forks by content fingerprint instead,
-   * and DeepSeek falls back to one — all resolved entirely in the backend, so
+   * includes Codex, Claude and DeepSeek assistant turns. A transcript without
+   * an id can still fork by a content fingerprint, resolved in the backend, so
    * never gate the fork affordance on this. */
   agent_message_id?: string | null
   /** CLIENT-ONLY, never on the wire. The id the PARSER gave this turn.
@@ -615,6 +614,9 @@ export interface DbConversationSummary {
    *  row. Prefer the assistant store's current name when it knows the id. */
   assistant_id?: number
   assistant_name?: string
+  /** The owner's assistant (`uid`) a delegation child or a piece of its
+   *  work ran as. */
+  bot_uid?: string
   /** Where the conversation was started from, when not the window: `"cli"`
    *  for a `codeg-cli` run. Absent on every other row; another value (from a
    *  newer build) is shown as nothing. */
@@ -1097,12 +1099,27 @@ export type ConversationStatus =
 
 /** Mirrors Rust `ConversationKind` (src-tauri/src/db/entities/conversation.rs).
  *  `loop` rows belong to the Loop Engineering workbench and never appear in
- *  the sidebar list; `delegate` rows nest under their parent's tool-call view. */
-export type ConversationKind = "regular" | "chat" | "loop" | "delegate"
+ *  the sidebar list; `delegate` rows nest under their parent's tool-call view;
+ *  `personal` rows are the personal agent's own session segments, shown on its
+ *  page only; `ask` rows ("ask about this selection") nest under the
+ *  conversation they were asked from (`parent_id`) and are listed in its
+ *  Session Details; `check` rows — the personal agent checking a message of a
+ *  conversation ("is this right?") — nest and are listed the same way under
+ *  the conversation the message is in. */
+export type ConversationKind =
+  | "regular"
+  | "chat"
+  | "loop"
+  | "delegate"
+  | "personal"
+  | "ask"
+  | "check"
 
 /** Mirrors Rust `FolderKind` (src-tauri/src/db/entities/folder.rs).
- *  `loop_worktree` is reserved for M2+ — add it here when the variant lands. */
-export type FolderKind = "regular" | "chat"
+ *  `personal` is the personal agent's working directory: hidden everywhere,
+ *  like `chat`. `loop_worktree` is reserved for M2+ — add it here when the
+ *  variant lands. */
+export type FolderKind = "regular" | "chat" | "personal"
 
 export const STATUS_ORDER: ConversationStatus[] = [
   "in_progress",
@@ -1613,6 +1630,36 @@ export type PermissionAnswerOrigin =
   | { kind: "user" }
   | { kind: "chat_channel" }
   | { kind: "cli_policy"; run_id: string }
+  /** An assistant answering a plan approval for the owner (7.3.1). */
+  | { kind: "assistant"; bot_id: number }
+  /** The owner answering such a plan approval on an assistant's page. */
+  | { kind: "assistant_page" }
+
+/** Who answered a question or a plan approval (Rust `AnswerOrigin`). */
+export type AnswerOrigin =
+  | { kind: "user" }
+  | { kind: "assistant_page" }
+  | { kind: "assistant"; bot_id: number }
+  | { kind: "chat_channel" }
+  | { kind: "cli_policy" }
+
+/** How a question or plan approval settled: the answer that took effect and
+ *  whose it was — or, with neither, that it was withdrawn (Rust
+ *  `AnswerResolution`). */
+export interface AnswerResolution {
+  answer?: unknown
+  origin?: AnswerOrigin
+  at: string
+}
+
+/** What the assistant that dispatched a session answers there for the owner
+ *  (Rust `AskDelegate`): a window holds back its notification of those until
+ *  one is forwarded. */
+export interface AskDelegate {
+  bot_id: number
+  questions: boolean
+  plans: boolean
+}
 
 /**
  * One answered permission request, as a record about its tool call (Rust
@@ -1714,6 +1761,21 @@ export interface SessionConfigSelectOptionInfo {
   value: string
   name: string
   description?: string | null
+  /** What the agent says about this entry's model's reasoning efforts — only
+   *  on an entry of the model option, and only where the agent names them
+   *  (claude-agent-acp 0.110.0+, codex-acp 2.10.0+). Absent otherwise. */
+  reasoning_efforts?: ModelReasoningEffortsInfo | null
+}
+
+/** One model's reasoning efforts, from its entry of the `model` option
+ *  (JetBrains AIR `reasoningEfforts`): known before that model is current,
+ *  where the effort option lists only the current model's. */
+export interface ModelReasoningEffortsInfo {
+  /** Effort ids, in the order the effort option lists them once the model is
+   *  current. Never empty. */
+  values: string[]
+  /** The one the agent recommends — one of `values` — when it names one. */
+  recommended?: string | null
 }
 
 export interface SessionConfigSelectGroupInfo {
@@ -1882,6 +1944,2273 @@ export type AssistantChange =
 
 export const ASSISTANT_CHANGED_EVENT = "assistant://changed"
 
+// ─── Personal agent ────────────────────────────────────────────────────────
+// Mirrors src-tauri/src/models/personal_agent.rs (snake_case wire form). One
+// long-lived assistant per data dir: its own page, one timeline across the
+// agent sessions ("segments") it runs on, and work dispatched to the role
+// assistants above.
+
+export interface PersonalAgentSettings {
+  /** 0 turns auto-compaction off. */
+  auto_compact_percent: number
+  compact_command: string | null
+  /** The agent type the command was written for. */
+  compact_command_agent: string | null
+  handoff_budget_chars: number
+  /** 0 = no limit. */
+  dispatch_concurrency: number
+  skill_enabled: boolean
+  /** The UI language the owner last saved from — kept by the backend (the
+   *  dialog sends its `locale` beside the settings), for the template files
+   *  of a working directory made anew. */
+  locale?: AppLocale | null
+}
+
+/** The things codeg draws an assistant as (10.6): the ring — the
+ *  primary's — and twelve things a coder works with. */
+export type BotShape =
+  | "ring"
+  | "terminal"
+  | "braces"
+  | "shield"
+  | "chip"
+  | "bug"
+  | "cursor"
+  | "gear"
+  | "file"
+  | "magnifier"
+  | "package"
+  | "rocket"
+  | "mug"
+
+export type BotColor =
+  | "black"
+  | "brown"
+  | "red"
+  | "orange"
+  | "yellow"
+  | "green"
+  | "teal"
+  | "blue"
+  | "purple"
+  | "magenta"
+  | "gray"
+
+/** A text avatar's colour on an assistant: one of the faces' colours (what
+ *  the face editor offers), or one of the ten the collaboration settings'
+ *  assistants had, which the avatars made before carry. */
+export type AvatarTextColor = BotColor | AssistantAvatarColor
+
+/** An assistant's avatar: a face (shape and colour), or one of the avatars
+ *  the collaboration settings' assistants had, which the assistants made
+ *  before 1.6 carry — a monogram or an emoji now in a face's colour. */
+export type BotAvatar =
+  | { kind: "face"; shape: BotShape; color: BotColor }
+  | { kind: "monogram"; color: AvatarTextColor }
+  | { kind: "emoji"; emoji: string; color: AvatarTextColor }
+  | { kind: "image"; data_url: string }
+
+/** Any avatar but a face: what `AssistantAvatar` draws. */
+export type DiscAvatar = Exclude<BotAvatar, { kind: "face" }>
+
+export interface PersonalAgentInfo {
+  id: number
+  /** Empty: use the localized default name. */
+  name: string
+  avatar: BotAvatar
+  /** Its brain; `null` (all three) for an assistant converted on upgrade
+   *  before there was a primary to copy one from: it can be @-mentioned,
+   *  not talked to (D3). */
+  agent_type: AgentType | null
+  agent_options: AgentDelegationDefaults | null
+  label_snapshot: AssistantLabelSnapshot | null
+  /** The agent its work runs on, every option picked — its own (D1);
+   *  `null` when what is stored names no agent codeg knows. */
+  work: AssistantAgentConfig | null
+  /** What every session its work runs in is told first; "" for none. */
+  work_instructions: string
+  settings: PersonalAgentSettings
+  workdir: string
+  workdir_custom: boolean
+  folder_id: number | null
+  revision: number
+  created_at: string
+  updated_at: string
+  /** The primary assistant, or a worker. */
+  kind: PersonalAgentBotKind
+  uid: string | null
+  /** The collaboration settings' assistant it was converted from. */
+  legacy_assistant_id: number | null
+}
+
+export type PersonalAgentBotKind = "primary" | "worker"
+
+export interface PersonalAgentDraft {
+  name?: string
+  avatar?: BotAvatar
+  agent_config?: AssistantAgentConfig
+  settings?: PersonalAgentSettings
+  locale?: string
+  /** The agent its work runs on (D1). The primary's first save copies the
+   *  brain unless told otherwise; later saves send it only to change it. */
+  work?: WorkChoice
+  /** Its work's standing instructions; "" clears them. */
+  work_instructions?: string
+}
+
+/** The agent an assistant's work runs on, as a page picks it (D1): a copy
+ *  of the brain as it is saved — every option the same, its own from then
+ *  on — or one picked apart (Rust `WorkChoice`). */
+export type WorkChoice =
+  | { kind: "same_as_brain" }
+  | { kind: "config"; config: AssistantAgentConfig }
+
+/** Longest standing instructions for an assistant's work, in characters
+ *  (Rust `MAX_WORK_INSTRUCTIONS_CHARS`). */
+export const MAX_WORK_INSTRUCTIONS_CHARS = 20_000
+
+export type SegmentReason =
+  | "first"
+  | "switch"
+  | "option_restart"
+  | "workdir"
+  | "manual"
+  | "recovery"
+  | "overflow"
+
+export type TimelineKind =
+  | "owner"
+  | "reply"
+  | "question"
+  | "permission"
+  | "dispatch"
+  | "result"
+  | "marker"
+  /** A native card codeg wrote itself — a proposal waiting for the owner, a
+   *  step whose outcome it cannot tell. */
+  | "notice"
+  /** A line codeg writes for a message between assistants: one sent ("sent a
+   *  message to …") or one received ("message from …"). */
+  | "exchange"
+
+export type OwnerStatus = "queued" | "delivered" | "answered" | "interrupted"
+
+export interface TimelineRow {
+  id: number
+  segment_id: number | null
+  batch_id: number | null
+  kind: TimelineKind
+  status: OwnerStatus | null
+  body: string
+  /** Shaped per kind; markers carry `marker`, replies `state`. */
+  data: Record<string, unknown> | null
+  dispatch_id: number | null
+  ref_id: string | null
+  /** The row this one quotes. */
+  reply_to: number | null
+  /** When the assistant started on it (owner messages, result cards);
+   *  `null` is unread. */
+  read_at: string | null
+  /** The event a result card stands for. */
+  event_id: number | null
+  /** When the owner saw it (an assistant reply once it settled, a result
+   *  card); `null` is new to the owner. */
+  seen_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** What the owner did with one button of a card in an assistant's reply
+ *  (`data.card_acts` on the reply row, by element id — 9.2): it survives a
+ *  reload and shows in every window. */
+export interface CardAct {
+  /** `pa.reply` or `pa.item`. */
+  action: string
+  label?: string
+  /** For `pa.item`: `done`, `drop` or `snooze`. */
+  op?: string
+  at: string
+}
+
+/** The button of a card a message of the owner's came from (`card` on
+ *  `personal_agent_send`). */
+export interface CardClick {
+  element: string
+  label: string
+}
+
+export interface TimelinePage {
+  rows: TimelineRow[]
+  has_older: boolean
+  /** A range read (`sinceId`) spans more rows than it returns: none came. */
+  too_far: boolean
+}
+
+/** Where a read of changed rows goes on from. */
+export interface TimelineCursor {
+  updated_at: string
+  id: number
+}
+
+export interface TimelineChanges {
+  rows: TimelineRow[]
+  next: TimelineCursor | null
+}
+
+/** The step a reply is on (mirrors `acp::reply_turn::ReplyStep`). */
+export type ReplyStep =
+  | { t: "text"; n: number; text: string }
+  | {
+      t: "step"
+      n: number
+      id?: string
+      /** ACP tool kind, or `think` / `plan` / `compact` / `question`. */
+      kind: string
+      title: string
+      status?: string
+      awaiting?: boolean
+    }
+
+/** The reply in flight, as a snapshot carries it. */
+export interface LiveReply {
+  row_id: number
+  current: ReplyStep | null
+}
+
+export interface SegmentInfo {
+  id: number
+  seq: number
+  agent_type: AgentType
+  label_snapshot: AssistantLabelSnapshot
+  conversation_id: number | null
+  agent_session_id: string | null
+  start_reason: SegmentReason
+  end_reason: SegmentReason | null
+  pending_reason: SegmentReason | null
+  started_at: string
+  ended_at: string | null
+  handoff_size: number | null
+  handoff_trimmed: boolean
+  compactions_auto: number
+  compactions_manual: number
+  compactions_agent: number
+  auto_compact_paused: boolean
+}
+
+export type DispatchMode = "task" | "chat" | "session"
+
+export type DispatchState =
+  | "queued"
+  | "running"
+  | "waiting_input"
+  | "review"
+  | "completed"
+  | "failed"
+  | "canceled"
+  | "interrupted"
+  | "handed_over"
+
+/** What a dispatch's work runs on — its assistant's work agent, options and
+ *  standing instructions — frozen when it was handed out (Rust
+ *  `DispatchWorkSnapshot`). */
+export interface DispatchWorkSnapshot {
+  /** Its assistant's name then. */
+  name: string
+  /** Its assistant's uid: whose work it is, after a handover too. */
+  bot_uid?: string
+  agent_type: AgentType
+  agent_options: AgentDelegationDefaults
+  label_snapshot: AssistantLabelSnapshot | null
+  instructions: string
+}
+
+/** An assistant as a line or a card names it. */
+export interface BotFace {
+  id: number
+  name: string
+  avatar: BotAvatar | null
+  kind: "primary" | "worker"
+}
+
+export type BotMessageState =
+  | "queued"
+  | "delivered"
+  | "replied"
+  | "closed"
+  | "stopped"
+  | "looped"
+  | "canceled"
+
+/** One message of a thread between assistants. */
+export interface ThreadMessage {
+  id: number
+  from_bot_id: number
+  to_bot_id: number
+  body: string
+  reply_to: number | null
+  wants_reply: boolean
+  state: BotMessageState
+  created_at: string
+}
+
+/** A dispatch made on a thread. */
+export interface ThreadDispatch {
+  id: number
+  bot_id: number | null
+  title: string
+  mode: DispatchMode
+  state: DispatchState
+  work_task_id: number | null
+  conversation_id: number | null
+  /** What opens it from either end of the exchange: the folder its
+   *  conversation sits in, and the agent that reads it. */
+  conversation_folder_id: number | null
+  agent_type: AgentType
+  created_at: string
+}
+
+/** A thread between assistants: its messages, the assistants on it, and the
+ *  work handed out on it. */
+export interface ThreadView {
+  id: number
+  state: "open" | "stopped" | "looped"
+  messages: ThreadMessage[]
+  bots: BotFace[]
+  dispatches: ThreadDispatch[]
+}
+
+export interface DispatchInfo {
+  id: number
+  mode: DispatchMode
+  work: DispatchWorkSnapshot
+  folder_id: number | null
+  folder_name: string | null
+  deliverable: string | null
+  title: string
+  prompt: string
+  work_task_id: number | null
+  conversation_id: number | null
+  /** The folder the conversation sits in (a chat dispatch's hidden one). */
+  conversation_folder_id: number | null
+  /** The connection a chat or session dispatch runs on while it does. */
+  connection_id: string | null
+  state: DispatchState
+  result_excerpt: string | null
+  error: string | null
+  on_done: string | null
+  turns: number
+  created_at: string
+  updated_at: string
+  finished_at: string | null
+  /** Where it stands on the PR ladder (8.5). */
+  ladder: Ladder
+  /** The kanban task behind a task dispatch, while it exists. */
+  task: TaskFacts | null
+  /** How many of its work's questions and plan approvals its assistant
+   *  answered for the owner (7.3.1). */
+  answered_for_you: number
+  /** What done looks like, as its assistant wrote it (7.5). */
+  done_when?: string | null
+  /** Its latest round of acceptance, when it has one (7.5). */
+  acceptance?: AcceptanceInfo | null
+  /** For a check codeg sent out: the dispatch it checks, and which round. */
+  check_for?: number | null
+  check_round?: number | null
+  /** The routine whose run handed it out (6.9). */
+  routine_id?: number | null
+}
+
+/** Where a round of acceptance stands (7.5). */
+export type AcceptanceState =
+  | "checking"
+  | "deciding"
+  | "asked"
+  | "accepted"
+  | "revised"
+  | "stale"
+  | "void"
+  | "changed"
+
+/** What the acceptance check found. */
+export type CheckVerdict = "pass" | "fail" | "unverified"
+
+/** Who concluded a round. */
+export type AcceptanceDecidedBy = "assistant" | "fallback" | "owner"
+
+/** A round of acceptance, as a dispatch card shows it (7.5). */
+export interface AcceptanceInfo {
+  round_id: number
+  round: number
+  state: AcceptanceState
+  verdict: CheckVerdict | null
+  unchecked: boolean
+  decided_by: AcceptanceDecidedBy | null
+  check_dispatch_id: number | null
+  /** It is about the task's current run. */
+  current: boolean
+}
+
+/** An acceptance card's `data` (Rust `acceptance_payload`). */
+export interface AcceptanceCardData {
+  notice: "acceptance"
+  /** open = the owner's call; changed = checked again on a click; stale =
+   *  no longer applies; acted = concluded. */
+  state: "open" | "acted" | "changed" | "stale"
+  /** A later round replaced this one (the work was checked again). */
+  superseded?: boolean
+  round_id: number
+  round: number
+  max_rounds: number
+  /** The round's own state. */
+  phase: AcceptanceState
+  dispatch_id: number
+  title: string
+  work_task_id: number | null
+  folder_id: number | null
+  /** The agent the work ran on. */
+  work_agent: AgentType | null
+  checker_agent: AgentType | null
+  check_dispatch_id: number | null
+  verdict: CheckVerdict | null
+  evidence: string | null
+  unchecked: boolean
+  decision: "accept" | "revise" | "ask_owner" | null
+  decided_by: AcceptanceDecidedBy | null
+  reason: string | null
+  message: string | null
+  question: string | null
+  history: {
+    round: number
+    state: AcceptanceState
+    verdict: CheckVerdict | null
+    message: string | null
+  }[]
+  delivered_head: string | null
+  merge_commit: string | null
+  version_guaranteed: boolean | null
+  pr_url: string | null
+}
+
+/** What an assistant does on a forge (7.4). */
+export type ForgeAction = "comment" | "close" | "merge"
+
+/** Where a forge action's card stands: waiting for the owner's approval,
+ *  running, done, turned down by codeg's rules for a merge, refused by the
+ *  forge, in doubt, not run (its premises changed on approval), declined. */
+export type ForgeCardState =
+  | "open"
+  | "acting"
+  | "done"
+  | "refused"
+  | "failed"
+  | "unknown"
+  | "not_run"
+  | "dismissed"
+
+/** Why a merge was not made, by codeg's rules of the merged version. */
+export type ForgeRefusalCode =
+  | "merged"
+  | "closed"
+  | "draft"
+  | "after_acceptance"
+  | "not_accepted"
+  | "not_delivered"
+  | "checks_unreadable"
+  | "checks_partial"
+  | "checks_running"
+  | "checks_failing"
+
+/** The item a forge action names, resolved once. */
+export interface ForgeCardTarget {
+  /** The forge's display name: GitHub, GitLab, Gitea, CNB. */
+  provider: string
+  host: string
+  repo: string
+  kind: "issue" | "pr"
+  number: number
+  url: string | null
+  account: string | null
+  task_id: number | null
+}
+
+/** A forge action card's `data` (Rust `forge_acts::raise_forge_card`). */
+export interface ForgeCardData {
+  notice: "forge"
+  action: ForgeAction
+  state: ForgeCardState
+  /** direct = done at once; confirm = the owner asked to approve such
+   *  actions; suggest = the assistant's idea; cnb = a merge there. */
+  why: "direct" | "confirm" | "suggest" | "cnb"
+  target: ForgeCardTarget
+  /** A comment's full text, as the assistant wrote it. */
+  body: string | null
+  method: "merge" | "squash" | "rebase" | null
+  /** A merge: the head it merges, its checks, what vouches for it. */
+  head: string | null
+  checks: "green" | "none" | "unknown" | null
+  version: "accepted" | "green" | null
+  /** The forge holds the head with the merge (false on CNB). */
+  guaranteed: boolean
+  code?: ForgeRefusalCode | null
+  reason: string | null
+  result?: {
+    url?: string | null
+    merge_commit?: string | null
+    comment_id?: string | null
+  } | null
+  error?: string | null
+}
+
+/** What a watched pull request came to (Rust `watch::PrEvent`). */
+export type PrEvent =
+  | "checks_failed"
+  | "checks_passed"
+  | "conflict"
+  | "mergeable"
+  | "no_conflict"
+  | "merged"
+  | "closed"
+  /** Review feedback the owner is asked to hand to the task (7.4, phase 3). */
+  | "feedback"
+
+/** Why codeg started a round on a watched pull request (7.4, phase 3). */
+export type PrFixCause = "checks" | "conflict" | "feedback"
+
+/** One round codeg ran on a pull request, as its "fixed as often as
+ *  allowed" card lists it. */
+export interface PrFixRound {
+  n: number
+  cause: PrFixCause
+  how: "followup" | "task"
+  head: string
+  dispatch_id: number
+  task_id: number | null
+  /** What its task said it did. */
+  summary: string | null
+  files: number | null
+  additions: number | null
+  deletions: number | null
+}
+
+/** What codeg does about failed checks or a conflict, on its PR card:
+ *  starting / started a round (`n`, `how`, `dispatch_id`), could not
+ *  (`failed`: `error`; `none`: `why`), one under way (`busy`), asking the
+ *  owner (`ask`), only telling (`told`), fixing nothing (`off`), or fixed as
+ *  often as allowed (`gave_up`, with the `rounds`). */
+export interface PrFixState {
+  state:
+    | "starting"
+    | "started"
+    | "failed"
+    | "none"
+    | "busy"
+    | "ask"
+    | "told"
+    | "off"
+    | "gave_up"
+  cause: PrFixCause
+  n?: number
+  how?: "followup" | "task"
+  dispatch_id?: number
+  error?: string
+  why?: string
+  rounds?: PrFixRound[]
+}
+
+/** A piece of review feedback on a feedback card. */
+export interface PrFeedbackShown {
+  id: string
+  kind: "review" | "line" | "comment"
+  verdict: "approved" | "changes_requested" | "commented" | "dismissed" | null
+  author: string | null
+  bot: boolean
+  /** Its author can write to the repository. */
+  writer: boolean
+  path: string | null
+  line: number | null
+  at: string | null
+  url: string | null
+  /** The beginning of what it says. */
+  text: string
+}
+
+/** A round on a watched pull request, as its dispatch card carries it. */
+export interface PrFixMark {
+  watch_id: number
+  cause: PrFixCause
+  n: number
+  head: string
+  how: "followup" | "task"
+  label: string
+  origin_dispatch_id: number | null
+  delivered: boolean
+}
+
+/** One failing check, as a PR card names it. */
+export interface PrCheckLine {
+  name: string
+  url?: string | null
+  summary?: string | null
+}
+
+/** A head's checks, counted (Rust `watch::CheckTally`). */
+export interface PrCheckTally {
+  available: boolean
+  partial: boolean
+  total: number
+  passed: number
+  failed: number
+  pending: number
+  neutral: number
+  failing: PrCheckLine[]
+}
+
+/** The card of what a watched pull request came to (7.4). */
+export interface PrCardData {
+  notice: "pr"
+  event: PrEvent
+  /** open; later: a newer card followed; stopped: no longer watched;
+   *  dismissed; acted: a feedback card answered. */
+  state: "open" | "later" | "stopped" | "dismissed" | "acted"
+  watch_id: number
+  /** `owner/repo#12` (`!12` on GitLab). */
+  target: string
+  provider: string
+  number: number
+  url: string | null
+  title: string | null
+  /** The head the checks are of, shortened. */
+  head: string
+  checks: PrCheckTally
+  merge_state: string | null
+  task_id: number | null
+  dispatch_id: number | null
+  /** What codeg does about it by itself (7.4, phase 3). */
+  fix?: PrFixState
+  /** A feedback card: what was written. */
+  feedback?: PrFeedbackShown[]
+  /** A feedback card answered: the round it went to, or that it waits. */
+  forwarded?: { dispatch_id?: number; waiting?: boolean }
+  /** Ready to merge, but codeg did not merge it by itself: its rules said
+   *  no (`refused`), or the forge could not be read (`unread`), and why. */
+  merge?: { state: "refused" | "unread"; why: string }
+}
+
+/** One setting an assistant changed from the conversation (Rust
+ *  `prefs::Applied`): the options codeg filled in for a brain or an
+ *  agent, and who picked each. */
+export interface ChangedItem {
+  key: string
+  from: unknown
+  to: unknown
+  picked?: PickedOption[] | null
+}
+
+/** A plan answer on an ask card: send it back (`revise`) with feedback. */
+export type AskPlanDecision = "approve" | "revise" | "abandon"
+
+/** What the owner's answer on an ask card came to (7.3.1). */
+export interface AskAnswerOutcome {
+  state: "answered" | "already_answered" | "withdrawn" | "submitted"
+  text: string
+}
+
+/** Who answered an ask, as its card says. */
+export type AskAnsweredBy =
+  | { kind: "assistant"; bot_id: number; name?: string | null }
+  | { kind: "owner"; where?: "session" | "page" | null }
+  | { kind: "channel" }
+  | { kind: "policy" }
+
+/** A question or plan approval of a piece of handed-out work, answered by
+ *  the assistant that dispatched it or forwarded to the owner: an ask
+ *  card's `data` (Rust `AskCard`). */
+export interface AskCardData {
+  notice: "ask"
+  ask_id: number
+  bot_id: number
+  dispatch_id: number
+  title: string
+  agent_type: AgentType | null
+  mode: DispatchMode | null
+  folder_id: number | null
+  conversation_id: number | null
+  conversation_folder_id: number | null
+  work_task_id: number | null
+  request: "question" | "plan" | "plan_permission"
+  request_id: string
+  questions: QuestionSpec[]
+  plan: string | null
+  plan_actions: string[]
+  state: "asking" | "forwarded" | "submitting" | "answered" | "withdrawn"
+  forward_reason:
+    | "assistant"
+    | "settings"
+    | "secret"
+    | "no_brain"
+    | "turn_ended"
+    | "turn_failed"
+    | "timeout"
+    | "handed_over"
+    | null
+  suggestion: string | null
+  reason: string | null
+  answered_by: AskAnsweredBy | null
+  answer: unknown
+  answered_at: string | null
+  asked_at: string | null
+  forwarded_at: string | null
+  mirror_of: {
+    bot_id: number
+    row_id: number | null
+    ask_id: number
+    name?: string | null
+  } | null
+}
+
+/** Where a conversation opens: its project and the agent that reads it. */
+export interface ConversationTarget {
+  conversation_id: number
+  folder_id: number
+  agent_type: AgentType
+  title: string | null
+}
+
+/** A rung of the PR ladder (8.5), as codeg reads it from the dispatch and its
+ *  kanban task. Code-changing work is finished at `merged`. */
+export type Ladder =
+  | "working"
+  | "waiting_you"
+  | "checking"
+  | "mergeable"
+  | "merging"
+  | "pr_open"
+  /** A watched pull request (7.4): its head's checks running, failed; a
+   *  conflict; closed without merging. */
+  | "waiting_checks"
+  | "checks_failed"
+  | "stuck"
+  | "pr_closed"
+  | "merged"
+  | "done"
+  | "failed"
+  | "paused"
+  | "canceled"
+  | "handed_over"
+
+/** Where a watched pull request stands (Rust `watch::Phase`). */
+export type PrPhase =
+  | "waiting_checks"
+  | "checks_failed"
+  | "conflict"
+  | "mergeable"
+  | "no_conflict"
+  | "open"
+  | "merged"
+  | "closed"
+
+/** A watched pull request as the task card shows it (7.4, 8.5). */
+export interface PrFacts {
+  watch_id: number
+  phase: PrPhase | null
+  /** Its head's checks: passed, failed (that may not fail), running, of
+   *  how many; `checks_known` false where the forge shows none (CNB). */
+  passed: number
+  failed: number
+  pending: number
+  total: number
+  checks_known: boolean
+  head: string | null
+  merge_state: string | null
+  last_read_at: string | null
+  /** What was last read may be out of date (read long ago, or held back
+   *  by a rate limit or a failing forge). */
+  stale: boolean
+  watching: boolean
+}
+
+/** The kanban task behind a task dispatch, as its card shows it. */
+export interface TaskFacts {
+  task_id: number
+  status: WorkTaskStatus
+  /** The project it belongs to. */
+  folder_id: number
+  branch: string | null
+  base_branch: string | null
+  files_changed: number | null
+  additions: number | null
+  deletions: number | null
+  /** The pull request its latest delivery reached. */
+  pr_url: string | null
+  pr_number: number | null
+  completion_kind: "merged" | "delivered_pr" | "accepted_without_merge" | null
+  conversation_id: number | null
+  /** Its live round's connection, while it has one. */
+  connection_id: string | null
+  started_at: string | null
+  finished_at: string | null
+  /** Its pull request, as the watch last read it. */
+  pr: PrFacts | null
+  /** The board's next step for it in review, as "today" words it (A4):
+   *  what its work's head offers. Absent where it was not read. */
+  next?: TodayReason | null
+}
+
+export type ItemKind =
+  | "dispatch"
+  | "reminder"
+  | "followup"
+  | "question"
+  /** Waiting for another assistant's answer to a message (1.4). */
+  | "message"
+  | "when_mentioned"
+export type ItemStatus = "open" | "waiting" | "done" | "dropped"
+export type WaitsFor = "owner" | "agent" | "time" | "external"
+
+/** A day of the week, as a repeat rule names it. */
+export type ItemWeekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun"
+
+/** How a matter with a due time comes back (6.1). */
+export interface ItemRepeat {
+  every: "daily" | "weekdays" | "weekly" | "monthly"
+  /** `weekly`: the days it comes on. */
+  days?: ItemWeekday[]
+  /** `monthly`: the day of the month, 1–31 (past a month's end, its last
+   *  day). */
+  day?: number
+  /** `HH:MM`, the owner's local time. */
+  at: string
+  /** `YYYY-MM-DD`, the last day it comes on (inclusive). */
+  until?: string | null
+}
+
+/** What happens when a matter comes due: a reminder card for the owner, or
+ *  the assistant woken to do it. */
+export type ItemAtDue = "notify" | "act"
+
+/** What the assistant said it would do when the matter comes due. */
+export interface ItemActSpec {
+  what: string
+  dispatch?: Record<string, unknown> | null
+}
+
+export interface ItemInfo {
+  id: number
+  kind: ItemKind
+  dispatch_id: number | null
+  status: ItemStatus
+  waits_for: WaitsFor | null
+  summary: string
+  on_done: string | null
+  origin_timeline_id: number | null
+  created_at: string
+  updated_at: string
+  dispatch_state: DispatchState | null
+  /** UTC; the current occurrence's due time. */
+  due_at: string | null
+  repeat: ItemRepeat | null
+  at_due: ItemAtDue | null
+  act_spec: ItemActSpec | null
+  /** When the current occurrence fired: at or after `due_at`, it did. */
+  fired_at: string | null
+  /** A `when_mentioned` matter's keywords and how it comes up (6.8). */
+  mention?: ItemMention | null
+  /** When it was settled, by whom and how: none while open, and for one
+   *  settled before this was kept. */
+  closed_at?: string | null
+  closed_by?: ItemClosedBy | null
+  closed_how?: ItemClosedHow | null
+  /** A question's: the owner's message answering it, and how it stands
+   *  (`linked`: the assistant has it; `interrupted`: its turn did not
+   *  finish). */
+  answer_row_id?: number | null
+  answer_state?: "linked" | "interrupted" | null
+  /** A message's: the assistant it waits on. */
+  peer?: ItemPeer | null
+}
+
+/** Who settled a matter. */
+export type ItemClosedBy = "owner" | "agent" | "codeg"
+
+/** How a matter was settled. */
+export type ItemClosedHow =
+  | "done"
+  | "dropped"
+  | "withdrawn"
+  | "stopped_waiting"
+  | "plan_canceled"
+  | "answered"
+  | "replied"
+  | "gone"
+  | "used_up"
+  | "expired"
+  | "merged"
+  | "replaced"
+
+/** The assistant a message's matter waits on (its name when it was
+ *  deleted, `gone`). */
+export interface ItemPeer {
+  id: number
+  name: string | null
+  avatar: unknown
+  gone: boolean
+}
+
+/** The owner's act on a matter: the matter as it is now, what takes the
+ *  panel's act back, and — a message's dropped — whether the message was
+ *  taken back. */
+export interface ItemActResult {
+  item: ItemInfo
+  undo: number | null
+  withdrawn: boolean | null
+}
+
+/** What an owner's message answering a question keeps on its row
+ *  (`data.answers_item`). */
+export interface OwnerAnswersItem {
+  id: number
+  summary: string
+  linked_at: string
+}
+
+/** How a matter that comes up when the owner mentions something does. */
+export interface ItemMention {
+  keywords: string[]
+  cooldown_hours: number
+  max_times: number
+  /** UTC. */
+  expires_at: string
+  /** How many times it came up, and when it last did. */
+  times: number
+  last_at?: string | null
+}
+
+/** A reminder an owner's message brought up, as its row keeps it
+ *  (`data.mentioned`). */
+export interface MentionHit {
+  item_id: number
+  bot_id: number
+  by: string
+  keyword: string
+  text: string
+  times: number
+  max_times: number
+}
+
+export interface UsageReading {
+  percent: number
+  used: number | null
+  size: number | null
+  source: "live" | "transcript"
+}
+
+export interface CompactCheck {
+  at: string
+  outcome:
+    | "below"
+    | "compacted"
+    | "disabled"
+    | "usage_unknown"
+    | "no_command"
+    | "paused"
+    | "skipped_after_attempt"
+  percent: number | null
+}
+
+export type CompactInitiator = "auto" | "owner" | "agent"
+
+export interface PersonalAgentTurnInfo {
+  batch_id: number
+  kind: "delivery" | "compaction"
+  started_at: string
+  compaction_initiator: CompactInitiator | null
+  /** It carries the owner's messages (else it gives way when they write). */
+  for_owner?: boolean
+  /** The notes before a compaction (7.7): it gives way to the owner. */
+  flush?: boolean
+}
+
+export interface PersonalAgentStatus {
+  /** `elsewhere`: another codeg process runs the agent; read-only here. */
+  engine: "here" | "elsewhere"
+  configured: boolean
+  segment: SegmentInfo | null
+  connection_id: string | null
+  connected: boolean
+  turn: PersonalAgentTurnInfo | null
+  usage: UsageReading | null
+  auto_compact_percent: number
+  compact_command: string | null
+  last_check: CompactCheck | null
+  last_compaction: {
+    at: string
+    initiator: "auto" | "owner" | null
+    status: "ok" | "failed" | "canceled" | "running"
+    before_percent: number | null
+    after_percent: number | null
+  } | null
+  queued_messages: number
+  pending_events: number
+  /** The assistants' messages the owner has not seen yet. */
+  unseen: number
+  dispatch_running: number
+  dispatch_queued: number
+  dispatch_limit: number
+  pending_permission: boolean
+  pending_question: boolean
+  last_error: string | null
+  workdir: string | null
+  /** The reply being written, for a page opened mid-turn. */
+  live_reply: LiveReply | null
+}
+
+export interface PersonalAgentSnapshot {
+  agent: PersonalAgentInfo | null
+  status: PersonalAgentStatus
+  /** The account's preferences and team: the same for every assistant. */
+  account: PersonalAgentAccount
+}
+
+/** The owner's preferences (13.5): the items whose feature exists. */
+export interface PersonalAgentPrefs {
+  reply_length: "short" | "medium" | "long"
+  cards: "prefer" | "decisions" | "never"
+  when_unsure: "assume" | "ask"
+  chat_changes: "apply" | "show"
+  confirm_dispatch: "never" | "code" | "always"
+  followups: "auto" | "ask"
+  messages: "auto" | "ask"
+  /** 0 = no limit. */
+  loop_rounds: number
+  /** A dispatch a restart interrupted: retried at once, or asked first. */
+  interrupt_retry: "auto" | "ask"
+  /** Automatic retries of one dispatch; 0 = never. */
+  retry_rounds: number
+  /** A piece of work's questions: the dispatching assistant answers, or the
+   *  owner. */
+  exec_questions: "assistant" | "owner"
+  /** A piece of work's plan approvals. */
+  exec_plans: "assistant" | "owner"
+  /** Code work an assistant dispatched is checked and accepted on its own
+   *  (7.5). */
+  auto_accept: "on" | "off"
+  /** Before codeg compacts an assistant's context, it notes the day's
+   *  points in its log (7.7). */
+  flush: "on" | "off"
+  /** Work its assistant wants changed after the check: sent back at once, or
+   *  put to the owner first. */
+  accept_revise: "auto" | "ask"
+  /** Rounds of checks one piece of work gets; 0 sends nothing back. */
+  accept_rounds: number
+  /** A comment an assistant posts on a forge: posted at once, or put to the
+   *  owner on an approval card first (7.4). */
+  forge_comment: "auto" | "ask"
+  /** An issue an assistant closes on a forge. */
+  issue_close: "auto" | "ask"
+  /** A pull request an assistant merges: when its head is the version to
+   *  merge and its checks passed; CNB always asks. */
+  pr_merge: "auto" | "ask"
+  /** The work a dispatch routine hands out (6.9). */
+  routine_dispatch: "auto" | "ask"
+  /** A plan an assistant lays out (7.6): started at once, or shown to the
+   *  owner first and started on their Start. */
+  plans: "auto" | "ask"
+  /** The nightly tidy-up of every assistant's memory and the process
+   *  skills learned from work that went well (7.7, 7.8): made at once with a
+   *  card that undoes it, kept as drafts the owner applies, or not done. */
+  tidy: "auto" | "draft" | "off"
+  /** A watched pull request whose checks failed (7.4): fixed by its task,
+   *  the owner asked first, or only told. */
+  ci_failure: "fix" | "ask" | "tell"
+  /** One that conflicts with its base: its task merges the base in, or the
+   *  owner is asked first. */
+  pr_conflict: "auto" | "ask"
+  /** Review feedback from those who can write to the repository: handed to
+   *  the task at once, or the owner asked first. */
+  review_feedback: "auto" | "ask"
+  /** Comments from those who cannot: the assistant judges, or the owner is
+   *  asked. */
+  outsider_comments: "auto" | "ask"
+  /** Rounds codeg starts by itself to fix one pull request; 0 is never. */
+  ci_rounds: number
+  /** The owner's time zone: `system` (follow the system's) or an IANA
+   *  name (1.12). */
+  time_zone: string
+  /** Whether codeg records when the owner is in codeg, to learn their usual
+   *  hours (1.12). */
+  presence: "on" | "off"
+  /** Off: the assistants reach the owner only with their reminders (1.13). */
+  proactive: "on" | "off"
+  /** How urgent news reaches the owner. */
+  urgent_via: "system_attention" | "system" | "in_page"
+  /** How normal news reaches the owner. */
+  normal_via: "system" | "in_page" | "today"
+  /** How low news reaches the owner: only in "Today", or one merged
+   *  notification at most every two hours. */
+  low_via: "today" | "digest"
+  /** While the owner types: minutes after they stop before normal news is
+   *  sent, merged; 0 = sent as usual. */
+  focus_wait: number
+  /** Quiet hours: outside the usual hours (22:00–08:00 until learned), a
+   *  fixed span, or none. */
+  quiet_hours: "auto" | "fixed" | "none"
+  /** The fixed span, `HH:MM`. */
+  quiet_from: string
+  quiet_to: string
+  /** What still comes through in quiet hours. */
+  quiet_lets: "reminders" | "urgent"
+  /** "Tomorrow morning" in reminders: when the owner's day usually starts,
+   *  or a fixed time. */
+  morning: "hours" | "fixed"
+  /** The fixed morning, `HH:MM`. */
+  morning_at: string
+  /** The projects the assistants keep an eye on: every open one, new ones
+   *  too (`"all"`), or only these (project ids). */
+  projects: "all" | number[]
+  level_reminder: PersonalAgentNewsLevel
+  level_forwarded: PersonalAgentNewsLevel
+  level_approval: PersonalAgentNewsLevel
+  level_waiting: PersonalAgentNewsLevel
+  level_question: PersonalAgentNewsLevel
+  level_confirm: PersonalAgentNewsLevel
+  level_stuck: PersonalAgentNewsLevel
+  level_done: PersonalAgentNewsLevel
+  level_reply: PersonalAgentNewsLevel
+  level_exchange: PersonalAgentNewsLevel
+  level_changed: PersonalAgentNewsLevel
+  level_answered: PersonalAgentNewsLevel
+  level_acceptance: PersonalAgentNewsLevel
+  level_used_up: PersonalAgentNewsLevel
+  level_forge: PersonalAgentNewsLevel
+  level_pr_ready: PersonalAgentNewsLevel
+  level_pr: PersonalAgentNewsLevel
+  level_routine: PersonalAgentNewsLevel
+  level_routine_paused: PersonalAgentNewsLevel
+  /** codeg's proposal cards about what is stuck on the owner (6.7). */
+  level_proposal: PersonalAgentNewsLevel
+  /** codeg's other proposal cards. */
+  level_proposal_low: PersonalAgentNewsLevel
+  /** The morning brief and the wrap-up (6.4, 6.5). */
+  level_brief: PersonalAgentNewsLevel
+  /** What an assistant changed in its memory, persona or rules (7.7). */
+  level_memory: PersonalAgentNewsLevel
+  /** A plan carried out to its end, and a stuck one (7.6). */
+  level_plan: PersonalAgentNewsLevel
+  level_plan_stuck: PersonalAgentNewsLevel
+  /** codeg's proposal rules (6.7): each on or off, with its threshold. */
+  rule_failed: "on" | "off"
+  rule_failed_hours: number
+  rule_review: "on" | "off"
+  rule_review_hours: number
+  rule_session: "on" | "off"
+  rule_session_minutes: number
+  rule_pr_review: "on" | "off"
+  rule_pr_review_days: number
+  rule_uncommitted: "on" | "off"
+  rule_uncommitted_hours: number
+  rule_idle: "on" | "off"
+  rule_idle_days: number
+  rule_behind: "on" | "off"
+  rule_repeat: "on" | "off"
+  rule_repeat_count: number
+  /** The assistants' own suggestions (`suggest: true`). */
+  rule_suggest: "on" | "off"
+  /** The morning brief (6.4): whether there is one, when it is prepared —
+   *  a quarter of an hour before the usual start, or at `brief_at` — its
+   *  parts, and how many suggestions it may make (0: none). */
+  brief: "on" | "off"
+  brief_time: "hours" | "fixed"
+  brief_at: string
+  brief_needs: "on" | "off"
+  brief_night: "on" | "off"
+  brief_bots: "on" | "off"
+  brief_schedule: "on" | "off"
+  brief_loose: "on" | "off"
+  brief_yesterday: "on" | "off"
+  brief_suggestions: number
+  /** The day's wrap-up (6.5): near the end of the usual day and when asked,
+   *  only when asked, or never brought. */
+  wrap: "auto" | "ask" | "off"
+  /** "Tonight I can do" in the wrap-up. */
+  wrap_tonight: "on" | "off"
+  /** The computer kept awake while work chosen for tonight runs (desktop). */
+  keep_awake: "on" | "off"
+  /** The menu bar shows the busy assistant's face, the unread count and
+   *  the recent assistants (10.10; desktop). */
+  menubar: "on" | "off"
+  /** The dock badge counts the assistants with unread (10.10; desktop). */
+  dock_badge: "on" | "off"
+  /** The time machine searches every conversation in codeg (8.2). */
+  history_sessions: "on" | "off"
+  /** The time machine searches the board's tasks (8.2). */
+  history_tasks: "on" | "off"
+  /** codeg counts how the owner answers each kind of card and lowers a
+   *  proposal rule whose cards they keep dismissing (5.2). */
+  reactions: "on" | "off"
+  /** The weekly review (6.6): in the first morning brief of each week, in
+   *  Friday's wrap-up, or not at all. */
+  weekly_review: "brief" | "wrap" | "off"
+  /** The weekly review asks whether to show changes first when the owner
+   *  undoes many of those made at their word. */
+  rule_undo: "on" | "off"
+  /** The weekly review asks whether to hide or delete a work assistant
+   *  not woken for two weeks. */
+  rule_idle_bot: "on" | "off"
+}
+
+/** codeg's proposal rules (6.7). */
+export const PROPOSAL_RULES = [
+  "failed",
+  "review",
+  "session",
+  "pr_review",
+  "uncommitted",
+  "idle",
+  "behind",
+  "repeat",
+  "suggest",
+  "undo",
+  "idle_bot",
+] as const
+export type ProposalRule = (typeof PROPOSAL_RULES)[number]
+
+/** One proposal rule's record, as the preferences show it. */
+export interface ProposalRuleView {
+  rule: ProposalRule
+  /** ISO 8601: when the owner muted it from a card (it is off since). */
+  muted_at: string | null
+  /** ISO 8601: when codeg lowered it, the owner having dismissed three of
+   *  its cards in a row. */
+  quiet_since: string | null
+  /** Its cards in the last 30 days. */
+  raised: number
+  acted: number
+  dismissed: number
+}
+
+/** How much a kind of news may interrupt the owner (6.2). */
+export type PersonalAgentNewsLevel = "urgent" | "normal" | "low"
+
+export type PersonalAgentPrefKey = keyof PersonalAgentPrefs
+
+/** Payload of `personal-agent://notify` (1.13): something to tell the
+ *  owner, routed by the backend.
+ *  - `posted`: the desktop backend posted the OS notification itself;
+ *  - `toast`: a codeg window has the focus — that window shows it in page;
+ *  - `system`: none has — one window or tab posts the OS notification. */
+export interface PersonalAgentNotify {
+  id: string
+  mode: "toast" | "system" | "posted"
+  level: PersonalAgentNewsLevel
+  bot_id: number | null
+  /** The assistant's name, or a merged title. */
+  title: string
+  /** The news, then a line saying why it is told now. */
+  body: string
+  /** The body when notification contents are hidden. */
+  hidden_body: string
+  /** Urgent: draw the owner back (Dock bounce, taskbar flash). */
+  attention: boolean
+  /** The owner wants it on the page only: never a system notification. */
+  in_page: boolean
+  link: PersonalAgentNotifyLink | null
+  avatar: BotAvatar | null
+}
+
+export type PersonalAgentNotifyLink =
+  | { kind: "bot"; bot_id: number; row_id: number | null }
+  | { kind: "conversation"; conversation_id: number; folder_id: number | null }
+
+export const PERSONAL_AGENT_NOTIFY_EVENT = "personal-agent://notify"
+
+/** What a "Today" row waits on the owner for (today.rs `task_reason`). */
+export type TodayReason =
+  | "failed"
+  | "accepted_queued"
+  | "merge_queued"
+  | "accepted_unchecked"
+  | "needs_delivery"
+  | "merge_ready"
+  | "review"
+  // Just failed: its assistant has a moment to pick it up first (B6).
+  | "looking"
+
+/** What a row of "Today" is (6.3, 1.14). */
+export type TodayRowKind =
+  // Waits on the owner: an assistant's card or ask, as its news is named …
+  | "approval"
+  | "forwarded"
+  | "question"
+  | "confirm"
+  | "stuck"
+  | "waiting"
+  // … an acceptance card to answer (7.5), a routine codeg paused (6.9), a
+  // watched pull request fixed as often as allowed (7.4), a plan stuck on
+  // a step (7.6) …
+  | "acceptance"
+  | "routine_paused"
+  | "used_up"
+  | "plan_stuck"
+  // … an assistant's suggestion, handed-out work that failed, a board task,
+  // a session, a reminder that came due.
+  | "proposal"
+  | "failed"
+  | "task"
+  | "session"
+  | "reminder"
+  // Watching: handed-out work (and board tasks, above).
+  | "dispatch"
+  // The rest of the day: a matter with a time.
+  | "item"
+  // Done today: handed-out work, or a check of a message the owner asked
+  // about (a check under acceptance is its work's, not listed).
+  | "finished"
+  | "checked"
+  | "answered"
+  | "changed"
+  // What an assistant remembered (7.7).
+  | "memory"
+  // An assistant's nightly tidy-up, and a process skill it wrote (7.7,
+  // 7.8): done today, or a draft waiting on the owner.
+  | "tidy"
+  | "skill"
+  // Something an assistant did on a forge (7.4).
+  | "forge"
+  // A watched pull request: one to merge (waits on the owner), one watched,
+  // one merged today.
+  | "pr_ready"
+  | "pr"
+  | "pr_merged"
+  // A routine (6.9): one that runs later today, a run under way, a report.
+  | "routine"
+  | "routine_run"
+  // One of codeg's proposal rules (6.7) whose thing no other row stands
+  // for: a pull request waiting for review, changes left uncommitted, a
+  // matter gone quiet, a new project.
+  | "rule"
+  | "routine_report"
+  /** A matter settled today, with who did it and how. */
+  | "matter_closed"
+
+export interface TodayRow {
+  /** The same thing keeps the same key across reads. */
+  key: string
+  kind: TodayRowKind
+  /** How urgent a wait is, by the owner's levels. */
+  level?: PersonalAgentNewsLevel
+  /** The assistant it is about; `null`: the owner's own session or task. */
+  bot_id: number | null
+  project: { id: number; name: string } | null
+  title: string
+  text: string | null
+  /** ISO 8601: when it began waiting, is due, ended. */
+  at: string
+  /** A task's status, a dispatch's state, what a session waits for
+   *  (`permission` / `question` / `plan`), a matter's `<kind>:<notify|act>`,
+   *  a change's `acted` / `undone`, an answer's request. */
+  state: string | null
+  row_id: number | null
+  dispatch_id: number | null
+  task_id: number | null
+  conversation_id: number | null
+  item_id: number | null
+  notice_id: number | null
+  /** The routine it is, or is a run of (6.9). */
+  routine_id?: number | null
+  agent_type: string | null
+  /** The owner can take it back here. */
+  undo: boolean
+  /** What a board task or failed work waits on the owner for (today.rs
+   *  `task_reason`): put into a sentence and a button. */
+  reason?: TodayReason | null
+  /** A setting `changed` for the owner: its card's `changes` and the
+   *  `names` they use, to word it as the card does (its `title` names a
+   *  setting by its key). */
+  changes?: { changes: unknown; names: unknown } | null
+  /** A board task being checked: the check's own work and its round (C1). */
+  check_dispatch_id?: number | null
+  round?: number | null
+  /** An acceptance waiting on the owner whose task is queued to merge. */
+  queued?: boolean
+  /** A matter settled today (`matter_closed`): who settled it and how;
+   *  the matter's kind is `state`. */
+  closed_by?: ItemClosedBy | null
+  closed_how?: ItemClosedHow | null
+  /** ... a message's: the assistant it waited on. */
+  peer?: ItemPeer | null
+  /** ... what takes the owner's act on the panel back
+   *  (`personalAgentItemUndo`), while it still can be. */
+  matter_undo?: number | null
+}
+
+/** "Today": every assistant's, in four groups. */
+export interface PersonalAgentToday {
+  needs: TodayRow[]
+  watching: TodayRow[]
+  schedule: TodayRow[]
+  done: TodayRow[]
+  day_start: string
+  day_end: string
+  at: string
+  /** The handed-out work rows point at. */
+  dispatches: DispatchInfo[]
+  /** The morning brief or the wrap-up being prepared (6.4). */
+  brief?: TodayBrief | null
+  /** Rows of open acceptance cards nothing can be done on any more (C1). */
+  stale_acceptance?: number[]
+}
+
+/** One thing in the activity list (C1): "today"'s row of it, the matter it
+ *  stands for, or a routine. */
+export interface ActivityRow {
+  /** Unique in the list. */
+  key: string
+  /** The assistant it is of: what its actions go to (another's, on the
+   *  primary's page); null, the owner's own. */
+  bot_id: number | null
+  /** The thing it is, kept across groups and reads: what its unfolding is
+   *  kept by. */
+  thing: string
+  today: TodayRow | null
+  item: ItemInfo | null
+  routine: Routine | null
+  /** The card of a matter's latest firing with no "today" row. */
+  card_row_id: number | null
+  /** Its reminder card while it is open: what [Hand to ...] answers. */
+  card_notice_id?: number | null
+}
+
+/** The activity tab's one list (C1). */
+export interface PersonalAgentActivity {
+  needs: ActivityRow[]
+  watching: ActivityRow[]
+  next: ActivityRow[]
+  done: ActivityRow[]
+  /** What waits on the owner: the badge and the group's head. */
+  waiting: number
+  /** The primary's pill: "today"'s count and the first of them. */
+  pill: { count: number; first: string | null }
+  brief: TodayBrief | null
+  /** Acceptance cards on the timeline nothing can be done on any more. */
+  stale_acceptance: number[]
+  dispatches: DispatchInfo[]
+  day_start: string
+  day_end: string
+  as_of: string
+}
+
+/** A morning brief or a wrap-up "today" mentions. */
+export interface TodayBrief {
+  id: number
+  kind: "brief" | "wrap"
+  state: string
+  row_id: number | null
+}
+
+/** A work assistant's line in a morning brief (6.4). */
+export interface BriefBotLine {
+  bot_id: number
+  name: string
+  done: number
+  done_titles: string[]
+  doing: string[]
+  stuck: number
+  stuck_text: string | null
+}
+
+/** A loose end in a morning brief: a matter untouched for a week, a
+ *  worktree with changes left uncommitted, a session left in progress. */
+export interface BriefLoose {
+  kind: "item" | "worktree" | "session"
+  id: number
+  bot_id: number | null
+  title: string
+  project: string | null
+  since: string
+}
+
+/** A message a "tonight" card sent, and what came back (6.5). */
+export interface BriefTonightMessage {
+  id: number
+  to_bot_id: number
+  to_name: string
+  text: string
+  state: string
+  reply: string | null
+  at: string
+}
+
+/** What codeg gathered for a morning brief or a wrap-up (6.4, 6.5): the
+ *  card codeg writes itself, with no brain to write it, draws these. */
+export interface BriefMaterial {
+  kind: "brief" | "wrap"
+  day: string
+  since: string
+  at: string
+  needs: TodayRow[]
+  night: TodayRow[]
+  tonight: TodayRow[]
+  tonight_messages?: BriefTonightMessage[]
+  schedule: TodayRow[]
+  running: TodayRow[]
+  tomorrow?: TodayRow[]
+  bots: BriefBotLine[]
+  loose: BriefLoose[]
+  yesterday: {
+    date: string
+    total: number
+    by_project: [string, number][]
+    by_agent: [string, number][]
+  } | null
+  hours: string | null
+  suggestions: number
+  dispatches: DispatchInfo[]
+  off?: string[]
+  /** What codeg sees of the owner lately (5.2). */
+  owner?: string | null
+  /** The weekly review, when this one carries it (6.6). */
+  week?: BriefWeek | null
+  /** The assistants' tidy-ups since the last brief, a line each (7.7). */
+  tidied?: TodayRow[]
+}
+
+/** A name and how many, in the weekly review. */
+export interface BriefWeekCount {
+  id: number
+  name: string
+  n: number
+}
+
+/** One assistant's tokens in the week: its brain's and its handed-out
+ *  work's. */
+export interface BriefWeekTokens {
+  bot_id: number
+  name: string
+  own: number
+  handed_out: number
+}
+
+/** The weekly review (6.6, 3.1): the week's figures from codeg's records. */
+export interface BriefWeek {
+  label: string
+  first: string
+  last: string
+  so_far: boolean
+  dispatched: number
+  by_bot: BriefWeekCount[]
+  by_mode: Record<string, number>
+  completed: number
+  failed: number
+  settled: number
+  first_pass: number
+  caught: number
+  retried: number
+  routine_done: number
+  /** Rounds codeg ran by itself on a pull request's failed checks or
+   *  conflict; absent from a review made before it was counted. */
+  ci_fixed?: number
+  merged: number
+  asked: number
+  plans: number
+  answered_by: BriefWeekCount[]
+  forwarded: number
+  messages: number
+  threads: number
+  loops: number
+  tokens: number
+  tokens_by_day: [string, number][]
+  tokens_by_bot: BriefWeekTokens[]
+  unblock_minutes: number | null
+  unblocked: number
+  unblock_before: number | null
+  held: { merged: number; deferred: number; kept: number }
+  briefs: number
+  wraps: number
+  tonight: number
+  proposals: number
+  proposals_taken: number
+  proposals_dismissed: number
+  muted_rules: string[]
+  lowered: string[]
+  changes: number
+  changes_undone: number
+  memory: number
+  memory_undone: number
+  reminders: number
+  reminders_done: number
+  reminders_snoozed: number
+  repeat_offers: number
+  idle_items: number
+  hours_note: string | null
+  asks: {
+    rule: "undo" | "idle_bot"
+    bot_id: number | null
+    name: string | null
+    undone: number
+    made: number
+    since: string | null
+  }[]
+}
+
+/** A project the projects card lists when getting to know the owner (5.4,
+ *  1.15): where its remote is, and whether an account serves that forge. */
+/** What codeg knows of a project's forge from this machine alone. */
+export type PersonalAgentProjectForge =
+  /** An account serves its host. */
+  | { kind: "account"; provider: ForgeProviderId; host: string }
+  /** On a public forge codeg speaks, no account for it yet. */
+  | { kind: "no_account"; provider: ForgeProviderId; host: string }
+  /** Another host: self-hosted, or a forge codeg does not speak. */
+  | { kind: "other"; host: string }
+  /** No forge remote. */
+  | { kind: "none" }
+  /** Not known (git or the accounts could not be read). */
+  | { kind: "unknown" }
+
+/** A project the assistants may keep an eye on (`prefs.projects`). */
+export interface PersonalAgentMeetProject {
+  id: number
+  name: string
+  path: string
+  forge: PersonalAgentProjectForge
+}
+
+/** One answer on a native card of several questions: a choice's letter, or
+ *  the owner's own words. */
+export interface PersonalAgentChoicePick {
+  key?: string
+  text?: string
+}
+
+/** Whether the owner is in codeg now, as one window's beat leaves it. */
+export interface PersonalAgentPresence {
+  present: boolean
+  /** Their last input in any window, ISO 8601. */
+  last_active: string | null
+}
+
+/** One kind of day's usual hours: minutes after its midnight; `end` may
+ *  pass 1440 (a late night belongs to its evening). */
+export interface PersonalAgentDayHours {
+  start: number
+  end: number
+  /** Known: learned from the record, or set by the owner; else the
+   *  defaults (09:00–18:00). */
+  learned: boolean
+  /** The days it was learned from. */
+  days: number
+  /** The owner set it: it stands whatever is learned. */
+  set: boolean
+}
+
+/** Where a time machine search looks (8.2). */
+export type PersonalAgentHistoryScope =
+  | "all"
+  | "timeline"
+  | "sessions"
+  | "tasks"
+  | "messages"
+
+/** One thing the time machine found: a timeline row, a message between
+ *  assistants, a conversation (its best matching part), a board task. */
+export interface PersonalAgentHistoryHit {
+  source: "timeline" | "message" | "session" | "task"
+  ref_id: number
+  /** Who said it: owner, assistant, agent, codeg, message, task, title,
+   *  prompt. */
+  role: string
+  title: string | null
+  /** The words around the match, each match between U+0002 and U+0003. */
+  excerpt: string
+  at: string
+  project_id: number | null
+  project: string | null
+  agent_type: string | null
+  bot_id: number | null
+  bot_name: string | null
+  peer_bot_id: number | null
+  peer_name: string | null
+  /** The timeline row it opens at. */
+  row_id: number | null
+  /** The conversation it opens. */
+  conversation_id: number | null
+  /** How many of its parts matched (a conversation's turns). */
+  matches: number
+}
+
+/** How far the time machine's index is (About you). */
+export interface PersonalAgentHistoryStatus {
+  documents: number
+  sessions_done: number
+  sessions_total: number
+  sessions_on: boolean
+  tasks_on: boolean
+  /** A pass over the conversations is going. */
+  reading: boolean
+}
+
+export interface PersonalAgentHistoryResults {
+  hits: PersonalAgentHistoryHit[]
+  /** One or two characters: only the last 90 days were looked through. */
+  short: boolean
+  status: PersonalAgentHistoryStatus
+}
+
+/** A project the owner worked in (5.1). */
+export interface PersonalAgentProjectSeen {
+  folder_id: number
+  name: string
+  /** Conversations with activity in the last 7 / 30 days. */
+  recent: number
+  sessions: number
+  last_at: string
+  /** The owner asked codeg not to mind it. */
+  excluded: boolean
+}
+
+/** An agent's share of the owner's conversations (5.1). */
+export interface PersonalAgentAgentShare {
+  agent_type: string
+  sessions: number
+  percent: number
+}
+
+/** How the owner answered one kind of card (5.1). */
+export interface PersonalAgentCardReaction {
+  kind: string
+  raised: number
+  acted: number
+  dismissed: number
+  muted: number
+  undone: number
+  expired: number
+  open: number
+  /** The median minutes to act. */
+  act_minutes: number | null
+}
+
+/** How an assistant's handed-out work went over the last 30 days (2.11). */
+export interface PersonalAgentGrade {
+  dispatches: number
+  settled: number
+  first_pass: number
+  /** Percent; `null` with nothing settled. */
+  first_pass_rate: number | null
+  avg_minutes: number | null
+}
+
+/** The work one assistant handed out on one agent one way (7.9). */
+export interface PersonalAgentGradeCell {
+  /** Who handed it out; `null` from before there were several. */
+  bot_id: number | null
+  agent_type: AgentType
+  /** The agent's name, the latest one it went by. */
+  agent: string
+  mode: DispatchMode
+  grade: PersonalAgentGrade
+}
+
+export interface PersonalAgentGrades {
+  /** By assistant id. */
+  bots: Record<string, PersonalAgentGrade>
+  /** Apart: assistant × agent × mode, the most work first. */
+  cells: PersonalAgentGradeCell[]
+}
+
+/** A change on the "about you" page (5.3). */
+export type PersonalAgentProfileOp =
+  | {
+      op: "hours"
+      day: "workday" | "restday"
+      start?: string | null
+      end?: string | null
+    }
+  | { op: "project"; folder_id: number; excluded: boolean }
+  | { op: "clear" }
+
+/** The "about you" page (13.5, 1.12, 2.11). */
+export interface PersonalAgentProfile {
+  /** As set: `system` or a zone's name. */
+  time_zone: string
+  /** The zone in effect. */
+  zone: string
+  system_zone: string
+  zones: string[]
+  /** The record is kept. */
+  presence: boolean
+  present: boolean
+  last_active: string | null
+  hours: {
+    workday: PersonalAgentDayHours
+    restday: PersonalAgentDayHours
+  }
+  /** What the record alone says: what the hours go back to. */
+  learned_hours: {
+    workday: PersonalAgentDayHours
+    restday: PersonalAgentDayHours
+  }
+  /** The days the hours are learned from. */
+  learn_days: number
+  /** How the owner answers cards is counted. */
+  reactions: boolean
+  /** What is seen counts from here (30 days back, or since cleared). */
+  seen_since: string
+  cleared_at: string | null
+  projects: PersonalAgentProjectSeen[]
+  /** Not-minded projects not among those seen: `[id, name]`. */
+  excluded: [number, string][]
+  agents: PersonalAgentAgentShare[]
+  /** Empty with the record of their answers off. */
+  cards: PersonalAgentCardReaction[]
+}
+
+export interface PersonalAgentAccount {
+  prefs: PersonalAgentPrefs
+  /** What the items add up to: a preset, or `custom`. */
+  automation_level: "standard" | "ask_more" | "custom"
+  /** The disturbance level the notification items add up to (13.4). */
+  disturb_level: "quiet" | "standard" | "more" | "custom"
+}
+
+/** One item to change: `prefs.<item>`, `prefs.automation_level`,
+ *  `prefs.disturb_level`, `own.<item>`. */
+export interface PersonalAgentSettingChange {
+  key: string
+  value: unknown
+}
+
+export interface PersonalAgentApplied {
+  key: string
+  from: unknown
+  to: unknown
+}
+
+/** One of the owner's assistants, as the roster lists it. */
+export interface PersonalAgentBotSummary {
+  id: number
+  kind: PersonalAgentBotKind
+  uid: string | null
+  name: string
+  avatar: BotAvatar
+  hidden: boolean
+  /** Whether it has a brain yet (D3). */
+  has_brain: boolean
+  /** The collaboration settings' assistant it was converted from. */
+  legacy_assistant_id: number | null
+  /** The agent its work runs on (what an @-mention hands work to); null
+   *  when codeg does not know it. Absent from an older backend. */
+  work_agent_type?: AgentType | null
+  created_at: string
+}
+
+/** A document an assistant wrote in its working directory. */
+export interface PersonalAgentOutputDoc {
+  /** Relative to the working directory. */
+  path: string
+  modified_at: string
+  size: number
+}
+
+/** How the owner arranged an assistant on the roster (4.14). */
+export interface RosterFlags {
+  sort_order: number
+  pinned_at: string | null
+  section: string | null
+  hidden: boolean
+  muted: boolean
+  unread_mark: boolean
+  notify: boolean
+}
+
+/** What the owner does to an assistant on the roster. */
+export type RosterAct =
+  | { act: "pin" }
+  | { act: "unpin" }
+  | { act: "section"; name: string | null }
+  | { act: "hide" }
+  | { act: "show" }
+  | { act: "mute" }
+  | { act: "unmute" }
+  | { act: "mark_unread" }
+  | { act: "mark_read" }
+  | { act: "order"; ids: number[] }
+  | { act: "notify"; on: boolean }
+
+/** Whether an assistant works now (8.3). */
+export type BotWorkState = "busy" | "idle" | "done"
+/** What it wants of the owner (8.3). */
+export type BotAttention = "needs_you" | "unread" | "none"
+/** The face the backend computes; `stuck` is the page's own (waiting on
+ *  the owner past two minutes). */
+export type BotFaceState =
+  | "idle"
+  | "thinking"
+  | "working"
+  | "waiting"
+  | "done"
+  | "failed"
+  | "sleeping"
+/** A face as drawn: the backend's, or `stuck`. */
+export type BotLook = BotFaceState | "stuck"
+
+/** The first of what waits on the owner, and how many. */
+export interface BotNeedsYou {
+  kind:
+    | "question"
+    | "permission"
+    | "plan"
+    | "confirm"
+    | "uncertain"
+    | "loop"
+    | "choice"
+    | "changed"
+    | "input"
+    | "acceptance"
+    /** A watched pull request ready to merge (7.4). */
+    | "mergeable"
+    /** A routine codeg paused (6.9). */
+    | "routine_paused"
+    /** A watched pull request codeg fixed as often as allowed (7.4). */
+    | "pr_gave_up"
+    /** A plan stuck on a step (7.6). */
+    | "plan_stuck"
+    | string
+  text: string
+  since: string
+  row_id: number | null
+  count: number
+}
+
+/** One step in a short line (8.4): being done, or done. */
+export interface StepLine {
+  n: number
+  kind: string
+  target?: string
+  status?: string
+  awaiting?: boolean
+  started_at: string
+  added?: number
+  removed?: number
+  passed?: number
+  failed?: number
+  exit_code?: number
+  hits?: number
+  dispatch_id?: number
+}
+
+export interface BotActivity {
+  step: StepLine
+  /** The handed-out work it is from (its brain at rest). */
+  work?: { dispatch_id: number; title: string }
+  /** The brain's turn: picks the wording that rotates. */
+  turn?: number
+}
+
+export interface BotHandWork {
+  dispatch_id: number
+  title: string
+  mode: DispatchMode
+  state: DispatchState
+  work_task_id: number | null
+  conversation_id: number | null
+  /** Where it stands on the PR ladder (8.5). */
+  ladder: Ladder
+  /** Its pull request, watched. */
+  pr: PrFacts | null
+}
+
+export interface BotAwaitedReply {
+  message_id: number
+  to_bot_id: number
+  to_name: string
+}
+
+/** One assistant's live state (8.3). */
+export interface BotLive {
+  bot_id: number
+  work: BotWorkState
+  attention: BotAttention
+  needs: BotNeedsYou | null
+  unread: number
+  activity: BotActivity | null
+  /** This process can tell the activity (it runs the assistants). */
+  activity_known: boolean
+  work_on_hand: BotHandWork[]
+  awaiting: BotAwaitedReply[]
+  /** Its face at rest. */
+  face: BotFaceState
+  /** A turn or a piece of work just done (or failed), over `face` till
+   *  `until`. */
+  flash: { face: BotFaceState; until: string } | null
+  connected: boolean
+  last_line: { text: string; at: string } | null
+  last_activity_at: string | null
+  updated_at: string
+  /** A busy state not renewed by then is stale. */
+  expires_at: string | null
+}
+
+/** An assistant on the roster. */
+export interface RosterEntry extends PersonalAgentBotSummary {
+  roster: RosterFlags
+  live: BotLive
+  /** The head of its persona, as the team list reads it: from the first
+   *  line of its `SOUL.md` on, line breaks folded, 200 characters. */
+  persona: string
+  /** A work assistant whose persona is still its default file. */
+  persona_unwritten: boolean
+}
+
+/** Payload of `personal-agent://bots`. */
+export type BotsChange =
+  | { kind: "live"; bot_id: number; live: BotLive }
+  | { kind: "roster" }
+
+/** Where a value codeg picked for the owner came from (10.5). */
+export type PickedFrom = "given" | "other_config" | "agent"
+
+export interface PickedOption {
+  id: string
+  name: string
+  value: string
+  value_label: string
+  from: PickedFrom
+}
+
+export interface BotCreateDraft {
+  name: string
+  /** The uid the page previewed the default face with. */
+  uid?: string | null
+  /** Its persona's first paragraph; empty: the default sentence, until it
+   *  writes its own. */
+  persona?: string | null
+  avatar?: BotAvatar | null
+  /** What its work runs on (D1); absent: a copy of its brain. */
+  work?: WorkChoice | null
+  locale?: string | null
+}
+
+/** A work assistant made — or, when the agent's options could not be read,
+ *  what the editor opens with instead. */
+export interface BotMade {
+  bot: PersonalAgentBotSummary | null
+  options_unavailable: { agent_type: AgentType; why: string } | null
+}
+
+/** What deleting a work assistant touches (4.14). */
+export interface BotImpact {
+  bot_id: number
+  name: string
+  running: {
+    dispatch_id: number
+    title: string
+    mode: DispatchMode
+    state: DispatchState
+  }[]
+  unanswered_messages: number
+  /** Its plans still going: they stop (7.6). */
+  plans: { plan_id: number; title: string }[]
+  /** Steps of other assistants' plans handed to it, not done yet. */
+  plan_steps: {
+    plan_id: number
+    plan_title: string
+    bot_name: string
+    seq: number
+    title: string
+  }[]
+  workdir: string
+  workdir_custom: boolean
+}
+
+/** Where a plan stands (7.6). */
+export type PlanState =
+  | "draft"
+  | "running"
+  | "stuck"
+  | "stopped"
+  | "done"
+  | "canceled"
+
+/** Where a plan's step stands. */
+export type PlanStepState =
+  | "pending"
+  | "running"
+  | "done"
+  | "failed"
+  | "canceled"
+  | "stopped"
+
+/** One step of a plan, as its card shows it. */
+export interface PlanStepView {
+  seq: number
+  title: string
+  /** Another assistant, or the plan's own (`self`). */
+  target_kind: "bot" | "self"
+  target_id: number
+  target_name: string
+  agent_type?: AgentType
+  face?: unknown
+  mode: DispatchMode | null
+  project_id: number | null
+  project_name: string | null
+  deliverable: "change" | "report" | null
+  prompt: string
+  done_when: string | null
+  depends_on: number[]
+  state: PlanStepState
+  confirmed: boolean
+  ready: boolean
+  ladder: string | null
+  dispatch_id: number | null
+  message_id: number | null
+  work_task_id: number | null
+  conversation_id: number | null
+  conversation_folder_id: number | null
+  result: string | null
+  error: string | null
+  started_at: string | null
+  ended_at: string | null
+}
+
+/** One line of a change to a plan. */
+export interface PlanChangeItem {
+  kind: "added" | "changed" | "removed" | "retry" | "title" | "goal" | string
+  seq?: number
+  title?: string
+  fields?: string[]
+}
+
+/** A change made to a plan, as its card lists it. */
+export interface PlanChangeView {
+  index: number
+  at: string
+  by: "assistant" | "owner" | string
+  items: PlanChangeItem[]
+  reason: string | null
+  undoable: boolean
+  undone: boolean
+  kept: number[]
+}
+
+/** A plan, as its card shows it (7.6). */
+export interface PlanView {
+  id: number
+  title: string
+  goal: string | null
+  state: PlanState
+  stuck_reason: string | null
+  steps: PlanStepView[]
+  changes: PlanChangeView[]
+  done: number
+  total: number
+  created_at: string
+  started_at: string | null
+  ended_at: string | null
+}
+
+export interface BotDeleteOptions {
+  hand_over: boolean
+  delete_workdir: boolean
+}
+
+/** One of the personal agent's files: a fixed one (`SOUL.md`, `AGENTS.md`,
+ *  `USER.md`, and the memory index `MEMORY.md`), or an entry the index lists
+ *  (`memory/<name>.md`: a fact, a reference or a lesson). */
+export interface PersonalAgentFile {
+  name: string
+  content: string
+  exists: boolean
+  /** A process skill the owner turned off (7.8): kept, not loaded. */
+  off?: boolean
+}
+
+export interface PersonalAgentDayStat {
+  date: string
+  owner_messages: number
+  replies: number
+  dispatches_task: number
+  dispatches_chat: number
+  dispatches_session: number
+  dispatches_completed: number
+  dispatches_failed: number
+  agent_tokens: number
+  dispatch_tokens: number
+}
+
+/** The work handed out on one agent. */
+export interface PersonalAgentWorkStat {
+  agent_type: AgentType
+  /** The agent's name. */
+  name: string
+  dispatches: number
+  completed: number
+}
+
+export interface PersonalAgentUsagePoint {
+  at: string
+  percent: number
+  kind: "delivery" | "compaction_before" | "compaction_after" | "segment_start"
+  segment_seq: number
+}
+
+export interface PersonalAgentStats {
+  days: PersonalAgentDayStat[]
+  agents: PersonalAgentWorkStat[]
+  usage: PersonalAgentUsagePoint[]
+  tokens_synced_at: string | null
+}
+
+/** Payload for `personal-agent://changed`. Timeline rows ride along whole,
+ *  and so does the step the reply in flight is on. `bot_id` is the assistant
+ *  it is about (0: the primary, before it is set up). */
+export type PersonalAgentChange = { bot_id?: number } & (
+  | { kind: "timeline"; rows: TimelineRow[] }
+  | { kind: "reply"; row_id: number; current: ReplyStep | null }
+  | { kind: "status" }
+  | { kind: "agent" }
+  | { kind: "dispatch"; id: number }
+  | { kind: "item"; id: number }
+  /** A routine changed, or one of its runs (6.9). */
+  | { kind: "routine"; id: number }
+  /** A check of a message of conversation `conversation_id` began or ended
+   *  (10.3): its view marks the message. */
+  | { kind: "check"; conversation_id: number }
+)
+
+/** Where a check of a message stands (10.3). */
+export type MessageCheckState = "checking" | "done" | "failed"
+/** What a check found the message to be. */
+export type MessageCheckVerdict = "true" | "false" | "partly" | "unsure"
+
+/** "Is this right?" (10.3): a check of a message of an ordinary
+ *  conversation, as its page and the card show it. Mirrors
+ *  `MessageCheckView` in models/personal_agent.rs. */
+export interface MessageCheck {
+  id: number
+  bot_id: number
+  conversation_id: number
+  /** The message's fingerprint (`messageFingerprint`). */
+  message_fp: string
+  /** The sentence's, when one was checked; "" for the whole message. */
+  quote_fp: string
+  quote: string | null
+  state: MessageCheckState
+  verdict: MessageCheckVerdict | null
+  evidence: string | null
+  /** Why it is unsure for want of evidence, or why it did not finish. */
+  note: string | null
+  dispatch_id: number | null
+  /** The checker's session, once it has one. */
+  check_conversation_id: number | null
+  notice_id: number | null
+  /** Its card on the primary's timeline. */
+  row_id: number | null
+  created_at: string
+  updated_at: string
+}
+
+export const PERSONAL_AGENT_CHANGED_EVENT = "personal-agent://changed"
+
 // ─── Automations ───────────────────────────────────────────────────────────
 // Mirrors src-tauri/src/models/automation.rs. Wire form is snake_case (serde
 // default), matching AgentDelegationDefaults.
@@ -2009,6 +4338,30 @@ export interface WorkTaskConfig {
    *  the choice existed does). The branch actually used is recorded on
    *  `WorkTask.base_branch` once the worktree exists. */
   base_branch?: string | null
+  /** The role assistant a personal-agent dispatch runs this task as (its name
+   *  at dispatch). Display only. */
+  executor_name?: string | null
+  /** Server-owned: the selector tuple above is the task's own, fixed at
+   *  creation or explicit edit, never re-resolved from the folder's task
+   *  settings (codeg#1179). Absent on tasks from before; a client never sets
+   *  it. */
+  agent_config_frozen?: boolean
+}
+
+/** A bound task's conversation selection, as its next rerun runs it
+ *  (`WorkTask.conversation_selection`). */
+export interface WorkTaskConversationSelection {
+  conversation_id: number
+  folder_id: number
+  agent_type: AgentType
+  /** Config option values (model, effort, …) by option id. */
+  config_values: Record<string, string>
+  /** The conversation predates stored selections: these are what its next
+   *  connect replays once and keeps. */
+  legacy: boolean
+  /** A legacy task whose agent was changed while bound: its next run starts a
+   *  new conversation with the task's own tuple. */
+  replaces_conversation: boolean
 }
 
 export interface WorkTask {
@@ -2081,6 +4434,9 @@ export interface WorkTask {
    *  a task is first delivered, and always on a forge-sourced task — that
    *  one's pull request is `source_meta.result_pr`. */
   delivery?: WorkTaskDelivery | null
+  /** The personal-agent dispatch that created this task, when one did. It
+   *  lands as the board's settings say, like any other task. */
+  personal_agent_dispatch_id?: number | null
   /** The reply drafted for each thread of a forge-sourced task, keyed by item
    *  number (JSON object keys are strings) — what the write-back posts once
    *  the task is accepted. Absent = no draft: the comment is then the outcome
@@ -2100,6 +4456,9 @@ export interface WorkTask {
    *  open instead of settling it — settling would end that work (mirrors Rust
    *  WorkTaskBackgroundWait). Absent when not waiting. */
   background_wait?: WorkTaskBackgroundWait | null
+  /** The bound conversation's own model / options — only on a single-task
+   *  fetch (`workTaskGet`) from a server that knows them; absent otherwise. */
+  conversation_selection?: WorkTaskConversationSelection | null
   created_at: string
   updated_at: string
   started_at: string | null
@@ -2814,6 +5173,8 @@ export interface WorkTaskPreflight {
   exit_code?: number | null
   /** Trailing combined output — present when the light is red. */
   output_tail?: string | null
+  /** Which run of the command wrote this light (engine bookkeeping). */
+  run_id?: string | null
 }
 
 /** One append-only timeline entry ("how the task advanced"). */
@@ -3321,8 +5682,22 @@ export type AcpEvent =
       supported: boolean
     }
   | {
+      /** Whether the agent offers `_session/rewind`, behind a sent message's
+       *  "edit and resend" (claude-agent-acp 0.112.0, codex-acp 2.12.0). */
+      type: "rewind_supported"
+      supported: boolean
+    }
+  | {
       type: "mode_changed"
       mode_id: string
+    }
+  | {
+      /** The composer's pending mode pick for this connection (applied by a
+       *  tab at its next send, never sent to the agent from here). `null`
+       *  clears it — once the agent's current mode reached it. */
+      type: "composer_mode_changed"
+      mode_id: string | null
+      explicit?: boolean
     }
   | {
       type: "plan_update"
@@ -3527,6 +5902,9 @@ export type AcpEvent =
        *  Absent for a plain agent delegation. */
       assistant_id?: number | null
       assistant_name?: string | null
+      /** The owner's assistant it runs as (its uid); with it, `assistant_id`
+       *  is that assistant's row. */
+      bot_uid?: string | null
     }
   /**
    * The child sub-session has finished (or errored / timed out / been
@@ -3547,6 +5925,7 @@ export type AcpEvent =
       /** Mirrors `delegation_started`'s assistant identity. */
       assistant_id?: number | null
       assistant_name?: string | null
+      bot_uid?: string | null
     }
   /**
    * A codeg delegation of this (parent) connection started (`running`) or
@@ -3607,6 +5986,8 @@ export type AcpEvent =
   | {
       type: "question_resolved"
       question_id: string
+      /** Whose answer took effect, or that it was withdrawn. */
+      resolution?: AnswerResolution
     }
   /**
    * A Grok `exit_plan_mode` call: the agent finished planning and is blocked on
@@ -3626,6 +6007,25 @@ export type AcpEvent =
   | {
       type: "plan_approval_resolved"
       approval_id: string
+      resolution?: AnswerResolution
+    }
+  /**
+   * The assistant that dispatched this session answers its questions and
+   * plan approvals for the owner: a window does not notify them.
+   */
+  | {
+      type: "ask_delegate"
+      delegate?: AskDelegate | null
+    }
+  /**
+   * A question or plan approval the assistant was answering is now the
+   * owner's. The assistant notifies them itself (`personal-agent://notify`,
+   * 1.13); a window has nothing more to do.
+   */
+  | {
+      type: "ask_forwarded"
+      request_id: string
+      kind: "question" | "plan" | "permission"
     }
   /**
    * The agent's effective settings (env vars / model provider / native config)
@@ -3735,6 +6135,10 @@ export interface LiveMessage {
   role: MessageRole
   content: LiveContentBlock[]
   started_at: string
+  /** The turn failed, in the agent's words (a terminal `SessionFailure`
+   *  applied while it ran): the reducer's closing `turn_error` block, for a
+   *  client hydrating before `TurnComplete`. */
+  turn_error?: string | null
 }
 
 export interface PendingPermissionState {
@@ -3777,6 +6181,7 @@ export interface ActiveDelegationState {
   /** The assistant the child runs as, mirrored for the same reason. */
   assistant_id?: number | null
   assistant_name?: string | null
+  bot_uid?: string | null
 }
 
 /** Lifecycle of a live-feedback note (mirror of Rust `FeedbackStatus`). */
@@ -3889,6 +6294,11 @@ export interface SessionFailureRecord {
    *  silenced, not fixed — saying otherwise would be a lie whenever the
    *  connection is still down. */
   dismissed?: boolean
+  /** codeg's own, never an adapter's: this terminal record's `title` also
+   *  streamed as one whole reply chunk of the turn it ended (Antigravity tells
+   *  a dead executor that way), so the failure line takes those words' place
+   *  (`dropEchoedFailureText`). */
+  echoed_in_reply?: boolean
 }
 
 /**
@@ -4006,6 +6416,9 @@ export interface LiveSessionSnapshot {
   /** Awaiting-decision Grok `exit_plan_mode` approval, recoverable on mid-turn
    *  attach. Absent (omitted) when no approval is pending. */
   pending_plan_approval?: PendingPlanApprovalState | null
+  /** What the dispatching assistant answers here for the owner. Absent when
+   *  nobody does. */
+  ask_delegate?: AskDelegate | null
   /** In-flight user prompt for the current turn — lets a client attaching
    *  mid-turn render the user turn. Absent (omitted) when no turn is in flight. */
   pending_user_message?: {
@@ -4051,8 +6464,13 @@ export interface LiveSessionSnapshot {
    *  event). Absent when it is off. */
   remote_control?: RemoteControlInfo | null
   fork_supported: boolean
+  /** See the `rewind_supported` event. Omitted when false. */
+  rewind_supported?: boolean
   available_commands: AvailableCommandInfo[]
   selectors_ready: boolean
+  /** The composer's pending mode pick (see the `composer_mode_changed`
+   *  event). Absent when there is none. */
+  composer_mode_id?: string | null
   /** Whether the running session is on stale (launch-time) config after a later
    *  settings save. Absent on older server payloads (then treated as `false`). */
   config_stale?: boolean
@@ -4491,6 +6909,9 @@ export interface AgentSkillItem {
   pack?: string | null
   /** A copy Codeg made where no link could be made. */
   codeg_copy?: boolean
+  /** A Harness plugin's member skill (`owner: "harness"`): the plugin's
+   *  install name. It is managed with the plugin, as a whole. */
+  plugin?: string | null
 }
 
 export interface AgentSkillsListResult {
@@ -6386,6 +8807,11 @@ export interface DeepSeekCatalogModel {
    *  untouched. Dropping it does not fail: it silently moves that model to the
    *  other delivery mode, which is why it must survive a round trip. */
   systemPromptUpdate?: "in-history"
+  /** How a mid-session change to the tool list reaches this route (DSH 0.2,
+   *  deepseek-acp 0.12.0 on). Carried through untouched like
+   *  `systemPromptUpdate`; the agent's own default model declares
+   *  `"addition-only"`, which keeps the cached prompt prefix. */
+  toolUpdate?: "in-history" | "addition-only"
 }
 
 /** What the settings panel reads about the stored catalog. */
@@ -6407,6 +8833,153 @@ export interface DeepSeekModelCatalog {
    *  document was understood, so the rows stay editable — but until they are
    *  fixed, sessions run on the agent's built-in catalog instead. */
   invalid: string | null
+}
+
+// ── routines (6.9) ──────────────────────────────────────────────────────────
+
+/** `brain` wakes its assistant; `dispatch` hands out its template's work. */
+export type RoutineKind = "brain" | "dispatch"
+export type RoutineTrigger = "schedule" | "event"
+
+/** The coding events a routine can run on. */
+export const ROUTINE_EVENT_KINDS = [
+  "dispatch_ended",
+  "task_status",
+  "session_waiting",
+  "pr_checks_failed",
+  "pr_checks_passed",
+  "pr_conflict",
+  "pr_mergeable",
+  "pr_no_conflict",
+  "pr_merged",
+  "pr_closed",
+  "pr_review",
+  "forge_issue",
+] as const
+export type RoutineEventKind = (typeof ROUTINE_EVENT_KINDS)[number]
+
+/** An event trigger: its kind, and which of those events. */
+export interface RoutineEventSpec {
+  kind: RoutineEventKind | string
+  project_id?: number | null
+  /** A dispatch's or a board task's states. */
+  states?: string[]
+  /** Only the assistant's own work. */
+  mine?: boolean
+  /** `forge_issue`: a label, and issues or pull requests. */
+  label?: string | null
+  what?: "issue" | "pr" | null
+}
+
+/** The work a dispatch routine hands out. */
+export interface RoutineDispatchTemplate {
+  mode?: DispatchMode | null
+  project_id?: number | null
+  title?: string | null
+  prompt?: string | null
+  deliverable?: "change" | "report" | null
+  done_when?: string | null
+}
+
+/** What a run looks at before it wakes anyone. */
+export type RoutinePrecheck =
+  | { kind: "none" }
+  | { kind: "commits"; project_id: number; branch?: string | null }
+  | {
+      kind: "forge_new"
+      project_id: number
+      what?: "issue" | "pr" | null
+      label?: string | null
+    }
+  | { kind: "items_waiting"; hours: number }
+  | { kind: "changes"; project_id: number }
+
+/** A routine as the editor writes it. */
+export interface RoutineDraft {
+  title?: string | null
+  what?: string | null
+  kind?: RoutineKind | null
+  cron?: string | null
+  /** An IANA zone; left out, the owner's. */
+  timezone?: string | null
+  event?: RoutineEventSpec | null
+  dispatch?: RoutineDispatchTemplate | null
+  precheck?: RoutinePrecheck | null
+}
+
+export type RoutineRunOutcome =
+  | "running"
+  | "skipped"
+  | "silent"
+  | "reported"
+  | "failed"
+  | "missed"
+  | "asked"
+  | "declined"
+  | "stopped"
+
+export interface RoutineRun {
+  id: number
+  routine_id: number
+  seq: number
+  /** `schedule` | `event` | `now` | `trial` */
+  trigger: string
+  due_at: string | null
+  started_at: string
+  ended_at: string | null
+  outcome: RoutineRunOutcome
+  note: string | null
+  dispatch_id: number | null
+  notice_id: number | null
+  /** Its assistant's reply, to scroll to. */
+  row_id: number | null
+}
+
+export interface Routine {
+  id: number
+  bot_id: number
+  title: string
+  what: string
+  kind: RoutineKind
+  trigger: RoutineTrigger
+  cron: string | null
+  /** As set; `null` follows the owner's zone. */
+  timezone: string | null
+  /** The zone it runs in now. */
+  zone: string
+  event: RoutineEventSpec | null
+  dispatch: RoutineDispatchTemplate | null
+  precheck: RoutinePrecheck | null
+  enabled: boolean
+  /** `failures` | `work_agent` | `owner` */
+  paused_reason: string | null
+  source: string
+  next_run_at: string | null
+  last_run_at: string | null
+  runs: number
+  failures: number
+  created_at: string
+  /** Its latest runs, newest first. */
+  last: RoutineRun[]
+}
+
+/** The owner's buttons on a routine. */
+export type RoutineAction = "run_now" | "pause" | "resume" | "delete"
+
+/** One file of an assistant's memory a turn changed (7.7). */
+export interface MemoryFileChange {
+  path: string
+  status: "added" | "modified" | "deleted"
+  kind: "entry" | "index" | "user" | "soul" | "rules"
+  /** An entry's title as the persona page shows it; a fixed file's name. */
+  title: string
+}
+
+/** An entry of its memory a reply used (7.7). */
+export interface ReplyMemory {
+  /** `memory/<name>.md`. */
+  name: string
+  title: string
 }
 
 /** One `llm-pi-ai` provider route: a provider a DeepSeek session may serve

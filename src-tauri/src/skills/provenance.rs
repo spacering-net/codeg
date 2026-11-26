@@ -204,6 +204,7 @@ impl Provenance {
                                 HarnessSkillInfo {
                                     item_ref: text("ref"),
                                     version: text("version"),
+                                    plugin: text("plugin"),
                                 },
                             );
                         }
@@ -231,6 +232,34 @@ impl Provenance {
                     }
                 }
             }
+        }
+        out
+    }
+
+    /// A plugin's own store (`super::owned`): its Harness manifest is all
+    /// there is, and every skill it lists is the plugin's. No pack claims
+    /// anything there — a member may well have a pack skill's name.
+    pub fn load_owned(store: &Path) -> Self {
+        let mut out = Self::default();
+        match crate::harness::skills::manifest::load(store) {
+            Ok(manifest) => {
+                for (id, entry) in manifest.skills {
+                    out.harness.insert(
+                        id.clone(),
+                        HarnessSkillInfo {
+                            item_ref: Some(entry.item_ref.clone()),
+                            version: entry.version.clone(),
+                            plugin: entry.plugin.clone(),
+                        },
+                    );
+                    out.claims.insert(id, SkillOrigin::Harness);
+                }
+            }
+            Err(error) => out.problems.push(
+                SkillsIssue::new(codes::MANIFEST_UNREADABLE)
+                    .path(store.join(HARNESS_MANIFEST))
+                    .detail(error.detail()),
+            ),
         }
         out
     }

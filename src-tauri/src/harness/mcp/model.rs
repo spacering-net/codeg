@@ -573,6 +573,11 @@ pub struct HarnessInstalled {
     pub mcp_problem: Option<Reason>,
     /// The same for `skills` (the skills manifest).
     pub skills_problem: Option<Reason>,
+    /// The plugins installed from Harness (`harness::plugins::listing`).
+    pub plugins: Vec<crate::harness::plugins::listing::ListedPlugin>,
+    /// The same for `plugins` (the plugins record, also one a newer Codeg
+    /// wrote).
+    pub plugins_problem: Option<Reason>,
 }
 
 // ─── harness_mcp_uninstall ──────────────────────────────────────────────

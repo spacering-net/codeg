@@ -5,6 +5,47 @@ use super::agent::AgentType;
 use super::message::{MessageTurn, TurnUsage};
 use crate::db::entities::conversation::ConversationKind;
 
+/// A conversation's own selector state, stored as JSON on
+/// `conversation.selector_state` and replayed alone when the conversation
+/// reconnects (the client's new-conversation default is never mixed in).
+///
+/// `mode_id` is the mode the session actually RUNS with; `composer_mode_id`
+/// is a mode the user picked in a tab's composer that the tab applies at its
+/// next send (a legacy-modes pick is deferred to send time). They are kept
+/// apart so an engine rerun never runs a tab's unsent intent as the applied
+/// mode. `config_values` round-trips what the preference replay consumes
+/// (a select's value id; `"true"`/`"false"` for a boolean).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSelection {
+    #[serde(default)]
+    pub mode_id: Option<String>,
+    #[serde(default)]
+    pub composer_mode_id: Option<String>,
+    #[serde(default)]
+    pub config_values: std::collections::BTreeMap<String, String>,
+}
+
+impl ConversationSelection {
+    /// Parse the stored column. Malformed JSON is treated as absent (logged):
+    /// the conversation then takes the legacy one-time fallback instead of
+    /// failing to connect.
+    pub fn parse(raw: Option<&str>) -> Option<Self> {
+        let raw = raw?;
+        match serde_json::from_str::<Self>(raw) {
+            Ok(sel) => Some(sel),
+            Err(e) => {
+                tracing::warn!("[conversation] unparsable selector_state ignored: {e}");
+                None
+            }
+        }
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationSummary {
     pub id: String,
@@ -37,13 +78,14 @@ pub struct DbConversationSummary {
     pub agent_type: AgentType,
     pub status: String,
     /// Mirrors `conversation.kind` — drives sidebar visibility/grouping
-    /// (serialized as "regular" | "chat" | "loop" | "delegate").
+    /// (serialized as "regular" | "chat" | "loop" | "delegate" | "ask").
     pub kind: ConversationKind,
     pub model: Option<String>,
     pub git_branch: Option<String>,
     pub external_id: Option<String>,
     pub message_count: u32,
-    /// Number of direct, non-deleted delegation children. Drives the sidebar
+    /// Number of direct, non-deleted children (delegation sub-sessions and
+    /// ask conversations). Drives the sidebar
     /// chevron: a row with `child_count > 0` is expandable into its sub-session
     /// subtree. Not stored on the row — computed by a single GROUP BY aggregate
     /// (`fill_child_counts`) over the returned set, so `child_count > 0` iff
@@ -78,6 +120,10 @@ pub struct DbConversationSummary {
     /// falls back to this one when the assistant row is unknown to it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assistant_name: Option<String>,
+    /// Mirror of `conversation.bot_uid`: the owner's assistant a delegation
+    /// child or a piece of its work ran as. Absent on every other row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot_uid: Option<String>,
     /// Mirror of `conversation.source`: `"cli"` for a conversation a
     /// `codeg-cli` run started. Absent on every other row.
     #[serde(skip_serializing_if = "Option::is_none")]

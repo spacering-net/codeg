@@ -2,14 +2,15 @@
 
 import { UserRound } from "lucide-react"
 
-import { monogramFor } from "@/lib/assistant-avatar"
-import type { AssistantAvatar as AssistantAvatarValue } from "@/lib/types"
-import type { AssistantAvatarColor } from "@/lib/types"
+import { isEmojiGlyph, monogramFor } from "@/lib/assistant-avatar"
+import type { AvatarTextColor, DiscAvatar } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /** The disc a monogram or emoji avatar sits on, per palette key — one
- *  treatment per theme. Literal strings so Tailwind can see them. */
-const DISC_CLASSES: Record<AssistantAvatarColor, string> = {
+ *  treatment per theme. Literal strings so Tailwind can see them. The
+ *  collaboration settings' ten, then the faces' colours an assistant's
+ *  text avatar takes (each the palette step its face is drawn in). */
+const DISC_CLASSES: Record<AvatarTextColor, string> = {
   slate:
     "bg-slate-500/15 text-slate-700 dark:bg-slate-400/20 dark:text-slate-200",
   red: "bg-red-500/15 text-red-700 dark:bg-red-400/20 dark:text-red-200",
@@ -25,28 +26,32 @@ const DISC_CLASSES: Record<AssistantAvatarColor, string> = {
   violet:
     "bg-violet-500/15 text-violet-700 dark:bg-violet-400/20 dark:text-violet-200",
   pink: "bg-pink-500/15 text-pink-700 dark:bg-pink-400/20 dark:text-pink-200",
+  black:
+    "bg-neutral-900/15 text-neutral-900 dark:bg-neutral-200/20 dark:text-neutral-100",
+  brown:
+    "bg-amber-800/15 text-amber-900 dark:bg-amber-600/25 dark:text-amber-200",
+  yellow:
+    "bg-yellow-400/25 text-yellow-800 dark:bg-yellow-300/20 dark:text-yellow-100",
+  purple:
+    "bg-violet-500/15 text-violet-700 dark:bg-violet-400/20 dark:text-violet-200",
+  magenta:
+    "bg-fuchsia-500/15 text-fuchsia-700 dark:bg-fuchsia-400/20 dark:text-fuchsia-200",
+  gray: "bg-slate-400/20 text-slate-600 dark:bg-slate-500/25 dark:text-slate-200",
 }
 
-/** Solid swatches for the colour picker, same keys. */
-export const SWATCH_CLASSES: Record<AssistantAvatarColor, string> = {
-  slate: "bg-slate-500",
-  red: "bg-red-500",
-  orange: "bg-orange-500",
-  amber: "bg-amber-500",
-  green: "bg-green-500",
-  teal: "bg-teal-500",
-  sky: "bg-sky-500",
-  blue: "bg-blue-500",
-  violet: "bg-violet-500",
-  pink: "bg-pink-500",
+/** A length given in px at 100% zoom, as rem (app zoom scales the root font
+ *  size). */
+function rem(px: number): string {
+  return `${px / 16}rem`
 }
 
 export interface AssistantAvatarProps {
   /** `null` draws the generic assistant glyph (an id nothing here knows). */
-  avatar: AssistantAvatarValue | null | undefined
+  avatar: DiscAvatar | null | undefined
   /** The name a monogram is drawn from. */
   name: string
-  /** Pixel size of the (round) avatar. */
+  /** Size of the (round) avatar, in px at 100% zoom: drawn in rem, so it
+   *  grows and shrinks with the app zoom like the text beside it. */
   size: number
   className?: string
 }
@@ -58,7 +63,11 @@ export function AssistantAvatar({
   size,
   className,
 }: AssistantAvatarProps) {
-  const style = { width: size, height: size, fontSize: Math.round(size * 0.45) }
+  const style = {
+    width: rem(size),
+    height: rem(size),
+    fontSize: rem(Math.round(size * 0.45)),
+  }
   if (!avatar) {
     return (
       <span
@@ -70,7 +79,9 @@ export function AssistantAvatar({
         style={style}
         aria-hidden
       >
-        <UserRound style={{ width: size * 0.55, height: size * 0.55 }} />
+        <UserRound
+          style={{ width: rem(size * 0.55), height: rem(size * 0.55) }}
+        />
       </span>
     )
   }
@@ -83,8 +94,13 @@ export function AssistantAvatar({
         src={avatar.data_url}
         alt=""
         draggable={false}
-        className={cn("shrink-0 rounded-full object-cover", className)}
-        style={{ width: size, height: size }}
+        // `max-w-none`: an image's base `max-width: 100%` would squeeze it
+        // into a box narrower than its size (the discs above just overflow).
+        className={cn(
+          "max-w-none shrink-0 rounded-full object-cover",
+          className
+        )}
+        style={{ width: rem(size), height: rem(size) }}
       />
     )
   }
@@ -103,7 +119,9 @@ export function AssistantAvatar({
         style={style}
         aria-hidden
       >
-        <UserRound style={{ width: size * 0.5, height: size * 0.5 }} />
+        <UserRound
+          style={{ width: rem(size * 0.5), height: rem(size * 0.5) }}
+        />
       </span>
     )
   }
@@ -112,12 +130,13 @@ export function AssistantAvatar({
       data-slot="assistant-avatar"
       className={cn(
         "inline-flex shrink-0 select-none items-center justify-center rounded-full font-medium leading-none",
+        avatar.kind === "emoji" && isEmojiGlyph(glyph) && "font-emoji",
         DISC_CLASSES[avatar.color] ?? DISC_CLASSES.slate,
         className
       )}
       style={
         avatar.kind === "emoji"
-          ? { ...style, fontSize: Math.round(size * 0.55) }
+          ? { ...style, fontSize: rem(Math.round(size * 0.55)) }
           : style
       }
       aria-hidden

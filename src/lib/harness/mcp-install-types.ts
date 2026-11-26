@@ -14,6 +14,7 @@
  * does not know: such values are kept as they came (`Open`) and shown as
  * "unknown", never taken for the permissive case. What is SENT stays closed.
  */
+import type { HarnessListedPlugin } from "./plugin-install-types"
 import type { HarnessInstalledSkill } from "./skill-install-types"
 import type { HarnessPermissions } from "./types"
 import type {
@@ -254,6 +255,11 @@ export interface HarnessInstalled {
   skills: HarnessInstalledSkill[]
   mcp_problem: HarnessReason | null
   skills_problem: HarnessReason | null
+  /** The installed plugins, one row each. Always set by the normalizer
+   *  (`[]` from a Codeg that installs none). */
+  plugins?: HarnessListedPlugin[]
+  /** The plugin record cannot be read (or a newer Codeg wrote it). */
+  plugins_problem?: HarnessReason | null
 }
 
 export interface HarnessMcpPlan {

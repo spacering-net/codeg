@@ -199,6 +199,14 @@ pub trait SessionQuestionAccess: Send + Sync {
         self.register_question(parent_connection_id, questions).await
     }
 
+    /// Stop the connection's running turn the way the user's Stop does
+    /// (`ConnectionManager::cancel`: the agent's `session/cancel` and the
+    /// conversation row's `Cancelled`), for an agent that waits for the turn to
+    /// be cancelled once its question is declined (antigravity-acp 1.5.2).
+    ///
+    /// The default does nothing, for stubs.
+    async fn cancel_turn(&self, _connection_id: &str) {}
+
     /// Cancel a pending question — the companion's tool call was canceled
     /// (peer-close) or the connection is tearing down. Removes it and clears
     /// the card on every client. No-op if it was already answered / gone.
@@ -424,6 +432,25 @@ pub fn validate_specs(specs: &[QuestionSpec]) -> Result<(), String> {
 ///
 /// Output is therefore bounded by the question set's own size, in asked order.
 /// A declined submission yields an empty, `declined: true` outcome.
+/// What stands in for a secret answer anywhere but in the executor's own
+/// tool result.
+pub const REDACTED_SECRET: &str = "•••";
+
+/// The outcome of `answer` as it may be kept and shown: the answers to a
+/// question that asks for a secret (`is_secret`) read [`REDACTED_SECRET`].
+pub fn redacted_outcome(questions: &[QuestionSpec], answer: &QuestionAnswer) -> QuestionOutcome {
+    let mut shown = answer.clone();
+    for item in &mut shown.answers {
+        let secret = questions
+            .iter()
+            .any(|q| q.id == item.question_id && q.is_secret);
+        if secret && !item.labels.is_empty() {
+            item.labels = vec![REDACTED_SECRET.to_string()];
+        }
+    }
+    build_outcome(questions, &shown)
+}
+
 pub fn build_outcome(questions: &[QuestionSpec], answer: &QuestionAnswer) -> QuestionOutcome {
     if answer.declined {
         return QuestionOutcome {
@@ -1000,8 +1027,12 @@ pub struct ElicitationQuestions {
     pub tool_call_id: Option<String>,
     /// codex's `request_user_input_async` (codex-acp 2.6.0, #707): the agent
     /// asked without waiting, and its turn goes on while the form is open.
-    /// codex-acp cancels the form when that turn ends, steers an accepted
-    /// answer into it, and sends nothing for a decline. The form carries no
+    /// codex-acp steers an accepted answer into that turn and sends nothing
+    /// for a decline. Up to 2.10.0 it cancels the form when the turn ends;
+    /// from 2.11.0 the form outlives the turn, and codeg declines it at its
+    /// own `TurnComplete` (`cancel_questions_by_parent`); an answer accepted
+    /// just before that decline, after the adapter's turn ended, starts a new
+    /// turn the adapter owns (no `session/prompt`). The form carries no
     /// `toolCallId`. Read from `_meta.codex.delivery == "async"` for a codex
     /// peer only (see [`ElicitationPeer`]).
     pub async_delivery: bool,
@@ -4279,6 +4310,9 @@ mod tests {
             // Right server, right words, wrong tool — the match is anchored at
             // the END so a longer name cannot borrow it.
             "mcp__codeg-mcp__ask_user_question_twice",
+            // A third-party server named `mcp` whose tool borrows the whole
+            // name: claude-agent-acp 0.109.1+ titles it `<server>: <tool>`.
+            "mcp: codeg-mcp__ask_user_question",
             // …and at the start: a server whose name only ends in codeg-mcp
             // is another one, and so is a server `codeg` whose tool is
             // `mcp_ask_user_question`.

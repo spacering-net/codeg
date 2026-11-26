@@ -17,6 +17,7 @@ import {
   PackageCheck,
   PackageX,
   PencilLine,
+  Puzzle,
   SearchX,
   Sparkles,
   Trash2,
@@ -35,7 +36,9 @@ import {
 import { useElementWidth } from "@/hooks/use-element-width"
 import { useHistoryBackDismiss } from "@/hooks/use-history-back-dismiss"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { useOpenHarness } from "@/hooks/use-open-harness"
 import { customReadSkill } from "@/lib/api"
+import { HARNESS_INSTALLED } from "@/lib/harness/mcp-install-state"
 import { modelOf } from "@/lib/harness/skill-links"
 import {
   useSkillsHarness,
@@ -88,7 +91,12 @@ import { SHOW_ALL_AGENTS_CLASS } from "../mcp/mcp-server-detail"
 import { listenSkillsChanged } from "@/lib/skills/changes"
 import { cn } from "@/lib/utils"
 import { freeCopyId, freeId } from "@/lib/skills/ids"
-import { cellView, isProblemKind, type SkillsModel } from "@/lib/skills/model"
+import {
+  cellView,
+  isProblemKind,
+  seenBy,
+  type SkillsModel,
+} from "@/lib/skills/model"
 import type { SkillsIssue, StoreSkill } from "@/lib/skills/types"
 import { moveRowFocus } from "../mcp/mcp-server-list"
 import { DiscoverMark } from "../discover/discover-card"
@@ -103,6 +111,7 @@ import {
   HarnessSkillView,
 } from "./harness-skill-part"
 import {
+  AgentStrip,
   EmptyState,
   FailureNote,
   FailureText,
@@ -208,6 +217,84 @@ function missingHarnessSkills(
       (!query ||
         mark.name.toLowerCase().includes(query) ||
         mark.itemRef.toLowerCase().includes(query))
+  )
+}
+
+/** The member skills of the plugins installed as skills only that the
+ *  filters let through: only under "all" and "from Harness". */
+function shownPluginSkills(
+  model: SkillsModel,
+  filters: SkillsFilters
+): StoreSkill[] {
+  if (filters.show !== "all" && filters.show !== "harness") return []
+  return (model.inventory.plugin_skills ?? [])
+    .filter((skill) => matches(skill, filters.text))
+    .sort(
+      (a, b) =>
+        (a.plugin ?? "").localeCompare(b.plugin ?? "") ||
+        a.name.localeCompare(b.name)
+    )
+}
+
+/**
+ * The plugins' member skills, apart from Codeg's own: each says the plugin
+ * it belongs to and which agents see it, and has no actions of its own —
+ * the plugin is managed as a whole. A row opens its plugin in the Plugins
+ * section.
+ */
+function PluginSkillsList({ skills }: { skills: readonly StoreSkill[] }) {
+  const t = useTranslations("Harness.skills")
+  const { openHarness } = useOpenHarness()
+  const [installed] = useHarnessSlot(HARNESS_INSTALLED)
+  if (skills.length === 0) return null
+  const itemIdOf = (plugin: string | undefined) =>
+    installed.value?.plugins?.find((entry) => entry.name === plugin)?.item_id
+  return (
+    <section aria-label={t("list.pluginSkills")} className="min-w-0">
+      <p className={HARNESS_GROUP_LABEL_CLASS}>{t("list.pluginSkills")}</p>
+      <ul onKeyDown={moveRowFocus} className={HARNESS_ROWS_CLASS}>
+        {skills.map((skill) => {
+          const itemId = itemIdOf(skill.plugin)
+          const content = (
+            <>
+              <span className={HARNESS_ROW_TILE_CLASS}>
+                <Puzzle aria-hidden="true" />
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col gap-1">
+                <span className="flex min-w-0 flex-wrap items-center gap-2">
+                  <span
+                    dir="ltr"
+                    className="block w-fit max-w-full truncate font-mono text-sm"
+                  >
+                    {skill.name}
+                  </span>
+                  <DiscoverMark size="sm" tone="info">
+                    {t("marks.belongsTo", { plugin: skill.plugin ?? "?" })}
+                  </DiscoverMark>
+                </span>
+                <AgentStrip agents={seenBy(skill)} />
+              </span>
+            </>
+          )
+          return (
+            <li key={`${skill.plugin ?? ""}:${skill.id}`} className="min-w-0">
+              {itemId ? (
+                <button
+                  type="button"
+                  data-mcp-row={`plugin:${skill.plugin ?? ""}:${skill.id}`}
+                  onClick={() => openHarness({ section: "plugins", itemId })}
+                  className={HARNESS_ROW_CLASS}
+                >
+                  {content}
+                </button>
+              ) : (
+                <div className={HARNESS_ROW_CLASS}>{content}</div>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </section>
   )
 }
 
@@ -578,7 +665,8 @@ export function SkillsSection() {
     } else if (
       model.managed.length === 0 &&
       model.orphanBroken.length === 0 &&
-      (harness?.marks.size ?? 0) === 0
+      (harness?.marks.size ?? 0) === 0 &&
+      (model.inventory.plugin_skills?.length ?? 0) === 0
     ) {
       list = (
         <>
@@ -603,8 +691,12 @@ export function SkillsSection() {
             link.path.toLowerCase().includes(filters.text.trim().toLowerCase()))
       )
       const gone = missingHarnessSkills(model, filters, harness)
+      const owned = shownPluginSkills(model, filters)
       list =
-        rows.length === 0 && orphans.length === 0 && gone.length === 0 ? (
+        rows.length === 0 &&
+        orphans.length === 0 &&
+        gone.length === 0 &&
+        owned.length === 0 ? (
           <EmptyState
             icon={<SearchX aria-hidden="true" className="size-5" />}
             title={t("list.noMatch")}
@@ -659,6 +751,7 @@ export function SkillsSection() {
             {gridFits && (hidden > 0 || showAll) && (
               <ShowAllAgents hidden={hidden} />
             )}
+            <PluginSkillsList skills={owned} />
             {gone.length > 0 && (
               <section aria-label={tHarness("missingList")} className="min-w-0">
                 <p className={HARNESS_GROUP_LABEL_CLASS}>

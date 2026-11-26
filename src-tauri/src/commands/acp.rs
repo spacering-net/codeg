@@ -2451,6 +2451,29 @@ pub(crate) async fn system_probed_version(
     system_probed_version_with(declared_probe, resolved_bin, npm_package).await
 }
 
+/// What [`system_probed_version`] last read for `resolved_bin`, while the
+/// binary is unchanged since; `None` when it has not been asked. Runs
+/// nothing: for a caller that must not start the agent's CLI.
+pub(crate) fn known_system_probed_version(
+    agent_type: AgentType,
+    resolved_bin: &std::path::Path,
+) -> Option<String> {
+    // Read through its own probe, never this cache.
+    if cfg!(windows) && agent_type == AgentType::Qoder {
+        return None;
+    }
+    let declared_probe = agent_type
+        .custom_id()
+        .and_then(crate::acp::custom_registry::version_probe_of);
+    let mtime = std::fs::metadata(resolved_bin).ok()?.modified().ok()?;
+    let key = probe_cache_key(resolved_bin, declared_probe, None);
+    let cache = SYSTEM_PROBE_CACHE.lock().ok()?;
+    match cache.as_ref()?.get(&key) {
+        Some((cached_mtime, version)) if *cached_mtime == mtime => version.clone(),
+        _ => None,
+    }
+}
+
 /// Probe order: the declared `version_probe` command wins when it yields a
 /// version; then `npm list -g` for npx packages (exact installed version,
 /// both prefixes); then the near-universal `<cmd> --version` convention. A
@@ -8758,7 +8781,7 @@ async fn hermes_setup_argvs() -> (Vec<String>, Vec<String>) {
         // Unreachable: Hermes is always an Npx distribution. Fall through to
         // the npx guidance with the same pinned spec so a future match-arm
         // change can't resurrect a stale recipe.
-        _ => "hermes-agent@0.23.2",
+        _ => "hermes-agent@0.23.4",
     };
     (
         hermes_npx_argv(package, &["acp", "--setup"]),
@@ -10424,6 +10447,7 @@ pub(crate) fn build_skill_item(
         owner: crate::acp::types::AgentSkillOwner::Agent,
         pack: None,
         codeg_copy: false,
+        plugin: None,
     }
 }
 
@@ -12293,6 +12317,398 @@ pub(crate) async fn acp_update_agent_preferences_and_refresh(
     Ok(refresh_config_staleness(manager, db, data_dir, &[agent_type], ConfigStaleKind::AgentConfig).await)
 }
 
+/// What a connect replays on the session, and which conversation row the
+/// connection is bound to for persisting its selection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConnectSelection {
+    pub mode_id: Option<String>,
+    pub config_values: BTreeMap<String, String>,
+    /// The conversation row resolved for this connect; `None` for a draft.
+    pub row_id: Option<i32>,
+    /// The row's pending composer mode, restored onto the connection.
+    pub composer_mode_id: Option<String>,
+}
+
+/// Resolve the selection a connect replays (codeg#1179).
+///
+/// The row is `conversation_id` when it is live and runs `agent_type`, else —
+/// given `session_id` — the live row holding `(session_id, agent_type)`.
+///
+/// - Row with a stored selection → ONLY that is replayed; the client's
+///   new-conversation default never reaches an existing conversation, and an
+///   option the snapshot lacks is left to the resumed agent.
+/// - Row without one (legacy NULL / unparsable) → once, then frozen by the
+///   persister: a to-do task's CURRENT conversation whose task names the
+///   row's agent replays the task's tuple; any other task row (agent differs)
+///   or an automation run's row replays nothing (the resumed agent's own
+///   selection gets frozen); only an ordinary conversation takes the client's
+///   default.
+/// - No row (draft) → the client's default.
+///
+/// The row, the task binding and the automation-run link are read in ONE read
+/// transaction under the persister lock, so it never mixes a pre-relink NULL
+/// selection with a post-relink "no owner" and never reads mid-write.
+pub async fn resolve_connect_selection(
+    db: &sea_orm::DatabaseConnection,
+    manager: &ConnectionManager,
+    agent_type: AgentType,
+    conversation_id: Option<i32>,
+    session_id: Option<&str>,
+    client_mode_id: Option<String>,
+    client_config_values: BTreeMap<String, String>,
+) -> ConnectSelection {
+    let client = ConnectSelection {
+        mode_id: client_mode_id,
+        config_values: client_config_values,
+        row_id: None,
+        composer_mode_id: None,
+    };
+    let _guard = manager.selection.lock().await;
+    match resolve_connect_selection_tx(db, agent_type, conversation_id, session_id, &client).await
+    {
+        Ok(sel) => sel,
+        Err(e) => {
+            tracing::warn!("[ACP] resolve_connect_selection failed, using the client's: {e}");
+            client
+        }
+    }
+}
+
+async fn resolve_connect_selection_tx(
+    db: &sea_orm::DatabaseConnection,
+    agent_type: AgentType,
+    conversation_id: Option<i32>,
+    session_id: Option<&str>,
+    client: &ConnectSelection,
+) -> Result<ConnectSelection, crate::db::error::DbError> {
+    use crate::db::entities::{automation_run, conversation, work_task};
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
+
+    let agent_str = serde_json::to_value(agent_type)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+    let txn = db.begin().await?;
+    let mut row = match conversation_id.filter(|id| *id > 0) {
+        Some(id) => conversation::Entity::find_by_id(id)
+            .filter(conversation::Column::DeletedAt.is_null())
+            .one(&txn)
+            .await?
+            .filter(|r| r.agent_type == agent_str),
+        None => None,
+    };
+    if row.is_none() {
+        if let Some(sid) = session_id.filter(|s| !s.is_empty()) {
+            row = conversation::Entity::find()
+                .filter(conversation::Column::ExternalId.eq(sid))
+                .filter(conversation::Column::AgentType.eq(agent_str.clone()))
+                .filter(conversation::Column::DeletedAt.is_null())
+                .one(&txn)
+                .await?;
+        }
+    }
+    let Some(row) = row else {
+        txn.commit().await?;
+        return Ok(client.clone());
+    };
+    if let Some(stored) =
+        crate::models::ConversationSelection::parse(row.selector_state.as_deref())
+    {
+        txn.commit().await?;
+        return Ok(ConnectSelection {
+            mode_id: stored.mode_id,
+            config_values: stored.config_values,
+            row_id: Some(row.id),
+            composer_mode_id: stored.composer_mode_id,
+        });
+    }
+    // Legacy row: no selection recorded yet.
+    let task = work_task::Entity::find()
+        .filter(work_task::Column::ConversationId.eq(row.id))
+        .one(&txn)
+        .await?;
+    let selection = if let Some(task) = task {
+        let cfg: crate::models::WorkTaskConfig =
+            serde_json::from_str(&task.config).unwrap_or_default();
+        let (agent, mode, values) =
+            crate::db::service::work_task_service::resolve_agent_config(&txn, task.folder_id, &cfg)
+                .await?;
+        if agent.as_deref() == Some(agent_str.as_str()) {
+            ConnectSelection {
+                mode_id: mode,
+                config_values: values,
+                row_id: Some(row.id),
+                composer_mode_id: None,
+            }
+        } else {
+            ConnectSelection {
+                row_id: Some(row.id),
+                ..Default::default()
+            }
+        }
+    } else {
+        let automation = automation_run::Entity::find()
+            .filter(automation_run::Column::ConversationId.eq(row.id))
+            .one(&txn)
+            .await?;
+        if automation.is_some() {
+            ConnectSelection {
+                row_id: Some(row.id),
+                ..Default::default()
+            }
+        } else {
+            ConnectSelection {
+                row_id: Some(row.id),
+                ..client.clone()
+            }
+        }
+    };
+    txn.commit().await?;
+    Ok(selection)
+}
+
+/// [`resolve_connect_selection`] + spawn + bind: the connect path every
+/// user-facing entry point (Tauri, web, chat channel) shares.
+///
+/// A connection that ended before it could be bound — a resume the agent
+/// refused during its handshake, or a session it lost — is reported like a
+/// closed one (`ConnectionNotFound`): the web client's attach and the chat
+/// channel's routing need a live connection, and have no other way to learn
+/// it is gone. The desktop app reads such an ending from the connection's own
+/// events instead (see [`spawn_and_bind_conversation_selection`]).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn spawn_with_conversation_selection(
+    manager: &ConnectionManager,
+    db: &sea_orm::DatabaseConnection,
+    agent_type: AgentType,
+    working_dir: Option<String>,
+    session_id: Option<String>,
+    runtime_env: BTreeMap<String, String>,
+    owner_window_label: String,
+    emitter: EventEmitter,
+    conversation_id: Option<i32>,
+    client_mode_id: Option<String>,
+    client_config_values: BTreeMap<String, String>,
+) -> Result<String, AcpError> {
+    let spawned = spawn_and_bind_conversation_selection(
+        manager,
+        db,
+        agent_type,
+        working_dir,
+        session_id,
+        runtime_env,
+        owner_window_label,
+        emitter,
+        conversation_id,
+        client_mode_id,
+        client_config_values,
+    )
+    .await?;
+    spawned.bound?;
+    Ok(spawned.connection_id)
+}
+
+/// A spawned connection, and whether binding it to its conversation's row
+/// worked (`Err` only when the connection had already ended).
+pub(crate) struct SpawnedConversationConnection {
+    pub connection_id: String,
+    pub bound: Result<(), AcpError>,
+}
+
+/// [`spawn_with_conversation_selection`] that hands the connection back even
+/// when it ended before the bind, saying so in `bound`.
+///
+/// For the desktop app's `acp_connect`: its client buffers every event of a
+/// connection it has not routed yet and replays them once it has the id, so a
+/// resume that ended during its handshake still shows why — the error with its
+/// code, or `SessionLoadFailed` and its banner (a codex session another
+/// process holds is `session_busy`, with Reload). Refusing the id instead
+/// showed every such ending as a bare "connection not found".
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn spawn_and_bind_conversation_selection(
+    manager: &ConnectionManager,
+    db: &sea_orm::DatabaseConnection,
+    agent_type: AgentType,
+    working_dir: Option<String>,
+    session_id: Option<String>,
+    runtime_env: BTreeMap<String, String>,
+    owner_window_label: String,
+    emitter: EventEmitter,
+    conversation_id: Option<i32>,
+    client_mode_id: Option<String>,
+    client_config_values: BTreeMap<String, String>,
+) -> Result<SpawnedConversationConnection, AcpError> {
+    let selection = resolve_connect_selection(
+        db,
+        manager,
+        agent_type,
+        conversation_id,
+        session_id.as_deref(),
+        client_mode_id,
+        client_config_values,
+    )
+    .await;
+    let connection_id = manager
+        .spawn_agent(
+            agent_type,
+            working_dir,
+            session_id,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            selection.mode_id.clone(),
+            selection.config_values.clone(),
+        )
+        .await?;
+    // Before returning, so a setter right after connect finds the binding.
+    let bound = match selection.row_id {
+        Some(row_id) => {
+            manager
+                .bind_selection_conversation(&connection_id, row_id, selection.composer_mode_id)
+                .await
+        }
+        None => Ok(()),
+    };
+    Ok(SpawnedConversationConnection {
+        connection_id,
+        bound,
+    })
+}
+
+#[cfg(test)]
+mod connect_selection_tests {
+    use super::*;
+    use crate::db::service::conversation_service;
+    use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+    use crate::models::ConversationSelection;
+
+    fn client() -> (Option<String>, BTreeMap<String, String>) {
+        let mut v = BTreeMap::new();
+        v.insert("model".to_string(), "default-model".to_string());
+        v.insert("effort".to_string(), "high".to_string());
+        (Some("default-mode".to_string()), v)
+    }
+
+    #[tokio::test]
+    async fn a_stored_selection_is_replayed_alone() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-1179-connect").await;
+        let conv = conversation_service::create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .unwrap();
+        let mut values = BTreeMap::new();
+        values.insert("model".to_string(), "picked".to_string());
+        conversation_service::set_selector_state(
+            &db.conn,
+            conv.id,
+            &ConversationSelection {
+                mode_id: None,
+                composer_mode_id: Some("plan".into()),
+                config_values: values.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let manager = ConnectionManager::new();
+        let (mode, vals) = client();
+        let sel = resolve_connect_selection(
+            &db.conn,
+            &manager,
+            AgentType::Codex,
+            Some(conv.id),
+            None,
+            mode,
+            vals,
+        )
+        .await;
+        // Neither the default's mode nor its extra option leaks in.
+        assert_eq!(sel.mode_id, None);
+        assert_eq!(sel.config_values, values);
+        assert_eq!(sel.row_id, Some(conv.id));
+        assert_eq!(sel.composer_mode_id.as_deref(), Some("plan"));
+    }
+
+    #[tokio::test]
+    async fn drafts_legacy_rows_and_other_agents_fall_back_as_specified() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-1179-connect-legacy").await;
+        let conv = conversation_service::create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .unwrap();
+        let manager = ConnectionManager::new();
+        let (mode, vals) = client();
+
+        // Legacy ordinary row → the client's default, bound to the row.
+        let sel = resolve_connect_selection(
+            &db.conn,
+            &manager,
+            AgentType::Codex,
+            Some(conv.id),
+            None,
+            mode.clone(),
+            vals.clone(),
+        )
+        .await;
+        assert_eq!(sel.mode_id, mode);
+        assert_eq!(sel.config_values, vals);
+        assert_eq!(sel.row_id, Some(conv.id));
+
+        // Another agent / unknown row → treated as a draft.
+        let sel = resolve_connect_selection(
+            &db.conn,
+            &manager,
+            AgentType::ClaudeCode,
+            Some(conv.id),
+            None,
+            mode.clone(),
+            vals.clone(),
+        )
+        .await;
+        assert_eq!(sel.row_id, None);
+        assert_eq!(sel.config_values, vals);
+
+        // A legacy task conversation whose task names another agent → nothing.
+        let task = crate::db::service::work_task_service::create(
+            &db.conn,
+            crate::models::WorkTaskDraft {
+                folder_id: folder,
+                title: "t".into(),
+                config: serde_json::json!({
+                    "display_text": "x",
+                    "prompt_blocks": [{ "type": "text", "text": "x" }],
+                    "agent_type": "claude_code",
+                }),
+            },
+        )
+        .await
+        .unwrap();
+        {
+            use crate::db::entities::work_task;
+            use sea_orm::sea_query::Expr;
+            use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+            work_task::Entity::update_many()
+                .col_expr(work_task::Column::ConversationId, Expr::value(Some(conv.id)))
+                .filter(work_task::Column::Id.eq(task.id))
+                .exec(&db.conn)
+                .await
+                .unwrap();
+        }
+        let sel = resolve_connect_selection(
+            &db.conn,
+            &manager,
+            AgentType::Codex,
+            Some(conv.id),
+            None,
+            mode,
+            vals,
+        )
+        .await;
+        assert_eq!(sel.row_id, Some(conv.id));
+        assert_eq!(sel.mode_id, None);
+        assert!(sel.config_values.is_empty());
+    }
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 #[allow(clippy::too_many_arguments)]
@@ -12302,6 +12718,7 @@ pub async fn acp_connect(
     session_id: Option<String>,
     preferred_mode_id: Option<String>,
     preferred_config_values: Option<BTreeMap<String, String>>,
+    conversation_id: Option<i32>,
     manager: State<'_, ConnectionManager>,
     db: State<'_, AppDatabase>,
     app_handle: tauri::AppHandle,
@@ -12326,43 +12743,94 @@ pub async fn acp_connect(
     verify_agent_installed(agent_type).await?;
 
     let emitter = EventEmitter::from_app(&app_handle);
+    let spawned = spawn_and_bind_conversation_selection(
+        &manager,
+        &db.conn,
+        agent_type,
+        working_dir,
+        session_id,
+        runtime_env,
+        window.label().to_string(),
+        emitter,
+        conversation_id,
+        preferred_mode_id,
+        preferred_config_values.unwrap_or_default(),
+    )
+    .await?;
+    if let Err(e) = spawned.bound {
+        // Ended during its handshake: the webview replays the connection's
+        // buffered events once it routes this id, which say why.
+        tracing::info!(
+            "[ACP] connection {} ended before its conversation could be bound: {e}",
+            spawned.connection_id
+        );
+    }
+    Ok(spawned.connection_id)
+}
+
+/// Record the composer's pending mode pick on a connection (never sent to the
+/// agent; the tab applies it at its next send). `initial` = a draft's
+/// one-time hand-over at its first send. Returns whether it applied.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_set_composer_mode(
+    connection_id: String,
+    mode_id: Option<String>,
+    initial: Option<bool>,
+    manager: State<'_, ConnectionManager>,
+) -> Result<bool, AcpError> {
     manager
-        .spawn_agent(
-            agent_type,
-            working_dir,
-            session_id,
-            runtime_env,
-            window.label().to_string(),
-            emitter,
-            preferred_mode_id,
-            preferred_config_values.unwrap_or_default(),
-        )
+        .set_composer_mode(&connection_id, mode_id, initial.unwrap_or(false))
         .await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[allow(clippy::too_many_arguments)]
 pub async fn acp_prompt(
     connection_id: String,
     blocks: Vec<PromptInputBlock>,
     folder_id: Option<i32>,
     conversation_id: Option<i32>,
     client_message_id: Option<String>,
+    // An edited message: cut the session back to just before the message it
+    // replaces, in the same step (see `crate::acp::rewind`).
+    rewind: Option<crate::acp::rewind::RewindTarget>,
     db: State<'_, crate::db::AppDatabase>,
     manager: State<'_, ConnectionManager>,
 ) -> Result<(), AcpError> {
-    manager
-        .send_prompt_linked_with_message_id(
-            &db,
-            &connection_id,
-            blocks,
-            folder_id,
-            conversation_id,
-            None,
-            client_message_id,
-        )
-        .await
-        .map(|_| ())
+    match rewind {
+        Some(rewind) => {
+            manager
+                .send_prompt_linked_rewinding(
+                    &db,
+                    &connection_id,
+                    blocks,
+                    folder_id,
+                    conversation_id,
+                    client_message_id,
+                    rewind,
+                )
+                .await?
+        }
+        None => {
+            manager
+                .send_prompt_linked_with_message_id(
+                    &db,
+                    &connection_id,
+                    blocks,
+                    folder_id,
+                    conversation_id,
+                    None,
+                    client_message_id,
+                )
+                .await?
+        }
+    };
+    // A person typed this in a codeg window: a dispatch they write in is
+    // theirs from now on.
+    crate::personal_agent::note_owner_prompt(&connection_id, conversation_id);
+    Ok(())
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -12552,9 +13020,16 @@ pub async fn acp_answer_plan_approval(
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn acp_disconnect(
     connection_id: String,
+    only_if_idle: Option<bool>,
     manager: State<'_, ConnectionManager>,
-) -> Result<(), AcpError> {
-    manager.disconnect(&connection_id).await
+) -> Result<Option<bool>, AcpError> {
+    if only_if_idle == Some(true) {
+        return manager
+            .release_idle(&connection_id, chrono::Utc::now())
+            .await
+            .map(Some);
+    }
+    manager.disconnect(&connection_id).await.map(|()| None)
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -15724,6 +16199,16 @@ pub(crate) async fn acp_delete_agent_skill_in(
             )),
             codes::READ_ONLY_SKILL,
             None,
+        ));
+    }
+    // A Harness plugin's member skill changes only with the plugin.
+    if let Some(plugin) = crate::skills::owned::plugin_of_entry(ctx, &skill_path) {
+        return Err(skill_page_error(
+            AppCommandError::permission_denied(format!(
+                "'{id}' is the Harness plugin {plugin}'s skill; it changes only with the plugin"
+            )),
+            codes::PLUGIN_OWNED,
+            Some(plugin),
         ));
     }
     let kind = match crate::skills::link::inspect(&skill_path) {
@@ -21384,7 +21869,7 @@ wire_api = "chat"
     // version is also the recorded fallback when detection comes up empty.
     #[test]
     fn hermes_custom_version_spec_keeps_lifecycle_scripts_and_records_its_version() {
-        let spec = build_npm_install_spec("hermes-agent@0.23.2", Some("0.24.0")).unwrap();
+        let spec = build_npm_install_spec("hermes-agent@0.23.4", Some("0.24.0")).unwrap();
         assert_eq!(spec, "hermes-agent@0.24.0");
         assert!(npm_package_requires_scripts(&spec));
         assert!(npm_package_bootstraps_runtime(&spec));
@@ -23215,11 +23700,11 @@ wire_api = "chat"
     fn installs_name_the_packages_whose_scripts_npm_must_run() {
         for (specs, name) in [
             (
-                &["hermes-agent@0.23.2", "hermes-agent@0.24.0", "hermes-agent"][..],
+                &["hermes-agent@0.23.4", "hermes-agent@0.24.0", "hermes-agent"][..],
                 "hermes-agent",
             ),
             (
-                &["@xai-official/grok@1.0.89", "@xai-official/grok"][..],
+                &["@xai-official/grok@1.0.92", "@xai-official/grok"][..],
                 "@xai-official/grok",
             ),
         ] {
@@ -23237,23 +23722,23 @@ wire_api = "chat"
         // Every other agent keeps the user's own script policy, and so does a
         // package whose name only starts like one of those.
         for spec in [
-            "cline@3.0.74",
+            "cline@3.0.75",
             "@xai-official/grok-darwin-arm64@1.0.77",
             "hermes-agent-npm@1.0.0",
         ] {
             assert!(npm_run_scripts_args(spec).is_empty(), "{spec}");
         }
         // Grok's postinstall downloads nothing and leaves no runtime to check.
-        assert!(!npm_package_bootstraps_runtime("@xai-official/grok@1.0.89"));
+        assert!(!npm_package_bootstraps_runtime("@xai-official/grok@1.0.92"));
         assert_eq!(
-            hermes_npx_argv("hermes-agent@0.23.2", &["acp", "--setup"]),
+            hermes_npx_argv("hermes-agent@0.23.4", &["acp", "--setup"]),
             [
                 "npx",
                 "-y",
                 "--ignore-scripts=false",
                 "--allow-scripts=hermes-agent",
                 "--package",
-                "hermes-agent@0.23.2",
+                "hermes-agent@0.23.4",
                 "hermes",
                 "acp",
                 "--setup",
@@ -23280,7 +23765,7 @@ wire_api = "chat"
                     .expect("npx recipe must pin via --package");
                 assert_eq!(
                     argv.get(pkg_idx + 1).map(String::as_str),
-                    Some("hermes-agent@0.23.2")
+                    Some("hermes-agent@0.23.4")
                 );
                 assert_eq!(argv.get(pkg_idx + 2).map(String::as_str), Some("hermes"));
             } else {
@@ -23892,7 +24377,7 @@ model = "gpt"
             )
         };
 
-        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.23.2", download());
+        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.23.4", download());
         let text = annotated.to_string();
         assert!(text.contains("fetch failed"), "keeps the original error");
         assert!(text.contains("HTTP(S)_PROXY"), "adds the proxy hint");
@@ -23902,7 +24387,7 @@ model = "gpt"
         // whose postinstall codeg also runs but which downloads nothing.
         for other in [
             "@zed-industries/claude-code-acp",
-            "@xai-official/grok@1.0.89",
+            "@xai-official/grok@1.0.92",
         ] {
             let other = annotate_npm_bootstrap_failure(other, download());
             assert!(!other.to_string().contains("HTTP(S)_PROXY"));
@@ -23910,7 +24395,7 @@ model = "gpt"
 
         // A hermes failure that isn't a download stays untouched.
         let permissions = annotate_npm_bootstrap_failure(
-            "hermes-agent@0.23.2",
+            "hermes-agent@0.23.4",
             AcpError::Protocol("failed to install npm package globally: EACCES".to_string()),
         );
         assert!(!permissions.to_string().contains("HTTP(S)_PROXY"));

@@ -180,6 +180,7 @@ impl DelegationEventEmitter for ConnectionManagerEventEmitter {
                 task_id: task_id.to_string(),
                 assistant_id: assistant.map(|a| a.id),
                 assistant_name: assistant.map(|a| a.name.clone()),
+                bot_uid: assistant.and_then(|a| a.bot_uid.clone()),
             },
         )
         .await;
@@ -214,6 +215,7 @@ impl DelegationEventEmitter for ConnectionManagerEventEmitter {
                 result,
                 assistant_id: assistant.map(|a| a.id),
                 assistant_name: assistant.map(|a| a.name.clone()),
+                bot_uid: assistant.and_then(|a| a.bot_uid.clone()),
             },
         )
         .await;

@@ -286,6 +286,19 @@ export interface ConversationRuntimeSession {
 
   // Cleanup
   pendingCleanup: boolean
+  /**
+   * An edited message was sent but its cut could not be applied to the view
+   * (the message was not found): the next detail load re-anchors the batch on
+   * the history it brings (`recaptureBatchStart`), whichever load that is.
+   */
+  rebaseBatchOnNextLoad?: boolean
+  /** With `rebaseBatchOnNextLoad`: the live turns that predate that cut, which
+   *  the next load drops whichever load it is (`dropLiveTurnIds`). */
+  pendingDropLiveTurnIds?: string[]
+  /** Optimistic turns whose send never went out (no connection to send on by
+   *  the time it got there). They stay on screen as before; an edit does not
+   *  wait on them (`handleEditUserTurn`). */
+  unsentOptimisticIds?: string[]
 }
 
 interface ConversationRuntimeState {
@@ -449,6 +462,23 @@ type Action =
       conversationId: number
       id: string
     }
+  | {
+      type: "TRUNCATE_AT_TURN"
+      conversationId: number
+      /** The edited message: its id, or the agent's id for it (a reload may
+       *  have renamed a message this session sent to its parser id). */
+      turnId: string
+      agentMessageId: string
+      /** The edited message's own prompt (its client message id), already
+       *  sent: it and whatever followed it are kept. */
+      keepFromTurnId: string
+    }
+  | {
+      type: "REQUEST_BATCH_REBASE"
+      conversationId: number
+      dropLiveTurnIds: string[]
+    }
+  | { type: "MARK_OPTIMISTIC_UNSENT"; conversationId: number; id: string }
   | {
       // Cross-client VIEWER synthesizes the sender's user turn from a
       // `user_message` event / snapshot. Idempotent + sender-guarded in the
@@ -640,6 +670,41 @@ function batchStartCapture(
   // History within the window: everything, or up to and including the
   // in-flight prompt (a user turn — it never moves the assistant count).
   return captureAt(detail, cutoff === -1 ? turns.length : cutoff + 1)
+}
+
+/** Where an edited message's cut lands: the message in `detail` (looked up
+ *  first — a mid-turn reload can hold a copy of a turn `localTurns` also
+ *  holds, and the earlier copy is where the history has to end) or in
+ *  `localTurns`, by its id or by the agent's id for it. */
+function locateCutTarget(
+  session: ConversationRuntimeSession,
+  cut: { turnId: string; agentMessageId: string }
+): { where: "detail" | "local"; index: number; timestamp: string } | null {
+  // The agent's id names the message wherever it now sits; a turn id alone
+  // only counts on a turn that names no other message (a parse reuses its
+  // positional ids — the edited message's replacement can be `turn-2` too).
+  const matches = (t: MessageTurn) =>
+    t.role === "user" &&
+    (t.agent_message_id === cut.agentMessageId ||
+      (t.id === cut.turnId && t.agent_message_id == null))
+  const turns = session.detail?.turns ?? []
+  const inDetail = turns.findIndex(matches)
+  if (inDetail !== -1) {
+    return {
+      where: "detail",
+      index: inDetail,
+      timestamp: turns[inDetail].timestamp,
+    }
+  }
+  const inLocal = session.localTurns.findIndex(matches)
+  if (inLocal !== -1) {
+    return {
+      where: "local",
+      index: inLocal,
+      timestamp: session.localTurns[inLocal].timestamp,
+    }
+  }
+  return null
 }
 
 /** The capture for a batch whose first turn lands at `boundaryRel` within
@@ -1772,7 +1837,9 @@ function keepUnchangedStreamingTurns(
   return kept
 }
 
-/** Metadata backfilled onto a local assistant turn by the post-turn reparse. */
+/** Metadata backfilled onto a local turn by the post-turn reparse: stats and
+ *  the parser's name onto assistant turns, the parser's name and the agent's
+ *  own id onto user turns. */
 export interface TurnMetadataPatch {
   index: number
   usage?: TurnUsage | null
@@ -1785,6 +1852,9 @@ export interface TurnMetadataPatch {
    *  turn" — "fork from here" is the one today — has to send the parser's name
    *  instead. See `MessageTurn.source_turn_id`. */
   source_turn_id?: string | null
+  /** A USER turn's rewind point as the agent names it (the parser's
+   *  `agent_message_id`): what "edit and resend" sends (`PromptRewindTarget`). */
+  agent_message_id?: string | null
 }
 
 /** A failed round's closing line: a `system` turn of `turn_error` blocks. */
@@ -2103,7 +2173,67 @@ export function computeTurnMetadataPatches(params: {
     })
   })
 
+  // A user turn's agent id is what "edit and resend" cuts the agent's session
+  // at, so a wrong one cuts the conversation somewhere the user did not point.
+  // It is placed only where the parse opens exactly where this batch does and
+  // holds the very prompts this session sent — as many, and each one's text
+  // matching — once the reply that closes the batch is on disk. Anything less
+  // (a parse still behind, a prompt the parser merged with an identical one, a
+  // prompt from another client) leaves every one unnamed: the message offers
+  // no edit until the conversation is reopened, which beats an edit that cuts
+  // one message off.
+  const localUserIndices: number[] = []
+  localTurns.forEach((turn, index) => {
+    if (turn.role === "user") localUserIndices.push(index)
+  })
+  const sessionUserTurns = sessionTurns.filter((turn) => turn.role === "user")
+  // On top of the replies' own gate (`idIsPlaceable`: every round lines up,
+  // as many replies on both sides), so a parse that dropped one prompt and
+  // kept its reply — a repeated message deduped by the parser — cannot pair
+  // the remaining prompts one round off.
+  //
+  // And the batch's user and system turns have to come in the same order on
+  // both sides (reply sub-turns are split by different rules and are not
+  // compared): a failed attempt's error line the parse holds and the tab does
+  // not means the two are not the same prompts, whatever their text says.
+  const nonReplyRoles = (turns: readonly MessageTurn[]) =>
+    turns
+      .filter((turn) => turn.role !== "assistant")
+      .map((turn) => turn.role)
+      .join(",")
+  const usersArePlaceable =
+    idIsPlaceable &&
+    params.parseOpensAtBatch &&
+    nonReplyRoles(sessionTurns) === nonReplyRoles(localTurns) &&
+    sessionUserTurns.length === localUserIndices.length &&
+    localUserIndices.every(
+      (index, i) =>
+        userTurnText(localTurns[index]) === userTurnText(sessionUserTurns[i])
+    )
+  if (usersArePlaceable) {
+    localUserIndices.forEach((index, i) => {
+      const parsed = sessionUserTurns[i]
+      if (!parsed.agent_message_id) return
+      patches.push({
+        index,
+        source_turn_id: parsed.id,
+        agent_message_id: parsed.agent_message_id,
+      })
+    })
+  }
+
   return patches
+}
+
+/** A user turn's text as the rewind compares it (`user_turn_text` in
+ *  `crate::acp::rewind`): its text blocks joined, whitespace runs collapsed. */
+export function userTurnText(turn: MessageTurn): string {
+  return turn.blocks
+    .flatMap((block) => (block.type === "text" ? [block.text] : []))
+    .join("\n")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ")
 }
 
 function upsertExternalIdIndex(
@@ -2402,9 +2532,12 @@ function reducer(
         detailIsInFlight
       const keepAllLiveBuffers =
         action.preserveLive === true || detailIsInFlight
-      const dropIds = action.dropLiveTurnIds?.length
-        ? new Set(action.dropLiveTurnIds)
-        : null
+      // A missed edit cut's stale turns ride on whichever load lands first.
+      const dropList = [
+        ...(action.dropLiveTurnIds ?? []),
+        ...(current.pendingDropLiveTurnIds ?? []),
+      ]
+      const dropIds = dropList.length ? new Set(dropList) : null
 
       // Retire overlay turns the refetched detail now covers: both sides
       // measure byte offsets of the SAME transcript, so `entry.watermark <=
@@ -2449,17 +2582,20 @@ function reducer(
             ? {}
             : { localTurns: [] }
           : { localTurns: [], optimisticTurns: [], liveMessage: null }),
-        // Applied AFTER the blanket rules above so a fork's targeted removal
-        // survives `preserveLive` (which is what a fork asks for: keep
-        // everything except the turns it just invalidated).
-        ...(dropIds
-          ? {
-              localTurns: current.localTurns.filter((t) => !dropIds.has(t.id)),
-              optimisticTurns: current.optimisticTurns.filter(
-                (t) => !dropIds.has(t.id)
-              ),
-            }
-          : {}),
+      }
+      // Applied AFTER the blanket rules above so a fork's targeted removal
+      // survives `preserveLive` (which is what a fork asks for: keep
+      // everything except the turns it just invalidated) — and filtering what
+      // those rules KEPT, so a settled load that cleared the buffers is not
+      // handed them back by a removal list (a missed edit cut's, which rides
+      // on whichever load lands first).
+      if (dropIds) {
+        nextSession.localTurns = nextSession.localTurns.filter(
+          (t) => !dropIds.has(t.id)
+        )
+        nextSession.optimisticTurns = nextSession.optimisticTurns.filter(
+          (t) => !dropIds.has(t.id)
+        )
       }
       // A load that drops replies the batch already held leaves the batch's
       // anchor pointing at where THEY began, while what remains of the batch
@@ -2471,7 +2607,12 @@ function reducer(
       // next reply some other round's stats, so the batch is re-anchored on
       // the transcript just loaded (`recaptureBatchStart`). A batch left with
       // nothing at all is captured afresh by its next send anyway.
-      if (nextSession.localTurns.length < current.localTurns.length) {
+      if (
+        nextSession.localTurns.length < current.localTurns.length ||
+        current.rebaseBatchOnNextLoad
+      ) {
+        nextSession.rebaseBatchOnNextLoad = false
+        nextSession.pendingDropLiveTurnIds = undefined
         const capture = recaptureBatchStart(nextSession)
         nextSession.historyAssistantBaseline = capture.baseline
         nextSession.batchBoundaryIndex = capture.boundaryIndex
@@ -2916,6 +3057,109 @@ function reducer(
         }
       })
 
+    case "TRUNCATE_AT_TURN": {
+      // The agent's session was cut back to before the edited message and the
+      // edited prompt admitted in the same step: drop the message and
+      // everything after it from the view, keeping the new prompt (and any
+      // reply already streamed to it), and anchor the new batch on what is
+      // left. `truncateAtTurn` only dispatches when the target is found.
+      const current = state.byConversationId.get(action.conversationId)
+      if (!current) return state
+      const target = locateCutTarget(current, action)
+      if (!target) return state
+      const keepFrom = current.localTurns.findIndex(
+        (t) => t.id === action.keepFromTurnId
+      )
+      const sentTurns =
+        keepFrom === -1 ? [] : current.localTurns.slice(keepFrom)
+      // An overlay turn (out-of-turn background work) stays only when it
+      // provably predates the cut message.
+      const cutAt = Date.parse(target.timestamp)
+      const keepOverlay = (entry: BackgroundOverlayEntry) => {
+        const at = Date.parse(entry.turn.timestamp)
+        return Number.isFinite(at) && Number.isFinite(cutAt) && at < cutAt
+      }
+      if (target.where === "local") {
+        // Everything before it in `localTurns`, and the whole `detail`, stays;
+        // so does the batch anchor the kept turns were sent under.
+        return updateSessionInState(state, action.conversationId, (s) => ({
+          ...s,
+          localTurns: [...s.localTurns.slice(0, target.index), ...sentTurns],
+          backgroundTurns: s.backgroundTurns.filter(keepOverlay),
+          detailLoading: false,
+        }))
+      }
+      const detail = current.detail
+      if (!detail) return state
+      // A reload that landed after the admission may already hold the new
+      // prompt, stamped as the in-flight one: it stays, as history the batch
+      // opens after (the same reading `batchStartCapture` gives it).
+      // Only when it IS that prompt — the backend stamps the in-flight turn
+      // with the client message id it was sent with. A stamp a reload left on
+      // an earlier turn that has since finished names a turn the cut drops.
+      const stampedId = detail.in_flight_user_turn_id ?? null
+      const stamped =
+        stampedId === null || stampedId !== action.keepFromTurnId
+          ? -1
+          : detail.turns.findIndex(
+              (t, i) =>
+                i > target.index && t.role === "user" && t.id === stampedId
+            )
+      const kept = [
+        ...detail.turns.slice(0, target.index),
+        ...(stamped === -1 ? [] : detail.turns.slice(stamped)),
+      ]
+      const cutDetail: DbConversationDetail = {
+        ...detail,
+        turns: kept,
+        in_flight_user_turn_id: stamped === -1 ? null : stampedId,
+        ...(isWindowedDetail(detail)
+          ? { turns_total: detail.turns_offset + kept.length }
+          : {}),
+      }
+      const anchor = captureAt(
+        cutDetail,
+        stamped === -1 ? target.index : target.index + 1
+      )
+      return updateSessionInState(state, action.conversationId, (s) => ({
+        ...s,
+        detail: cutDetail,
+        // `truncateAtTurn` invalidated any fetch still out; its answer will be
+        // dropped, so nothing else would clear the flag.
+        detailLoading: false,
+        // Every live turn and background overlay before the new prompt came
+        // after the cut message.
+        localTurns: sentTurns,
+        backgroundTurns: s.backgroundTurns.filter(keepOverlay),
+        historyAssistantBaseline: anchor.baseline,
+        batchBoundaryIndex: anchor.boundaryIndex,
+        batchBoundaryPrefixHash: anchor.boundaryHash,
+      }))
+    }
+
+    case "MARK_OPTIMISTIC_UNSENT":
+      return updateSessionInState(state, action.conversationId, (s) =>
+        s.optimisticTurns.some((t) => t.id === action.id)
+          ? {
+              ...s,
+              unsentOptimisticIds: [
+                ...(s.unsentOptimisticIds ?? []),
+                action.id,
+              ],
+            }
+          : s
+      )
+
+    case "REQUEST_BATCH_REBASE":
+      return updateSessionInState(state, action.conversationId, (s) => ({
+        ...s,
+        rebaseBatchOnNextLoad: true,
+        pendingDropLiveTurnIds: [
+          ...(s.pendingDropLiveTurnIds ?? []),
+          ...action.dropLiveTurnIds,
+        ],
+      }))
+
     case "REMOVE_OPTIMISTIC_TURN": {
       const current = state.byConversationId.get(action.conversationId)
       if (!current) return state
@@ -2927,6 +3171,9 @@ function reducer(
       return updateSessionInState(state, action.conversationId, (s) => ({
         ...s,
         optimisticTurns: remaining,
+        unsentOptimisticIds: s.unsentOptimisticIds?.filter(
+          (id) => id !== action.id
+        ),
         // Drop back to idle once the last in-flight optimistic turn is rolled
         // back, so the `awaiting_persist` set on append doesn't linger and
         // suppress the next detail reconciliation. Concurrent optimistic turns
@@ -3201,12 +3448,15 @@ function reducer(
         const newModel = turn.model ?? patch.model
         const newCompletedAt = turn.completed_at ?? patch.completed_at
         const newSourceTurnId = turn.source_turn_id ?? patch.source_turn_id
+        const newAgentMessageId =
+          turn.agent_message_id ?? patch.agent_message_id
         if (
           newUsage !== turn.usage ||
           newDuration !== turn.duration_ms ||
           newModel !== turn.model ||
           newCompletedAt !== turn.completed_at ||
-          newSourceTurnId !== turn.source_turn_id
+          newSourceTurnId !== turn.source_turn_id ||
+          newAgentMessageId !== turn.agent_message_id
         ) {
           patchedTurns[patch.index] = {
             ...turn,
@@ -3215,6 +3465,7 @@ function reducer(
             model: newModel,
             completed_at: newCompletedAt,
             source_turn_id: newSourceTurnId,
+            agent_message_id: newAgentMessageId,
           }
           changed = true
         }
@@ -3297,10 +3548,13 @@ function reducer(
 
 export interface RuntimeActions {
   fetchDetail: (conversationId: number) => void
+  /** Resolves once the fetch has landed (or failed, or been superseded) —
+   *  for a caller that must not act on the history before the fresh one is in
+   *  place, such as the send after an edited message's rewind. */
   refetchDetail: (
     conversationId: number,
     options?: { preserveLive?: boolean; dropLiveTurnIds?: string[] }
-  ) => void
+  ) => Promise<void>
   /**
    * Load one page of older history above the current window and prepend it
    * (reverse infinite scroll). No-op unless the loaded detail is windowed
@@ -3350,6 +3604,23 @@ export interface RuntimeActions {
     turnToken: string
   ) => void
   removeOptimisticTurn: (conversationId: number, id: string) => void
+  /** Drop the edited message and every turn after it from the view
+   *  (`TRUNCATE_AT_TURN`): what its rewind cut from the agent's session.
+   *  Returns whether the message was found to cut at. */
+  /** Note that an optimistic turn's send never went out (see
+   *  `unsentOptimisticIds`). */
+  markOptimisticUnsent: (conversationId: number, id: string) => void
+  truncateAtTurn: (
+    conversationId: number,
+    cut: {
+      turnId: string
+      agentMessageId: string
+      keepFromTurnId: string
+      /** The live turns that predate the cut, dropped by the next load when
+       *  the message is not found to cut at. */
+      staleLiveTurnIds: string[]
+    }
+  ) => boolean
   appendViewerUserTurn: (conversationId: number, turn: MessageTurn) => void
   applyBackgroundActivity: (
     conversationId: number,
@@ -4510,7 +4781,7 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
   const refetchDetail = (
     conversationId: number,
     options?: { preserveLive?: boolean; dropLiveTurnIds?: string[] }
-  ): void => {
+  ): Promise<void> => {
     // The session key is not always a fetchable DB id: a conversation started
     // as a new-chat draft keeps its virtual (negative) key for the tab's whole
     // life. Fetch with the bound DB row id (see `dbConversationId`) and store
@@ -4523,7 +4794,7 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
     const fetchId = session?.dbConversationId ?? conversationId
     const generation = bumpFetchGeneration(conversationId)
     dispatch({ type: "FETCH_DETAIL_START", conversationId })
-    fetchDetailWindowed(fetchId, session?.detail ?? null)
+    return fetchDetailWindowed(fetchId, session?.detail ?? null)
       .then((detail) => {
         if (!isLatestGeneration(conversationId, generation)) return
         dispatch({
@@ -5218,6 +5489,33 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
       }),
     removeOptimisticTurn: (conversationId, id) =>
       dispatch({ type: "REMOVE_OPTIMISTIC_TURN", conversationId, id }),
+    markOptimisticUnsent: (conversationId, id) =>
+      dispatch({ type: "MARK_OPTIMISTIC_UNSENT", conversationId, id }),
+    truncateAtTurn: (conversationId, cut) => {
+      const session = get().byConversationId.get(conversationId)
+      if (!session) return false
+      if (!locateCutTarget(session, cut)) {
+        // The caller reloads instead; that load (or any that beats it) drops
+        // the stale turns and re-anchors the batch.
+        dispatch({
+          type: "REQUEST_BATCH_REBASE",
+          conversationId,
+          dropLiveTurnIds: cut.staleLiveTurnIds,
+        })
+        return false
+      }
+      // A fetch issued before the cut read the history before it; landing
+      // now it would put the cut turns back over the edited message.
+      bumpFetchGeneration(conversationId)
+      dispatch({
+        type: "TRUNCATE_AT_TURN",
+        conversationId,
+        turnId: cut.turnId,
+        agentMessageId: cut.agentMessageId,
+        keepFromTurnId: cut.keepFromTurnId,
+      })
+      return true
+    },
     appendViewerUserTurn: (conversationId, turn) =>
       dispatch({ type: "APPEND_VIEWER_USER_TURN", conversationId, turn }),
     applyBackgroundActivity: (conversationId, turns, watermark) =>

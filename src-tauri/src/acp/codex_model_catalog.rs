@@ -67,7 +67,8 @@ struct EnumSpec {
 // Authoritative value sets + nullability, extracted from the codex binary itself
 // by feeding it candidate catalogs and reading the full `unknown variant …,
 // expected …` / `invalid type: null, expected …` errors (re-probed on 0.159.2
-// and again on 0.170.0, unchanged since 0.147 bar `web_search_provider` —
+// and again on 0.170.0 and 0.171.0, unchanged since 0.147 bar
+// `web_search_provider` —
 // treat these as version-specific and re-probe when codex moves).
 fn enum_spec_for(key: &str) -> Option<EnumSpec> {
     let spec = |allowed, nullable| Some(EnumSpec { allowed, nullable });
@@ -174,6 +175,13 @@ fn enum_spec_for(key: &str) -> Option<EnumSpec> {
 /// `null` (bar the ignored `supports_parallel_tool_calls`), every enum set
 /// above behaves as on 0.166.0, and the snapshot loads whole. Its new nested
 /// keys are in [`model_messages_override_is_safe`].
+///
+/// 0.171.0 (codex-acp 2.9.0 moves `@openai/codex` ^0.170.0 → ^0.171.0) ships
+/// the bundled catalog byte for byte as 0.170.0 did, so the snapshot is
+/// unchanged. Its one new `ModelInfo` field is the optional boolean in
+/// [`NULLABLE_BOOL_FIELDS`]. Re-probed against the 0.171.0 binary: every field
+/// here and every enum set above behaves as on 0.170.0, and so do the nested
+/// `model_messages` texts.
 const BOOL_FIELDS: &[&str] = &[
     "use_responses_lite",
     "supported_in_api",
@@ -191,11 +199,24 @@ const BOOL_FIELDS: &[&str] = &[
     "supports_reasoning_effort_updates",
 ];
 
+/// `ModelInfo` fields codex parses as an optional `bool`: a boolean or `null`
+/// loads, anything else rejects the whole catalog.
+///
+/// `multi_agent_tools_in_code_mode` is new in 0.171.0. `"yes"` earns `invalid
+/// type: string "yes", expected a boolean` there and `1` the same for an
+/// integer, each taking every model down with it, while `null`, `true` and
+/// `false` load — probed with a temporary `model_catalog_json`. 0.170.0
+/// ignores the key whatever it holds, so an override saved under 0.170 would
+/// fail the rebuild for 0.171 unchecked. No bundled model sets it yet, and the
+/// editor offers no control for it.
+const NULLABLE_BOOL_FIELDS: &[&str] = &["multi_agent_tools_in_code_mode"];
+
 /// Whether a custom `overrides` entry is safe to write. A single value codex
 /// can't parse rejects the entire catalog, so:
 /// - strict enum fields must carry a string in their allowed set, or `null`
 ///   only where that enum is genuinely optional;
-/// - boolean fields must carry an actual boolean;
+/// - boolean fields must carry an actual boolean (or `null`, for the optional
+///   ones in [`NULLABLE_BOOL_FIELDS`]);
 /// - `default_reasoning_level` must name one of the clone base's supported
 ///   efforts (codex 0.147 accepts it leniently, but older codex is strict and
 ///   the meaningful values are per-model anyway);
@@ -217,6 +238,9 @@ fn sanitized_override(key: &str, value: &Value, base: Option<&Map<String, Value>
     }
     if BOOL_FIELDS.contains(&key) {
         return value.is_boolean();
+    }
+    if NULLABLE_BOOL_FIELDS.contains(&key) {
+        return value.is_null() || value.is_boolean();
     }
     if value.is_null() {
         return true;
@@ -920,7 +944,7 @@ mod tests {
         assert_eq!(
             models.len(),
             14,
-            "snapshot should carry the catalog codex 0.170.0 ships"
+            "snapshot should carry the catalog codex 0.171.0 ships (0.170.0's)"
         );
         // 0.158.0 deleted gpt-5.4 outright (it had shipped hidden, as a
         // retirement stub) rather than hiding it any further.
@@ -1277,6 +1301,39 @@ mod tests {
         assert_eq!(provider("gw/null"), Some(&Value::Null));
         assert_eq!(provider("gw/mcp").unwrap(), "search_mcp");
         assert_eq!(provider("gw/standalone").unwrap(), "standalone");
+    }
+
+    /// codex 0.171.0's `multi_agent_tools_in_code_mode` is an optional boolean:
+    /// a string or a number in it rejects the whole catalog (probed), `null`
+    /// and both booleans load. No bundled model sets it, so a dropped value
+    /// leaves the key out.
+    #[test]
+    fn expand_sanitizes_multi_agent_tools_in_code_mode() {
+        let entry = |slug: &str, value: Value| CodexCustomEntry {
+            slug: slug.into(),
+            display_name: None,
+            context_window: None,
+            base: "gpt-6.2-sol".into(),
+            overrides: Map::from_iter([("multi_agent_tools_in_code_mode".into(), value)]),
+        };
+        let config = CodexModelConfig {
+            customs: vec![
+                entry("gw/string", Value::String("yes".into())),
+                entry("gw/number", Value::from(1)),
+                entry("gw/null", Value::Null),
+                entry("gw/true", Value::Bool(true)),
+                entry("gw/false", Value::Bool(false)),
+            ],
+            ..Default::default()
+        };
+        let cat = expand_to_catalog(&config, &snap());
+        let field =
+            |slug: &str| find(&cat, slug).expect(slug).get("multi_agent_tools_in_code_mode");
+        assert_eq!(field("gw/string"), None);
+        assert_eq!(field("gw/number"), None);
+        assert_eq!(field("gw/null"), Some(&Value::Null));
+        assert_eq!(field("gw/true"), Some(&Value::Bool(true)));
+        assert_eq!(field("gw/false"), Some(&Value::Bool(false)));
     }
 
     /// The compatibility template the editor writes must survive sanitization

@@ -77,6 +77,21 @@ describe("SessionRow", () => {
     expect(mockFocus).toHaveBeenCalledWith(3, 7, "claude_code")
   })
 
+  it("says what a session asks and jumps to it to answer", () => {
+    renderRow({
+      ...rootSession(),
+      ask: { kind: "question", text: "Which database?" },
+    })
+    expect(screen.getByText("Asks you · Which database?")).toBeInTheDocument()
+    expect(screen.getByText("Waiting")).toBeInTheDocument()
+    expect(screen.queryByTestId("permission-card")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button"))
+    expect(mockFocus).toHaveBeenCalledWith(3, 7, "claude_code")
+    cleanup()
+    renderRow({ ...rootSession(), ask: { kind: "plan", text: "" } })
+    expect(screen.getByText("Plan to approve")).toBeInTheDocument()
+  })
+
   it("names the parent on a delegation sub-agent row", () => {
     renderRow(subAgentSession())
     expect(screen.getByText("Run the tests")).toBeInTheDocument()

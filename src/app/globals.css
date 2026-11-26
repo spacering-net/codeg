@@ -1160,6 +1160,15 @@
 
 @theme inline {
   --font-sans: var(--font-sans);
+  /* An emoji's own fonts (`font-emoji`), and no generic family after them:
+     with `sans-serif` anywhere in its stack — the interface's ends on it —
+     WebKit took six seconds to first draw the two dozen emoji of the face
+     editor's page in the desktop's webview, even with the emoji font named
+     first; without it, milliseconds. A glyph none of these has still falls
+     back to the system's. */
+  --font-emoji:
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Segoe UI Symbol",
+    system-ui;
   --color-activity-rail: var(--activity-rail);
   --color-activity-ring: var(--activity-ring);
   --color-activity-ring-done: var(--activity-ring-done);
@@ -4242,4 +4251,1569 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   100% {
     opacity: 0;
   }
+}
+
+/* Personal agent: the message a jump landed on flashes once (2s) — a ring,
+   so the bubble keeps its own fill; with reduced motion the ring holds for
+   the same time instead (the page removes the class). */
+@keyframes pa-flash {
+  0%,
+  35% {
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 40%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+.pa-flash {
+  animation: pa-flash 2s ease-out;
+}
+.pa-flash-static {
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 35%, transparent);
+}
+
+/* Personal agent: what sits inside a bubble (a work row, a work pill, a
+   quote, code) is the bubble's own colour a step deeper — a translucent wash
+   over it, never a colour of its own (a white card on the grey read as a
+   hole in it) — and a step deeper again under the pointer and when pressed:
+   `--pa-inset`, `--pa-inset-hover`, `--pa-inset-active`. Each state moves
+   away from the bubble, never back towards it, so a hovered card stands out
+   more rather than fading into its bubble (Radix Colors' component steps,
+   Material's state layers). Being translucent, the washes read the same
+   over a workspace background image. */
+
+/* Personal agent: an assistant's face itself, on its conversation
+   (`data-pa-face`): its body's colour and its eyes', the very palette steps
+   its face is drawn in (`FACE_BODY`, `FACE_EYES` in bot-avatar.tsx) — for
+   the owner's bubbles, which are its body's colour with the words in its
+   eyes'. */
+[data-pa-face="black"] {
+  --pa-body: var(--color-neutral-900);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="black"] {
+  --pa-body: var(--color-neutral-200);
+  --pa-eyes: var(--color-neutral-900);
+}
+[data-pa-face="brown"] {
+  --pa-body: var(--color-amber-800);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="brown"] {
+  --pa-body: var(--color-amber-600);
+}
+[data-pa-face="red"] {
+  --pa-body: var(--color-red-500);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="red"] {
+  --pa-body: var(--color-red-400);
+}
+[data-pa-face="orange"] {
+  --pa-body: var(--color-orange-500);
+  --pa-eyes: var(--color-neutral-900);
+}
+.dark [data-pa-face="orange"] {
+  --pa-body: var(--color-orange-400);
+}
+[data-pa-face="yellow"] {
+  --pa-body: var(--color-yellow-400);
+  --pa-eyes: var(--color-neutral-900);
+}
+.dark [data-pa-face="yellow"] {
+  --pa-body: var(--color-yellow-300);
+}
+[data-pa-face="green"] {
+  --pa-body: var(--color-green-500);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="green"] {
+  --pa-body: var(--color-green-400);
+  --pa-eyes: var(--color-neutral-900);
+}
+[data-pa-face="teal"] {
+  --pa-body: var(--color-teal-500);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="teal"] {
+  --pa-body: var(--color-teal-400);
+  --pa-eyes: var(--color-neutral-900);
+}
+[data-pa-face="blue"] {
+  --pa-body: var(--color-blue-500);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="blue"] {
+  --pa-body: var(--color-blue-400);
+}
+[data-pa-face="purple"] {
+  --pa-body: var(--color-violet-500);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="purple"] {
+  --pa-body: var(--color-violet-400);
+}
+[data-pa-face="magenta"] {
+  --pa-body: var(--color-fuchsia-500);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="magenta"] {
+  --pa-body: var(--color-fuchsia-400);
+}
+[data-pa-face="gray"] {
+  --pa-body: var(--color-slate-400);
+  --pa-eyes: var(--color-neutral-900);
+}
+.dark [data-pa-face="gray"] {
+  --pa-body: var(--color-slate-500);
+  --pa-eyes: var(--color-white);
+}
+
+/* Personal agent: the first setup's screen — a soft wash of the face's
+   colour (`--pa-body`; the theme's for a picture) from behind it, a glow
+   round the face that breathes slowly and rings that ripple out from it
+   (both held still with reduced motion). A black or grey face is a light
+   touch of grey, never a cloud. The colour eases over as another face is
+   picked. An assistant's own page (`data-pa-bot-frame`) has the same wash
+   and glow, without the ripples; the "new work assistant" box's head
+   (`data-pa-new-bot-head`) the glow. */
+@property --pa-setup-tint {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+[data-pa-setup-frame],
+[data-pa-bot-frame],
+[data-pa-new-bot-head] {
+  --pa-setup-tint: var(--pa-body, var(--primary));
+  --pa-setup-wash: 15%;
+  --pa-setup-halo: 0.24;
+  --pa-setup-ring: 40%;
+  transition: --pa-setup-tint 400ms ease;
+}
+[data-pa-setup-frame][data-pa-face="black"],
+[data-pa-setup-frame][data-pa-face="gray"],
+[data-pa-bot-frame][data-pa-face="black"],
+[data-pa-bot-frame][data-pa-face="gray"],
+[data-pa-new-bot-head][data-pa-face="black"],
+[data-pa-new-bot-head][data-pa-face="gray"] {
+  --pa-setup-wash: 4%;
+  --pa-setup-halo: 0.08;
+  --pa-setup-ring: 22%;
+}
+.pa-setup-wash {
+  background: radial-gradient(
+    50% 40% at var(--pa-setup-wash-at, 50% 32%),
+    color-mix(in oklab, var(--pa-setup-tint) var(--pa-setup-wash), transparent),
+    transparent 75%
+  );
+}
+/* Side by side (the frame 56rem wide or more, `data-wide`): behind the
+   face, on the left — the middle of the 25rem column ending 2rem short of
+   the middle; right to left, on the right. */
+[data-pa-setup-frame][data-wide] .pa-setup-wash {
+  --pa-setup-wash-at: calc(50% - 14.5rem) 50%;
+}
+[dir="rtl"] [data-pa-setup-frame][data-wide] .pa-setup-wash {
+  --pa-setup-wash-at: calc(50% + 14.5rem) 50%;
+}
+/* An assistant's own page: behind its face at the top of the column; side
+   by side, in the middle of the left part (two fifths of the width). */
+[data-pa-bot-frame] .pa-setup-wash {
+  --pa-setup-wash-at: 50% 9rem;
+}
+[data-pa-bot-frame][data-wide] .pa-setup-wash {
+  --pa-setup-wash-at: 20% 50%;
+}
+[dir="rtl"] [data-pa-bot-frame][data-wide] .pa-setup-wash {
+  --pa-setup-wash-at: 80% 50%;
+}
+.pa-setup-halo {
+  position: absolute;
+  inset: -16%;
+  border-radius: 9999px;
+  background: var(--pa-setup-tint);
+  opacity: var(--pa-setup-halo);
+  filter: blur(22px);
+  pointer-events: none;
+}
+.pa-setup-ripple {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  pointer-events: none;
+}
+.pa-setup-ripple::before,
+.pa-setup-ripple::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1.5px solid
+    color-mix(in oklab, var(--pa-setup-tint) var(--pa-setup-ring), transparent);
+  opacity: 0;
+}
+@keyframes pa-setup-breathe {
+  0%,
+  100% {
+    transform: scale(0.92);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+@keyframes pa-setup-ripple {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+/* The die beside the name, rolled. */
+@keyframes pa-setup-roll {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  50% {
+    transform: rotate(200deg) scale(1.2);
+  }
+  100% {
+    transform: rotate(360deg) scale(1);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pa-setup-halo {
+    animation: pa-setup-breathe 4.5s ease-in-out infinite;
+  }
+  .pa-setup-ripple::before,
+  .pa-setup-ripple::after {
+    animation: pa-setup-ripple 4s cubic-bezier(0.2, 0.6, 0.35, 1) infinite;
+  }
+  .pa-setup-ripple::after {
+    animation-delay: 2s;
+  }
+}
+
+/* Personal agent: an assistant's face colour (10.7), on its conversation
+   (`data-pa-face`): once for the light theme and once for the dark, with
+   the text that reads on it. With "follow the assistant's colour" on
+   (`data-pa-accent`) it is the theme's colour there — the cards' accent
+   edges and buttons. The unread dot keeps its blue (it is not the theme's
+   colour). */
+[data-pa-face="black"] {
+  --pa-face: oklch(0.205 0 0);
+  --pa-face-foreground: oklch(0.985 0 0);
+}
+.dark [data-pa-face="black"] {
+  --pa-face: oklch(0.87 0 0);
+  --pa-face-foreground: oklch(0.205 0 0);
+}
+[data-pa-face="brown"] {
+  --pa-face: oklch(0.473 0.137 46.201);
+  --pa-face-foreground: oklch(0.985 0 0);
+}
+.dark [data-pa-face="brown"] {
+  --pa-face: oklch(0.666 0.179 58.318);
+  --pa-face-foreground: oklch(0.205 0 0);
+}
+[data-pa-face="red"] {
+  --pa-face: oklch(0.577 0.245 27.325);
+  --pa-face-foreground: oklch(0.985 0 0);
+}
+.dark [data-pa-face="red"] {
+  --pa-face: oklch(0.704 0.191 22.216);
+  --pa-face-foreground: oklch(0.205 0 0);
+}
+[data-pa-face="orange"] {
+  --pa-face: oklch(0.646 0.222 41.116);
+  --pa-face-foreground: oklch(0.985 0 0);
+}
+.dark [data-pa-face="orange"] {
+  --pa-face: oklch(0.75 0.183 55.934);
+  --pa-face-foreground: oklch(0.205 0 0);
+}
+[data-pa-face="yellow"] {
+  --pa-face: oklch(0.795 0.184 86.047);
+  --pa-face-foreground: oklch(0.205 0 0);
+}
+.dark [data-pa-face="yellow"] {
+  --pa-face: oklch(0.905 0.182 98.111);
+  --pa-face-foreground: oklch(0.205 0 0);
+}
+[data-pa-face="green"] {
+  --pa-face: oklch(0.627 0.194 149.214);
+  --pa-face-foreground: oklch(0.985 0 0);
+}
+.dark [data-pa-face="green"] {
+  --pa-face: oklch(0.792 0.209 151.711);
+  --pa-face-foreground: oklch(0.205 0 0);
+}
+[data-pa-face="teal"] {
+  --pa-face: oklch(0.6 0.118 184.704);
+  --pa-face-foreground: oklch(0.985 0 0);
+}
+.dark [data-pa-face="teal"] {
+  --pa-face: oklch(0.777 0.152 181.912);
+  --pa-face-foreground: oklch(0.205 0 0);
+}
+[data-pa-face="blue"] {
+  --pa-face: oklch(0.546 0.245 262.881);
+  --pa-face-foreground: oklch(0.985 0 0);
+}
+.dark [data-pa-face="blue"] {
+  --pa-face: oklch(0.707 0.165 254.624);
+  --pa-face-foreground: oklch(0.205 0 0);
+}
+[data-pa-face="purple"] {
+  --pa-face: oklch(0.541 0.281 293.009);
+  --pa-face-foreground: oklch(0.985 0 0);
+}
+.dark [data-pa-face="purple"] {
+  --pa-face: oklch(0.702 0.183 293.541);
+  --pa-face-foreground: oklch(0.205 0 0);
+}
+[data-pa-face="magenta"] {
+  --pa-face: oklch(0.591 0.293 322.896);
+  --pa-face-foreground: oklch(0.985 0 0);
+}
+.dark [data-pa-face="magenta"] {
+  --pa-face: oklch(0.74 0.238 322.16);
+  --pa-face-foreground: oklch(0.205 0 0);
+}
+[data-pa-face="gray"] {
+  --pa-face: oklch(0.446 0.043 257.281);
+  --pa-face-foreground: oklch(0.985 0 0);
+}
+.dark [data-pa-face="gray"] {
+  --pa-face: oklch(0.704 0.04 256.788);
+  --pa-face-foreground: oklch(0.205 0 0);
+}
+[data-pa-accent][data-pa-face] {
+  --primary: var(--pa-face);
+  --primary-foreground: var(--pa-face-foreground);
+  --ring: var(--pa-face);
+}
+
+/* Personal agent: the owner's bubble is the assistant's face — its body's
+   colour, the words in its eyes' (the theme's colour and the words on it,
+   for one with a picture for a face) — so it reads as theirs, in that
+   conversation's colour; the assistant's bubbles (below) are grey. What
+   sits inside (a quote) washes it with the words' colour, and takes it for
+   its own words and its edge (set on what is inside: the bubble's own
+   colour falls back on the theme's). It stays solid over a workspace
+   background image: the colour is what says whose it is. */
+.pa-owner-bubble {
+  --pa-own: var(--pa-body, var(--primary));
+  --pa-own-ink: var(--pa-eyes, var(--primary-foreground));
+  --foreground: var(--pa-own-ink);
+  --muted-foreground: color-mix(in oklab, var(--pa-own-ink) 72%, transparent);
+  --pa-inset: color-mix(in oklab, var(--pa-own-ink) 14%, transparent);
+  --pa-inset-hover: color-mix(in oklab, var(--pa-own-ink) 20%, transparent);
+  --pa-inset-active: color-mix(in oklab, var(--pa-own-ink) 26%, transparent);
+  /* A thing in it (a quote, `INSET_SURFACE`): that wash, no line — not the
+     white card it is on the assistant's grey. */
+  --pa-object: var(--pa-inset);
+  --pa-object-hover: var(--pa-inset-hover);
+  --pa-object-active: var(--pa-inset-active);
+  --pa-object-edge: transparent;
+  background-color: var(--pa-own);
+  color: var(--pa-own-ink);
+}
+.pa-owner-bubble > * {
+  --primary: var(--pa-own-ink);
+}
+
+/* Personal agent: the bubbles on the assistants' side — the personal
+   agent's replies, and the news of the work it handed out — are a plain
+   grey with no border, whatever the theme's colour: the theme's own text
+   colour mixed into its page colour (a light grey in the light theme, a
+   dark one in the dark), so a tinted theme gives it no more than its own
+   faint cast. What sits inside one (a work row, a work pill, a quote, code)
+   washes it with more of the text colour: a deeper grey in the light theme,
+   a lighter one in the dark — the step a dark theme's raised surfaces take.
+   Over a workspace background image the bubble turns translucent as the
+   conversation's message surfaces do, with their hairline. */
+.pa-agent-bubble {
+  --pa-inset: color-mix(in oklab, var(--foreground) 4%, transparent);
+  --pa-inset-hover: color-mix(in oklab, var(--foreground) 7%, transparent);
+  --pa-inset-active: color-mix(in oklab, var(--foreground) 10%, transparent);
+  background-color: var(--muted);
+  background-color: color-mix(
+    in oklab,
+    var(--foreground) 4.5%,
+    var(--background)
+  );
+}
+.dark .pa-agent-bubble {
+  --pa-inset: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --pa-inset-hover: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --pa-inset-active: color-mix(in oklab, var(--foreground) 12%, transparent);
+  background-color: color-mix(
+    in oklab,
+    var(--foreground) 9%,
+    var(--background)
+  );
+}
+/* A thing inside a bubble (`INSET_SURFACE`: a work row, a pill, a quote, a
+   choice's panel): a white card with a hairline on the bubble's grey — the
+   card's colour, as an assistant's own card — and, on such a card (codeg's
+   `data-pa-surface`, a json-render card), the card's colour a step deeper
+   with no line, as a list's item on it is. */
+.pa-agent-bubble {
+  --pa-object: var(--card);
+  --pa-object-hover: color-mix(in oklab, var(--foreground) 4%, var(--card));
+  --pa-object-active: color-mix(in oklab, var(--foreground) 7%, var(--card));
+  --pa-object-edge: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+/* A card in the conversation — on a bubble, or a message of its own with
+   no bubble round it (`CardMessage`, a reply that is one card, and what is
+   over and under that card: its quote): its own steps of the text's
+   colour, the things on it a wash of them, no line. */
+:is(.pa-agent-bubble, [data-pa-list])
+  :is([data-pa-surface], [data-slot="card"], [data-pa-bare]) {
+  --pa-inset: color-mix(in oklab, var(--foreground) 4%, transparent);
+  --pa-inset-hover: color-mix(in oklab, var(--foreground) 7%, transparent);
+  --pa-inset-active: color-mix(in oklab, var(--foreground) 10%, transparent);
+  --pa-object: var(--pa-inset);
+  --pa-object-hover: var(--pa-inset-hover);
+  --pa-object-active: var(--pa-inset-active);
+  --pa-object-edge: transparent;
+}
+.dark
+  :is(.pa-agent-bubble, [data-pa-list])
+  :is([data-pa-surface], [data-slot="card"], [data-pa-bare]) {
+  --pa-inset: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --pa-inset-hover: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --pa-inset-active: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+[data-workspace-bg="on"] .pa-agent-bubble {
+  background-color: color-mix(in oklab, var(--muted) 58%, transparent);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+/* Markdown's own surfaces, in the bubble, by the same steps: inline code, a
+   code block and a diagram are the bubble a step deeper, instead of their
+   own greys (one of them the bubble's own) and a code body of the page
+   colour — a white card on the grey; a code block's title bar a step
+   deeper again; and no frame round a code block, as round nothing else in
+   a bubble. The same on a card in the conversation, by its own steps. */
+:is(.pa-agent-bubble, [data-pa-surface])
+  :is(
+    [data-streamdown="inline-code"],
+    [data-streamdown="code-block"],
+    [data-streamdown="mermaid-block"],
+    [data-streamdown="code-block-header"]
+  ) {
+  background-color: var(--pa-inset);
+}
+:is(.pa-agent-bubble, [data-pa-surface]) [data-streamdown="code-block-body"] {
+  background-color: transparent;
+}
+:is(.pa-agent-bubble, [data-pa-surface]) [data-streamdown="code-block"] {
+  border-color: transparent;
+}
+:is(.pa-agent-bubble, [data-pa-surface]) [data-streamdown="code-block-header"] {
+  box-shadow: none;
+}
+/* A table in the conversation has no colour of its own: its body is
+   whatever it sits on — a bubble's grey, a card's white, a workspace
+   image — and its head a step of the text's colour over that, see-through
+   (not the tints a table takes elsewhere, which are a colour of their own
+   and read white on a grey bubble). */
+[data-pa-list] [data-streamdown="table-body"] {
+  background-color: transparent;
+}
+[data-pa-list] [data-streamdown="table-header"] {
+  background-color: color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+.dark [data-pa-list] [data-streamdown="table-header"] {
+  background-color: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+/* A button a menu or popover opens from carries its trigger's slot in
+   place of "button" (`asChild`): matched by its variant all the same. */
+/* Personal agent: a button standing on an assistant's bubble — a card's
+   "hand it to the assistant", "open the task" — is raised off its grey: the
+   page's colour with a hairline and a soft shadow (in the dark theme a step
+   lighter than the bubble), a little deeper under the pointer; the input
+   colour the outline buttons wash themselves with elsewhere is the bubble's
+   own grey, and left it a muddy patch. A ghost button takes the bubble's
+   own step deeper under the pointer, not the page's grey (the bubble's).
+   Not one on a card of its own inside it (a json-render card, or one
+   codeg draws as such: `data-pa-surface`), which has its own surface and
+   its buttons their own colours; the focus ring keeps its shadow. */
+.pa-agent-bubble
+  :is(
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
+  ):not([data-slot="card"] *, [data-pa-surface] *) {
+  border-color: transparent;
+  background-color: var(--background);
+  /* Under its border too: no grey seam inside the hairline. */
+  background-clip: border-box;
+}
+.pa-agent-bubble
+  :is(
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
+  ):not([data-slot="card"] *, [data-pa-surface] *):not(:focus-visible) {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent),
+    0 1px 2px color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+.pa-agent-bubble
+  :is(
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
+  ):not([data-slot="card"] *, [data-pa-surface] *):hover {
+  background-color: color-mix(
+    in oklab,
+    var(--foreground) 7%,
+    var(--background)
+  );
+}
+.dark
+  .pa-agent-bubble
+  :is(
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
+  ):not([data-slot="card"] *, [data-pa-surface] *) {
+  background-color: color-mix(
+    in oklab,
+    var(--foreground) 20%,
+    var(--background)
+  );
+}
+.dark
+  .pa-agent-bubble
+  :is(
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
+  ):not([data-slot="card"] *, [data-pa-surface] *):not(:focus-visible) {
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+.dark
+  .pa-agent-bubble
+  :is(
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
+  ):not([data-slot="card"] *, [data-pa-surface] *):hover {
+  background-color: color-mix(
+    in oklab,
+    var(--foreground) 28%,
+    var(--background)
+  );
+}
+.pa-agent-bubble
+  :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="ghost"]:not(
+    [data-slot="card"] *,
+    [data-pa-surface] *
+  ):hover,
+.pa-agent-bubble
+  :is(
+    [data-slot="button"],
+    [data-slot$="-trigger"]
+  )[data-variant="ghost"][aria-expanded="true"]:not(
+    [data-slot="card"] *,
+    [data-pa-surface] *
+  ) {
+  background-color: var(--pa-inset-hover);
+}
+/* Personal agent: a ghost button with words on an assistant's bubble — "not
+   now", "don't bring these up again", "make a team" — is a soft patch of
+   the bubble a step deeper, so it reads as a button and not as words
+   beside the raised ones; deeper under the pointer. One of an icon alone
+   keeps to the bubble until hovered: its shape says it is a button. Not
+   on a card of its own inside it. */
+.pa-agent-bubble {
+  --pa-tonal: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --pa-tonal-hover: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+.dark .pa-agent-bubble {
+  --pa-tonal: color-mix(in oklab, var(--foreground) 8%, transparent);
+  --pa-tonal-hover: color-mix(in oklab, var(--foreground) 13%, transparent);
+}
+.pa-agent-bubble
+  :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="ghost"]:not(
+    [data-size^="icon"]
+  ):not([data-slot="card"] *, [data-pa-surface] *) {
+  background-color: var(--pa-tonal);
+}
+.pa-agent-bubble
+  :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="ghost"]:not(
+    [data-size^="icon"]
+  ):not([data-slot="card"] *, [data-pa-surface] *):is(
+    :hover,
+    [aria-expanded="true"]
+  ) {
+  background-color: var(--pa-tonal-hover);
+}
+
+/* Personal agent: a choice on a card — a new assistant's opening question,
+   an assistant's own questions — raised off the bubble as its outline
+   buttons are: the page's colour with a hairline and a soft shadow, the
+   hairline deeper under the pointer (not a grey fill: the bubble's own,
+   the row sank into it). In the dark theme a step lighter than the bubble.
+   The one picked is the theme colour's, its hairline whole. "Other", to
+   write one's own, is the bubble's with a dashed line, its words not
+   faded to look switched off. */
+.pa-choice {
+  background-color: var(--background);
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--foreground) 9%, transparent),
+    0 1px 2px color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+button.pa-choice:enabled:not(.pa-choice-chosen):hover {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--foreground) 20%, transparent),
+    0 2px 6px color-mix(in oklab, var(--foreground) 7%, transparent);
+}
+.dark .pa-choice {
+  background-color: color-mix(
+    in oklab,
+    var(--foreground) 12%,
+    var(--background)
+  );
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+.dark button.pa-choice:enabled:not(.pa-choice-chosen):hover {
+  background-color: color-mix(
+    in oklab,
+    var(--foreground) 16%,
+    var(--background)
+  );
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 18%, transparent);
+}
+.pa-choice.pa-choice-chosen {
+  background-color: color-mix(in oklab, var(--primary) 8%, var(--background));
+  box-shadow: 0 0 0 1.5px var(--primary);
+}
+.pa-choice-other {
+  border: 1px dashed color-mix(in oklab, var(--foreground) 22%, transparent);
+  color: color-mix(in oklab, var(--foreground) 78%, transparent);
+}
+.pa-choice-other:enabled:hover {
+  border-color: color-mix(in oklab, var(--foreground) 36%, transparent);
+  background-color: color-mix(in oklab, var(--background) 55%, transparent);
+  color: var(--foreground);
+}
+.dark .pa-choice-other:enabled:hover {
+  background-color: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+/* Personal agent: the bubble a right-click opened its menu on, ringed in the
+   theme's colour (as a jump flashes it, softer) until the menu closes. */
+[data-pa-frame][data-state="open"] > [data-bubble] {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--primary) 30%, transparent);
+}
+[data-workspace-bg="on"] [data-pa-frame][data-state="open"] > .pa-agent-bubble {
+  box-shadow:
+    inset 0 0 0 1px var(--border),
+    0 0 0 2px color-mix(in oklab, var(--primary) 30%, transparent);
+}
+
+/* Personal agent: switching to another assistant (`SwitchVeil`). What the
+   page shows is the last one's, faded a little once the read takes a
+   moment — a quick one never flickers — under a thin bar running along the
+   conversation's top, which comes in after the same moment. Under reduced
+   motion the bar stands still. */
+[data-pa-switch-veil] > :not([data-pa-switch-bar]) {
+  transition: opacity 150ms ease-out;
+}
+[data-pa-switch-veil][data-pa-switching] > :not([data-pa-switch-bar]) {
+  opacity: 0.55;
+  transition-delay: 120ms;
+}
+[data-pa-switch-bar] {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  z-index: 20;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+  animation: pa-delayed-in 200ms ease-out 120ms both;
+}
+[data-pa-switch-bar] > span {
+  position: absolute;
+  inset-block: 0;
+  width: 40%;
+  border-radius: 9999px;
+  background-color: var(--pa-face, var(--primary));
+  animation: pa-switch-bar 1.1s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+@keyframes pa-switch-bar {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+[dir="rtl"] [data-pa-switch-bar] > span {
+  animation-direction: reverse;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-pa-switch-bar] > span {
+    width: 100%;
+    opacity: 0.5;
+    animation: none;
+  }
+}
+/* Comes in only once a wait takes a moment: what shows while something is
+   read (the conversation's shape before it is). */
+@keyframes pa-delayed-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.pa-delayed-in {
+  animation: pa-delayed-in 200ms ease-out 150ms both;
+}
+
+/* The personal agent's input box scrolls inside its round box: the
+   OverlayScrollbars look of `.field-scrollbar` (the side panel's bar), with
+   the gutter kept so the text does not re-wrap when the bar appears. Text
+   scrolled past an edge fades out there instead of being cut against the
+   buttons; the bar's strip stays unmasked. `data-fade` is kept by the box. */
+.pa-composer .codeg-composer-scroll {
+  scrollbar-gutter: stable;
+}
+.pa-composer .codeg-composer-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+.pa-composer .codeg-composer-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.pa-composer .codeg-composer-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: var(--border);
+  background-clip: padding-box;
+}
+.pa-composer .codeg-composer-scroll::-webkit-scrollbar-thumb:hover {
+  border-width: 1px;
+  background-color: var(--muted-foreground);
+}
+@supports not selector(::-webkit-scrollbar) {
+  .pa-composer .codeg-composer-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+}
+.pa-composer .codeg-composer-scroll[data-fade] {
+  -webkit-mask-image:
+    linear-gradient(
+      to bottom,
+      var(--pa-fade-top, #000),
+      #000 1.25rem,
+      #000 calc(100% - 1.25rem),
+      var(--pa-fade-bottom, #000)
+    ),
+    linear-gradient(#000, #000);
+  mask-image:
+    linear-gradient(
+      to bottom,
+      var(--pa-fade-top, #000),
+      #000 1.25rem,
+      #000 calc(100% - 1.25rem),
+      var(--pa-fade-bottom, #000)
+    ),
+    linear-gradient(#000, #000);
+  -webkit-mask-size:
+    calc(100% - 10px) 100%,
+    10px 100%;
+  mask-size:
+    calc(100% - 10px) 100%,
+    10px 100%;
+  -webkit-mask-position:
+    left top,
+    right top;
+  mask-position:
+    left top,
+    right top;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+[dir="rtl"] .pa-composer .codeg-composer-scroll[data-fade] {
+  -webkit-mask-position:
+    right top,
+    left top;
+  mask-position:
+    right top,
+    left top;
+}
+.pa-composer .codeg-composer-scroll[data-fade~="top"] {
+  --pa-fade-top: transparent;
+}
+.pa-composer .codeg-composer-scroll[data-fade~="bottom"] {
+  --pa-fade-bottom: transparent;
+}
+/* The input box's text: the editor's own size (0.875rem on a wide screen,
+   1rem on a narrow one, which stops a phone zooming in on focus) on a
+   1.375rem line — in the editor's 0.5rem of padding, the buttons' 1.875rem, so
+   a box of one line stays round at the ends. After the editor's own
+   `line-height: 1.55`, which it overrides. */
+.pa-composer .ProseMirror {
+  line-height: 1.375rem;
+}
+/* One line of placeholder, cut short with an ellipsis: on a single-line box
+   a wrapped one would spill under the buttons. */
+.pa-composer .ProseMirror p.is-editor-empty:first-child {
+  position: relative;
+}
+.pa-composer .ProseMirror p.is-editor-empty:first-child::before {
+  position: absolute;
+  inset-inline: 0;
+  float: none;
+  height: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Motion tokens (10.8) ───────────────────────────────────────────────────
+   One place for how things move; components use the variables and the
+   `motion-*` classes below, never numbers of their own. The springs are
+   solved once and committed as `linear()` curves
+   (`src/lib/motion/spring.ts`, `node --no-warnings
+   scripts/gen-spring-linear.mjs`); its test checks these strings. A webview
+   without `linear()` gets the entrance curve instead. Under reduced motion
+   (the one block at the end of this section) movement becomes fades, loops
+   stop, spinners pulse and the faces rest. */
+:root {
+  --motion-feedback: 120ms;
+  --motion-hover: 140ms;
+  --motion-enter: 160ms;
+  --motion-expand: 200ms;
+  --motion-row: 240ms;
+  --motion-card: 240ms;
+  --motion-crossfade: 260ms;
+  --motion-card-collapse: 300ms;
+  --motion-widget: 320ms;
+  --motion-stagger: 380ms;
+  --motion-pop: 500ms;
+
+  --motion-spin-small: 700ms;
+  --motion-spin: 1200ms;
+  --motion-bounce: 1400ms;
+  --motion-breathe: 2400ms;
+  --motion-shimmer: 1.6s;
+
+  --motion-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --motion-ease-enter: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --motion-ease-emphasis: cubic-bezier(0.23, 1, 0.32, 1);
+
+  /* The springs' durations: their shapes below are played in these. */
+  --motion-spring-fast-duration: 300ms;
+  --motion-spring-pop-duration: 500ms;
+  --motion-spring-fast: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-spring-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    /* mass 1, stiffness 175, damping 26 */
+    --motion-spring-fast: linear(
+      0,
+      0.021,
+      0.072,
+      0.141,
+      0.219,
+      0.3,
+      0.38,
+      0.456,
+      0.526,
+      0.59,
+      0.648,
+      0.699,
+      0.744,
+      0.783,
+      0.817,
+      0.846,
+      0.871,
+      0.892,
+      0.91,
+      0.925,
+      0.938,
+      0.949,
+      0.958,
+      0.965,
+      0.971,
+      0.976,
+      0.981,
+      0.984,
+      0.987,
+      0.99,
+      0.991,
+      0.993,
+      0.994,
+      0.995,
+      0.996,
+      0.997,
+      0.998,
+      0.998,
+      0.998,
+      0.999,
+      1
+    );
+    /* mass 1, stiffness 300, damping 21.8: about 7.8 % overshoot */
+    --motion-spring-pop: linear(
+      0,
+      0.019,
+      0.071,
+      0.145,
+      0.235,
+      0.332,
+      0.432,
+      0.531,
+      0.624,
+      0.71,
+      0.787,
+      0.855,
+      0.912,
+      0.96,
+      0.998,
+      1.028,
+      1.049,
+      1.064,
+      1.074,
+      1.078,
+      1.078,
+      1.076,
+      1.071,
+      1.065,
+      1.057,
+      1.049,
+      1.042,
+      1.034,
+      1.027,
+      1.02,
+      1.015,
+      1.01,
+      1.005,
+      1.002,
+      0.999,
+      0.997,
+      0.996,
+      0.995,
+      0.994,
+      0.994,
+      0.994,
+      0.994,
+      0.995,
+      0.995,
+      0.996,
+      0.996,
+      0.997,
+      0.998,
+      0.998,
+      0.999,
+      1
+    );
+  }
+}
+
+/* A new message: up 12px into place over 240ms while it grows from 0.985
+   over 320ms (`translate` and `scale` are separate properties, so the two
+   run side by side). Put on as it mounts; filled backwards only. */
+.motion-message-enter {
+  animation:
+    motion-rise var(--motion-row) var(--motion-ease-enter) backwards,
+    motion-grow var(--motion-widget) var(--motion-ease-enter) backwards;
+}
+
+/* A reply split into short bubbles (10.7), new to the page: after its
+   first, each bubble rises in 120ms after the one before. */
+.motion-message-enter [data-pa-bubble-part]:not([data-pa-bubble-part="0"]) {
+  animation: motion-rise var(--motion-row) var(--motion-ease-enter) backwards;
+}
+.motion-message-enter [data-pa-bubble-part="1"] {
+  animation-delay: 120ms;
+}
+.motion-message-enter [data-pa-bubble-part="2"] {
+  animation-delay: 240ms;
+}
+.motion-message-enter [data-pa-bubble-part="3"] {
+  animation-delay: 360ms;
+}
+
+@keyframes motion-rise {
+  from {
+    opacity: 0;
+    translate: 0 12px;
+  }
+}
+
+@keyframes motion-grow {
+  from {
+    scale: 0.985;
+  }
+}
+
+@keyframes motion-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* A row that opens from no height and shuts to none (roster rows, task rows,
+   the panel's lists), on a grid track so nothing reads layout: the wrapper
+   gets `motion-rows`, its one child is clipped while it moves.
+   `data-state="closed"` shuts it (keep it mounted for `--motion-row`, then
+   remove it); `motion-rows-enter` opens it as it mounts. */
+.motion-rows {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows var(--motion-row) var(--motion-spring-fast),
+    opacity var(--motion-row) var(--motion-ease-standard);
+}
+
+.motion-rows > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.motion-rows[data-state="closed"] {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+.motion-rows-enter {
+  animation: motion-rows-open var(--motion-row) var(--motion-spring-fast)
+    backwards;
+}
+
+@keyframes motion-rows-open {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+/* A hint pill over the timeline ("N need you", "New messages"): in and out
+   over 200ms on the standard curve. `motion-pill` as it mounts;
+   `data-state="closed"` to see it out before removing it. */
+.motion-pill {
+  animation: motion-pill-in var(--motion-expand) var(--motion-ease-standard)
+    backwards;
+  transition:
+    opacity var(--motion-expand) var(--motion-ease-standard),
+    translate var(--motion-expand) var(--motion-ease-standard);
+}
+
+.motion-pill[data-state="closed"] {
+  opacity: 0;
+  translate: 0 6px;
+  pointer-events: none;
+}
+
+@keyframes motion-pill-in {
+  from {
+    opacity: 0;
+    translate: 0 6px;
+  }
+}
+
+/* A reaction popping on (the 👍 on the owner's message): from nothing to its
+   size over 500ms on the pop spring, a little past it and back. */
+.motion-pop {
+  animation: motion-pop var(--motion-spring-pop-duration)
+    var(--motion-spring-pop) backwards;
+}
+
+@keyframes motion-pop {
+  from {
+    scale: 0;
+  }
+}
+
+/* The message a jump lands on: a ring flashes round it once. */
+.motion-jump-ring {
+  animation: motion-jump-ring 1200ms var(--motion-ease-standard);
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+@keyframes motion-jump-ring {
+  15%,
+  55% {
+    outline-color: var(--ring);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+
+/* Spinners on one phase across the screen: each mounts with
+   `animation-delay: -(now mod period)` (`useSyncedSpin`, `SyncedSpinner`),
+   so every one is at the same angle. */
+.motion-spin {
+  animation: motion-spin var(--motion-spin) linear infinite;
+}
+
+.motion-spin-small {
+  animation: motion-spin var(--motion-spin-small) linear infinite;
+}
+
+@keyframes motion-spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+/* Started, with nothing to say yet (the status line over the assistants'
+   input box): three dots rising in turn, as a messenger's typing does. */
+.motion-typing > span {
+  width: 0.25rem;
+  height: 0.25rem;
+  border-radius: 9999px;
+  background-color: currentColor;
+  animation: motion-typing var(--motion-spin) var(--motion-ease-standard)
+    infinite;
+}
+
+.motion-typing > span:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.motion-typing > span:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+@keyframes motion-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.4;
+    translate: 0 0;
+  }
+  30% {
+    opacity: 1;
+    translate: 0 -3px;
+  }
+}
+
+@keyframes motion-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* A loading skeleton whose sheen is one light across the screen: the
+   gradient is fixed to the viewport, so every block shows a slice of it. */
+.motion-skeleton {
+  background-color: var(--muted);
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in oklab, var(--foreground) 6%, transparent) 50%,
+    transparent 70%
+  );
+  background-size: 200vw 100%;
+  background-attachment: fixed;
+  animation: motion-skeleton var(--motion-shimmer) linear infinite;
+}
+
+@keyframes motion-skeleton {
+  from {
+    background-position: 100vw 0;
+  }
+  to {
+    background-position: -100vw 0;
+  }
+}
+
+/* ── An assistant's face (10.6, `bot-avatar.tsx`) ───────────────────────────
+   The drawing (`bot-shapes.ts`) turns as a whole with the look and toward
+   the pointer, drawn again by script; what moves it whole without drawing it
+   again is here. The body (`.pa-face-body`: the drawing) bobs, breathes,
+   sways or hops with the look, and perks up (`.pa-face-perk`, inside it)
+   when the pointer comes over it; the eyes blink (`.pa-face-lids`, a group
+   of the drawing; `data-blink` on the face). All in the SVG's own units (a
+   100 × 100 box), so a motion is the same share of a face at any size: a
+   tenth of it or so, enough to be seen on a 28px face. The body squashes
+   and stretches from its foot. The dot's ring is the background it sits on:
+   a parent drawing it on another colour sets `--pa-dot-ring`. The drawing's
+   paints are its colour's tones, a stylesheet of their own
+   (`faceToneCss`). */
+.pa-face {
+  --pa-dot-ring: var(--background);
+}
+
+.pa-face-body,
+.pa-face-perk {
+  transform-box: view-box;
+  transform-origin: 50px 94px;
+}
+
+/* The pointer comes over it: a little hop, squashed as it sets off and as
+   it lands. Two names for one motion, taken in turn, so the next time
+   starts it again. */
+.pa-face[data-perk="a"] .pa-face-perk {
+  animation: pa-face-perk-a 560ms var(--motion-ease-standard);
+}
+
+.pa-face[data-perk="b"] .pa-face-perk {
+  animation: pa-face-perk-b 560ms var(--motion-ease-standard);
+}
+
+.pa-face-lids {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 70ms var(--motion-ease-standard);
+}
+
+.pa-face[data-blink] .pa-face-lids {
+  transform: scaleY(0.1);
+}
+
+/* Thinking: tilting its head one way and the other, lifting a little each
+   time — moving the whole time it thinks, not only its eyes. */
+.pa-face[data-bot-look="thinking"] .pa-face-body {
+  animation: pa-face-ponder var(--motion-breathe) ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="working"] .pa-face-body {
+  animation: pa-face-bob var(--motion-bounce) ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="waiting"] .pa-face-body {
+  animation: pa-face-breathe var(--motion-breathe) ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="stuck"] .pa-face-body {
+  animation: pa-face-sway calc(var(--motion-breathe) * 1.5) ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="sleeping"] .pa-face-body {
+  animation: pa-face-sleep calc(var(--motion-breathe) * 1.25) ease-in-out
+    infinite;
+}
+
+/* Done: two hops once it has turned round (`DONE_SPIN_S`). */
+.pa-face[data-bot-look="done"] .pa-face-body {
+  animation: pa-face-hop 640ms var(--motion-ease-standard) 800ms 2;
+}
+
+.pa-face-z {
+  opacity: 0;
+  transform-box: fill-box;
+  animation: pa-face-z calc(var(--motion-breathe) * 1.25) ease-out infinite;
+}
+
+/* Waiting or working with a picture, an emoji or a monogram for a face: a
+   ring round it says so. */
+.pa-face-ring {
+  animation: pa-face-ring var(--motion-bounce) ease-in-out infinite;
+}
+
+/* A picture, an emoji or a monogram moves with its look too, whole, from
+   its foot: as a face does while it thinks, works and waits, and its hops
+   once done, a shake once failed (in its own sizes: a picture is no
+   100 × 100 box). */
+.pa-face-pic {
+  display: inline-flex;
+  transform-origin: 50% 100%;
+}
+
+.pa-face[data-bot-look="thinking"] > .pa-face-pic {
+  animation: pa-pic-ponder var(--motion-breathe) ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="working"] > .pa-face-pic {
+  animation: pa-pic-bob var(--motion-bounce) ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="waiting"] > .pa-face-pic {
+  animation: pa-face-breathe var(--motion-breathe) ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="done"] > .pa-face-pic {
+  animation: pa-pic-hop 640ms var(--motion-ease-standard) 2;
+}
+
+.pa-face[data-bot-look="failed"] > .pa-face-pic {
+  animation: pa-pic-shake 700ms var(--motion-ease-standard);
+}
+
+/* Thinking: its head tilted one way, then the other, lifted a little. */
+@keyframes pa-face-ponder {
+  0%,
+  50%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-4px) rotate(-7deg);
+  }
+  75% {
+    transform: translateY(-4px) rotate(7deg);
+  }
+}
+
+@keyframes pa-pic-ponder {
+  0%,
+  50%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-4%) rotate(-7deg);
+  }
+  75% {
+    transform: translateY(-4%) rotate(7deg);
+  }
+}
+
+@keyframes pa-pic-bob {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  14% {
+    transform: translateY(0) scale(1.07, 0.92);
+  }
+  42% {
+    transform: translateY(-10%) scale(0.95, 1.06);
+  }
+  64% {
+    transform: translateY(0) scale(1.05, 0.94);
+  }
+  80% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+
+@keyframes pa-pic-hop {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  16% {
+    transform: translateY(0) scale(1.08, 0.9);
+  }
+  45% {
+    transform: translateY(-20%) scale(0.94, 1.08);
+  }
+  70% {
+    transform: translateY(0) scale(1.06, 0.93);
+  }
+  85% {
+    transform: translateY(-3%) scale(1, 1);
+  }
+}
+
+@keyframes pa-pic-shake {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  20% {
+    transform: rotate(-12deg);
+  }
+  40% {
+    transform: rotate(10deg);
+  }
+  60% {
+    transform: rotate(-7deg);
+  }
+  80% {
+    transform: rotate(4deg);
+  }
+}
+
+/* Working: a bounce — down into a squash, up stretched, landing squashed. */
+@keyframes pa-face-bob {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  14% {
+    transform: translateY(0) scale(1.07, 0.92);
+  }
+  42% {
+    transform: translateY(-10px) scale(0.95, 1.06);
+  }
+  64% {
+    transform: translateY(0) scale(1.05, 0.94);
+  }
+  80% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+
+/* Waiting: breathing deep, taller as it breathes in. */
+@keyframes pa-face-breathe {
+  50% {
+    transform: scale(0.96, 1.07);
+  }
+}
+
+/* Asleep: a slow breath, spreading wider. */
+@keyframes pa-face-sleep {
+  50% {
+    transform: scale(1.06, 0.95);
+  }
+}
+
+/* Stuck: swaying, drowsy, from its foot. */
+@keyframes pa-face-sway {
+  0%,
+  100% {
+    transform: rotate(-5deg);
+  }
+  50% {
+    transform: rotate(5deg);
+  }
+}
+
+/* Done: a hop, squashed as it sets off and as it lands. */
+@keyframes pa-face-hop {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  16% {
+    transform: translateY(0) scale(1.08, 0.9);
+  }
+  45% {
+    transform: translateY(-20px) scale(0.94, 1.08);
+  }
+  70% {
+    transform: translateY(0) scale(1.06, 0.93);
+  }
+  85% {
+    transform: translateY(-3px) scale(1, 1);
+  }
+}
+
+@keyframes pa-face-perk-a {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  18% {
+    transform: translateY(0) scale(1.08, 0.9);
+  }
+  46% {
+    transform: translateY(-12px) scale(0.95, 1.07);
+  }
+  72% {
+    transform: translateY(0) scale(1.04, 0.95);
+  }
+}
+
+@keyframes pa-face-perk-b {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  18% {
+    transform: translateY(0) scale(1.08, 0.9);
+  }
+  46% {
+    transform: translateY(-12px) scale(0.95, 1.07);
+  }
+  72% {
+    transform: translateY(0) scale(1.04, 0.95);
+  }
+}
+
+@keyframes pa-face-z {
+  0% {
+    opacity: 0;
+    transform: translate(0, 4px) scale(0.7);
+  }
+  25% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(10px, -24px) scale(1.15);
+  }
+}
+
+@keyframes pa-face-ring {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Reduced motion, for everything of this section: movement becomes a fade,
+   loops stop, spinners pulse, the faces rest in each look's still pose (the
+   Zs stay, still) and the fast spring plays in 120ms. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-spring-fast-duration: 120ms;
+  }
+
+  .motion-message-enter,
+  .motion-pop,
+  .motion-pill {
+    animation: motion-fade var(--motion-enter) var(--motion-ease-standard)
+      backwards;
+  }
+
+  .motion-message-enter [data-pa-bubble-part] {
+    animation: none;
+  }
+
+  .motion-pill,
+  .motion-pill[data-state="closed"] {
+    translate: none;
+  }
+
+  .motion-rows,
+  .motion-rows-enter {
+    animation: none;
+    transition: opacity var(--motion-enter) var(--motion-ease-standard);
+  }
+
+  .motion-spin,
+  .motion-spin-small {
+    animation: motion-pulse var(--motion-spin) ease-in-out infinite;
+  }
+
+  /* The dots fade in turn instead (each keeps its delay). */
+  .motion-typing > span {
+    animation: motion-pulse var(--motion-spin) ease-in-out infinite;
+  }
+
+  .motion-skeleton {
+    animation: none;
+  }
+
+  .pa-face *,
+  .pa-face-ring {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .pa-face-z {
+    opacity: 0.7;
+  }
+}
+
+/* A roster row dragged onto a group (personal-agent/roster.tsx): no hover
+   card over the rows it passes, no text selected on its way. */
+:root[data-pa-roster-dragging] {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+:root[data-pa-roster-dragging] [data-pa-roster-hovercard] {
+  display: none;
+}
+
+/* Nor while a row's menu is open: the menu is what the owner looks at. */
+body:has([data-pa-roster-menu][data-state="open"]) [data-pa-roster-hovercard] {
+  display: none;
 }

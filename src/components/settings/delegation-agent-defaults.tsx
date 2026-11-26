@@ -61,10 +61,27 @@ interface CachedSnapshot {
   ts: number
 }
 const SNAPSHOT_TTL_MS = 30_000
+const MAX_CACHED_SNAPSHOTS = 32
 // Keyed by (agent, model): an agent that derives one option's choices from
 // another's value (opencode lists `effort` per model) answers differently per
 // model, so a cached snapshot for one model must not serve another.
 const snapshotCache = new Map<string, CachedSnapshot>()
+
+function rememberSnapshot(key: string, entry: CachedSnapshot): void {
+  snapshotCache.delete(key)
+  snapshotCache.set(key, entry)
+  // Expired snapshots are never served, so they go first: otherwise one read
+  // shortly before it expired would outrank a fresh one in recency order and
+  // push it out.
+  const now = Date.now()
+  for (const [cachedKey, cached] of snapshotCache) {
+    if (now - cached.ts > SNAPSHOT_TTL_MS) snapshotCache.delete(cachedKey)
+  }
+  if (snapshotCache.size > MAX_CACHED_SNAPSHOTS) {
+    const oldest = snapshotCache.keys().next()
+    if (!oldest.done) snapshotCache.delete(oldest.value)
+  }
+}
 
 function snapshotKey(agent: AgentType, model: string | null): string {
   return JSON.stringify([agent, model])
@@ -81,6 +98,7 @@ function readCache(
     snapshotCache.delete(key)
     return null
   }
+  rememberSnapshot(key, entry)
   return entry.snapshot
 }
 
@@ -89,7 +107,7 @@ function writeCache(
   model: string | null,
   snapshot: AgentOptionsSnapshot
 ): void {
-  snapshotCache.set(snapshotKey(agent, model), { snapshot, ts: Date.now() })
+  rememberSnapshot(snapshotKey(agent, model), { snapshot, ts: Date.now() })
 }
 
 /** How many values an agent's defaults override. */

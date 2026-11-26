@@ -28,6 +28,7 @@ vi.mock("sonner", () => ({
 }))
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskRequeue: (...args: unknown[]) => workTaskRequeue(...args),
   workTaskRetry: (...args: unknown[]) => workTaskRetry(...args),
 }))

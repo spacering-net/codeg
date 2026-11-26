@@ -4,7 +4,10 @@
 //! runtimes call, and the Tauri commands. The Web handlers are in
 //! `web/handlers/harness_updates.rs`.
 //!
-//! Both only tell: neither installs, updates or disables anything. With
+//! Neither installs, updates or removes anything. `harness_updates` only
+//! reads; a check `harness_check_updates` runs may switch off a plugin's
+//! autorun parts SRN no longer vouches for (the plugins guard, see
+//! `harness::updates`), as the scheduled check does. With
 //! `CODEG_HARNESS=off` both answer `enabled: false` and nothing else, without
 //! reading or asking anything. `codeg-mcp` exposes neither.
 
