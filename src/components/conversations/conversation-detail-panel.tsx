@@ -2477,21 +2477,24 @@ const ConversationTabView = memo(function ConversationTabView({
     [acpActions, tabId]
   )
 
+  const activeConnectError =
+    conn.connectError?.agentType === selectedAgent ? conn.connectError : null
   const mcpFailureErrorText = useMemo(
     () =>
       combineMcpFailureErrorTexts([
         acpLoadError,
         autoConnectError,
-        conn.error,
-        conn.connectError?.detail,
-        conn.connectError?.title,
+        connIsForOtherAgent ? null : conn.error,
+        activeConnectError?.detail,
+        activeConnectError?.title,
       ]),
     [
       acpLoadError,
+      activeConnectError?.detail,
+      activeConnectError?.title,
       autoConnectError,
       conn.error,
-      conn.connectError?.detail,
-      conn.connectError?.title,
+      connIsForOtherAgent,
     ]
   )
 

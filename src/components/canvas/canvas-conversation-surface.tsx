@@ -1049,9 +1049,13 @@ export function CanvasConversationSurface({
           mcpFailureErrorText={combineMcpFailureErrorTexts([
             acpLoadError,
             autoConnectError,
-            conn.error,
-            conn.connectError?.detail,
-            conn.connectError?.title,
+            connIsForOtherAgent ? null : conn.error,
+            conn.connectError?.agentType === agentType
+              ? conn.connectError.detail
+              : null,
+            conn.connectError?.agentType === agentType
+              ? conn.connectError.title
+              : null,
           ])}
           onReconnect={async () => {
             if (acpLoadError) {

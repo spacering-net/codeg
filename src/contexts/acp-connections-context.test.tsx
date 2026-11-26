@@ -10675,4 +10675,88 @@ describe("structured AppCommandError normalization and post-failure reconnect", 
     )
     expect(String(call?.[1]?.message ?? "")).not.toContain("[object Object]")
   })
+
+  it("preserves startup handshake MCP error across immediate connection_gone and clears it on reconnect", async () => {
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/proj")
+    })
+    const handlers = latestAttachHandlers()
+
+    const mcpError =
+      "MCP load failed for qa-mismatch-404: HTTP 404 session ID mismatch"
+    act(() => {
+      handlers.onEvent({
+        seq: 1,
+        connection_id: "spawned-conn",
+        type: "error",
+        agent_type: "claude_code",
+        code: "agent_process_exited",
+        message: mcpError,
+      })
+      handlers.onDetached("connection_gone")
+    })
+
+    // The dead connection entry was removed, yet connectError survives with the
+    // raw MCP error so the draft recovery strip remains visible.
+    expect(h.store!.getConnection(TAB)).toBeUndefined()
+    const connectError = h.store!.getConnectError(TAB)
+    expect(connectError).toBeDefined()
+    expect(connectError?.agentType).toBe("claude_code")
+    expect(
+      [connectError?.detail, connectError?.title].filter(Boolean).join("\n")
+    ).toContain("MCP load failed for qa-mismatch-404")
+
+    // Reconnecting after pausing the failing MCP server clears connectError and
+    // restores a live connection.
+    h.acpConnect.mockResolvedValueOnce("recovered-conn")
+    let reconnected = false
+    await act(async () => {
+      reconnected = await h.actions!.reconnect(TAB)
+    })
+    expect(reconnected).toBe(true)
+    expect(h.acpConnect).toHaveBeenCalledTimes(2)
+    expect(h.store!.getConnectError(TAB)).toBeUndefined()
+    expect(h.store!.getConnection(TAB)?.connectionId).toBe("recovered-conn")
+  })
+
+  it("persists conn.error into connectError when an already-established session errors then disconnects via connection_gone", async () => {
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/proj")
+    })
+    const handlers = latestAttachHandlers()
+
+    act(() => {
+      handlers.onEvent({
+        seq: 1,
+        connection_id: "spawned-conn",
+        type: "status_changed",
+        status: "connected",
+      })
+      handlers.onEvent({
+        seq: 2,
+        connection_id: "spawned-conn",
+        type: "session_started",
+        session_id: "sess-123",
+      })
+      handlers.onEvent({
+        seq: 3,
+        connection_id: "spawned-conn",
+        type: "error",
+        agent_type: "claude_code",
+        message: "MCP load failed for qa-mismatch-404: broken pipe",
+      })
+      handlers.onDetached("connection_gone")
+    })
+
+    expect(h.store!.getConnection(TAB)).toBeUndefined()
+    const connectError = h.store!.getConnectError(TAB)
+    expect(connectError).toEqual({
+      agentType: "claude_code",
+      title: "connectFailedTitle",
+      detail: "MCP load failed for qa-mismatch-404: broken pipe",
+      opensAgentSettings: false,
+    })
+  })
 })

@@ -173,6 +173,7 @@ import {
 import { rememberAdvertisedCommands } from "@/lib/advertised-commands-store"
 import { rememberModelLabels } from "@/lib/model-label-store"
 import { extractAppCommandError, toErrorMessage } from "@/lib/app-error"
+import { combineMcpFailureErrorTexts } from "@/lib/mcp/failure-recovery"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 
 /**
@@ -4156,6 +4157,10 @@ interface TurnFailureState {
 
 export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   const t = useTranslations("Folder.chat.acpConnections")
+  const tRef = useRef(t)
+  useLayoutEffect(() => {
+    tRef.current = t
+  }, [t])
   // Separate namespace: the agent-supplied vocabulary this provider has to
   // re-label lives under its own catalogue (see `lib/agent-label-vocabulary`).
   const vocabularyT = useTranslations("AgentVocabulary")
@@ -6581,6 +6586,24 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               message: text,
               level: route.level,
             })
+            // When a session error arrives during startup/handshake (before a
+            // session is established or while still connecting), also persist
+            // it in `connectErrors` so an immediate `connection_gone` teardown
+            // does not wipe the failure (and its raw `MCP load failed for ...`
+            // text) before the recovery strip can render it.
+            if (nc && (!nc.sessionId || nc.status === "connecting")) {
+              const rawDetail = combineMcpFailureErrorTexts([
+                reason,
+                e.message,
+                evidence,
+              ])
+              setConnectError(contextKey, {
+                agentType: nc.agentType,
+                title: text,
+                detail: rawDetail && rawDetail !== text ? rawDetail : null,
+                opensAgentSettings: false,
+              })
+            }
           }
           // OS notification: only for a session that broke, and message-only —
           // notification centers persist their payload outside the app, so
@@ -6822,6 +6845,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       retireTurnFailures,
       sessionFailureNotifyActions,
       sessionNotification,
+      setConnectError,
       settleRetryIncidentsOnProgress,
       t,
       tChat,
@@ -7110,6 +7134,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // a connection nobody touches once its turn is over).
           const gone = storeRef.current.connections.get(contextKey)
           if (gone?.status === "prompting") noteTurnEndedUnseen(gone)
+          if (gone?.error && !storeRef.current.connectErrors.has(contextKey)) {
+            setConnectError(contextKey, {
+              agentType: gone.agentType,
+              title: tRef.current("connectFailedTitle", {
+                agent: getAgentLabel(gone.agentType),
+              }),
+              detail: gone.error,
+              opensAgentSettings: false,
+            })
+          }
           // The composer that survives this is exactly the one whose Reconnect
           // button has to resume the session rather than start a new one.
           captureIdentityBeforeRemoval(contextKey)
@@ -7127,6 +7161,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       dispatch,
       flushStreamingQueue,
       seedDelegationsFromSnapshot,
+      setConnectError,
     ]
   )
 
