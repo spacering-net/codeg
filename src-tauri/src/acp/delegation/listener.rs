@@ -145,7 +145,46 @@ pub struct TokenStats {
     pub parent_connections: usize,
 }
 
+const SESSION_READ_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+const SESSION_READ_CAPACITY: usize = 256;
+const WAIT_FOR_REPLY: &str =
+    "An automatic reply is scheduled. If nothing else is actionable, end this turn and resume when it arrives.";
+
+#[derive(Default)]
+struct RecentSessionReads {
+    entries: HashMap<(String, i32, [u8; 32]), std::time::Instant>,
+}
+
+impl RecentSessionReads {
+    fn omit_unchanged(&mut self, caller: &str, refresh: bool, info: &mut SessionInfo) {
+        use sha2::{Digest, Sha256};
+
+        let Some(messages) = &info.messages else {
+            return;
+        };
+        let Ok(encoded) = serde_json::to_vec(messages) else {
+            return;
+        };
+        let key = (caller.to_owned(), info.session_id, Sha256::digest(encoded).into());
+        let now = std::time::Instant::now();
+        self.entries
+            .retain(|_, seen| now.duration_since(*seen) < SESSION_READ_WINDOW);
+        if !refresh && self.entries.contains_key(&key) {
+            info.messages = None;
+            info.note = Some("Recent messages are unchanged and were already returned. Wait for the automatic reply when one is pending, or pass refresh=true to read them again.".into());
+            return;
+        }
+        if self.entries.len() >= SESSION_READ_CAPACITY {
+            if let Some(key) = self.entries.keys().next().cloned() {
+                self.entries.remove(&key);
+            }
+        }
+        self.entries.insert(key, now);
+    }
+}
+
 pub struct DelegationListener {
+    recent_session_reads: tokio::sync::Mutex<RecentSessionReads>,
     pub broker: Arc<DelegationBroker>,
     pub session_message_db: std::sync::OnceLock<sea_orm::DatabaseConnection>,
     pub session_creator: std::sync::OnceLock<crate::acp::session_messages::SessionCreator>,
@@ -204,6 +243,7 @@ impl DelegationListener {
         results: Arc<dyn ResultToolAccess>,
     ) -> Arc<Self> {
         Arc::new(Self {
+            recent_session_reads: tokio::sync::Mutex::default(),
             session_message_db: std::sync::OnceLock::new(),
             session_creator: std::sync::OnceLock::new(),
             broker,
@@ -973,6 +1013,8 @@ impl DelegationListener {
             Ok((conversation_id, message_id)) => serde_json::json!({
                 "conversation_id": conversation_id,
                 "message_id": message_id,
+                "automatic_reply": true,
+                "note": WAIT_FOR_REPLY,
             }),
             Err(error) => serde_json::json!({"error": error}),
         }
@@ -997,6 +1039,11 @@ impl DelegationListener {
         match crate::db::service::session_message_service::enqueue(
             db, sender, req.conversation_id, req.message, req.mode, req.reply,
         ).await {
+            Ok(message_id) if req.reply => serde_json::json!({
+                "message_id": message_id,
+                "automatic_reply": true,
+                "note": WAIT_FOR_REPLY,
+            }),
             Ok(message_id) => serde_json::json!({"message_id": message_id}),
             Err(error) => serde_json::json!({"error": error.to_string()}),
         }
@@ -1212,9 +1259,17 @@ impl DelegationListener {
         if self.tokens.lookup(&req.token).await.is_none() {
             return SessionInfo::not_found(req.session_id);
         }
-        self.session_info
+        let mut info = self
+            .session_info
             .resolve(req.session_id, req.max_messages.unwrap_or(0))
-            .await
+            .await;
+        if info.messages.is_some() {
+            self.recent_session_reads
+                .lock()
+                .await
+                .omit_unchanged(&req.token, req.refresh, &mut info);
+        }
+        info
     }
 
     /// Validate the token and list the browser tabs an agent may know about.
@@ -3478,6 +3533,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn repeated_session_transcript_is_omitted_until_it_changes_or_is_refreshed() {
+        use crate::acp::session_info::{SessionMessageItem, SessionMessages};
+
+        let mut reads = RecentSessionReads::default();
+        let mut response = SessionInfo {
+            found: true,
+            session_id: 42,
+            status: Some("in_progress".into()),
+            messages: Some(SessionMessages {
+                total: 1,
+                included: 1,
+                truncated: false,
+                items: vec![SessionMessageItem {
+                    role: "assistant".into(),
+                    text: "Working".into(),
+                    tools: vec![],
+                }],
+            }),
+            ..Default::default()
+        };
+        reads.omit_unchanged("caller", false, &mut response.clone());
+        let mut repeat = response.clone();
+        reads.omit_unchanged("caller", false, &mut repeat);
+        assert!(repeat.messages.is_none());
+        assert!(repeat.note.unwrap().contains("unchanged"));
+        assert_eq!(repeat.status, response.status);
+
+        let mut other = response.clone();
+        reads.omit_unchanged("another caller", false, &mut other);
+        assert!(other.messages.is_some());
+
+        let mut refreshed = response.clone();
+        reads.omit_unchanged("caller", true, &mut refreshed);
+        assert!(refreshed.messages.is_some());
+
+        response.messages.as_mut().unwrap().items[0].text = "Finished".into();
+        reads.omit_unchanged("caller", false, &mut response);
+        assert!(response.messages.is_some());
+    }
+
     /// A valid `get_session_info` resolves the session by id and returns its
     /// metadata; the resolver is called with the requested id + max_messages.
     #[tokio::test]
@@ -3507,6 +3603,7 @@ mod tests {
             token: "tok".into(),
             session_id: 42,
             max_messages: Some(15),
+            refresh: false,
         });
         write_frame(&mut client, &msg).await.unwrap();
         let resp: BrokerResponse = read_frame(&mut client).await.unwrap();
@@ -3551,6 +3648,7 @@ mod tests {
                 token: "tok".into(),
                 session_id: id,
                 max_messages: Some(0),
+                refresh: false,
             });
             write_frame(&mut client, &msg).await.unwrap();
             let resp: BrokerResponse = read_frame(&mut client).await.unwrap();
@@ -3580,6 +3678,7 @@ mod tests {
             token: "bogus".into(),
             session_id: 42,
             max_messages: None,
+            refresh: false,
         });
         write_frame(&mut client, &msg).await.unwrap();
         let resp: BrokerResponse = read_frame(&mut client).await.unwrap();

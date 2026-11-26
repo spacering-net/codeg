@@ -561,8 +561,13 @@ async fn dispatch(
         return Ok(());
     }
 
+    let reply_instruction = if row.reply_back {
+        "Your final answer is sent back automatically. Put your result there once. Send a separate message only for an early handoff or a blocker requiring attention.\n\n"
+    } else {
+        ""
+    };
     let text = format!(
-        "[Codeg message from conversation {}; message {}]\n\n{}",
+        "[Codeg message from conversation {}; message {}]\n\n{reply_instruction}{}",
         row.sender_conversation_id, row.message_id, row.message
     );
     let (reply, mut result) = oneshot::channel();

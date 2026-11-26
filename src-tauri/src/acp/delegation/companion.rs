@@ -1349,6 +1349,10 @@ async fn build_tools_call_spawn(
                 token: ctx.token.clone(),
                 session_id,
                 max_messages: Some(max_messages),
+                refresh: arguments
+                    .get("refresh")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             };
             // No external_handle: a read-only lookup has nothing to cancel
             // broker-side — canceling only suppresses the response.
