@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { blockingPrompts } from "@/lib/blocking-prompts"
+import { blockingPromptKind, blockingPrompts } from "@/lib/blocking-prompts"
 
 const PERMISSION = { request_id: "req-1", tool_call: {}, options: [] }
 const QUESTION = {
@@ -69,5 +69,66 @@ describe("blockingPrompts", () => {
       "question:q-1",
       "plan:plan-1",
     ])
+  })
+})
+
+describe("blockingPromptKind", () => {
+  it("is null when nothing waits on the user", () => {
+    expect(blockingPromptKind(null)).toBeNull()
+    expect(blockingPromptKind(undefined)).toBeNull()
+    expect(blockingPromptKind(blockingPrompts(NONE))).toBeNull()
+  })
+
+  it("names each of the three prompts", () => {
+    expect(
+      blockingPromptKind(
+        blockingPrompts({ ...NONE, pendingPermission: PERMISSION })
+      )
+    ).toBe("permission")
+    expect(
+      blockingPromptKind(
+        blockingPrompts({ ...NONE, pendingAskQuestion: QUESTION })
+      )
+    ).toBe("question")
+    expect(
+      blockingPromptKind(
+        blockingPrompts({ ...NONE, pendingPlanApproval: PLAN })
+      )
+    ).toBe("plan")
+  })
+
+  it("collapses several open at once to the hardest block", () => {
+    // A badge shows one mark; a permission dialog is the one the user cannot
+    // miss, so it wins over a question, which wins over a plan.
+    expect(
+      blockingPromptKind(
+        blockingPrompts({
+          pendingPermission: PERMISSION,
+          pendingAskQuestion: QUESTION,
+          pendingPlanApproval: PLAN,
+        })
+      )
+    ).toBe("permission")
+    expect(
+      blockingPromptKind(
+        blockingPrompts({
+          ...NONE,
+          pendingAskQuestion: QUESTION,
+          pendingPlanApproval: PLAN,
+        })
+      )
+    ).toBe("question")
+  })
+
+  it("ignores a question set with no questions, like blockingPrompts does", () => {
+    expect(
+      blockingPromptKind(
+        blockingPrompts({
+          ...NONE,
+          pendingAskQuestion: { ...QUESTION, questions: [] },
+          pendingPlanApproval: PLAN,
+        })
+      )
+    ).toBe("plan")
   })
 })

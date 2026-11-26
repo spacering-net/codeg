@@ -29,6 +29,32 @@ type PromptFields = Pick<
   "pendingPermission" | "pendingAskQuestion" | "pendingPlanApproval"
 >
 
+/**
+ * Which decision a connection is parked on, collapsed to one value for a
+ * surface that has room for one mark (a sidebar row, a tab). Precedence is
+ * "hardest block first": a permission dialog outranks a question, which
+ * outranks a plan approval — but all three mean the same thing to the user,
+ * that the agent cannot move until they act.
+ */
+export type BlockingPromptKind = "permission" | "question" | "plan"
+
+export const BLOCKING_PRIORITY: readonly BlockingPromptKind[] = [
+  "permission",
+  "question",
+  "plan",
+]
+
+/** The one kind to show for `prompts`, or `null` when it waits on nobody. */
+export function blockingPromptKind(
+  prompts: BlockingPrompts | null | undefined
+): BlockingPromptKind | null {
+  if (!prompts) return null
+  if (prompts.permission) return "permission"
+  if (prompts.askQuestion) return "question"
+  if (prompts.planApproval) return "plan"
+  return null
+}
+
 /** The connection's blocking prompts, or `null` when it waits on nobody. */
 export function blockingPrompts(
   conn: PromptFields | null | undefined
