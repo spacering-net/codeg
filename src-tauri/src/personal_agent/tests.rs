@@ -9927,8 +9927,14 @@ async fn a_new_zone_moves_a_repeating_matter_to_its_clock_time_there() {
     let once = once.data["item_id"].as_i64().unwrap() as i32;
     // The owner puts a daily 09:00 one off to tomorrow morning — 09:00
     // too, by the clock: still a moment of their own. (Put off, never
-    // sooner: it is due tomorrow at 09:00 itself.)
-    let (tomorrow, _) = local_day(&engine, 1, "09:00").await;
+    // sooner: it is due tomorrow at 09:00 itself.) "Tomorrow" as the
+    // snooze reads it — in the small hours that is this morning, not
+    // the calendar's next day.
+    let (tz, mornings) = engine.owner_day().await;
+    let tomorrow = super::due::morning(tz, super::clock::now(), mornings)
+        .with_timezone(&tz)
+        .format("%Y-%m-%d %H:%M")
+        .to_string();
     let pills = call(
         &engine,
         "item_update",
