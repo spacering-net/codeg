@@ -4486,10 +4486,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   const rememberResolvedIdentity = useCallback(
     (
       contextKey: string,
-      patch: { sessionId?: string; conversationId?: number }
+      patch: { sessionId?: string; conversationId?: number },
+      expectedAgentType?: AgentType
     ) => {
       const remembered = lastConnectParamsRef.current.get(contextKey)
       if (!remembered) return
+      if (
+        expectedAgentType !== undefined &&
+        remembered.agentType !== expectedAgentType
+      ) {
+        return
+      }
       lastConnectParamsRef.current.set(contextKey, { ...remembered, ...patch })
       // A connection that was parked on a prompt before its conversation id was
       // known (a brand-new conversation answers a question in its first turn)
@@ -4512,9 +4519,13 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
    */
   const captureIdentityBeforeRemoval = useCallback(
     (contextKey: string) => {
-      const sessionId = storeRef.current.connections.get(contextKey)?.sessionId
-      if (!sessionId) return
-      rememberResolvedIdentity(contextKey, { sessionId })
+      const conn = storeRef.current.connections.get(contextKey)
+      if (!conn?.sessionId) return
+      rememberResolvedIdentity(
+        contextKey,
+        { sessionId: conn.sessionId },
+        conn.agentType
+      )
     },
     [rememberResolvedIdentity]
   )
@@ -6200,7 +6211,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             }
           }
           break
-        case "session_started":
+        case "session_started": {
           flushStreamingQueue(contextKey)
           dispatch({
             type: "SESSION_STARTED",
@@ -6210,8 +6221,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // The id that turns a later reconnect into a RESUME. It reaches us
           // only here, and only the store entry holds it — which is precisely
           // what a backend GC / idle sweep removes.
-          rememberResolvedIdentity(contextKey, { sessionId: e.session_id })
+          const sessionConn = storeRef.current.connections.get(contextKey)
+          rememberResolvedIdentity(
+            contextKey,
+            { sessionId: e.session_id },
+            sessionConn?.agentType
+          )
           break
+        }
         case "native_session_title":
           // Title is applied on the conversation row by the lifecycle worker
           // and reaches the sidebar via `conversation://changed`. Do not flush
@@ -6236,9 +6253,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // Same reason as session_started: a reconnect needs the conversation
           // id to be able to attach as a viewer to a surviving owner.
           if (e.conversation_id > 0) {
-            rememberResolvedIdentity(contextKey, {
-              conversationId: e.conversation_id,
-            })
+            const linkedConn = storeRef.current.connections.get(contextKey)
+            rememberResolvedIdentity(
+              contextKey,
+              {
+                conversationId: e.conversation_id,
+              },
+              linkedConn?.agentType
+            )
           }
           break
         case "session_modes": {

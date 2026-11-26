@@ -11119,4 +11119,88 @@ describe("structured AppCommandError normalization and post-failure reconnect", 
       opensAgentSettings: false,
     })
   })
+
+  it("does not leak the previous agent's sessionId into a switched agent's reconnect params", async () => {
+    await mountProvider()
+    // 1. Draft connects to agent A and receives a session id.
+    h.acpConnect.mockResolvedValueOnce("conn-agent-a")
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/proj")
+    })
+    const handlersA = latestAttachHandlers()
+    act(() => {
+      handlersA.onEvent({
+        seq: 1,
+        connection_id: "conn-agent-a",
+        type: "status_changed",
+        status: "connected",
+      })
+      handlersA.onEvent({
+        seq: 2,
+        connection_id: "conn-agent-a",
+        type: "session_started",
+        session_id: "sess-agent-a",
+      })
+    })
+    expect(h.store!.getConnection(TAB)?.sessionId).toBe("sess-agent-a")
+
+    // 2. User switches the same draft to agent B; tearing down A invokes
+    // captureIdentityBeforeRemoval, which must NOT copy sess-agent-a into B's
+    // remembered connect params.
+    h.acpGetAgentStatus.mockResolvedValueOnce({
+      agent_type: "antigravity",
+      enabled: true,
+      available: true,
+      installed_version: "1.0.0",
+      host_tools_agent_mode: false,
+      is_acp_adapter: true,
+    })
+    h.acpConnect.mockResolvedValueOnce("conn-agent-b")
+    await act(async () => {
+      await h.actions!.connect(
+        TAB,
+        "antigravity",
+        "/tmp/proj",
+        undefined,
+        undefined
+      )
+    })
+    const handlersB = latestAttachHandlers()
+    act(() => {
+      handlersB.onEvent({
+        seq: 1,
+        connection_id: "conn-agent-b",
+        type: "error",
+        agent_type: "antigravity",
+        message: "MCP load failed for qa-mismatch-404: 404 Not Found",
+      })
+      handlersB.onDetached("connection_gone")
+    })
+
+    // 3. Reconnecting agent B after pausing the failing MCP server must call
+    // acpConnect for "antigravity" with sessionId = undefined (session/new),
+    // never "sess-agent-a".
+    h.acpGetAgentStatus.mockResolvedValueOnce({
+      agent_type: "antigravity",
+      enabled: true,
+      available: true,
+      installed_version: "1.0.0",
+      host_tools_agent_mode: false,
+      is_acp_adapter: true,
+    })
+    h.acpConnect.mockResolvedValueOnce("conn-agent-b-recovered")
+    let reconnected = false
+    await act(async () => {
+      reconnected = await h.actions!.reconnect(TAB)
+    })
+
+    expect(reconnected).toBe(true)
+    expect(h.acpConnect).toHaveBeenCalledTimes(3)
+    expect(h.acpConnect.mock.calls[2][0]).toBe("antigravity")
+    expect(h.acpConnect.mock.calls[2][1]).toBe("/tmp/proj")
+    expect(h.acpConnect.mock.calls[2][2]).toBeUndefined()
+    expect(h.store!.getConnection(TAB)?.connectionId).toBe(
+      "conn-agent-b-recovered"
+    )
+  })
 })
