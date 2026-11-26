@@ -32,6 +32,25 @@ function cleanReason(raw: string | undefined, fallback: string): string {
 }
 
 /**
+ * Combine multiple candidate session/connect error strings into one multi-line
+ * payload so an outer generic message never masks a nested `MCP load failed
+ * for ...` line (e.g. in `conn.error` or `conn.connectError.detail`).
+ */
+export function combineMcpFailureErrorTexts(
+  parts: ReadonlyArray<string | null | undefined>
+): string | null {
+  const seen = new Set<string>()
+  const normalized: string[] = []
+  for (const part of parts) {
+    const trimmed = part?.trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    normalized.push(trimmed)
+  }
+  return normalized.length > 0 ? normalized.join("\n") : null
+}
+
+/**
  * Extract the first actionable MCP server initialization failure from `text`,
  * or `null` when none is present (or only the built-in `chrome_devtools`
  * server failed).

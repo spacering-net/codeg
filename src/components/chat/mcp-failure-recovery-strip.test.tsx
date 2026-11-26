@@ -219,4 +219,94 @@ describe("McpFailureRecoveryStrip", () => {
       screen.getByRole("button", { name: "Open MCP settings" })
     ).toBeInTheDocument()
   })
+
+  it("matches MCP failures in multi-line combined errors and renders actions in a left-aligned row below the title", async () => {
+    const user = userEvent.setup()
+    const onReconnect = vi.fn()
+
+    mocks.mcpInventory.mockResolvedValue({
+      agents: [
+        {
+          agent: "claude_code",
+          installed: true,
+          config: {
+            path: "/tmp/claude.json",
+            format: "json",
+            status: "ok",
+            basis: "basis-claude-qa",
+            symlink: false,
+            comments_lost_on_write: false,
+            related: [],
+          },
+          writable: true,
+          transports: ["stdio", "http", "sse"],
+          delivery: "agent_file",
+          can_disable: true,
+          disable_mode: "codeg_pause",
+          codeg_mcp: false,
+          session_capabilities: null,
+          entries: [
+            {
+              key: "qa-mismatch-404",
+              definition: { type: "http", url: "http://127.0.0.1:9999/mcp" },
+              extra: {},
+              enabled: true,
+              paused: false,
+              fingerprint: "fp-qa",
+              read_only: false,
+              reserved: false,
+              legacy: false,
+              problems: [],
+            },
+          ],
+        },
+      ],
+      reserved_keys: ["codeg-mcp"],
+      key_pattern: "^[A-Za-z0-9_-]{1,64}$",
+    })
+    mocks.mcpApply.mockResolvedValue({
+      outcome: "applied",
+      ok: true,
+      agents: [
+        {
+          agent: "claude_code",
+          path: "/tmp/claude.json",
+          status: "written",
+          basis: "basis-claude-qa-2",
+          issues: [],
+          warnings: [],
+          ops: [{ index: 0, key: "qa-mismatch-404", effect: "disabled" }],
+          writes: [],
+          backup_paths: [],
+        },
+      ],
+    })
+
+    renderStrip({
+      agentType: "claude_code",
+      errorText: [
+        "Failed to connect to Claude Code",
+        "MCP load failed for qa-mismatch-404: 404 Not Found",
+      ].join("\n"),
+      onReconnect,
+    })
+
+    const strip = screen.getByRole("status")
+    expect(strip).toHaveTextContent(
+      'MCP server "qa-mismatch-404" failed to initialize'
+    )
+
+    const pauseButton = screen.getByRole("button", {
+      name: "Pause qa-mismatch-404 & reconnect",
+    })
+    const actionsRow = pauseButton.parentElement
+    expect(actionsRow).not.toBeNull()
+    expect(actionsRow?.className).toContain("ps-[1.375rem]")
+    expect(actionsRow?.className).toContain("mt-1.5")
+    expect(strip.children[0]).not.toContainElement(pauseButton)
+    expect(strip.children[1]).toBe(actionsRow)
+
+    await user.click(pauseButton)
+    await waitFor(() => expect(onReconnect).toHaveBeenCalledTimes(1))
+  })
 })

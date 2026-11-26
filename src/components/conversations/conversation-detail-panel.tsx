@@ -34,6 +34,7 @@ import {
   type SelectionAskLiveSelectors,
 } from "@/components/message/selection-ask-composer"
 import { formatConversationTitle } from "@/lib/conversation-title"
+import { combineMcpFailureErrorTexts } from "@/lib/mcp/failure-recovery"
 import { useAskConversationDrawerStore } from "@/stores/ask-conversation-drawer-store"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
 import { useActiveFolder } from "@/contexts/active-folder-context"
@@ -2484,36 +2485,55 @@ const ConversationTabView = memo(function ConversationTabView({
     [acpActions, tabId]
   )
 
-  const mcpFailureErrorText =
-    acpLoadError ??
-    autoConnectError ??
-    conn.connectError?.detail ??
-    conn.connectError?.title ??
-    null
+  const mcpFailureErrorText = useMemo(
+    () =>
+      combineMcpFailureErrorTexts([
+        acpLoadError,
+        autoConnectError,
+        conn.error,
+        conn.connectError?.detail,
+        conn.connectError?.title,
+      ]),
+    [
+      acpLoadError,
+      autoConnectError,
+      conn.error,
+      conn.connectError?.detail,
+      conn.connectError?.title,
+    ]
+  )
 
   const handleMcpFailureReconnect = useCallback(async () => {
     if (acpLoadError) {
       handleReloadDetail()
       return
     }
-    const reconnected = await conn.reapplyConfig()
-    if (!reconnected && workingDirForConnection) {
-      await conn.connect(
-        selectedAgent,
-        workingDirForConnection,
-        dbConversationId != null && selectedAgent !== "cline"
-          ? externalId
-          : undefined,
-        dbConversationId ?? undefined
-      )
+    try {
+      const reconnected =
+        !connIsForOtherAgent && (await acpActions.reconnect(tabId))
+      if (!reconnected && workingDirForConnection) {
+        await conn.connect(
+          selectedAgent,
+          workingDirForConnection,
+          dbConversationId != null && selectedAgent !== "cline"
+            ? externalId
+            : undefined,
+          dbConversationId ?? undefined
+        )
+      }
+    } catch (e: unknown) {
+      console.error("[ConversationDetailPanel] MCP recovery reconnect:", e)
     }
   }, [
+    acpActions,
     acpLoadError,
     conn,
+    connIsForOtherAgent,
     dbConversationId,
     externalId,
     handleReloadDetail,
     selectedAgent,
+    tabId,
     workingDirForConnection,
   ])
 

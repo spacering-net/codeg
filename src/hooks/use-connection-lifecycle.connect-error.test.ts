@@ -34,11 +34,11 @@ vi.mock("@/contexts/task-context", () => {
 const conn = vi.hoisted(() => ({
   status: null as string | null,
   connectError: null as ConnectErrorInfo | null,
+  connect: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock("@/hooks/use-connection", () => {
   // A parked request: the call resolves without saying how the request did.
-  const connect = vi.fn().mockResolvedValue(undefined)
   const noop = vi.fn().mockResolvedValue(undefined)
   return {
     useConnection: () => ({
@@ -47,7 +47,7 @@ vi.mock("@/hooks/use-connection", () => {
       connectError: conn.connectError,
       selectorsReady: false,
       hasCachedSelectors: false,
-      connect,
+      connect: conn.connect,
       disconnect: noop,
       sendPrompt: noop,
       setMode: noop,
@@ -82,6 +82,8 @@ describe("useConnectionLifecycle autoConnectError", () => {
   beforeEach(() => {
     conn.status = null
     conn.connectError = null
+    conn.connect.mockReset()
+    conn.connect.mockResolvedValue(undefined)
   })
 
   it("reports the published failure of a request that was parked", async () => {
@@ -132,5 +134,25 @@ describe("useConnectionLifecycle autoConnectError", () => {
     }
     const { result } = renderDraft()
     expect(result.current.autoConnectError).toBeNull()
+  })
+
+  it("extracts readable text from structured AppCommandError objects instead of [object Object]", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      conn.connect.mockRejectedValueOnce({
+        code: "task_execution_failed",
+        message: "Failed to initialize ACP connection",
+        detail: "MCP load failed for qa-mismatch-404: 404 Not Found",
+      })
+      const { result } = renderDraft()
+      await vi.waitFor(() => {
+        expect(result.current.autoConnectError).toContain(
+          "MCP load failed for qa-mismatch-404: 404 Not Found"
+        )
+      })
+      expect(result.current.autoConnectError).not.toContain("[object Object]")
+    } finally {
+      consoleError.mockRestore()
+    }
   })
 })

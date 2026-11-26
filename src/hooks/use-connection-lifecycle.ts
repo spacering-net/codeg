@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl"
 import { useAcpActions } from "@/contexts/acp-connections-context"
 import { useTaskContext } from "@/contexts/task-context"
 import { useConnection, type UseConnectionReturn } from "@/hooks/use-connection"
-import { extractAppCommandError } from "@/lib/app-error"
+import { extractAppCommandError, toErrorMessage } from "@/lib/app-error"
 import { notify } from "@/lib/notify"
 import {
   isConnectionBusy,
@@ -144,8 +144,16 @@ export function shouldDisconnectOnUnmount(
 }
 
 function normalizeErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return String(error)
+  const appError = extractAppCommandError(error)
+  if (appError) {
+    const message = appError.message.trim()
+    const detail = appError.detail?.trim() ?? ""
+    if (detail && message && detail !== message && !detail.includes(message)) {
+      return `${message}\n${detail}`
+    }
+    return detail || message
+  }
+  return toErrorMessage(error)
 }
 
 function isExpectedConnectError(error: unknown): boolean {
@@ -518,13 +526,13 @@ export function useConnectionLifecycle({
   const publishedConnectError =
     conn.connectError?.agentType === agentType ? conn.connectError : null
   const autoConnectError =
-    status === "connected" || status === "prompting"
+    status === "connecting" || status === "connected" || status === "prompting"
       ? null
-      : lastAutoConnectError?.contextKey === contextKey &&
-          lastAutoConnectError.agentType === agentType
-        ? lastAutoConnectError.message
-        : publishedConnectError
-          ? (publishedConnectError.detail ?? publishedConnectError.title)
+      : publishedConnectError
+        ? (publishedConnectError.detail ?? publishedConnectError.title)
+        : lastAutoConnectError?.contextKey === contextKey &&
+            lastAutoConnectError.agentType === agentType
+          ? lastAutoConnectError.message
           : null
 
   // sendPrompt, connCancel, connRespondPermission are stable (depend

@@ -31,6 +31,7 @@ import {
   createChatDir,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { combineMcpFailureErrorTexts } from "@/lib/mcp/failure-recovery"
 import { notify } from "@/lib/notify"
 import { isConnectionReady } from "@/lib/queue-flush"
 import { getAgentLabel } from "@/lib/custom-agents"
@@ -426,6 +427,7 @@ export function CanvasConversationSurface({
     modeLoading,
     configOptionsLoading,
     selectorsLoading,
+    autoConnectError,
     handleFocus,
     handleSend: lifecycleSend,
     handleSetConfigOption,
@@ -1053,25 +1055,34 @@ export function CanvasConversationSurface({
           claudeApiRetry={conn.claudeApiRetry}
           sessionFailures={conn.sessionFailures}
           onSessionFailureDismiss={handleSessionFailureDismiss}
-          mcpFailureErrorText={
-            acpLoadError ??
-            conn.connectError?.detail ??
-            conn.connectError?.title ??
-            null
-          }
+          mcpFailureErrorText={combineMcpFailureErrorTexts([
+            acpLoadError,
+            autoConnectError,
+            conn.error,
+            conn.connectError?.detail,
+            conn.connectError?.title,
+          ])}
           onReconnect={async () => {
             if (acpLoadError) {
               acpActions.clearAcpLoadError(contextKey)
             }
-            const reconnected = await conn.reapplyConfig()
-            if (!reconnected && workingDir) {
-              await conn.connect(
-                agentType,
-                workingDir,
-                dbConversationId != null && agentType !== "cline"
-                  ? externalId
-                  : undefined,
-                dbConversationId ?? undefined
+            try {
+              const reconnected =
+                !connIsForOtherAgent && (await acpActions.reconnect(contextKey))
+              if (!reconnected && workingDir) {
+                await conn.connect(
+                  agentType,
+                  workingDir,
+                  dbConversationId != null && agentType !== "cline"
+                    ? externalId
+                    : undefined,
+                  dbConversationId ?? undefined
+                )
+              }
+            } catch (e: unknown) {
+              console.error(
+                "[CanvasConversationSurface] MCP recovery reconnect:",
+                e
               )
             }
           }}
