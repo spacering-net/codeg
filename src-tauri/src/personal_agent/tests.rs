@@ -15114,7 +15114,11 @@ async fn a_dispatch_routine_hands_out_its_work_itself_or_asks_first_when_the_own
 #[tokio::test]
 async fn three_failed_runs_in_a_row_or_a_work_agent_turned_off_pause_a_routine() {
     let (engine, _tmp) = configured().await;
-    role_assistant(&engine, "Researcher", true).await;
+    let bot = role_assistant(&engine, "Researcher", true).await;
+    // The slots are taken, so each run's work stays queued and the test
+    // fails it itself — not codeg launching it on a real agent, whose own
+    // failure (not installed) would race the test's "boom".
+    slots_taken(&engine, bot).await;
     let out = call(
         &engine,
         "routine_create",
@@ -15126,7 +15130,8 @@ async fn three_failed_runs_in_a_row_or_a_work_agent_turned_off_pause_a_routine()
     let id = out.data["routine"]["id"].as_i64().unwrap() as i32;
     for i in 0..3 {
         let run = rsvc::runs_of(&engine.db.conn, id, 1).await.unwrap().remove(0);
-        let d = settled(&engine, run.dispatch_id.unwrap()).await;
+        let d = dispatch_state(&engine, run.dispatch_id.unwrap()).await;
+        assert_eq!(d.state, DispatchState::Queued, "never launched");
         engine
             .routine_dispatch_ended(&crate::db::entities::personal_agent_dispatch::Model {
                 state: DispatchState::Failed,
