@@ -3261,7 +3261,7 @@
   },
   {
     "name": "session_brief",
-    "description": "Read, replace or edit your persistent session brief. Update it before handing work off, ending a phase, or ending your turn while waiting for a collaborator. Save the current goal, durable decisions, open work, relevant conversation or task IDs, and the next action. Read it when picking work back up after a pause or context compaction. Keep it within 12000 characters. Every edit oldText must match exactly once. The entire edit batch commits atomically. The brief is included in get_current_session and in the first prompt of newly delegated children.",
+    "description": "Read, replace or edit your persistent session brief. For ongoing work, create it once the assignment is clear. Before ending a turn, update it if the goal, a decision, work status, a blocker, or the next action changed. Keep the current state concise. Replace superseded details and keep the relevant conversation, task, or project plan references. Skip the write when the brief is still current. Read it after context compaction or when resuming work. Keep it within 12000 characters. Every edit oldText must match exactly once. The entire edit batch commits atomically. The brief is included in get_current_session and in the first prompt of newly delegated children.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3307,7 +3307,7 @@
   },
   {
     "name": "session_digest",
-    "description": "Update your user-facing session digest when a milestone is reached, the plan changes, or you need a decision from the user. Replace the digest in full and carry forward items that still apply. Use now for active work and news for meaningful changes. Use needsYou for decisions that require the user, and suggestions for optional next steps. Limits are 8 now items, 5 news items, 3 questions with up to 4 options each, and 3 suggestions. Each line has at most 300 characters. recommended must exactly equal an option. Keep question IDs stable until the question changes. Dismissed suggestion titles are returned in dismissedSuggestions. Respect them across updates. The user sees the digest above chat and answers through ordinary user messages.",
+    "description": "Keep the user-facing session digest current. Before ending a turn that changed user-visible progress, the plan, or a pending decision, update the digest. Replace it in full, carry forward items that still apply, and remove resolved questions and stale items. Skip the write when nothing has changed. Use now for active work, news for meaningful changes, needsYou for decisions that require the user, and suggestions for optional next steps. Limits are 8 now items, 5 news items, 3 questions with up to 4 options each, and 3 suggestions. Each line has at most 300 characters. recommended must exactly equal an option. Keep question IDs stable until the question changes. Dismissed suggestion titles are returned in dismissedSuggestions. Respect them across updates. The user sees the digest above chat and answers through ordinary user messages.",
     "inputSchema": {
       "type": "object",
       "properties": {
