@@ -1219,6 +1219,7 @@ pub fn build_router_with_srn(
         // stay one release longer, for older clients of this server.
         .route("/mcp_inventory", post(handlers::mcp::mcp_inventory))
         .route("/mcp_apply", post(handlers::mcp::mcp_apply))
+        .route("/mcp_probe", post(handlers::mcp::mcp_probe))
         .route(
             "/mcp_parse_snippet",
             post(handlers::mcp::mcp_parse_snippet),

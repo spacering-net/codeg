@@ -15,7 +15,7 @@ use crate::commands::mcp::McpAppType;
 use crate::models::agent::AgentType;
 use crate::parsers::{AgentEnv, AgentEnvs};
 
-use super::model::{McpConfigFormat, McpDelivery, McpTransport};
+use super::model::{McpConfigFormat, McpDelivery, McpDisableMode, McpTransport};
 
 const ALL_TRANSPORTS: &[McpTransport] =
     &[McpTransport::Stdio, McpTransport::Http, McpTransport::Sse];
@@ -81,6 +81,16 @@ pub(crate) struct AgentSpec {
 }
 
 impl AgentSpec {
+    pub fn disable_mode(&self) -> McpDisableMode {
+        if self.scan_only {
+            McpDisableMode::Unsupported
+        } else if self.disable.is_supported() {
+            McpDisableMode::Native
+        } else {
+            McpDisableMode::CodegPause
+        }
+    }
+
     pub fn supports(&self, transport: McpTransport) -> bool {
         self.transports.contains(&transport)
     }
@@ -413,6 +423,7 @@ pub(crate) struct EngineCtx {
     pub paths: BTreeMap<McpAppType, AgentPaths>,
     /// The MCP write lock file.
     pub lock_path: PathBuf,
+    pub paused_path: PathBuf,
     /// `<backup_root>/<agent>/` holds the copies taken before each write.
     pub backup_root: PathBuf,
     /// How long a save waits for the MCP write lock.
@@ -443,6 +454,9 @@ impl EngineCtx {
         Self {
             paths,
             lock_path: super::lock::default_lock_path(),
+            // Both runtime entry points export their effective app data directory on startup.
+            paused_path: crate::paths::resolve_effective_data_dir(&real_codeg_dir())
+                .join(super::paused::FILE_NAME),
             backup_root: default_backup_root(),
             lock_wait: super::lock::LOCK_WAIT,
         }

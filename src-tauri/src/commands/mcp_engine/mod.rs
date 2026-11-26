@@ -1,7 +1,7 @@
 //! The MCP engine: what every agent's MCP configuration says, and the only
 //! way codeg changes it.
 //!
-//! Three commands, each a `_core` function shared by the desktop command and
+//! Four commands, each a `_core` function shared by the desktop command and
 //! the web handler:
 //!
 //! - [`mcp_inventory`]: every agent's servers, read agent by agent and never
@@ -13,6 +13,7 @@
 //!   and the basis of every file the caller saw. All of it is done or none
 //!   of it; a preflight does none of it and says what would happen.
 //! - [`mcp_parse_snippet`]: servers out of pasted configuration.
+//! - [`mcp_probe`]: initialize a server and list its tools.
 //!
 //! How a write stays safe is spread over the modules: [`lock`] (one writer
 //! at a time, across processes), [`apply`] (the basis check, the validation,
@@ -34,7 +35,9 @@ pub(crate) mod inventory;
 pub(crate) mod json_doc;
 pub mod lock;
 pub mod model;
+mod paused;
 pub(crate) mod plugin_gate;
+mod probe;
 pub mod session;
 pub(crate) mod snippet;
 pub(crate) mod store;
@@ -59,6 +62,7 @@ use model::{codes, McpOpIssue};
 pub use model::{
     McpApplyRequest, McpApplyResult, McpChanged, McpInventory, McpOp, McpSnippet, MCP_CHANGED_EVENT,
 };
+pub use probe::{mcp_probe_core, McpProbeRequest, McpProbeResult};
 
 /// `lock_busy` → `errors.lockBusy`: the key the page finds the message
 /// under, the way the older MCP errors name theirs.
@@ -286,6 +290,27 @@ pub async fn mcp_apply(
         preflight: preflight.unwrap_or(false),
     };
     mcp_apply_core(&db, &EventEmitter::from_app(&app), request).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command(rename_all = "snake_case")]
+pub async fn mcp_probe(
+    agent: Option<McpAppType>,
+    key: Option<String>,
+    definition: Option<model::McpDefinition>,
+    timeout_ms: Option<u64>,
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<McpProbeResult, AppCommandError> {
+    Ok(mcp_probe_core(
+        &db,
+        McpProbeRequest {
+            agent,
+            key,
+            definition,
+            timeout_ms,
+        },
+    )
+    .await)
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
