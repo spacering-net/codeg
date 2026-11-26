@@ -144,4 +144,49 @@ describe("SlideSlot", () => {
     )
     expect(slotOf()).toHaveAttribute("data-motion", "enter")
   })
+  it("closes at once when told to, even with a slide to play", () => {
+    // The live activity row: it must go in the commit its turn ends in, not
+    // when a main-thread animation or timer gets round to it.
+    const computed = window.getComputedStyle
+    vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (element, pseudo) =>
+        element.classList.contains("slide-slot")
+          ? ({
+              animationName: "slide-slot-close",
+              animationDuration: "0.18s",
+            } as CSSStyleDeclaration)
+          : computed(element, pseudo)
+    )
+    const view = render(
+      <SlideSlot show closeAtOnce>
+        <span>tail</span>
+      </SlideSlot>
+    )
+    view.rerender(
+      <SlideSlot show={false} closeAtOnce>
+        <span>tail</span>
+      </SlideSlot>
+    )
+    expect(slotOf()).toBeNull()
+    // Mid-slide open too: it goes without waiting for the opening to end.
+    view.rerender(
+      <SlideSlot show closeAtOnce>
+        <span>tail</span>
+      </SlideSlot>
+    )
+    expect(slotOf()).toHaveAttribute("data-motion", "enter")
+    view.rerender(
+      <SlideSlot show={false} closeAtOnce>
+        <span>tail</span>
+      </SlideSlot>
+    )
+    expect(slotOf()).toBeNull()
+    // And still slides open when its content comes back.
+    view.rerender(
+      <SlideSlot show closeAtOnce>
+        <span>tail</span>
+      </SlideSlot>
+    )
+    expect(slotOf()).toHaveAttribute("data-motion", "enter")
+  })
 })

@@ -65,7 +65,7 @@ interface SessionDetailsInsightsProps {
 
 /**
  * The part of the Session Details side panel that follows the conversation's
- * transcript, each part a card like the summary above it: the agent's plan,
+ * transcript, each part a section under the summary: the agent's plan,
  * the ask conversations opened from it ("ask about this selection"), the
  * personal agent's checks of its messages ("is this right?") and the message
  * navigator, whose messages carry
@@ -75,9 +75,11 @@ interface SessionDetailsInsightsProps {
  * (see `MessageListView`'s `insightsInSidebar`); each section reads its own
  * part and renders nothing while that part is empty.
  *
- * Both lay their rows, headers included, on one grid: a left column of fixed
- * width — the headers' chevrons, the plan's step icons, the navigator's
- * message numbers — and the text beside it.
+ * Both lay their rows, headers included, on one grid: a narrow left column
+ * — the headers' icons, the plan's step icons, the navigator's message
+ * numbers — and the text beside it. Nothing reaches past the hairlines
+ * between the sections: rows run from where they start to where they end, and
+ * take no fill.
  *
  * The navigator's sub-agent cards open their "查看会话" drawer through a host
  * of their own: the transcript's host is in another branch of the tree, and
@@ -106,12 +108,6 @@ export function SessionDetailsInsights({
     </SessionViewerHost>
   )
 }
-
-/** The panel's cards: the summary card's tint, hairline and corners. */
-/** A card's own colour (its `bg-muted/40` over the page), for the ring that
- *  cuts a status dot out of the icon it sits on. */
-const CARD_RING =
-  "ring-[color-mix(in_oklab,var(--muted)_40%,var(--background))]"
 
 /** The plan's progress, one segment per step: done, under way, to do. */
 function PlanProgress({ entries }: { entries: readonly PlanEntryInfo[] }) {
@@ -172,7 +168,7 @@ function PlanStepIcon({
 }
 
 /** Plan steps, one line each, the whole step — with its status and priority
- *  — in its tooltip. The step under way is tinted. */
+ *  — in its tooltip. The step under way is set in a heavier weight. */
 function PlanSteps({
   entries,
   streaming,
@@ -190,14 +186,11 @@ function PlanSteps({
           <li
             key={`${entry.content}-${index}`}
             title={`${entry.content}\n${status} · ${priority}`}
-            className={cn(
-              "-mx-1.5 flex h-7 min-w-0 items-center gap-2 rounded-md px-1.5",
-              entry.status === "in_progress" && "bg-blue-500/[0.08]"
-            )}
+            className="flex h-7 min-w-0 items-center gap-2"
           >
             <span
               aria-hidden="true"
-              className="flex w-7 shrink-0 justify-center"
+              className="flex w-5 shrink-0 justify-center"
             >
               <PlanStepIcon status={entry.status} streaming={streaming} />
             </span>
@@ -268,7 +261,7 @@ const LINKED_SECTION = {
  * The conversations linked to this one, newest first — the same rows the
  * sidebar nests under it: the asks opened from its transcript ("ask about this
  * selection"), or the personal agent's checks of its messages ("is this
- * right?"), a card each. A row opens its conversation in the ask drawer to go
+ * right?"), a section each. A row opens its conversation in the ask drawer to go
  * on with it (or watch it), and its button turns it into an ordinary
  * conversation, which moves it to the root of the sidebar. Renders nothing
  * while there are none.
@@ -343,24 +336,21 @@ function LinkedConversationsSection({
             return (
               <li
                 key={ask.id}
-                className={cn(
-                  "group/ask -mx-1.5 flex h-7 min-w-0 items-center rounded-md transition-colors hover:bg-foreground/[0.06]",
-                  openId === ask.id && "bg-foreground/[0.06]"
-                )}
+                className="group/ask flex h-7 min-w-0 items-center gap-1"
               >
                 {/* The agent's icon — the assistant's avatar, for a row run as
                     one — takes the header icon's column, its status a dot on
-                    its corner as the summary card draws it, so the title lines
+                    its corner as the summary draws it, so the title lines
                     up with the section's. */}
                 <button
                   type="button"
                   title={title}
                   onClick={() => handleOpen(ask)}
-                  className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md ps-1.5 text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  className="group/askrow flex h-full min-w-0 flex-1 items-center gap-2 rounded-md text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
                 >
                   <span
                     aria-hidden="true"
-                    className="flex w-7 shrink-0 justify-center"
+                    className="flex w-5 shrink-0 justify-center"
                   >
                     <span className="relative flex">
                       <LinkedRowIcon conversation={ask} />
@@ -368,15 +358,24 @@ function LinkedConversationsSection({
                         status={status}
                         size="sm"
                         className={cn(
-                          "absolute -end-0.5 -bottom-0.5 ring-2",
-                          CARD_RING,
+                          "absolute -end-0.5 -bottom-0.5 ring-2 ring-background",
                           status === "in_progress" &&
                             "motion-safe:animate-pulse"
                         )}
                       />
                     </span>
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground/85">
+                  {/* No fill on hover: only the title turns the accent
+                      colour, as a navigator row's does. The one open in the
+                      drawer stays in it. */}
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate text-[0.8125rem] transition-colors group-hover/askrow:text-primary",
+                      openId === ask.id
+                        ? "font-medium text-primary"
+                        : "text-foreground/85"
+                    )}
+                  >
                     {title}
                   </span>
                 </button>
@@ -388,7 +387,7 @@ function LinkedConversationsSection({
                     setConfirming({ id: ask.id, title })
                     setConfirmOpen(true)
                   }}
-                  className="me-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity outline-none group-hover/ask:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 [@media(hover:none)]:opacity-100"
+                  className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity outline-none group-hover/ask:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 [@media(hover:none)]:opacity-100"
                 >
                   <Unlink className="size-3.5" />
                 </button>

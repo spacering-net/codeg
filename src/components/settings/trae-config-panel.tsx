@@ -5,6 +5,11 @@ import { useTranslations } from "next-intl"
 import { Copy, Eye, EyeOff, KeyRound, Loader2, Save } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  AgentPanelCard,
+  AgentPanelGroup,
+  AgentPanelSaveBar,
+} from "@/components/settings/agent-panel-layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import type { AcpAgentInfo } from "@/lib/types"
@@ -84,22 +89,15 @@ export function TraeConfigPanel({
   }, [t])
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-      <div>
-        <label className="text-xs font-medium">
-          {t("trae.configManagement")}
-        </label>
-        <p className="mt-1 text-2xs text-muted-foreground">
-          {t("trae.configDescription")}
-        </p>
-      </div>
-
-      <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
-        <div className="flex items-center gap-1.5">
-          <KeyRound className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-2xs font-medium">{t("trae.signInTitle")}</span>
-        </div>
-        <p className="text-2xs text-muted-foreground">{t("trae.signInHint")}</p>
+    <AgentPanelGroup
+      title={t("trae.configManagement")}
+      description={t("trae.configDescription")}
+    >
+      <AgentPanelCard
+        icon={KeyRound}
+        title={t("trae.signInTitle")}
+        description={t("trae.signInHint")}
+      >
         <div className="flex items-center gap-2">
           <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-2xs font-mono whitespace-nowrap">
             {TRAE_LOGIN_COMMAND}
@@ -116,58 +114,62 @@ export function TraeConfigPanel({
             <Copy className="h-3 w-3" />
           </Button>
         </div>
-      </div>
+      </AgentPanelCard>
 
-      <div className="space-y-1.5">
-        <label htmlFor="trae-pat" className="text-2xs text-muted-foreground">
-          {t("trae.patLabel")}
-        </label>
-        <div className="flex items-center gap-2">
+      <AgentPanelCard>
+        <div className="space-y-1.5">
+          <label htmlFor="trae-pat" className="text-2xs text-muted-foreground">
+            {t("trae.patLabel")}
+          </label>
+          <div className="flex items-center gap-2">
+            <Input
+              id="trae-pat"
+              type={showPat ? "text" : "password"}
+              value={pat}
+              onChange={(event) => setPat(event.target.value)}
+              autoComplete="off"
+              disabled={saving}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setShowPat((prev) => !prev)}
+              title={
+                showPat ? t("actions.hideApiKey") : t("actions.showApiKey")
+              }
+              aria-label={
+                showPat ? t("actions.hideApiKey") : t("actions.showApiKey")
+              }
+            >
+              {showPat ? (
+                <EyeOff className="h-3.5 w-3.5" />
+              ) : (
+                <Eye className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          </div>
+          <p className="text-2xs text-muted-foreground">{t("trae.patHint")}</p>
+        </div>
+
+        <div className="space-y-1.5">
+          <label htmlFor="trae-host" className="text-2xs text-muted-foreground">
+            {t("trae.hostLabel")}
+          </label>
           <Input
-            id="trae-pat"
-            type={showPat ? "text" : "password"}
-            value={pat}
-            onChange={(event) => setPat(event.target.value)}
+            id="trae-host"
+            value={host}
+            onChange={(event) => setHost(event.target.value)}
+            placeholder="https://api.example.com"
             autoComplete="off"
+            spellCheck={false}
             disabled={saving}
           />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setShowPat((prev) => !prev)}
-            title={showPat ? t("actions.hideApiKey") : t("actions.showApiKey")}
-            aria-label={
-              showPat ? t("actions.hideApiKey") : t("actions.showApiKey")
-            }
-          >
-            {showPat ? (
-              <EyeOff className="h-3.5 w-3.5" />
-            ) : (
-              <Eye className="h-3.5 w-3.5" />
-            )}
-          </Button>
+          <p className="text-2xs text-muted-foreground">{t("trae.hostHint")}</p>
         </div>
-        <p className="text-2xs text-muted-foreground">{t("trae.patHint")}</p>
-      </div>
+      </AgentPanelCard>
 
-      <div className="space-y-1.5">
-        <label htmlFor="trae-host" className="text-2xs text-muted-foreground">
-          {t("trae.hostLabel")}
-        </label>
-        <Input
-          id="trae-host"
-          value={host}
-          onChange={(event) => setHost(event.target.value)}
-          placeholder="https://api.example.com"
-          autoComplete="off"
-          spellCheck={false}
-          disabled={saving}
-        />
-        <p className="text-2xs text-muted-foreground">{t("trae.hostHint")}</p>
-      </div>
-
-      <div className="flex justify-end">
+      <AgentPanelSaveBar>
         <Button
           type="button"
           size="sm"
@@ -187,7 +189,7 @@ export function TraeConfigPanel({
             </>
           )}
         </Button>
-      </div>
-    </div>
+      </AgentPanelSaveBar>
+    </AgentPanelGroup>
   )
 }
