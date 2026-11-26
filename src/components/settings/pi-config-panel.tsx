@@ -19,6 +19,11 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  AgentPanelCard,
+  AgentPanelGroup,
+  AgentPanelSaveBar,
+} from "@/components/settings/agent-panel-layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
@@ -868,296 +873,303 @@ export function PiConfigPanel({
       {/* Runtime — which pi binary pi-acp spawns. "Default pi" manages the
           global pi on PATH (install XOR uninstall, never both); "Custom pi"
           points at your own build. */}
-      <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-        <div>
-          <label className="flex items-center gap-1.5 text-xs font-medium">
-            <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
-            {t("pi.runtimeTitle")}
-          </label>
-          <p className="mt-1 text-2xs text-muted-foreground">
-            {t("pi.runtimeDescription")}
-          </p>
-        </div>
-
-        <RadioGroup
-          value={mode}
-          onValueChange={(value) => setMode(value as PiRuntimeMode)}
-          className="grid-cols-2"
-        >
-          <label
-            htmlFor="pi-mode-default"
-            className={cn(
-              "flex cursor-pointer items-start gap-2 rounded-md border p-2.5 text-2xs",
-              mode === "default"
-                ? "border-primary bg-primary/5"
-                : "border-input"
-            )}
-          >
-            <RadioGroupItem
-              value="default"
-              id="pi-mode-default"
-              className="mt-0.5"
-            />
-            <span>
-              <span className="block font-medium text-foreground">
-                {t("pi.modeDefault")}
-              </span>
-              <span className="mt-0.5 block text-muted-foreground">
-                {t("pi.modeDefaultHint")}
-              </span>
-            </span>
-          </label>
-          <label
-            htmlFor="pi-mode-custom"
-            className={cn(
-              "flex cursor-pointer items-start gap-2 rounded-md border p-2.5 text-2xs",
-              mode === "custom" ? "border-primary bg-primary/5" : "border-input"
-            )}
-          >
-            <RadioGroupItem
-              value="custom"
-              id="pi-mode-custom"
-              className="mt-0.5"
-            />
-            <span>
-              <span className="block font-medium text-foreground">
-                {t("pi.modeCustom")}
-              </span>
-              <span className="mt-0.5 block text-muted-foreground">
-                {t("pi.modeCustomHint")}
-              </span>
-            </span>
-          </label>
-        </RadioGroup>
-
-        {/* Default pi → status of the global `pi`, with a single contextual
-            action: Install when missing, Uninstall when present (never both). */}
-        {mode === "default" && (
-          <div className="space-y-2.5 rounded-md border border-dashed p-2.5">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0 flex-1 text-2xs">
-                {checkingPi ? (
-                  <span className="flex items-center gap-1.5 text-muted-foreground">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    {t("pi.binaryChecking")}
-                  </span>
-                ) : piStatus?.found ? (
-                  <span className="flex items-start gap-1.5 text-emerald-600">
-                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    <span className="min-w-0">
-                      <span className="font-medium">
-                        {t("pi.binaryInstalled")}
-                      </span>
-                      {piStatus.version ? ` · ${piStatus.version}` : ""}
-                      {piStatus.resolvedPath ? (
-                        <span className="mt-0.5 block break-all text-muted-foreground">
-                          {piStatus.resolvedPath}
-                        </span>
-                      ) : null}
-                    </span>
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1.5 text-muted-foreground">
-                    <XCircle className="h-3.5 w-3.5 shrink-0" />
-                    {t("pi.binaryMissing")}
-                  </span>
-                )}
-              </div>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    void detectPiBinary()
-                    setCatalogRevision((previous) => previous + 1)
-                  }}
-                  disabled={checkingPi || piOp !== null}
-                  title={t("pi.recheck")}
-                  className="h-7 px-2"
-                >
-                  <RotateCw
-                    className={cn("h-3.5 w-3.5", checkingPi && "animate-spin")}
-                  />
-                </Button>
-                {!checkingPi &&
-                  (piStatus?.found ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={handleUninstallPi}
-                      disabled={piOp !== null}
-                      className="gap-1.5"
-                    >
-                      {piOp === "uninstall" ? (
-                        <>
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          {t("actions.uninstalling")}
-                        </>
-                      ) : (
-                        <>
-                          <Trash2 className="h-3.5 w-3.5" />
-                          {t("actions.uninstall")}
-                        </>
-                      )}
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={handleInstallPi}
-                      disabled={piOp !== null}
-                      className="gap-1.5"
-                    >
-                      {piOp === "install" ? (
-                        <>
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          {t("pi.installing")}
-                        </>
-                      ) : (
-                        <>
-                          <Download className="h-3.5 w-3.5" />
-                          {t("pi.installBinary")}
-                        </>
-                      )}
-                    </Button>
-                  ))}
-              </div>
-            </div>
-
-            {piRuntimeIsTooOld(piStatus?.version) && (
-              <p className="text-2xs text-amber-600 dark:text-amber-400">
-                {t("pi.runtimeTooOld", { min: PI_MIN_RUNTIME_VERSION })}
-              </p>
-            )}
-            {piInstallStatus !== "idle" && (
-              <div className="max-h-[12.5rem] overflow-y-auto rounded-md border bg-muted/50 p-3 font-mono text-2xs leading-relaxed text-muted-foreground">
-                {piInstallLogs.map((line, i) => (
-                  <div
-                    key={i}
-                    className={
-                      line.startsWith("ERROR:") ? "text-destructive" : ""
-                    }
-                  >
-                    {line}
-                  </div>
-                ))}
-                <div ref={installLogEndRef} />
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Custom pi → bring your own build / wrapper. */}
-        {mode === "custom" && (
+      <AgentPanelGroup
+        title={
           <>
-            <div className="space-y-1.5">
-              <label className="text-2xs text-muted-foreground">
-                {t("pi.commandLabel")}
-              </label>
-              <div className="flex items-center gap-2">
-                <Input
-                  value={command}
-                  onChange={(event) => {
-                    setCommand(event.target.value)
-                    setValidation(null)
-                  }}
-                  placeholder="/path/to/pi · pi"
-                  spellCheck={false}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleValidate}
-                  disabled={validating || !command.trim()}
-                  className="gap-1.5 whitespace-nowrap"
-                >
-                  {validating ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <TerminalSquare className="h-3.5 w-3.5" />
-                  )}
-                  {t("pi.validate")}
-                </Button>
-              </div>
-              {validation && (
-                <p
-                  className={cn(
-                    "flex items-start gap-1.5 text-2xs",
-                    validation.found ? "text-emerald-600" : "text-destructive"
-                  )}
-                >
-                  {validation.found ? (
-                    <>
+            <Cpu
+              className="size-3.5 shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+            {t("pi.runtimeTitle")}
+          </>
+        }
+        description={t("pi.runtimeDescription")}
+      >
+        <AgentPanelCard>
+          <RadioGroup
+            value={mode}
+            onValueChange={(value) => setMode(value as PiRuntimeMode)}
+            className="grid-cols-2"
+          >
+            <label
+              htmlFor="pi-mode-default"
+              className={cn(
+                "flex cursor-pointer items-start gap-2 rounded-md border p-2.5 text-2xs",
+                mode === "default"
+                  ? "border-primary bg-primary/5"
+                  : "border-input"
+              )}
+            >
+              <RadioGroupItem
+                value="default"
+                id="pi-mode-default"
+                className="mt-0.5"
+              />
+              <span>
+                <span className="block font-medium text-foreground">
+                  {t("pi.modeDefault")}
+                </span>
+                <span className="mt-0.5 block text-muted-foreground">
+                  {t("pi.modeDefaultHint")}
+                </span>
+              </span>
+            </label>
+            <label
+              htmlFor="pi-mode-custom"
+              className={cn(
+                "flex cursor-pointer items-start gap-2 rounded-md border p-2.5 text-2xs",
+                mode === "custom"
+                  ? "border-primary bg-primary/5"
+                  : "border-input"
+              )}
+            >
+              <RadioGroupItem
+                value="custom"
+                id="pi-mode-custom"
+                className="mt-0.5"
+              />
+              <span>
+                <span className="block font-medium text-foreground">
+                  {t("pi.modeCustom")}
+                </span>
+                <span className="mt-0.5 block text-muted-foreground">
+                  {t("pi.modeCustomHint")}
+                </span>
+              </span>
+            </label>
+          </RadioGroup>
+
+          {/* Default pi → status of the global `pi`, with a single contextual
+            action: Install when missing, Uninstall when present (never both). */}
+          {mode === "default" && (
+            <div className="space-y-2 border-t pt-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 flex-1 text-2xs">
+                  {checkingPi ? (
+                    <span className="flex items-center gap-1.5 text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      {t("pi.binaryChecking")}
+                    </span>
+                  ) : piStatus?.found ? (
+                    <span className="flex items-start gap-1.5 text-emerald-600">
                       <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                      <span className="break-all">
-                        {validation.resolvedPath}
-                        {validation.version ? ` (${validation.version})` : ""}
+                      <span className="min-w-0">
+                        <span className="font-medium">
+                          {t("pi.binaryInstalled")}
+                        </span>
+                        {piStatus.version ? ` · ${piStatus.version}` : ""}
+                        {piStatus.resolvedPath ? (
+                          <span className="mt-0.5 block break-all text-muted-foreground">
+                            {piStatus.resolvedPath}
+                          </span>
+                        ) : null}
                       </span>
-                    </>
+                    </span>
                   ) : (
-                    <>
-                      <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                      {t("pi.commandNotFound")}
-                    </>
+                    <span className="flex items-center gap-1.5 text-muted-foreground">
+                      <XCircle className="h-3.5 w-3.5 shrink-0" />
+                      {t("pi.binaryMissing")}
+                    </span>
                   )}
-                </p>
-              )}
-              {invalidEnteredCommand && (
-                <p className="text-2xs text-destructive">
-                  {t("pi.relativeCommandPath")}
-                </p>
-              )}
-              {piRuntimeIsTooOld(validation?.version) && (
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      void detectPiBinary()
+                      setCatalogRevision((previous) => previous + 1)
+                    }}
+                    disabled={checkingPi || piOp !== null}
+                    title={t("pi.recheck")}
+                    className="h-7 px-2"
+                  >
+                    <RotateCw
+                      className={cn(
+                        "h-3.5 w-3.5",
+                        checkingPi && "animate-spin"
+                      )}
+                    />
+                  </Button>
+                  {!checkingPi &&
+                    (piStatus?.found ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleUninstallPi}
+                        disabled={piOp !== null}
+                        className="gap-1.5"
+                      >
+                        {piOp === "uninstall" ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            {t("actions.uninstalling")}
+                          </>
+                        ) : (
+                          <>
+                            <Trash2 className="h-3.5 w-3.5" />
+                            {t("actions.uninstall")}
+                          </>
+                        )}
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={handleInstallPi}
+                        disabled={piOp !== null}
+                        className="gap-1.5"
+                      >
+                        {piOp === "install" ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            {t("pi.installing")}
+                          </>
+                        ) : (
+                          <>
+                            <Download className="h-3.5 w-3.5" />
+                            {t("pi.installBinary")}
+                          </>
+                        )}
+                      </Button>
+                    ))}
+                </div>
+              </div>
+
+              {piRuntimeIsTooOld(piStatus?.version) && (
                 <p className="text-2xs text-amber-600 dark:text-amber-400">
                   {t("pi.runtimeTooOld", { min: PI_MIN_RUNTIME_VERSION })}
                 </p>
               )}
-              <p className="text-2xs text-muted-foreground">
-                {t("pi.commandHint")}
-              </p>
+              {piInstallStatus !== "idle" && (
+                <div className="max-h-[12.5rem] overflow-y-auto rounded-md border bg-muted/50 p-3 font-mono text-2xs leading-relaxed text-muted-foreground">
+                  {piInstallLogs.map((line, i) => (
+                    <div
+                      key={i}
+                      className={
+                        line.startsWith("ERROR:") ? "text-destructive" : ""
+                      }
+                    >
+                      {line}
+                    </div>
+                  ))}
+                  <div ref={installLogEndRef} />
+                </div>
+              )}
             </div>
+          )}
 
-            <details className="rounded-md border border-dashed">
-              <summary className="cursor-pointer list-none px-2.5 py-1.5 text-2xs font-medium text-muted-foreground">
-                {t("pi.advanced")}
-              </summary>
-              <div className="space-y-2.5 px-2.5 pb-2.5">
-                <div className="space-y-1.5">
-                  <label className="text-2xs text-muted-foreground">
-                    {t("pi.configDirLabel")}
-                  </label>
+          {/* Custom pi → bring your own build / wrapper. */}
+          {mode === "custom" && (
+            <>
+              <div className="space-y-1.5 border-t pt-3">
+                <label className="text-2xs text-muted-foreground">
+                  {t("pi.commandLabel")}
+                </label>
+                <div className="flex items-center gap-2">
                   <Input
-                    value={configDir}
-                    onChange={(event) => setConfigDir(event.target.value)}
-                    placeholder="~/.pi/agent"
+                    value={command}
+                    onChange={(event) => {
+                      setCommand(event.target.value)
+                      setValidation(null)
+                    }}
+                    placeholder="/path/to/pi · pi"
                     spellCheck={false}
                   />
-                  {invalidEnteredAgentDir && (
-                    <p className="text-2xs text-destructive">
-                      {t("pi.relativeAgentDir")}
-                    </p>
-                  )}
-                  {configDir.trim() !== "" && (
-                    <p className="text-2xs text-amber-600 dark:text-amber-400">
-                      {t("pi.configDirSkillsNote")}
-                    </p>
-                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleValidate}
+                    disabled={validating || !command.trim()}
+                    className="gap-1.5 whitespace-nowrap"
+                  >
+                    {validating ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <TerminalSquare className="h-3.5 w-3.5" />
+                    )}
+                    {t("pi.validate")}
+                  </Button>
                 </div>
-                <div className="space-y-1.5">
-                  <label className="text-2xs text-muted-foreground">
-                    {t("pi.sessionDirLabel")}
-                  </label>
-                  <Input
-                    value={sessionDir}
-                    onChange={(event) => setSessionDir(event.target.value)}
-                    placeholder="~/.pi/agent/sessions"
-                    spellCheck={false}
-                  />
-                </div>
-                {/*
+                {validation && (
+                  <p
+                    className={cn(
+                      "flex items-start gap-1.5 text-2xs",
+                      validation.found ? "text-emerald-600" : "text-destructive"
+                    )}
+                  >
+                    {validation.found ? (
+                      <>
+                        <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        <span className="break-all">
+                          {validation.resolvedPath}
+                          {validation.version ? ` (${validation.version})` : ""}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        {t("pi.commandNotFound")}
+                      </>
+                    )}
+                  </p>
+                )}
+                {invalidEnteredCommand && (
+                  <p className="text-2xs text-destructive">
+                    {t("pi.relativeCommandPath")}
+                  </p>
+                )}
+                {piRuntimeIsTooOld(validation?.version) && (
+                  <p className="text-2xs text-amber-600 dark:text-amber-400">
+                    {t("pi.runtimeTooOld", { min: PI_MIN_RUNTIME_VERSION })}
+                  </p>
+                )}
+                <p className="text-2xs text-muted-foreground">
+                  {t("pi.commandHint")}
+                </p>
+              </div>
+
+              <details className="border-t pt-3">
+                <summary className="cursor-pointer list-none text-xs font-medium">
+                  {t("pi.advanced")}
+                </summary>
+                <div className="mt-2 space-y-2.5">
+                  <div className="space-y-1.5">
+                    <label className="text-2xs text-muted-foreground">
+                      {t("pi.configDirLabel")}
+                    </label>
+                    <Input
+                      value={configDir}
+                      onChange={(event) => setConfigDir(event.target.value)}
+                      placeholder="~/.pi/agent"
+                      spellCheck={false}
+                    />
+                    {invalidEnteredAgentDir && (
+                      <p className="text-2xs text-destructive">
+                        {t("pi.relativeAgentDir")}
+                      </p>
+                    )}
+                    {configDir.trim() !== "" && (
+                      <p className="text-2xs text-amber-600 dark:text-amber-400">
+                        {t("pi.configDirSkillsNote")}
+                      </p>
+                    )}
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-2xs text-muted-foreground">
+                      {t("pi.sessionDirLabel")}
+                    </label>
+                    <Input
+                      value={sessionDir}
+                      onChange={(event) => setSessionDir(event.target.value)}
+                      placeholder="~/.pi/agent/sessions"
+                      spellCheck={false}
+                    />
+                  </div>
+                  {/*
                   Both dirs persist to the per-agent `env_json`, which is injected
                   into the spawned pi child and nowhere else — while the history
                   parser resolves pi's sessions directory from codeg's OWN process
@@ -1165,20 +1177,21 @@ export function PiConfigPanel({
                   resumes fine, and the sessions never show up in the list. Saying
                   so beats letting the user discover it as missing history.
                 */}
-                {(configDir.trim() !== "" || sessionDir.trim() !== "") && (
-                  <p className="text-2xs text-amber-600 dark:text-amber-400">
-                    {t("pi.dirHistoryNote")}
+                  {(configDir.trim() !== "" || sessionDir.trim() !== "") && (
+                    <p className="text-2xs text-amber-600 dark:text-amber-400">
+                      {t("pi.dirHistoryNote")}
+                    </p>
+                  )}
+                  <p className="text-2xs text-muted-foreground">
+                    {t("pi.flagsHint")}
                   </p>
-                )}
-                <p className="text-2xs text-muted-foreground">
-                  {t("pi.flagsHint")}
-                </p>
-              </div>
-            </details>
-          </>
-        )}
+                </div>
+              </details>
+            </>
+          )}
+        </AgentPanelCard>
 
-        <div className="flex items-center justify-between gap-2">
+        <AgentPanelSaveBar className="flex items-center justify-between gap-2">
           <span className="text-2xs text-muted-foreground">
             {customIncomplete ? t("pi.customIncomplete") : ""}
           </span>
@@ -1206,135 +1219,141 @@ export function PiConfigPanel({
               </>
             )}
           </Button>
-        </div>
-      </div>
+        </AgentPanelSaveBar>
+      </AgentPanelGroup>
 
       {/* Credentials / model — pi's native settings.json / auth.json */}
-      <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-        <div>
-          <label className="flex items-center gap-1.5 text-xs font-medium">
-            <KeyRound className="h-3.5 w-3.5 text-muted-foreground" />
+      <AgentPanelGroup
+        title={
+          <>
+            <KeyRound
+              className="size-3.5 shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
             {t("pi.configManagement")}
-          </label>
-          <p className="mt-1 text-2xs text-muted-foreground">
-            {t("pi.configDescription")}
+          </>
+        }
+        description={t("pi.configDescription")}
+      >
+        {invalidSavedAgentDir && (
+          <p className="text-2xs text-destructive">
+            {t("pi.relativeAgentDir")}
           </p>
-          {invalidSavedAgentDir && (
-            <p className="mt-1 text-2xs text-destructive">
-              {t("pi.relativeAgentDir")}
-            </p>
-          )}
-          {configLoadError && (
-            <p className="mt-1 text-2xs text-destructive">
-              {t("pi.configLoadFailed", { message: configLoadError })}
-            </p>
-          )}
-        </div>
+        )}
+        {configLoadError && (
+          <p className="text-2xs text-destructive">
+            {t("pi.configLoadFailed", { message: configLoadError })}
+          </p>
+        )}
 
-        <div className="space-y-1.5">
-          <label className="text-2xs text-muted-foreground">
-            {t("pi.providerLabel")}
-          </label>
-          <Select
-            value={selectedProvider}
-            onValueChange={handleProviderChange}
-            disabled={savingCreds || loadingCreds}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder={t("pi.providerPlaceholder")} />
-            </SelectTrigger>
-            <SelectContent align="start">
-              <SelectItem value={PI_CUSTOM_SENTINEL}>
-                {t("pi.customProvider")}
-              </SelectItem>
-              <SelectSeparator />
-              {providerOptions.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {p.label}
+        <AgentPanelCard>
+          <div className="space-y-1.5">
+            <label className="text-2xs text-muted-foreground">
+              {t("pi.providerLabel")}
+            </label>
+            <Select
+              value={selectedProvider}
+              onValueChange={handleProviderChange}
+              disabled={savingCreds || loadingCreds}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder={t("pi.providerPlaceholder")} />
+              </SelectTrigger>
+              <SelectContent align="start">
+                <SelectItem value={PI_CUSTOM_SENTINEL}>
+                  {t("pi.customProvider")}
                 </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+                <SelectSeparator />
+                {providerOptions.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
-        {isCustom && (
-          <div className="space-y-2.5 rounded-md border border-dashed p-2.5">
-            <div className="grid grid-cols-2 gap-2">
+          {isCustom && (
+            <div className="space-y-2 border-t pt-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1.5">
+                  <label className="text-2xs text-muted-foreground">
+                    {t("pi.providerIdLabel")}
+                  </label>
+                  <Input
+                    value={customId}
+                    onChange={(event) => setCustomId(event.target.value)}
+                    placeholder="my-provider"
+                    spellCheck={false}
+                    disabled={savingCreds || loadingCreds}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-2xs text-muted-foreground">
+                    {t("pi.apiProtocolLabel")}
+                  </label>
+                  <Select
+                    value={customApi}
+                    onValueChange={setCustomApi}
+                    disabled={savingCreds || loadingCreds}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent align="start">
+                      {PI_CUSTOM_API_PROTOCOLS.map((api) => (
+                        <SelectItem key={api} value={api}>
+                          {api}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
               <div className="space-y-1.5">
                 <label className="text-2xs text-muted-foreground">
-                  {t("pi.providerIdLabel")}
+                  {t("pi.baseUrlLabel")}
                 </label>
                 <Input
-                  value={customId}
-                  onChange={(event) => setCustomId(event.target.value)}
-                  placeholder="my-provider"
+                  value={customBaseUrl}
+                  onChange={(event) => setCustomBaseUrl(event.target.value)}
+                  placeholder="https://api.example.com/v1"
                   spellCheck={false}
                   disabled={savingCreds || loadingCreds}
                 />
               </div>
-              <div className="space-y-1.5">
-                <label className="text-2xs text-muted-foreground">
-                  {t("pi.apiProtocolLabel")}
-                </label>
-                <Select
-                  value={customApi}
-                  onValueChange={setCustomApi}
-                  disabled={savingCreds || loadingCreds}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent align="start">
-                    {PI_CUSTOM_API_PROTOCOLS.map((api) => (
-                      <SelectItem key={api} value={api}>
-                        {api}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              <p className="text-2xs text-muted-foreground">
+                {t("pi.customProviderHint")}
+              </p>
             </div>
-            <div className="space-y-1.5">
-              <label className="text-2xs text-muted-foreground">
-                {t("pi.baseUrlLabel")}
-              </label>
-              <Input
-                value={customBaseUrl}
-                onChange={(event) => setCustomBaseUrl(event.target.value)}
-                placeholder="https://api.example.com/v1"
-                spellCheck={false}
-                disabled={savingCreds || loadingCreds}
-              />
-            </div>
-            <p className="text-2xs text-muted-foreground">
-              {t("pi.customProviderHint")}
-            </p>
+          )}
+        </AgentPanelCard>
+
+        <AgentPanelCard>
+          <div className="space-y-1.5">
+            <label className="text-2xs text-muted-foreground">
+              {t("pi.modelLabel")}
+            </label>
+            <ModelIdInputWithFetch
+              value={model}
+              onChange={setModel}
+              state={providerModels}
+              placeholder="claude-sonnet-5-5"
+              disabled={savingCreds || loadingCreds}
+            />
           </div>
-        )}
 
-        <div className="space-y-1.5">
-          <label className="text-2xs text-muted-foreground">
-            {t("pi.modelLabel")}
-          </label>
-          <ModelIdInputWithFetch
-            value={model}
-            onChange={setModel}
-            state={providerModels}
-            placeholder="claude-sonnet-5-5"
-            disabled={savingCreds || loadingCreds}
-          />
-        </div>
-
-        {isCustom && (
-          <ModelIdListField
-            ids={customModels ?? storedCustomModels}
-            onChange={setCustomModels}
-            state={providerModels}
-            readOnly={savingCreds || loadingCreds}
-            title={tModels("piList.title")}
-            hint={tModels("piList.hint")}
-          />
-        )}
+          {isCustom && (
+            <ModelIdListField
+              ids={customModels ?? storedCustomModels}
+              onChange={setCustomModels}
+              state={providerModels}
+              readOnly={savingCreds || loadingCreds}
+              title={tModels("piList.title")}
+              hint={tModels("piList.hint")}
+            />
+          )}
+        </AgentPanelCard>
 
         {/* ---- Reasoning card ----
             pi reads `reasoning: modelDef.reasoning ?? false`, and an undeclared
@@ -1343,11 +1362,10 @@ export function PiConfigPanel({
             custom providers need this: a built-in model carries pi's own, more
             accurate declaration. */}
         {isCustom && (
-          <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-2xs font-medium">
-                {t("pi.reasoningTitle")}
-              </span>
+          <AgentPanelCard
+            title={t("pi.reasoningTitle")}
+            description={t("pi.reasoningDescription")}
+            control={
               <label className="flex cursor-pointer items-center gap-1.5 text-2xs text-muted-foreground">
                 <Switch
                   checked={reasoning.enabled}
@@ -1370,11 +1388,8 @@ export function PiConfigPanel({
                 />
                 {t("pi.reasoningEnableLabel")}
               </label>
-            </div>
-            <p className="text-3xs text-muted-foreground">
-              {t("pi.reasoningDescription")}
-            </p>
-
+            }
+          >
             {reasoning.enabled && (
               <>
                 <div className="space-y-1">
@@ -1408,7 +1423,7 @@ export function PiConfigPanel({
                       )
                     })}
                   </div>
-                  <p className="text-3xs text-muted-foreground">
+                  <p className="text-2xs text-muted-foreground">
                     {reasoning.levels.length === 0
                       ? t("pi.levelsEmptyError")
                       : t("pi.levelsHint")}
@@ -1426,7 +1441,7 @@ export function PiConfigPanel({
                       {t("pi.wireValuesTitle")}
                     </button>
                     {showWireValues && (
-                      <div className="space-y-1.5 rounded-md border border-dashed p-2">
+                      <div className="space-y-2 border-t pt-3">
                         {reasoning.levels.map((level) => (
                           <div key={level} className="flex items-center gap-2">
                             <span className="w-16 shrink-0 font-mono text-2xs text-muted-foreground">
@@ -1451,7 +1466,7 @@ export function PiConfigPanel({
                             />
                           </div>
                         ))}
-                        <p className="text-3xs text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           {t("pi.wireValuesHint")}
                         </p>
                       </div>
@@ -1460,83 +1475,89 @@ export function PiConfigPanel({
                 )}
               </>
             )}
-          </div>
+          </AgentPanelCard>
         )}
 
-        <div className="space-y-1.5">
-          <label className="text-2xs text-muted-foreground">
-            {t("pi.thinkingLabel")}
-          </label>
-          <Select
-            value={effectiveThinkingLevel || "off"}
-            onValueChange={(value) => setThinkingLevel(value)}
-            // A model with no reasoning has exactly one reachable level, so the
-            // control would be a lie.
-            disabled={
-              savingCreds || loadingCreds || (isCustom && !reasoning.enabled)
-            }
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="start">
-              {availableLevels.map((level) => (
-                <SelectItem key={level} value={level}>
-                  {t(`pi.thinking.${level}`)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {!isCustom && effectiveProvider && trimmedModel && (
-            <PiModelLevelsHint
-              model={trimmedModel}
-              catalog={currentCatalog}
-              levels={catalogLevels}
-              requested={requestedLevel}
-              clamped={clampedLevel}
-            />
-          )}
-          {defaultLevelUnlisted && (
-            <p className="text-2xs text-destructive">
-              {t("pi.defaultLevelUnlisted")}
-            </p>
-          )}
-        </div>
-
-        <div className="space-y-1.5">
-          <label className="text-2xs text-muted-foreground">
-            {t("pi.apiKeyLabel")}
-          </label>
-          <div className="flex items-center gap-2">
-            <Input
-              type={showKey ? "text" : "password"}
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder={
-                providerHasKey ? t("pi.apiKeySetPlaceholder") : "sk-..."
-              }
-              disabled={savingCreds || loadingCreds}
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setShowKey((prev) => !prev)}
-              title={
-                showKey ? t("actions.hideApiKey") : t("actions.showApiKey")
+        <AgentPanelCard>
+          <div className="space-y-1.5">
+            <label className="text-2xs text-muted-foreground">
+              {t("pi.thinkingLabel")}
+            </label>
+            <Select
+              value={effectiveThinkingLevel || "off"}
+              onValueChange={(value) => setThinkingLevel(value)}
+              // A model with no reasoning has exactly one reachable level, so the
+              // control would be a lie.
+              disabled={
+                savingCreds || loadingCreds || (isCustom && !reasoning.enabled)
               }
             >
-              {showKey ? (
-                <EyeOff className="h-3.5 w-3.5" />
-              ) : (
-                <Eye className="h-3.5 w-3.5" />
-              )}
-            </Button>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="start">
+                {availableLevels.map((level) => (
+                  <SelectItem key={level} value={level}>
+                    {t(`pi.thinking.${level}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {!isCustom && effectiveProvider && trimmedModel && (
+              <PiModelLevelsHint
+                model={trimmedModel}
+                catalog={currentCatalog}
+                levels={catalogLevels}
+                requested={requestedLevel}
+                clamped={clampedLevel}
+              />
+            )}
+            {defaultLevelUnlisted && (
+              <p className="text-2xs text-destructive">
+                {t("pi.defaultLevelUnlisted")}
+              </p>
+            )}
           </div>
-          <p className="text-2xs text-muted-foreground">{t("pi.apiKeyHint")}</p>
-        </div>
+        </AgentPanelCard>
 
-        <div className="flex justify-end">
+        <AgentPanelCard>
+          <div className="space-y-1.5">
+            <label className="text-2xs text-muted-foreground">
+              {t("pi.apiKeyLabel")}
+            </label>
+            <div className="flex items-center gap-2">
+              <Input
+                type={showKey ? "text" : "password"}
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                placeholder={
+                  providerHasKey ? t("pi.apiKeySetPlaceholder") : "sk-..."
+                }
+                disabled={savingCreds || loadingCreds}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowKey((prev) => !prev)}
+                title={
+                  showKey ? t("actions.hideApiKey") : t("actions.showApiKey")
+                }
+              >
+                {showKey ? (
+                  <EyeOff className="h-3.5 w-3.5" />
+                ) : (
+                  <Eye className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </div>
+            <p className="text-2xs text-muted-foreground">
+              {t("pi.apiKeyHint")}
+            </p>
+          </div>
+        </AgentPanelCard>
+
+        <AgentPanelSaveBar>
           <Button
             type="button"
             size="sm"
@@ -1561,8 +1582,8 @@ export function PiConfigPanel({
               </>
             )}
           </Button>
-        </div>
-      </div>
+        </AgentPanelSaveBar>
+      </AgentPanelGroup>
 
       {/* Project trust — review/revoke the decisions in pi's trust.json.
           A trusted folder lets that repo's `.pi/extensions` run at pi startup,
@@ -1571,17 +1592,11 @@ export function PiConfigPanel({
           codeg builds auto-trusted every opened workspace; those entries are
           indistinguishable from ones made inside pi, so they are listed for
           review rather than pruned automatically. */}
-      <div className="space-y-2 rounded-md border bg-muted/10 p-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-xs font-medium">
-            <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
-            {t("pi.projectTrustTitle")}
-          </div>
-          <p className="mt-1 text-2xs text-muted-foreground">
-            {t("pi.projectTrustDescription")}
-          </p>
-        </div>
-
+      <AgentPanelCard
+        icon={ShieldCheck}
+        title={t("pi.projectTrustTitle")}
+        description={t("pi.projectTrustDescription")}
+      >
         {trustEntries === null ? (
           <p className="text-2xs text-muted-foreground">
             {t("pi.projectTrustLoading")}
@@ -1632,7 +1647,7 @@ export function PiConfigPanel({
             ))}
           </ul>
         )}
-      </div>
+      </AgentPanelCard>
     </div>
   )
 }

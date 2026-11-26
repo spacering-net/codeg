@@ -182,7 +182,7 @@ describe("DelegationSettingsSection", () => {
 
     renderWithIntl()
 
-    const note = await screen.findByText(/will not get the delegation tools/)
+    const note = await screen.findByText(/won't get delegation tools/)
     expect(note).toHaveTextContent("Codex, Claude Code")
     expect(note).not.toHaveTextContent("Grok")
     expect(note).not.toHaveTextContent("Pi")
@@ -196,7 +196,7 @@ describe("DelegationSettingsSection", () => {
 
     await loaded()
     expect(
-      screen.queryByText(/will not get the delegation tools/)
+      screen.queryByText(/won't get delegation tools/)
     ).not.toBeInTheDocument()
   })
 
@@ -210,7 +210,7 @@ describe("DelegationSettingsSection", () => {
 
     await loaded()
     expect(
-      screen.queryByText(/will not get the delegation tools/)
+      screen.queryByText(/won't get delegation tools/)
     ).not.toBeInTheDocument()
   })
 

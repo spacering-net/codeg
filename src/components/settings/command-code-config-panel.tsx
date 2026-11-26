@@ -5,6 +5,11 @@ import { useTranslations } from "next-intl"
 import { Copy, Eye, EyeOff, KeyRound, Loader2, Save } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  AgentPanelCard,
+  AgentPanelGroup,
+  AgentPanelSaveBar,
+} from "@/components/settings/agent-panel-layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import type { AcpAgentInfo } from "@/lib/types"
@@ -75,26 +80,15 @@ export function CommandCodeConfigPanel({
   }, [t])
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-      <div>
-        <label className="text-xs font-medium">
-          {t("commandCode.configManagement")}
-        </label>
-        <p className="mt-1 text-2xs text-muted-foreground">
-          {t("commandCode.configDescription")}
-        </p>
-      </div>
-
-      <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
-        <div className="flex items-center gap-1.5">
-          <KeyRound className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-2xs font-medium">
-            {t("commandCode.signInTitle")}
-          </span>
-        </div>
-        <p className="text-2xs text-muted-foreground">
-          {t("commandCode.signInHint")}
-        </p>
+    <AgentPanelGroup
+      title={t("commandCode.configManagement")}
+      description={t("commandCode.configDescription")}
+    >
+      <AgentPanelCard
+        icon={KeyRound}
+        title={t("commandCode.signInTitle")}
+        description={t("commandCode.signInHint")}
+      >
         <div className="flex items-center gap-2">
           <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-2xs font-mono whitespace-nowrap">
             {COMMAND_CODE_LOGIN_COMMAND}
@@ -111,47 +105,51 @@ export function CommandCodeConfigPanel({
             <Copy className="h-3 w-3" />
           </Button>
         </div>
-      </div>
+      </AgentPanelCard>
 
-      <div className="space-y-1.5">
-        <label
-          htmlFor="command-code-api-key"
-          className="text-2xs text-muted-foreground"
-        >
-          {t("commandCode.apiKeyLabel")}
-        </label>
-        <div className="flex items-center gap-2">
-          <Input
-            id="command-code-api-key"
-            type={showKey ? "text" : "password"}
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
-            autoComplete="off"
-            disabled={saving}
-          />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setShowKey((prev) => !prev)}
-            title={showKey ? t("actions.hideApiKey") : t("actions.showApiKey")}
-            aria-label={
-              showKey ? t("actions.hideApiKey") : t("actions.showApiKey")
-            }
+      <AgentPanelCard>
+        <div className="space-y-1.5">
+          <label
+            htmlFor="command-code-api-key"
+            className="text-2xs text-muted-foreground"
           >
-            {showKey ? (
-              <EyeOff className="h-3.5 w-3.5" />
-            ) : (
-              <Eye className="h-3.5 w-3.5" />
-            )}
-          </Button>
+            {t("commandCode.apiKeyLabel")}
+          </label>
+          <div className="flex items-center gap-2">
+            <Input
+              id="command-code-api-key"
+              type={showKey ? "text" : "password"}
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              autoComplete="off"
+              disabled={saving}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setShowKey((prev) => !prev)}
+              title={
+                showKey ? t("actions.hideApiKey") : t("actions.showApiKey")
+              }
+              aria-label={
+                showKey ? t("actions.hideApiKey") : t("actions.showApiKey")
+              }
+            >
+              {showKey ? (
+                <EyeOff className="h-3.5 w-3.5" />
+              ) : (
+                <Eye className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          </div>
+          <p className="text-2xs text-muted-foreground">
+            {t("commandCode.apiKeyHint")}
+          </p>
         </div>
-        <p className="text-2xs text-muted-foreground">
-          {t("commandCode.apiKeyHint")}
-        </p>
-      </div>
+      </AgentPanelCard>
 
-      <div className="flex justify-end">
+      <AgentPanelSaveBar>
         <Button
           type="button"
           size="sm"
@@ -171,7 +169,7 @@ export function CommandCodeConfigPanel({
             </>
           )}
         </Button>
-      </div>
-    </div>
+      </AgentPanelSaveBar>
+    </AgentPanelGroup>
   )
 }
