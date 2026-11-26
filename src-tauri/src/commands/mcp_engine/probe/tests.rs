@@ -454,6 +454,8 @@ fn a_saved_probe_prefers_the_native_definition_and_falls_back_to_paused() {
     let paused_path = dir.path().join("mcp-paused.json");
     let app = McpAppType::Cursor;
     let ctx = EngineCtx {
+        codeg_dir: dir.path().to_path_buf(),
+        custom_agents: BTreeMap::new(),
         paths: BTreeMap::from([(
             app,
             AgentPaths {
@@ -470,7 +472,7 @@ fn a_saved_probe_prefers_the_native_definition_and_falls_back_to_paused() {
     let content = json!({"version":1,"entries":{"cursor":{"candidate":{"definition":paused,"paused_at":"2026-11-26T00:00:00Z"}}}});
     std::fs::write(paused_path, content.to_string()).unwrap();
     let load = || {
-        stored_definition(&ctx, app, "candidate", &AgentEnv::default())
+        stored_definition(&ctx, &app.into(), "candidate", &AgentEnv::default())
             .unwrap()
             .to_canonical_json()
     };
@@ -542,4 +544,66 @@ async fn a_saved_codex_probe_resolves_its_home_and_auth_from_agent_env() {
     assert!(!serde_json::to_string(&report)
         .unwrap()
         .contains("host-only-credential"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn saved_custom_probe_uses_the_registered_agent_environment_and_data_dir() {
+    use crate::db::{service::custom_agent_service, test_helpers::fresh_in_memory_db};
+    use crate::models::agent::AgentType;
+
+    let db = fresh_in_memory_db().await;
+    let dir = tempfile::tempdir().unwrap();
+    let id = "mcp-probe-custom";
+    let mut def = super::super::tests::custom_def(id, true);
+    custom_agent_service::upsert(&db.conn, &def).await.unwrap();
+    let agent_type = AgentType::custom(id).unwrap();
+    agent_setting_service::ensure_defaults(
+        &db.conn,
+        &[agent_setting_service::AgentDefaultInput {
+            agent_type,
+            registry_id: id.into(),
+            default_sort_order: 0,
+        }],
+    )
+    .await
+    .unwrap();
+    agent_setting_service::update_preferences(
+        &db.conn,
+        agent_type,
+        true,
+        Some(json!({"MCP_CUSTOM_PROBE": "custom-agent-env"}).to_string()),
+    )
+    .await
+    .unwrap();
+    let definition = shell(
+        r#"
+        [ "$MCP_CUSTOM_PROBE" = "custom-agent-env" ] || exit 2
+        IFS= read -r init || exit 3
+        printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","serverInfo":{"name":"custom-test"}}}'
+        IFS= read -r initialized || exit 4
+        IFS= read -r list || exit 5
+        printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"custom-tool"}]}}'
+    "#,
+        BTreeMap::new(),
+    );
+    let path = dir.path().join("custom-agents").join(id).join("mcp.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        path,
+        json!({"mcpServers": {"saved": definition}}).to_string(),
+    )
+    .unwrap();
+    let request = || {
+        serde_json::from_value(json!({"agent": format!("custom:{id}"), "key": "saved"})).unwrap()
+    };
+    let report = mcp_probe_at(&db, request(), dir.path()).await;
+    assert_eq!(report.status, McpProbeStatus::Ok, "{report:?}");
+    assert_eq!(report.tools[0].name, "custom-tool");
+    def.supports_mcp = false;
+    custom_agent_service::upsert(&db.conn, &def).await.unwrap();
+    assert_eq!(
+        mcp_probe_at(&db, request(), dir.path()).await.status,
+        McpProbeStatus::ConfigError
+    );
 }

@@ -9,13 +9,13 @@
 //! agent's own, through the same resolvers the history parsers use.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::commands::mcp::McpAppType;
-use crate::models::agent::AgentType;
+use crate::models::agent::{is_valid_custom_agent_id, AgentType};
 use crate::parsers::{AgentEnv, AgentEnvs};
 
-use super::model::{McpConfigFormat, McpDelivery, McpDisableMode, McpTransport};
+use super::model::{McpAgentId, McpConfigFormat, McpDelivery, McpDisableMode, McpTransport};
 
 const ALL_TRANSPORTS: &[McpTransport] =
     &[McpTransport::Stdio, McpTransport::Http, McpTransport::Sse];
@@ -72,6 +72,7 @@ impl DisableFlag {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AgentSpec {
+    /// Native document dialect used to read and write the server entries.
     pub app: McpAppType,
     pub transports: &'static [McpTransport],
     pub delivery: McpDelivery,
@@ -196,6 +197,34 @@ pub(crate) fn spec(app: McpAppType) -> AgentSpec {
     }
 }
 
+pub(crate) fn custom_spec(supports_mcp: bool) -> AgentSpec {
+    AgentSpec {
+        // Custom agents use the standard mcpServers JSON shape and canonical fields.
+        app: McpAppType::ClaudeCode,
+        transports: ALL_TRANSPORTS,
+        delivery: McpDelivery::CodegSession,
+        disable: DisableFlag::disabled_true(),
+        scan_only: !supports_mcp,
+    }
+}
+
+pub(crate) fn codeg_dir() -> PathBuf {
+    crate::paths::resolve_effective_data_dir(&real_codeg_dir())
+}
+
+pub(crate) fn custom_paths(codeg_dir: &Path, id: &str) -> Option<AgentPaths> {
+    is_valid_custom_agent_id(id).then(|| AgentPaths {
+        servers: codeg_dir.join("custom-agents").join(id).join("mcp.json"),
+        plugin_gate: None,
+    })
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CustomAgent {
+    pub display_name: String,
+    pub supports_mcp: bool,
+}
+
 pub(crate) fn agent_type_of(app: McpAppType) -> AgentType {
     match app {
         McpAppType::ClaudeCode => AgentType::ClaudeCode,
@@ -221,8 +250,7 @@ pub(crate) fn agent_type_of(app: McpAppType) -> AgentType {
     }
 }
 
-/// The MCP app of a built-in agent; `None` for a custom agent, whose config
-/// files codeg knows nothing about.
+/// The native MCP dialect and path rules associated with a built-in agent.
 pub(crate) fn app_of(agent_type: AgentType) -> Option<McpAppType> {
     all_apps()
         .iter()
@@ -420,6 +448,8 @@ pub(crate) fn format_of(app: McpAppType, path: &std::path::Path) -> McpConfigFor
 /// test can point all of it at a temp directory.
 #[derive(Debug, Clone)]
 pub(crate) struct EngineCtx {
+    pub codeg_dir: PathBuf,
+    pub custom_agents: BTreeMap<String, CustomAgent>,
     pub paths: BTreeMap<McpAppType, AgentPaths>,
     /// The MCP write lock file.
     pub lock_path: PathBuf,
@@ -451,23 +481,44 @@ impl EngineCtx {
             .iter()
             .map(|app| (*app, resolve_paths(*app, &envs.get(agent_type_of(*app)))))
             .collect();
+        let codeg_dir = codeg_dir();
         Self {
+            custom_agents: BTreeMap::new(),
             paths,
             lock_path: super::lock::default_lock_path(),
             // Both runtime entry points export their effective app data directory on startup.
-            paused_path: crate::paths::resolve_effective_data_dir(&real_codeg_dir())
-                .join(super::paused::FILE_NAME),
+            paused_path: codeg_dir.join(super::paused::FILE_NAME),
+            codeg_dir,
             backup_root: default_backup_root(),
             lock_wait: super::lock::LOCK_WAIT,
         }
+    }
+
+    pub fn with_codeg_dir(mut self, dir: &Path) -> Self {
+        self.codeg_dir = dir.to_path_buf();
+        self.paused_path = dir.join(super::paused::FILE_NAME);
+        self
     }
 
     pub fn paths_of(&self, app: McpAppType) -> Option<&AgentPaths> {
         self.paths.get(&app)
     }
 
-    pub fn backup_dir(&self, app: McpAppType) -> PathBuf {
-        self.backup_root.join(wire_name(app))
+    pub fn paths_for(&self, agent: &McpAgentId) -> Option<AgentPaths> {
+        match agent {
+            McpAgentId::Builtin(app) => self.paths_of(*app).cloned(),
+            McpAgentId::Custom(id) if self.custom_agents.contains_key(id) => {
+                custom_paths(&self.codeg_dir, id)
+            }
+            McpAgentId::Custom(_) => None,
+        }
+    }
+
+    pub fn backup_dir(&self, agent: &McpAgentId) -> PathBuf {
+        match agent {
+            McpAgentId::Builtin(app) => self.backup_root.join(wire_name(*app)),
+            McpAgentId::Custom(id) => self.backup_root.join("custom-agents").join(id),
+        }
     }
 }
 

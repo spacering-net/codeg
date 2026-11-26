@@ -5,6 +5,7 @@ mod remote;
 mod tests;
 
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
@@ -16,8 +17,8 @@ use crate::commands::mcp::McpAppType;
 use crate::db::{service::agent_setting_service, AppDatabase};
 use crate::parsers::AgentEnv;
 
-use super::agents::{agent_type_of, EngineCtx};
-use super::model::{McpDefinition, McpFileStatus, RESERVED_KEY};
+use super::agents::EngineCtx;
+use super::model::{McpAgentId, McpDefinition, McpFileStatus, RESERVED_KEY};
 
 const MAX_READ_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TOOLS: usize = 200;
@@ -27,7 +28,7 @@ const PROTOCOL_VERSION: &str = "2025-03-26";
 
 #[derive(Deserialize)]
 pub struct McpProbeRequest {
-    pub agent: Option<McpAppType>,
+    pub agent: Option<McpAgentId>,
     pub key: Option<String>,
     pub definition: Option<McpDefinition>,
     pub timeout_ms: Option<u64>,
@@ -120,6 +121,14 @@ impl ProbeError {
 }
 
 pub async fn mcp_probe_core(db: &AppDatabase, request: McpProbeRequest) -> McpProbeResult {
+    mcp_probe_at(db, request, &super::agents::codeg_dir()).await
+}
+
+pub(crate) async fn mcp_probe_at(
+    db: &AppDatabase,
+    request: McpProbeRequest,
+    codeg_dir: &Path,
+) -> McpProbeResult {
     let start = Instant::now();
     let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(8_000).clamp(1_000, 15_000));
     let mut report = empty_report();
@@ -128,14 +137,21 @@ pub async fn mcp_probe_core(db: &AppDatabase, request: McpProbeRequest) -> McpPr
         let envs = agent_setting_service::load_agent_envs(&db.conn).await;
         let env = request
             .agent
-            .map(|app| envs.get(agent_type_of(app)))
+            .as_ref()
+            .and_then(McpAgentId::agent_type)
+            .map(|agent| envs.get(agent))
             .unwrap_or_default();
         let definition = match (request.definition, request.agent, request.key) {
             (Some(definition), _, None) => definition,
             (None, Some(app), Some(key)) => {
-                let ctx = EngineCtx::from_envs(&envs);
+                let mut ctx = EngineCtx::from_envs(&envs).with_codeg_dir(codeg_dir);
+                if matches!(app, McpAgentId::Custom(_)) {
+                    super::load_custom_agents(&mut ctx, db).await.map_err(|_| {
+                        ProbeError::config("Could not read the custom agent registry")
+                    })?;
+                }
                 let entry_env = env.clone();
-                tokio::task::spawn_blocking(move || stored_definition(&ctx, app, &key, &entry_env))
+                tokio::task::spawn_blocking(move || stored_definition(&ctx, &app, &key, &entry_env))
                     .await
                     .map_err(|_| ProbeError::config("Could not read the MCP configuration"))??
             }
@@ -153,17 +169,34 @@ pub async fn mcp_probe_core(db: &AppDatabase, request: McpProbeRequest) -> McpPr
 
 fn stored_definition(
     ctx: &EngineCtx,
-    app: McpAppType,
+    agent: &McpAgentId,
     key: &str,
     env: &AgentEnv,
 ) -> ProbeResult<McpDefinition> {
     if key == RESERVED_KEY {
         return Err(ProbeError::config("The Codeg companion cannot be probed"));
     }
-    let paths = ctx
-        .paths_of(app)
-        .ok_or_else(|| ProbeError::config("Unknown MCP config location"))?;
-    let (config, entries) = super::inventory::read_agent_config(ctx, app, paths);
+    let (config, entries) = match agent {
+        McpAgentId::Builtin(app) => {
+            let paths = ctx
+                .paths_of(*app)
+                .ok_or_else(|| ProbeError::config("Unknown MCP config location"))?;
+            super::inventory::read_agent_config(ctx, *app, paths)
+        }
+        McpAgentId::Custom(id) => {
+            if ctx
+                .custom_agents
+                .get(id)
+                .is_some_and(|agent| !agent.supports_mcp)
+            {
+                return Err(ProbeError::config(
+                    "MCP is disabled in the agent's settings",
+                ));
+            }
+            super::inventory::read_custom_config(ctx, agent)
+                .ok_or_else(|| ProbeError::config("Unknown MCP config location"))?
+        }
+    };
     if config.status == McpFileStatus::Unreadable {
         return Err(ProbeError::config(
             "The agent's MCP configuration could not be read",
@@ -178,7 +211,9 @@ fn stored_definition(
         .ok_or_else(|| ProbeError::config("The MCP entry has no usable definition"))?;
     // Codex keeps credential references outside the canonical definition.
     // Resolve them on the host with the same overrides as its launch.
-    if let (McpAppType::Codex, McpDefinition::Http { headers, .. }) = (app, &mut definition) {
+    if let (Some(McpAppType::Codex), McpDefinition::Http { headers, .. }) =
+        (agent.builtin(), &mut definition)
+    {
         if let Some(name) = entry
             .extra
             .get("bearer_token_env_var")

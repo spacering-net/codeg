@@ -46,7 +46,7 @@ use crate::commands::mcp_engine::agents::EngineCtx;
 use crate::commands::mcp_engine::apply::changed_agents;
 use crate::commands::mcp_engine::model::codes as engine_codes;
 use crate::commands::mcp_engine::model::{
-    is_valid_new_key, McpApplyOutcome, McpApplyRequest, McpApplyResult, McpDefinition,
+    is_valid_new_key, McpAgentId, McpApplyOutcome, McpApplyRequest, McpApplyResult, McpDefinition,
     McpFileStatus, McpInventory, McpIssue, McpOp, McpOpAction, McpOpEffect, McpTransport,
     KEY_PATTERN, RESERVED_KEY,
 };
@@ -76,7 +76,7 @@ const MAX_KEY: usize = 64;
 #[derive(Debug, Clone)]
 pub(crate) struct Local {
     pub engine: EngineCtx,
-    pub installed: BTreeMap<McpAppType, bool>,
+    pub installed: BTreeMap<McpAgentId, bool>,
     pub record_path: PathBuf,
 }
 
@@ -109,7 +109,8 @@ fn reads_of(inventory: &McpInventory) -> BTreeMap<McpAppType, AgentRead> {
     inventory
         .agents
         .iter()
-        .map(|agent| {
+        .filter_map(|agent| {
+            let app = agent.agent.builtin()?;
             let read = if agent.config.status == McpFileStatus::Unreadable
                 || agent.config.basis.is_none()
             {
@@ -117,7 +118,7 @@ fn reads_of(inventory: &McpInventory) -> BTreeMap<McpAppType, AgentRead> {
             } else {
                 AgentRead::Entries(agent.entries.clone())
             };
-            (agent.agent, read)
+            Some((app, read))
         })
         .collect()
 }
@@ -268,11 +269,14 @@ pub(crate) async fn plan(
             .agents
             .iter()
             .filter(|agent| agent.writable && agent.transports.contains(&transport))
-            .filter(|agent| match &recorded_agents {
-                Some(recorded) => recorded.contains(&agent.agent),
-                None => agent.installed == Some(true),
+            .filter_map(|agent| {
+                let app = agent.agent.builtin()?;
+                match &recorded_agents {
+                    Some(recorded) => recorded.contains(&app),
+                    None => agent.installed == Some(true),
+                }
+                .then_some(app)
             })
-            .map(|agent| agent.agent)
             .collect()
     };
 
@@ -311,7 +315,7 @@ pub(crate) async fn plan(
         inventory
             .agents
             .iter()
-            .find(|found| found.agent == agent)
+            .find(|found| found.agent.builtin() == Some(agent))
             .and_then(|found| found.entries.iter().find(|entry| entry.key == key))
     };
     let ours = |agent: McpAppType, key: &str| -> Option<&RecordAgent> {
@@ -371,11 +375,15 @@ pub(crate) async fn plan(
         keys.push(default.clone());
     }
     for key in &keys {
-        for agent in &inventory.agents {
-            let Some(entry) = entry_of(agent.agent, key) else {
+        for app in inventory
+            .agents
+            .iter()
+            .filter_map(|agent| agent.agent.builtin())
+        {
+            let Some(entry) = entry_of(app, key) else {
                 continue;
             };
-            let (owner, item_id, item_ref, state) = match ours(agent.agent, key) {
+            let (owner, item_id, item_ref, state) = match ours(app, key) {
                 Some(mine) => {
                     let state = if entry.fingerprint.as_deref() == Some(&mine.definition_sha256) {
                         LocalState::AsInstalled
@@ -385,13 +393,13 @@ pub(crate) async fn plan(
                     (EntryOwner::ThisItem, None, None, Some(state))
                 }
                 None => {
-                    let (owner, item_id, item_ref) = owner_of(agent.agent, key);
+                    let (owner, item_id, item_ref) = owner_of(app, key);
                     (owner, item_id, item_ref, None)
                 }
             };
             conflicts.push(KeyConflict {
                 key: key.clone(),
-                agent: agent.agent,
+                agent: app,
                 owner,
                 item_id,
                 item_ref,
@@ -477,41 +485,44 @@ pub(crate) async fn plan(
     let agents = inventory
         .agents
         .iter()
-        .map(|agent| PlanAgent {
-            agent: agent.agent,
-            installed: agent.installed,
-            writable: agent.writable,
-            transports: agent.transports.clone(),
-            path: agent.config.path.clone(),
-            status: agent.config.status,
-            basis: agent.config.basis.clone(),
-            keys: agent
-                .entries
-                .iter()
-                .map(|entry| entry.key.clone())
-                .collect(),
-            reason: agent.config.reason.clone().or_else(|| {
-                (!agent.writable).then(|| McpIssue::new(engine_codes::MANAGED_BY_AGENT))
-            }),
-            entries: agent
-                .entries
-                .iter()
-                .map(|entry| {
-                    let (owner, item_id, item_ref) = owner_of(agent.agent, &entry.key);
-                    ExistingEntry {
-                        key: entry.key.clone(),
-                        owner,
-                        item_id,
-                        item_ref,
-                    }
-                })
-                .collect(),
+        .filter_map(|agent| {
+            let app = agent.agent.builtin()?;
+            Some(PlanAgent {
+                agent: app,
+                installed: agent.installed,
+                writable: agent.writable,
+                transports: agent.transports.clone(),
+                path: agent.config.path.clone(),
+                status: agent.config.status,
+                basis: agent.config.basis.clone(),
+                keys: agent
+                    .entries
+                    .iter()
+                    .map(|entry| entry.key.clone())
+                    .collect(),
+                reason: agent.config.reason.clone().or_else(|| {
+                    (!agent.writable).then(|| McpIssue::new(engine_codes::MANAGED_BY_AGENT))
+                }),
+                entries: agent
+                    .entries
+                    .iter()
+                    .map(|entry| {
+                        let (owner, item_id, item_ref) = owner_of(app, &entry.key);
+                        ExistingEntry {
+                            key: entry.key.clone(),
+                            owner,
+                            item_id,
+                            item_ref,
+                        }
+                    })
+                    .collect(),
+            })
         })
         .collect();
     let basis = inventory
         .agents
         .iter()
-        .filter_map(|agent| Some((agent.agent, agent.config.basis.clone()?)))
+        .filter_map(|agent| Some((agent.agent.builtin()?, agent.config.basis.clone()?)))
         .collect();
 
     Ok(HarnessMcpPlan {
@@ -618,7 +629,7 @@ fn set_ops(targets: &[McpAppType], key: &str, definition: &McpDefinition) -> Vec
     targets
         .iter()
         .map(|agent| McpOp {
-            agent: *agent,
+            agent: (*agent).into(),
             key: key.to_string(),
             action: McpOpAction::Set {
                 definition: definition.clone(),
@@ -628,11 +639,11 @@ fn set_ops(targets: &[McpAppType], key: &str, definition: &McpDefinition) -> Vec
 }
 
 /// The basis each agent of a preflight result was found at.
-fn basis_of(result: &McpApplyResult) -> BTreeMap<McpAppType, String> {
+fn basis_of(result: &McpApplyResult) -> BTreeMap<McpAgentId, String> {
     result
         .agents
         .iter()
-        .filter_map(|agent| Some((agent.agent, agent.basis.clone()?)))
+        .filter_map(|agent| Some((agent.agent.clone(), agent.basis.clone()?)))
         .collect()
 }
 
@@ -732,7 +743,7 @@ fn record_install(
         let basis = result
             .agents
             .iter()
-            .find(|done| done.agent == *agent)
+            .find(|done| done.agent.builtin() == Some(*agent))
             .and_then(|done| done.basis.as_deref());
         let definition_sha256 = written_fingerprint(engine, *agent, &meta.key, basis)
             .unwrap_or_else(|| meta.intended.clone());
@@ -869,9 +880,9 @@ pub(crate) async fn install(
     };
 
     // 1. The engine's preflight, with the basis the dialog showed.
-    let basis: BTreeMap<McpAppType, String> = targets
+    let basis = targets
         .iter()
-        .map(|agent| (*agent, request.basis[agent].clone()))
+        .map(|agent| ((*agent).into(), request.basis[agent].clone()))
         .collect();
     let preflight = mcp_engine::apply_in(
         &local.engine,
@@ -899,16 +910,17 @@ pub(crate) async fn install(
     let issues: Vec<Reason> = preflight
         .agents
         .iter()
-        .filter(|agent| !replace.contains(&agent.agent))
-        .filter(|agent| {
+        .filter_map(|agent| Some((agent.agent.builtin()?, agent)))
+        .filter(|(app, _)| !replace.contains(app))
+        .filter(|(_, agent)| {
             agent
                 .ops
                 .iter()
                 .any(|op| matches!(op.effect, McpOpEffect::Updated | McpOpEffect::Unchanged))
         })
-        .map(|agent| {
+        .map(|(app, _)| {
             Reason::new(codes::REPLACE_REQUIRED)
-                .param("agent", record::name_of(agent.agent))
+                .param("agent", record::name_of(app))
                 .param("key", key.clone())
         })
         .collect();
@@ -1270,7 +1282,7 @@ pub(crate) async fn uninstall(
     let ops: Vec<McpOp> = removing
         .iter()
         .map(|agent| McpOp {
-            agent: *agent,
+            agent: (*agent).into(),
             key: key.clone(),
             action: McpOpAction::Remove,
         })
@@ -1298,7 +1310,10 @@ pub(crate) async fn uninstall(
     let preflight = mcp_engine::apply_in(
         &local.engine,
         &McpApplyRequest {
-            basis: given,
+            basis: given
+                .into_iter()
+                .map(|(app, basis)| (app.into(), basis))
+                .collect(),
             ops: ops.clone(),
             preflight: true,
         },

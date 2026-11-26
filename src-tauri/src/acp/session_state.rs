@@ -22,7 +22,7 @@ use crate::acp::types::{
     AcpEvent, AsyncTaskRecord, AvailableCommandInfo, BackgroundOutstandingTask, ConfigStaleKind,
     ConnectionStatus, EventEnvelope, GrokModelCatalog, GrokModelSpec, PromptCapabilitiesInfo,
     RemoteControlInfo, SessionConfigKindInfo, SessionConfigOptionInfo, SessionFailureRecord,
-    SessionModeStateInfo, ToolApprovalInfo, ToolCallImageInfo,
+    SessionMcpState, SessionModeStateInfo, ToolApprovalInfo, ToolCallImageInfo,
 };
 use crate::models::agent::AgentType;
 use crate::models::message::MessageRole;
@@ -905,6 +905,7 @@ pub struct SessionState {
     /// Which settings surface drifted, for the banner's wording. `Some` iff
     /// `config_stale`; reset to `None` when staleness clears.
     pub config_stale_kind: Option<ConfigStaleKind>,
+    pub mcp_state: Option<SessionMcpState>,
 
     /// Last live ACP session title we actually emitted on this connection.
     /// Used to skip identical `session_info_update.title` repeats (CodeBuddy
@@ -1097,6 +1098,7 @@ impl SessionState {
             last_turn_ended_abnormally: false,
             config_stale: false,
             config_stale_kind: None,
+            mcp_state: None,
             last_native_title: None,
             held_wire_title: None,
             wire_title_wake: Arc::new(tokio::sync::Notify::new()),
@@ -1444,6 +1446,9 @@ impl SessionState {
                     }
                 }
                 self.config_options = Some(config_options.clone());
+            }
+            AcpEvent::SessionMcpState { state } => {
+                self.mcp_state = Some(state.clone());
             }
             AcpEvent::SessionConfigStale { stale, kind } => {
                 self.config_stale = *stale;
@@ -2871,6 +2876,7 @@ impl SessionState {
             composer_mode_id: self.composer_mode_id.clone(),
             config_stale: self.config_stale,
             config_stale_kind: self.config_stale_kind,
+            mcp_state: self.mcp_state.clone(),
             last_error: self.last_error.clone(),
             session_failures: self.session_failures.values().cloned().collect(),
             async_tasks: self.async_tasks.values().cloned().collect(),
@@ -3114,6 +3120,8 @@ pub struct LiveSessionSnapshot {
     /// byte-identical with the pre-feature wire shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_stale_kind: Option<ConfigStaleKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_state: Option<SessionMcpState>,
     /// Most recent agent/runtime error for this live connection. Omitted when
     /// no error has occurred so older clients and common snapshots stay small.
     #[serde(default, skip_serializing_if = "Option::is_none")]

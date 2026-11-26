@@ -496,6 +496,8 @@ pub enum AcpEvent {
     },
     /// Session established with agent-assigned session ID
     SessionStarted { session_id: String },
+    /// Current MCP configuration and observed server status for this session.
+    SessionMcpState { state: SessionMcpState },
     /// Backend has bound this connection to a conversation row. Emitted exactly
     /// once per connection lifetime, on first prompt that creates the row.
     /// Frontend uses this to associate the connection_id with conversation_id
@@ -1109,6 +1111,51 @@ pub enum ConfigStaleKind {
     AgentConfig,
     /// A model provider row this agent is bound to (url / key / model) changed.
     ModelProvider,
+    /// MCP settings changed since the connection started.
+    McpConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionMcpServerStatus {
+    Attached,
+    Configured,
+    SkippedTransport,
+    Confirmed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionMcpServerEntry {
+    pub key: String,
+    pub transport: crate::commands::mcp_engine::model::McpTransport,
+    pub origin: crate::commands::mcp_engine::model::McpDelivery,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    pub status: SessionMcpServerStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub confirmed_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionMcpCapabilitiesSnapshot {
+    pub http: bool,
+    pub sse: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionMcpState {
+    pub delivery: crate::commands::mcp_engine::model::McpDelivery,
+    pub supports_mcp: bool,
+    pub codeg_mcp_attached: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<SessionMcpCapabilitiesSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_basis: Option<String>,
+    #[serde(default)]
+    pub servers: Vec<SessionMcpServerEntry>,
 }
 
 /// A block of the user's submitted prompt, broadcast via [`AcpEvent::UserMessage`]

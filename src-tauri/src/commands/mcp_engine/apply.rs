@@ -28,14 +28,14 @@ use std::path::PathBuf;
 use crate::acp::codex_catalog_commit::{LockedHome, McpCommitError, McpConfigChange};
 use crate::commands::mcp::McpAppType;
 
-use super::agents::{format_of, spec, AgentSpec, EngineCtx};
+use super::agents::{custom_spec, format_of, spec, AgentSpec, EngineCtx};
 use super::dialect;
 use super::fsio;
 use super::json_doc::OPENCODE_LEGACY_FLAG;
 use super::model::{
-    codes, is_valid_new_key, McpAgentResult, McpAgentStatus, McpApplyOutcome, McpApplyRequest,
-    McpApplyResult, McpConfigFormat, McpDisableMode, McpFileWrite, McpIssue, McpOp, McpOpAction,
-    McpOpEffect, McpOpIssue, McpOpResult, RESERVED_KEY,
+    codes, is_valid_new_key, McpAgentId, McpAgentResult, McpAgentStatus, McpApplyOutcome,
+    McpApplyRequest, McpApplyResult, McpConfigFormat, McpDisableMode, McpFileWrite, McpIssue,
+    McpOp, McpOpAction, McpOpEffect, McpOpIssue, McpOpResult, RESERVED_KEY,
 };
 use super::paused::{self, PausedEntries, PausedEntry, PausedFile};
 use super::plugin_gate;
@@ -88,7 +88,7 @@ struct FilePlan {
 
 /// Everything about one agent's part in a run.
 struct Work {
-    app: McpAppType,
+    agent: McpAgentId,
     path: PathBuf,
     /// Set once something stops this agent's operations.
     blocked: Option<McpAgentStatus>,
@@ -111,7 +111,7 @@ impl Work {
 
     fn result(&self, status: McpAgentStatus, backup_paths: Vec<String>) -> McpAgentResult {
         McpAgentResult {
-            agent: self.app,
+            agent: self.agent.clone(),
             path: self.path.display().to_string(),
             status,
             basis: self.basis.clone(),
@@ -504,20 +504,19 @@ fn run_ops(
 /// operations to it in memory.
 fn prepare(
     ctx: &EngineCtx,
-    app: McpAppType,
+    agent: &McpAgentId,
     ops: &[(usize, &McpOp)],
     request: &McpApplyRequest,
     codex: &CodexAccess<'_>,
     paused_file: &mut std::io::Result<PausedFile>,
 ) -> Work {
-    let spec = spec(app);
-    let paths = ctx.paths_of(app).cloned();
+    let paths = ctx.paths_for(agent);
     let path = paths
         .as_ref()
         .map(|paths| paths.servers.clone())
         .unwrap_or_default();
     let mut work = Work {
-        app,
+        agent: agent.clone(),
         path: path.clone(),
         blocked: None,
         basis: None,
@@ -531,14 +530,29 @@ fn prepare(
     let Some(paths) = paths else {
         work.block(
             McpAgentStatus::ReadOnly,
-            McpOpIssue::new(codes::AGENT_READ_ONLY),
+            McpOpIssue::new(match agent {
+                McpAgentId::Builtin(_) => codes::AGENT_READ_ONLY,
+                McpAgentId::Custom(_) => codes::AGENT_NOT_WRITABLE,
+            }),
         );
         return work;
     };
+    let spec = match agent {
+        McpAgentId::Builtin(app) => spec(*app),
+        McpAgentId::Custom(id) if ctx.custom_agents[id].supports_mcp => custom_spec(true),
+        McpAgentId::Custom(_) => {
+            work.block(
+                McpAgentStatus::ReadOnly,
+                McpOpIssue::new(codes::MCP_DISABLED_IN_AGENT_SETTINGS),
+            );
+            return work;
+        }
+    };
+    let app = spec.app;
 
     // The file as it is now. Codex's is read under its lock when this run
     // holds it.
-    let is_codex = app == McpAppType::Codex;
+    let is_codex = agent.builtin() == Some(McpAppType::Codex);
     let read = match (is_codex, codex) {
         (true, CodexAccess::Locked(gate)) => gate.read(),
         (true, CodexAccess::Failed(problem)) => {
@@ -582,7 +596,7 @@ fn prepare(
         );
         return work;
     }
-    match request.basis.get(&app) {
+    match request.basis.get(agent) {
         Some(seen) if *seen != basis => {
             work.block(
                 McpAgentStatus::ChangedElsewhere,
@@ -814,7 +828,7 @@ fn write_file(
     }
     let backup = match &file.original {
         Some(original) => Some(
-            fsio::backup(&ctx.backup_dir(work.app), &file.path, original)
+            fsio::backup(&ctx.backup_dir(&work.agent), &file.path, original)
                 .map_err(|e| io_issue(codes::BACKUP_FAILED, &e))?,
         ),
         None => None,
@@ -879,12 +893,12 @@ fn restore_file(written: &Written, codex: &CodexAccess<'_>) -> Undone {
 
 /// The agents the operations name, in the order they first appear, each with
 /// its operations and their positions.
-fn group_ops(ops: &[McpOp]) -> Vec<(McpAppType, Vec<(usize, &McpOp)>)> {
-    let mut groups: Vec<(McpAppType, Vec<(usize, &McpOp)>)> = Vec::new();
+fn group_ops(ops: &[McpOp]) -> Vec<(&McpAgentId, Vec<(usize, &McpOp)>)> {
+    let mut groups: Vec<(_, Vec<_>)> = Vec::new();
     for (index, op) in ops.iter().enumerate() {
-        match groups.iter_mut().find(|(app, _)| *app == op.agent) {
+        match groups.iter_mut().find(|(app, _)| *app == &op.agent) {
             Some((_, group)) => group.push((index, op)),
-            None => groups.push((op.agent, vec![(index, op)])),
+            None => groups.push((&op.agent, vec![(index, op)])),
         }
     }
     groups
@@ -899,9 +913,9 @@ pub(crate) fn busy_result(
     let agents = group_ops(&request.ops)
         .into_iter()
         .map(|(app, _)| McpAgentResult {
-            agent: app,
+            agent: app.clone(),
             path: ctx
-                .paths_of(app)
+                .paths_for(app)
                 .map(|paths| paths.servers.display().to_string())
                 .unwrap_or_default(),
             status: McpAgentStatus::NotWritten,
@@ -930,7 +944,7 @@ pub(crate) fn apply_locked(
     let mut paused_file = PausedFile::read(&ctx.paused_path);
     let mut works: Vec<Work> = group_ops(&request.ops)
         .iter()
-        .map(|(app, ops)| prepare(ctx, *app, ops, request, codex, &mut paused_file))
+        .map(|(app, ops)| prepare(ctx, app, ops, request, codex, &mut paused_file))
         .collect();
 
     let blocked = works.iter().any(|work| work.blocked.is_some());
@@ -1072,10 +1086,11 @@ pub(crate) fn apply_locked(
                 }
             }
             // Whatever is on disk now is what the next attempt starts from.
-            let paused = if spec(work.app).disable_mode() == McpDisableMode::CodegPause {
-                paused_file.as_ref().map(|file| file.entries(work.app))
-            } else {
-                Ok(None)
+            let paused = match work.agent.builtin() {
+                Some(app) if spec(app).disable_mode() == McpDisableMode::CodegPause => {
+                    paused_file.as_ref().map(|file| file.entries(app))
+                }
+                _ => Ok(None),
             };
             work.basis = paused
                 .ok()
@@ -1092,7 +1107,7 @@ pub(crate) fn apply_locked(
 }
 
 /// The agents whose files a run left changed.
-pub(crate) fn changed_agents(result: &McpApplyResult) -> Vec<McpAppType> {
+pub(crate) fn changed_agents(result: &McpApplyResult) -> Vec<McpAgentId> {
     result
         .agents
         .iter()
@@ -1104,7 +1119,7 @@ pub(crate) fn changed_agents(result: &McpApplyResult) -> Vec<McpAppType> {
                     | McpAgentStatus::RestoreFailed
             )
         })
-        .map(|agent| agent.agent)
+        .map(|agent| agent.agent.clone())
         .collect()
 }
 

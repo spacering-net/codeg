@@ -229,8 +229,8 @@ pub struct CustomAgentDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version_probe: Option<String>,
     /// User declaration that the agent accepts MCP servers over the ACP wire
-    /// (`session/new`'s `mcpServers`) — which, for a custom agent, means the
-    /// built-in codeg-mcp companion (delegation, live feedback, task tools).
+    /// (`session/new`'s `mcpServers`), including user-configured servers and
+    /// the built-in codeg-mcp companion.
     ///
     /// Not every ACP agent does: some reject any entry in that field and fail
     /// session creation outright, so a custom agent that codeg cannot connect
@@ -551,9 +551,8 @@ pub fn build_meta(def: &CustomAgentDef) -> Result<AcpAgentMeta, CustomAgentError
 
     Ok(AcpAgentMeta {
         agent_type,
-        // MCP is forwarded over the ACP wire (`session/new`'s `mcpServers`) —
-        // for a custom agent, the codeg-mcp companion is the whole of it. On
-        // by default; the user turns it off for an agent that rejects server
+        // MCP is forwarded over the ACP wire (`session/new`'s `mcpServers`).
+        // The user turns it off for an agent that rejects server
         // entries and fails to connect (see `CustomAgentDef::supports_mcp`).
         // Built-ins declare the same flag as a constant, where OpenClaw is the
         // only opt-out (see `only_builtin_openclaw_opts_out_of_mcp`).

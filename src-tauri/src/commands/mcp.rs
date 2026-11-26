@@ -485,7 +485,7 @@ pub async fn mcp_install_from_marketplace_core(
     };
     // Announced even when the walk stopped part-way: the agents before the
     // failure were written.
-    mcp_engine::announce_changed(emitter, &normalized_apps);
+    mcp_engine::announce_builtin_changed(emitter, &normalized_apps);
     written?;
 
     find_local_server(&server_id).ok_or_else(|| {
@@ -588,7 +588,7 @@ pub async fn mcp_upsert_local_server_core(
     if walked {
         // Past the preflight every agent is walked, so every agent is
         // announced — whether or not the walk finished.
-        mcp_engine::announce_changed(emitter, &ALL_MCP_APPS);
+        mcp_engine::announce_builtin_changed(emitter, &ALL_MCP_APPS);
     }
     written?;
 
@@ -664,7 +664,7 @@ pub async fn mcp_set_server_apps_core(
             .symmetric_difference(&target_set)
             .copied()
             .collect();
-        mcp_engine::announce_changed(emitter, &touched);
+        mcp_engine::announce_builtin_changed(emitter, &touched);
     }
     written?;
 
@@ -710,7 +710,7 @@ pub async fn mcp_remove_server_core(
         }
     }
     if removed {
-        mcp_engine::announce_changed(emitter, &target_apps);
+        mcp_engine::announce_builtin_changed(emitter, &target_apps);
     }
     match failure {
         Some(error) => Err(error),
@@ -3717,9 +3717,8 @@ fn upsert_server_for_app(app: McpAppType, id: &str, spec: &Value) -> Result<(), 
 /// A thin door onto the MCP engine's reader
 /// (`mcp_engine::session::servers_for_session`), which a launch calls with
 /// the agent's own environment instead. What it leaves out — an entry the
-/// agent's flag turns off, pi's and a custom agent's (nothing reaches them
-/// over the wire), an entry named like the built-in companion — is told
-/// there.
+/// agent's flag turns off, pi's extension entries, and an entry named like
+/// the built-in companion — is told there.
 pub fn read_servers_for_agent_type(
     agent_type: crate::models::agent::AgentType,
 ) -> Result<BTreeMap<String, Value>, AppCommandError> {
