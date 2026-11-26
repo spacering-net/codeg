@@ -172,6 +172,7 @@ import {
 } from "@/lib/selector-prefs-storage"
 import { rememberAdvertisedCommands } from "@/lib/advertised-commands-store"
 import { rememberModelLabels } from "@/lib/model-label-store"
+import { extractAppCommandError, toErrorMessage } from "@/lib/app-error"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 
 /**
@@ -4071,8 +4072,16 @@ function getAffectedKey(action: Action): string | null {
 }
 
 function normalizeErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return String(error)
+  const appError = extractAppCommandError(error)
+  if (appError) {
+    const message = appError.message.trim()
+    const detail = appError.detail?.trim() ?? ""
+    if (detail && message && detail !== message && !detail.includes(message)) {
+      return `${message}\n${detail}`
+    }
+    return detail || message
+  }
+  return toErrorMessage(error)
 }
 
 type AlertedError = Error & { alerted: true }

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 
-import { agentTypeToMcpApp, extractMcpInitFailure } from "./failure-recovery"
+import {
+  agentTypeToMcpApp,
+  combineMcpFailureErrorTexts,
+  extractMcpInitFailure,
+} from "./failure-recovery"
 
 describe("extractMcpInitFailure", () => {
   it("parses raw `MCP load failed for <name>: <reason>` lines", () => {
@@ -68,6 +72,27 @@ describe("extractMcpInitFailure", () => {
     expect(
       extractMcpInitFailure("Network timeout while calling API")
     ).toBeNull()
+  })
+})
+
+describe("combineMcpFailureErrorTexts", () => {
+  it("merges non-empty error texts so generic outer messages never mask nested MCP failures", () => {
+    const combined = combineMcpFailureErrorTexts([
+      null,
+      "Failed to connect to Claude Code",
+      "   ",
+      "MCP load failed for qa-mismatch-404: 404 Not Found",
+      "MCP load failed for qa-mismatch-404: 404 Not Found",
+      undefined,
+    ])
+    expect(combined).toBe(
+      "Failed to connect to Claude Code\nMCP load failed for qa-mismatch-404: 404 Not Found"
+    )
+    expect(extractMcpInitFailure(combined ?? "")).toEqual({
+      serverName: "qa-mismatch-404",
+      reason: "404 Not Found",
+    })
+    expect(combineMcpFailureErrorTexts([null, undefined, "  "])).toBeNull()
   })
 })
 
