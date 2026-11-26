@@ -1791,6 +1791,18 @@
   --os-size: 8px;
 }
 
+/* A dialog's own scrollbar (in its rail, see DialogContent): kept off the
+   round corners along its length, and 2px in from the edge — the padding is
+   inside the strip, so it grows by 4px to keep the 6px (8px) thumb. */
+[data-slot="dialog-scrollbar-rail"] > .os-scrollbar.os-theme-codeg {
+  --os-size: 10px;
+  --os-padding-perpendicular: 2px;
+  --os-padding-axis: 1.25rem;
+}
+[data-slot="dialog-scrollbar-rail"] > .os-scrollbar.os-theme-codeg:hover {
+  --os-size: 12px;
+}
+
 /* Forge label chips. The six values come from `labelSwatch()` as inline custom
    properties (both themes at once); this picks which set applies, because the
    theme is a class on the root and an inline style cannot see it. Unlayered on
