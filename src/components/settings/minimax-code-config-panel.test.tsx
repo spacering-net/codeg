@@ -13,7 +13,7 @@ it("explains native sign-in without collecting or saving credentials", () => {
   )
   expect(screen.getByText("mcode login")).toBeInTheDocument()
   expect(screen.getByText("mcode login --region global")).toBeInTheDocument()
-  expect(screen.getByText(/existing BYOK configuration/)).toBeInTheDocument()
+  expect(screen.getByText(/BYOK needs no extra login/)).toBeInTheDocument()
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument()
   expect(screen.queryByRole("button")).not.toBeInTheDocument()
 })

@@ -143,7 +143,9 @@ describe("OpenCodePermissionsSection", () => {
     const harness = setup(
       JSON.stringify({ permission: { bash: { "git *": "allow" } } })
     )
-    expect(screen.getByText(/These rules come from OpenCode 1/)).toBeVisible()
+    expect(
+      screen.getByText(/From OpenCode 1's permission and tools keys/)
+    ).toBeVisible()
     fireEvent.click(screen.getByRole("button", { name: shellRulesName }))
     const inputs = screen.getAllByPlaceholderText("git *")
     fireEvent.change(inputs[inputs.length - 1], { target: { value: "rm *" } })
@@ -155,7 +157,7 @@ describe("OpenCodePermissionsSection", () => {
       rule("shell", "rm *", "allow"),
     ])
     expect(
-      screen.queryByText(/These rules come from OpenCode 1/)
+      screen.queryByText(/From OpenCode 1's permission and tools keys/)
     ).not.toBeInTheDocument()
   })
 
@@ -264,7 +266,7 @@ describe("OpenCodePermissionsSection", () => {
     setup(JSON.stringify({ permissions: "allow" }))
     expect(
       screen.getByText(
-        "The permission rules have a shape codeg does not recognize. Edit them in the native JSON below, or use Reset to start over."
+        "Unrecognized permission rules. Edit them in the native JSON below, or Reset to start over."
       )
     ).toBeInTheDocument()
     expect(autoAccept()).toBeDisabled()
@@ -279,10 +281,10 @@ describe("OpenCodePermissionsSection", () => {
       })
     )
     expect(
-      screen.getByText(/not written in the order shown below/)
+      screen.getByText(/Rules are out of the order shown/)
     ).toBeInTheDocument()
     expect(
-      screen.getByText(/Editing below is paused until the order is fixed/)
+      screen.getByText(/Editing is paused until the order is fixed/)
     ).toBeInTheDocument()
     // It must not read as auto-accept while the rows claim shell is denied.
     expect(autoAccept()).toHaveAttribute("data-state", "unchecked")
@@ -300,7 +302,7 @@ describe("OpenCodePermissionsSection", () => {
       rule("shell", "*", "deny"),
     ])
     expect(
-      screen.queryByText(/not written in the order shown below/)
+      screen.queryByText(/Rules are out of the order shown/)
     ).not.toBeInTheDocument()
     for (const select of screen.getAllByRole("combobox")) {
       expect(select).toBeEnabled()
@@ -334,7 +336,7 @@ describe("OpenCodePermissionsSection", () => {
       })
     )
     expect(
-      screen.getByText(/shadowed by a later, more general pattern/)
+      screen.getByText(/shadowed by a later, broader pattern/)
     ).toBeInTheDocument()
     expect(
       screen.queryByRole("button", { name: "Fix order" })
@@ -343,7 +345,9 @@ describe("OpenCodePermissionsSection", () => {
 
   it("notes 1.x rules, and a tools deny keeps auto-accept off", () => {
     setup(JSON.stringify({ permission: "allow", tools: { bash: false } }))
-    expect(screen.getByText(/These rules come from OpenCode 1/)).toBeVisible()
+    expect(
+      screen.getByText(/From OpenCode 1's permission and tools keys/)
+    ).toBeVisible()
     expect(autoAccept()).toHaveAttribute("data-state", "unchecked")
   })
 
@@ -354,7 +358,9 @@ describe("OpenCodePermissionsSection", () => {
         agents: { build: { permissions: [rule("shell", "*", "ask")] } },
       })
     )
-    expect(screen.getByText(/These agents override permissions/)).toBeVisible()
+    expect(
+      screen.getByText(/These agents' overrides win over everything here/)
+    ).toBeVisible()
     expect(autoAccept()).toHaveAttribute("data-state", "unchecked")
   })
 
@@ -373,7 +379,7 @@ describe("OpenCodePermissionsSection", () => {
     expect(harness.doc().agent).toEqual({ review: {} })
     expect(autoAccept()).toHaveAttribute("data-state", "checked")
     expect(
-      screen.queryByText(/These agents override permissions/)
+      screen.queryByText(/These agents' overrides win over everything here/)
     ).not.toBeInTheDocument()
   })
 

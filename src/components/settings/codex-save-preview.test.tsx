@@ -40,7 +40,7 @@ describe("CodexSavePreview", () => {
     })
     renderPreview()
     expect(
-      await screen.findByText(/sets root model = “glm-5\.2”/)
+      await screen.findByText(/manages root model \(“glm-5\.2”\)/)
     ).toBeVisible()
     expect(codexCatalogPlanPreview).toHaveBeenCalledWith({
       configToml: "x = 1",

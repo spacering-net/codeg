@@ -694,12 +694,15 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
                 ? t("detachedHead", { sha: head?.short_sha ?? "" })
                 : (branch ?? undefined)
             }
-            className="min-w-0 gap-0.5 px-1.5"
+            // `shrink` overrides the Button's `shrink-0` so a narrow composer
+            // row ellipsizes the branch name instead of pushing the chip into
+            // the trailing status icons.
+            className="min-w-0 shrink gap-0.5 px-1.5"
           >
             {isDetached ? (
-              <GitCommitHorizontal className="size-3 shrink-0 text-muted-foreground" />
+              <GitCommitHorizontal className="me-0.5 size-3 shrink-0 text-muted-foreground" />
             ) : (
-              <GitBranch className="size-3 shrink-0 text-muted-foreground" />
+              <GitBranch className="me-0.5 size-3 shrink-0 text-muted-foreground" />
             )}
             <span className="max-w-[10rem] truncate">
               {branch ?? head?.branch ?? head?.short_sha ?? t("noBranch")}

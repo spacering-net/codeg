@@ -154,7 +154,7 @@ describe("OpencodePluginsModal", () => {
     renderModal()
 
     expect(
-      await screen.findByText(/declared under OpenCode 1's `plugin` key/)
+      await screen.findByText(/sit under the old `plugin` key and still load/)
     ).toBeInTheDocument()
   })
 

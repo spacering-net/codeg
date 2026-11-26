@@ -11,7 +11,7 @@
  * every assistant shares are a button in the window chrome, by the panel's
  * toggle, and what acts on the assistant itself — the session underneath,
  * compacting, a new session — is in the "⋯" by its face on the panel. The
- * assistants are listed on the workspace's sidebar ("Personal assistants");
+ * assistants are listed on the workspace's sidebar ("Assistants");
  * the capsule lists them too, for a collapsed sidebar or a phone. The
  * sessions it reaches — its own, and those of the work it handed out —
  * open in a drawer on the right, over the page.

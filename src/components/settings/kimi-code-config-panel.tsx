@@ -17,6 +17,11 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  AgentPanelCard,
+  AgentPanelGroup,
+  AgentPanelSaveBar,
+} from "@/components/settings/agent-panel-layout"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
@@ -766,18 +771,12 @@ export function KimiCodeConfigPanel({
   )
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-      <div>
-        <label className="text-xs font-medium">
-          {t("kimiCode.configManagement")}
-        </label>
-        <p className="mt-1 text-2xs text-muted-foreground">
-          {t("kimiCode.configDescription")}
-        </p>
-      </div>
-
+    <AgentPanelGroup
+      title={t("kimiCode.configManagement")}
+      description={t("kimiCode.configDescription")}
+    >
       {/* ---- Status card: everything here is read BACK from config.toml ---- */}
-      <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
+      <AgentPanelCard>
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5">
             <span
@@ -790,7 +789,7 @@ export function KimiCodeConfigPanel({
             />
             {/* The label always describes DISK, never the form — the badge on
                 the right is what reports unsaved edits. */}
-            <span className="text-2xs font-medium">
+            <span className="text-xs font-medium">
               {status === "unconfigured"
                 ? t("kimiCode.statusUnconfigured")
                 : config.hasManagedBlock
@@ -863,46 +862,46 @@ export function KimiCodeConfigPanel({
             </span>
           </p>
         )}
-      </div>
+      </AgentPanelCard>
 
       {/* ---- Authentication method ---- */}
-      <div className="space-y-1.5">
-        <label className="text-2xs text-muted-foreground">
-          {t("kimiCode.authModeLabel")}
-        </label>
-        <Select
-          value={draft.mode}
-          onValueChange={(value) => patch({ mode: value as KimiAuthMode })}
-          disabled={saving}
-        >
-          <SelectTrigger
-            className="w-full"
-            aria-label={t("kimiCode.authModeLabel")}
+      <AgentPanelCard>
+        <div className="space-y-1.5">
+          <label className="text-2xs text-muted-foreground">
+            {t("kimiCode.authModeLabel")}
+          </label>
+          <Select
+            value={draft.mode}
+            onValueChange={(value) => patch({ mode: value as KimiAuthMode })}
+            disabled={saving}
           >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent align="start">
-            <SelectItem value="apikey">
-              {t("kimiCode.authModeApiKey")}
-            </SelectItem>
-            <SelectItem value="login">{t("kimiCode.authModeLogin")}</SelectItem>
-          </SelectContent>
-        </Select>
-        <p className="text-2xs text-muted-foreground">
-          {draft.mode === "apikey"
-            ? t("kimiCode.authModeApiKeyHint")
-            : t("kimiCode.loginHint")}
-        </p>
-      </div>
+            <SelectTrigger
+              className="w-full"
+              aria-label={t("kimiCode.authModeLabel")}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start">
+              <SelectItem value="apikey">
+                {t("kimiCode.authModeApiKey")}
+              </SelectItem>
+              <SelectItem value="login">
+                {t("kimiCode.authModeLogin")}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-2xs text-muted-foreground">
+            {draft.mode === "apikey"
+              ? t("kimiCode.authModeApiKeyHint")
+              : t("kimiCode.loginHint")}
+          </p>
+        </div>
+      </AgentPanelCard>
 
       {draft.mode === "apikey" && (
         <>
           {/* ---- Credential card ---- */}
-          <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
-            <span className="text-2xs font-medium">
-              {t("kimiCode.credentialTitle")}
-            </span>
-
+          <AgentPanelCard title={t("kimiCode.credentialTitle")}>
             <div className="grid gap-2 md:grid-cols-2">
               <div className="space-y-1">
                 <label
@@ -1057,14 +1056,10 @@ export function KimiCodeConfigPanel({
                 </div>
               </div>
             )}
-          </div>
+          </AgentPanelCard>
 
           {/* ---- Model card ---- */}
-          <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
-            <span className="text-2xs font-medium">
-              {t("kimiCode.modelTitle")}
-            </span>
-
+          <AgentPanelCard title={t("kimiCode.modelTitle")}>
             <div className="grid gap-2 md:grid-cols-2">
               <div className="space-y-1">
                 <label
@@ -1118,17 +1113,16 @@ export function KimiCodeConfigPanel({
                 <span>{t("kimiCode.modelNotInList")}</span>
               </p>
             )}
-          </div>
+          </AgentPanelCard>
 
           {/* ---- Reasoning card ----
               `kimi acp` only advertises its Thinking picker when the model
               declares a thinking capability, and sources the picker's rows from
               `support_efforts`. Both are written from here. */}
-          <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-2xs font-medium">
-                {t("kimiCode.reasoningTitle")}
-              </span>
+          <AgentPanelCard
+            title={t("kimiCode.reasoningTitle")}
+            description={t("kimiCode.reasoningDescription")}
+            control={
               <label className="flex cursor-pointer items-center gap-1.5 text-2xs text-muted-foreground">
                 <Switch
                   checked={draft.reasoningEnabled}
@@ -1140,11 +1134,8 @@ export function KimiCodeConfigPanel({
                 />
                 {t("kimiCode.reasoningEnableLabel")}
               </label>
-            </div>
-            <p className="text-3xs text-muted-foreground">
-              {t("kimiCode.reasoningDescription")}
-            </p>
-
+            }
+          >
             {draft.reasoningEnabled && (
               <>
                 <div className="space-y-1">
@@ -1200,7 +1191,7 @@ export function KimiCodeConfigPanel({
                       {t("kimiCode.effortsAdd")}
                     </Button>
                   </div>
-                  <p className="text-3xs text-muted-foreground">
+                  <p className="text-2xs text-muted-foreground">
                     {draft.supportEfforts.length === 0
                       ? t("kimiCode.effortsEmptyHint")
                       : t("kimiCode.effortsHint")}
@@ -1256,11 +1247,11 @@ export function KimiCodeConfigPanel({
                 </label>
               </>
             )}
-          </div>
+          </AgentPanelCard>
         </>
       )}
 
-      <div className="flex justify-end">
+      <AgentPanelSaveBar>
         <Button
           type="button"
           size="sm"
@@ -1280,87 +1271,89 @@ export function KimiCodeConfigPanel({
             </>
           )}
         </Button>
-      </div>
+      </AgentPanelSaveBar>
 
       {/* ---- Advanced: credential placement + the raw config.toml hatch ---- */}
-      <details className="rounded-md border bg-background/40 p-2">
-        <summary className="cursor-pointer text-2xs font-medium text-muted-foreground">
-          {t("kimiCode.advancedTitle")}
-        </summary>
-        <div className="mt-2 space-y-3">
-          {draft.mode === "apikey" && meta.usesApiKey && (
-            <div className="space-y-1">
-              <label
-                className="text-2xs text-muted-foreground"
-                title={t("kimiCode.authTypeHint")}
-              >
-                {t("kimiCode.authTypeLabel")}
-              </label>
-              <Select
-                value={draft.authType}
-                onValueChange={(value) =>
-                  patch({ authType: value as KimiNativeAuthType })
-                }
-                disabled={saving}
-              >
-                <SelectTrigger
-                  className="w-full"
-                  aria-label={t("kimiCode.authTypeLabel")}
+      <AgentPanelCard>
+        <details>
+          <summary className="cursor-pointer text-xs font-medium">
+            {t("kimiCode.advancedTitle")}
+          </summary>
+          <div className="mt-3 space-y-3">
+            {draft.mode === "apikey" && meta.usesApiKey && (
+              <div className="space-y-1">
+                <label
+                  className="text-2xs text-muted-foreground"
+                  title={t("kimiCode.authTypeHint")}
                 >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent align="start">
-                  <SelectItem value="api_key">
-                    {t("kimiCode.authTypeApiKey")}
-                  </SelectItem>
-                  <SelectItem value="env">
-                    {t("kimiCode.authTypeEnv")}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          )}
+                  {t("kimiCode.authTypeLabel")}
+                </label>
+                <Select
+                  value={draft.authType}
+                  onValueChange={(value) =>
+                    patch({ authType: value as KimiNativeAuthType })
+                  }
+                  disabled={saving}
+                >
+                  <SelectTrigger
+                    className="w-full"
+                    aria-label={t("kimiCode.authTypeLabel")}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent align="start">
+                    <SelectItem value="api_key">
+                      {t("kimiCode.authTypeApiKey")}
+                    </SelectItem>
+                    <SelectItem value="env">
+                      {t("kimiCode.authTypeEnv")}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
-          <div className="space-y-1.5">
-            <label className="text-2xs text-muted-foreground">
-              {t("kimiCode.rawEditorLabel")}
-            </label>
-            <Textarea
-              value={rawConfig}
-              onChange={(event) => setRawConfig(event.target.value)}
-              placeholder={t("kimiCode.rawEditorPlaceholder")}
-              className="min-h-[8.75rem] font-mono text-2xs"
-              disabled={saving}
-            />
-            <p className="flex items-start gap-1.5 text-2xs text-amber-700 dark:text-amber-400">
-              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-              <span>{t("kimiCode.rawEditorWarning")}</span>
-            </p>
-            <div className="flex justify-end">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={handleSaveRaw}
+            <div className="space-y-1.5">
+              <label className="text-2xs text-muted-foreground">
+                {t("kimiCode.rawEditorLabel")}
+              </label>
+              <Textarea
+                value={rawConfig}
+                onChange={(event) => setRawConfig(event.target.value)}
+                placeholder={t("kimiCode.rawEditorPlaceholder")}
+                className="min-h-[8.75rem] font-mono text-2xs"
                 disabled={saving}
-                className="gap-1.5"
-              >
-                {saving ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    {t("actions.saving")}
-                  </>
-                ) : (
-                  <>
-                    <Save className="h-3.5 w-3.5" />
-                    {t("actions.saveKimiCodeRawConfig")}
-                  </>
-                )}
-              </Button>
+              />
+              <p className="flex items-start gap-1.5 text-2xs text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                <span>{t("kimiCode.rawEditorWarning")}</span>
+              </p>
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={handleSaveRaw}
+                  disabled={saving}
+                  className="gap-1.5"
+                >
+                  {saving ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      {t("actions.saving")}
+                    </>
+                  ) : (
+                    <>
+                      <Save className="h-3.5 w-3.5" />
+                      {t("actions.saveKimiCodeRawConfig")}
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
-      </details>
-    </div>
+        </details>
+      </AgentPanelCard>
+    </AgentPanelGroup>
   )
 }
