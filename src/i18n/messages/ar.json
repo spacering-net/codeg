@@ -10364,13 +10364,6 @@
     "items": {
       "waitingAnswer": "بانتظار رد {name}: {text}",
       "wroteToYou": "كتب {name}: {text}",
-      "waits": {
-        "owner": "بانتظارك",
-        "agent": "لدى الوكيل",
-        "external": "قيد التنفيذ",
-        "time": "لاحقًا",
-        "none": "أخرى"
-      },
       "kind": {
         "dispatch": "إسناد",
         "reminder": "تذكير",
@@ -11289,7 +11282,8 @@
       "jump": "الانتقال إلى الرسالة الأصلية",
       "dismiss": "إزالة الاقتباس",
       "preview": "الرسالة الأصلية",
-      "previewHint": "الرسالة المقتبسة، قديمة جدًا لتحميلها هنا."
+      "previewHint": "الرسالة المقتبسة، قديمة جدًا لتحميلها هنا.",
+      "reminder": "تذكير: {summary}"
     },
     "step": {
       "awaiting": "بانتظار تأكيدك: {title}",
@@ -11828,7 +11822,10 @@
       "loading": "جارٍ تحميل الخطوات…",
       "empty": "لا خطوات بعد",
       "fold": "إخفاء الخطوات",
-      "openWork": "فتح العمل"
+      "openWork": "فتح العمل",
+      "replied": "تم الرد",
+      "workDone": "اكتمل العمل",
+      "notFinished": "لم يكتمل"
     },
     "sending": {
       "waking": "جارٍ إيقاظ {name}…",
@@ -11859,13 +11856,6 @@
       "notify": "أعلِمني",
       "notifyHint": "عندما يُنهي أمرًا أو ينتظرك",
       "item": {
-        "done": "تم",
-        "later": "لاحقًا",
-        "drop": "إسقاط",
-        "in15m": "بعد 15 دقيقة",
-        "in1h": "بعد ساعة",
-        "tomorrow": "صباح الغد",
-        "untimed": "دون وقت محدد",
         "act": "ينفّذه في موعده"
       },
       "output": {
@@ -12032,8 +12022,8 @@
       "snooze15m": "بعد 15 دقيقة",
       "snooze1h": "بعد ساعة",
       "snoozeTomorrow": "صباح الغد",
-      "handOver": "سلّمه للمساعد",
-      "handOverText": "تولَّ التذكير #{id}: {summary}",
+      "handOver": "سلِّم إلى {name}",
+      "handOverText": "تولَّ هذا التذكير: {summary}",
       "state": {
         "done": "تم",
         "snoozed": "مؤجل حتى {when}",
@@ -12059,7 +12049,6 @@
       "handed": "سُلِّم إلى {name}",
       "checking": "قيد التحقق · الجولة {round}",
       "queued": "في قائمة انتظار الدمج",
-      "waitsAgent": "بانتظار أن يتولاه {name}",
       "routineRunning": "قيد التشغيل",
       "routineLast": "آخر تشغيل: {outcome}",
       "fold": "إخفاء التفاصيل",
@@ -13063,6 +13052,121 @@
       "title": "لا يملك {name} عقلًا بعد",
       "body": "جاء من إعدادات التعاون. اضبط المساعد الرئيسي وسيحصل على نسخة من عقله، وعندها يمكنك التحدث إليه. وحتى ذلك الحين يمكنك الإشارة إليه بـ @ في المحادثات.",
       "setUp": "إعداد المساعد الرئيسي"
+    },
+    "matter": {
+      "act": {
+        "done": "تم",
+        "doneThis": "تم هذه المرة",
+        "doneEarly": "إنجاز مبكر",
+        "skipThis": "تخطَّ هذه المرة",
+        "merged": "تم الدمج",
+        "ack": "فهمت",
+        "snooze": "تأجيل",
+        "setTime": "تحديد وقت",
+        "in15m": "بعد 15 دقيقة",
+        "in1h": "بعد ساعة",
+        "tomorrow": "صباح الغد",
+        "handOver": "سلِّم إلى {name}",
+        "answer": "أجب",
+        "drop": "لم يعد مطلوبًا",
+        "stop": "أوقف التذكير",
+        "undo": "تراجع"
+      },
+      "hint": {
+        "doneNext": "تم هذه المرة، ويستمر بعدها كالمعتاد: {rule}",
+        "skipNext": "تُتخطّى هذه المرة، ويستمر بعدها كالمعتاد: {rule}",
+        "snoozeNotify": "ستُذكَّر مجددًا في ذلك الوقت",
+        "snoozeAct": "سيتولاه {name} في ذلك الوقت",
+        "setTimeNotify": "ستُذكَّر في ذلك الوقت",
+        "setTimeAct": "سيتولاه {name} في ذلك الوقت",
+        "handOver": "يتولى {name} الأمر",
+        "answer": "أجب في المحادثة مع {name}",
+        "drop": "يُزال من القائمة، ولن يتابعه {name}",
+        "dropQuestion": "لا حاجة للإجابة، وسيُبلَّغ {name}",
+        "dropMessage": "تُسحب الرسالة؛ وإن تعذّر ذلك فلن ينتظر {name} ردّ {peer}",
+        "stop": "لن تكون هناك تذكيرات بعد الآن",
+        "merged": "يُبلغ {name} أن طلب الدمج قد دُمج",
+        "ack": "يُزال من القائمة"
+      },
+      "toast": {
+        "done": "تم: {title}",
+        "doneNext": "تم هذه المرة — المرة القادمة {when}",
+        "doneEnded": "تم — كانت هذه آخر مرة",
+        "skipNext": "تم التخطي هذه المرة — المرة القادمة {when}",
+        "skipEnded": "تم التخطي — كانت هذه آخر مرة",
+        "snoozeNotify": "ستُذكَّر {when}",
+        "snoozeAct": "سيتولاه {name} {when}",
+        "dropped": "أُزيل: {title}",
+        "withdrawn": "سُحبت الرسالة المرسلة إلى {peer}",
+        "notWithdrawn": "لم تُسحب الرسالة؛ لم يعد {name} ينتظر ردّ {peer}",
+        "stopped": "لا مزيد من التذكيرات: {title}",
+        "handed": "سُلِّم إلى {name}",
+        "undone": "تم التراجع"
+      },
+      "meta": {
+        "reminds": "{name} يذكّرك · موعده {when}",
+        "remindsLate": "{name} يذكّرك · موعده {when}، مضى {late}",
+        "willRemind": "سيذكّرك {name} {when}",
+        "willDo": "سيتولاه {name} {when}",
+        "repeats": "{name} يذكّرك: {rule} · المرة القادمة {when}",
+        "asks": "{name} يسألك · ينتظر منذ {wait}",
+        "asked": "{name} يسألك",
+        "answered": "أجبت · بانتظار أن يقرأها {name}",
+        "interrupted": "لم تكتمل جولة {name} وربما لم يقرأ إجابتك · أجب مرة أخرى إن لزم",
+        "needsYou": "{name} يحتاجك · ينتظر منذ {wait}",
+        "following": "{name} يتابع · {wait}",
+        "external": "{name} ينتظر نتيجة خارجية · {wait}",
+        "message": "{name} ينتظر ردّ {peer} · {wait}",
+        "setAside": "مؤجَّل · بلا وقت",
+        "mention": "عندما تذكر {words} يذكّرك {name} · {times} من {max} مرات · حتى {until}",
+        "justNow": "الآن",
+        "someone": "المساعد الآخر"
+      },
+      "closed": {
+        "done": "أنجزته · {time}",
+        "dropped": "أزلته · {time}",
+        "withdrawn": "سحبت الرسالة المرسلة إلى {peer} · {time}",
+        "stoppedWaiting": "توقفت عن انتظار ردّ {peer} · {time}",
+        "agentDone": "أنجزه {name} · {time}",
+        "agentDropped": "توقف {name} عن متابعته · {time}",
+        "answered": "قرأ {name} إجابتك · {time}",
+        "replied": "ردّ {peer} · {time}",
+        "gone": "حُذف {peer}؛ لن يصل ردّ · {time}",
+        "planCanceled": "أُلغيت الخطة؛ لم يعد {name} ينتظر ردّ {peer} · {time}",
+        "usedUp": "استُنفد التذكير عند الذكر · {time}",
+        "expired": "انتهت مدة التذكير عند الذكر · {time}",
+        "ended": "انتهى · {time}"
+      }
+    },
+    "matterErrors": {
+      "gone": "هذا لم يعد موجودًا",
+      "settled": "هذا انتهى بالفعل",
+      "changed": "تغيّر هذا للتو — ألقِ نظرة أخرى",
+      "workRunning": "هذا العمل ما زال جاريًا؛ لإيقافه استخدم «إيقاف» في شريط المهمة",
+      "workNoTime": "لا يمكن تأجيل العمل المُسلَّم إلى وقت",
+      "messageNoTime": "هذا ينتظر ردّ {peer} ولا يمكن تأجيله إلى وقت",
+      "mentionNoTime": "هذا يظهر عندما تذكره، لا في وقت محدد",
+      "notEarlier": "هذا محدد بالفعل لـ {when}؛ التأجيل يؤخره فقط",
+      "hasTime": "هذا محدد بالفعل لـ {when}",
+      "inOtherHands": "هذا بيد {bot} ولا يمكن تأجيله إلى وقت",
+      "badTime": "لم يُفهم هذا الوقت",
+      "undoNone": "لا يمكن التراجع عن هذا",
+      "undoExpired": "مرّت أكثر من 10 دقائق؛ لم يعد التراجع ممكنًا",
+      "undoFired": "وصل التذكير للتو؛ لم يعد التراجع ممكنًا",
+      "undoChanged": "تغيّر هذا للتو؛ لم يعد التراجع ممكنًا",
+      "undoReplied": "ردّ {peer} بالفعل؛ لم يعد التراجع ممكنًا",
+      "undoPeerGone": "حُذف {peer}؛ لم يعد التراجع ممكنًا",
+      "undoAnswerRead": "قرأ {bot} إجابتك بالفعل؛ لم يعد التراجع ممكنًا",
+      "answerChanged": "تغيّر السؤال للتو. لم تُرسل الرسالة، وما كتبته ما زال في مربع الإدخال",
+      "answerQueued": "هذا السؤال في قائمة انتظار {bot}. لإضافة شيء، أزل «إجابة» وأرسله كرسالة عادية",
+      "reminderAnswered": "تمّت معالجة هذا التذكير بالفعل"
+    },
+    "answer": {
+      "bar": "إجابة: {question}",
+      "dismiss": "لا ترسلها كإجابة",
+      "label": "إجابة: {question}",
+      "ended": "انتهى هذا السؤال؛ لا حاجة للإجابة",
+      "alreadyAnswered": "هذا السؤال ينتظر بالفعل أن يقرأ {name} إجابتك"
     }
   },
   "MessageCheck": {

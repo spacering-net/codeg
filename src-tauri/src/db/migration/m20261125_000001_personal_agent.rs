@@ -644,7 +644,7 @@ impl MigrationTrait for Migration {
 }
 
 /// Add `column` to `table` unless it is there already.
-async fn add_column(
+pub(super) async fn add_column(
     conn: &DatabaseTransaction,
     table: &str,
     column: &str,
@@ -801,7 +801,13 @@ mod tests {
     async fn down_removes_everything_it_made() {
         let conn = Database::connect("sqlite::memory:").await.expect("db");
         Migrator::up(&conn, None).await.expect("migrate");
-        Migrator::down(&conn, Some(1)).await.expect("down");
+        // This step, and the one after it that adds to its matters.
+        let after = <Migrator as MigratorTrait>::migrations()
+            .iter()
+            .rev()
+            .position(|m| m.name().contains("m20261125_000001_personal_agent"))
+            .expect("migration is registered");
+        Migrator::down(&conn, Some(after as u32 + 1)).await.expect("down");
         let left = names(
             &conn,
             "SELECT name FROM sqlite_master WHERE name LIKE '%personal_agent%' \

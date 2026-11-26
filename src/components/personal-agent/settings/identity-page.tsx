@@ -66,7 +66,7 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { SetupAgentTiles } from "./setup-agent-tiles"
 import { SetupFrame } from "./setup-frame"
-import { PRIMARY_FACE } from "../bot-avatar"
+import { faceColorOf, PRIMARY_FACE } from "../bot-avatar"
 import { SetupIdentity } from "./setup-identity"
 import { useAgentConfig, type AgentConfigEditor } from "./use-agent-config"
 
@@ -372,7 +372,7 @@ export function IdentityPage({
   if (!agent) {
     return (
       <SetupFrame
-        face={avatar.kind === "face" ? avatar.color : null}
+        face={faceColorOf(avatar)}
         onSubmit={() => void save()}
         identity={
           <SetupIdentity

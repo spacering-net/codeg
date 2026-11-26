@@ -1317,7 +1317,9 @@ export function PersonalAgentRoster({
   )
 
   /** Before the primary is set up: one row that sets it up — the page's
-   *  first setup, which then gives the others their brains. */
+   *  first setup, which then gives the others their brains. A card of its
+   *  own, so on a first launch it stands apart from the empty sidebar's
+   *  buttons under it. */
   const setupRow = (
     <button
       type="button"
@@ -1328,15 +1330,15 @@ export function PersonalAgentRoster({
       }}
       data-pa-roster-setup
       className={cn(
-        "group/add flex w-full items-center gap-2.5 rounded-full px-2 py-1.5 text-start text-sm transition-colors",
+        "group/add flex w-full items-center gap-2.5 rounded-xl border px-2 py-2 text-start text-sm transition-colors",
         active && viewBot == null
-          ? "bg-accent text-accent-foreground"
-          : "text-foreground/80 hover:bg-muted hover:text-foreground"
+          ? "border-transparent bg-accent text-accent-foreground"
+          : "border-border/70 bg-background text-foreground/80 hover:bg-muted hover:text-foreground dark:bg-muted/50 dark:hover:bg-muted"
       )}
     >
       <span
         aria-hidden
-        className="flex size-7 shrink-0 items-center justify-center rounded-full border border-dashed border-border bg-background text-muted-foreground transition-colors group-hover/add:text-foreground"
+        className="flex size-7 shrink-0 items-center justify-center rounded-full border border-dashed border-border bg-muted/60 text-muted-foreground transition-colors group-hover/add:bg-background group-hover/add:text-foreground"
       >
         <Plus className="size-4" />
       </span>

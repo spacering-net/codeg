@@ -218,6 +218,9 @@ pub struct SendParams {
     /// The button on the quoted card the message comes from.
     #[serde(default)]
     pub card: Option<crate::personal_agent::card_acts::CardClick>,
+    /// The assistant's question the message answers.
+    #[serde(default)]
+    pub answers_item: Option<i32>,
 }
 
 pub async fn personal_agent_send(
@@ -230,6 +233,7 @@ pub async fn personal_agent_send(
             params.blocks,
             params.reply_to,
             params.card,
+            params.answers_item,
         )
         .await?,
     ))
@@ -311,12 +315,15 @@ pub struct ItemActParams {
     /// `snooze`: until when.
     #[serde(default)]
     pub until: Option<String>,
+    /// `panel` (the default) or `card`.
+    #[serde(default)]
+    pub from: Option<String>,
 }
 
 pub async fn personal_agent_item_act(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<ItemActParams>,
-) -> Result<Json<crate::models::personal_agent::ItemInfo>, AppCommandError> {
+) -> Result<Json<crate::models::personal_agent::ItemActResult>, AppCommandError> {
     Ok(Json(
         pa::personal_agent_item_act_core(
             &state.db,
@@ -324,8 +331,28 @@ pub async fn personal_agent_item_act(
             params.item_id,
             params.act,
             params.until,
+            params.from,
         )
         .await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemUndoParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub item_id: i32,
+    pub undo: i32,
+}
+
+pub async fn personal_agent_item_undo(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ItemUndoParams>,
+) -> Result<Json<crate::models::personal_agent::ItemInfo>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_item_undo_core(&state.db, params.bot_id, params.item_id, params.undo)
+            .await?,
     ))
 }
 
