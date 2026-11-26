@@ -908,7 +908,9 @@ mod tests {
         assert!(TOOL_NOTES.contains("look at the team first"));
         // An agent with no skill learns how a result is reported here (A3).
         assert!(TOOL_NOTES.contains("`[[quote:#ID]]` for each result you report"));
-        assert!(TOOL_NOTES.contains("do not say its title, state or session again"));
+        // Each piece named in the reply, its marker in the conclusion (P6).
+        assert!(TOOL_NOTES.contains("Name each piece of work and its result"));
+        assert!(TOOL_NOTES.contains("report in your conclusion — the text after your last tool call"));
         // Its skill and tools are not named to the owner.
         assert!(TOOL_NOTES.contains("never name them in what you write"));
         for worker in [false, true] {

@@ -13064,6 +13064,8 @@ mod against_a_forge {
         /// The next reads of a pull request answered 429 (retry after 120 s).
         limited: usize,
         pull_reads: usize,
+        /// Reads of a pull request begun (a slow one counts as it starts).
+        pull_reads_begun: usize,
         /// The next reads of a pull request answered with these statuses.
         fail_with: Vec<u16>,
         /// Each read of a pull request takes this long.
@@ -13137,7 +13139,11 @@ mod against_a_forge {
             .route(
                 "/api/v3/repos/acme/app/pulls/{n}",
                 get(|State(s): State<Shared>, UrlPath(n): UrlPath<i64>| async move {
-                    let slow = s.lock().unwrap().slow_ms;
+                    let slow = {
+                        let mut f = s.lock().unwrap();
+                        f.pull_reads_begun += 1;
+                        f.slow_ms
+                    };
                     if slow > 0 {
                         tokio::time::sleep(std::time::Duration::from_millis(slow)).await;
                     }
@@ -14004,10 +14010,21 @@ mod against_a_forge {
             host_ref.board_tick().await;
             let x = wsvc::of_tasks(&primary_ref.db.conn, &[t.id]).await.unwrap().remove(&t.id).unwrap();
             assert_eq!(x.bot_id, w);
-            // The worker's read is slow; the owner deletes it meanwhile.
-            state_ref.lock().unwrap().slow_ms = 800;
+            // The worker's read is slow; the owner deletes it meanwhile —
+            // once the read is under way, however busy the machine is.
+            let begun = {
+                let mut f = state_ref.lock().unwrap();
+                f.slow_ms = 800;
+                f.pull_reads_begun
+            };
             worker.spawn_watch_tick();
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            for _ in 0..500 {
+                if state_ref.lock().unwrap().pull_reads_begun > begun {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            assert!(state_ref.lock().unwrap().pull_reads_begun > begun, "the read never began");
             primary_ref
                 .delete_bot(w, &BotDeleteOptions { hand_over: true, ..Default::default() }, Some(worker.clone()))
                 .await
@@ -14017,6 +14034,29 @@ mod against_a_forge {
             // Nothing more is read as the deleted one's.
             state_ref.lock().unwrap().slow_ms = 0;
             worker.watch_tick().await;
+            // The round's task is under way, as the board would have it: no
+            // task engine runs here, so its start fails on its own — let it,
+            // then put the round where a running board puts it (else the
+            // test races that start, and loses on a busy machine).
+            let (round, _) = rounds_of(primary_ref).await.pop().expect("the round was handed over");
+            let mut settled = false;
+            for _ in 0..500 {
+                let d = svc::get_dispatch(&primary_ref.db.conn, round.id).await.unwrap().unwrap();
+                if d.state == DispatchState::Failed {
+                    settled = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            assert!(settled, "the round's start never settled");
+            svc::update_dispatch(
+                &primary_ref.db.conn,
+                round.id,
+                None,
+                DispatchWrite { state: Some(DispatchState::Running), error: Some(None), ..Default::default() },
+            )
+            .await
+            .unwrap();
             // The primary is told where it stands, and woken.
             read_now(primary_ref, x.id).await;
             let cards = pr_cards(primary_ref).await;
