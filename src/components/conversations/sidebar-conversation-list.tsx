@@ -12,7 +12,7 @@ import {
   useState,
   type Ref,
 } from "react"
-import { useTranslations } from "next-intl"
+import { useLocale, useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { Virtualizer, type VirtualizerHandle } from "virtua"
 import {
@@ -73,6 +73,12 @@ import {
   listChildConversations,
 } from "@/lib/api"
 import { isDesktop, revealItemInDir } from "@/lib/platform"
+import {
+  buildWorkspaceRowBadgeInputs,
+  useWorkspaceRowBadges,
+  type PluginWorkspaceRowBadgeTone,
+  type ResolvedWorkspaceRowBadge,
+} from "@/lib/host-plugins"
 import type {
   AgentType,
   ConversationStatus,
@@ -258,12 +264,28 @@ function FolderDisclosureChevron({ expanded }: { expanded: boolean }) {
   )
 }
 
+const WORKSPACE_ROW_BADGE_TONE_CLASSES: Record<
+  PluginWorkspaceRowBadgeTone,
+  string
+> = {
+  muted:
+    "bg-sidebar-foreground/8 text-sidebar-foreground/75 dark:bg-sidebar-foreground/12 dark:text-sidebar-foreground/80",
+  success:
+    "bg-emerald-500/12 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-300",
+  warning:
+    "bg-amber-500/12 text-amber-700 dark:bg-amber-400/15 dark:text-amber-300",
+  danger:
+    "bg-destructive/12 text-destructive dark:bg-destructive/20 dark:text-red-300",
+  info: "bg-sky-500/12 text-sky-700 dark:bg-sky-400/15 dark:text-sky-300",
+}
+
 const FolderHeader = memo(function FolderHeader({
   folderId,
   folderName,
   folderAlias,
   folderPath,
   runningCount,
+  pluginBadges,
   expanded,
   themeColor,
   appThemeColor,
@@ -409,6 +431,12 @@ const FolderHeader = memo(function FolderHeader({
    * its own to show it. Must be referentially stable to preserve the memo.
    */
   foldedScopes?: readonly number[]
+  /**
+   * Plugin-contributed status badges for this workspace row, when enabled
+   * plugins declare `contributes.workspaceRowBadges`. Omitted for synthetic
+   * `root` sub-groups and drag-surface clones.
+   */
+  pluginBadges?: readonly ResolvedWorkspaceRowBadge[]
 }) {
   // Own the translations here rather than receiving `t` as a prop: next-intl
   // returns a fresh `t` on every parent render, so passing it down would defeat
@@ -591,6 +619,32 @@ const FolderHeader = memo(function FolderHeader({
                       />
                     )}
                   </span>
+                  {pluginBadges && pluginBadges.length > 0 && (
+                    <span
+                      data-slot="plugin-workspace-row-badges"
+                      className="hidden @[12rem]/workspace-list:inline-flex min-w-0 max-w-[45%] shrink-0 items-center gap-1 overflow-hidden"
+                    >
+                      {pluginBadges.map((badge) => (
+                        <span
+                          key={badge.key}
+                          data-slot="plugin-workspace-row-badge"
+                          data-plugin-id={badge.pluginId}
+                          data-badge-id={badge.badgeId}
+                          data-badge-tone={badge.tone}
+                          title={`${badge.title}: ${badge.label}`}
+                          className={cn(
+                            "inline-flex min-w-0 max-w-[6rem] shrink items-center",
+                            "h-[0.9375rem] rounded-[0.3125rem] px-[0.3125rem]",
+                            "text-[0.625rem] font-medium leading-none",
+                            WORKSPACE_ROW_BADGE_TONE_CLASSES[badge.tone]
+                          )}
+                        >
+                          <span className="sr-only">{badge.title}: </span>
+                          <span className="truncate">{badge.label}</span>
+                        </span>
+                      ))}
+                    </span>
+                  )}
                   {/* Live-activity badge: the number of RUNNING sessions in this
                       group, and nothing at all when none are. Amber (not the
                       primary tint the old total-count chip used) is the same
@@ -1010,6 +1064,7 @@ export function SidebarConversationList({
 }: SidebarConversationListProps & {
   ref?: Ref<SidebarConversationListHandle>
 }) {
+  const locale = useLocale()
   const t = useTranslations("Folder.sidebar")
   const tCommon = useTranslations("Folder.common")
   const tTags = useTranslations("ConversationTags")
@@ -1027,6 +1082,11 @@ export function SidebarConversationList({
   // equality-guarded, so the Map reference only changes when a branch actually
   // changes — not on every poll tick.
   const branches = useAppWorkspaceStore((s) => s.branches)
+  const workspaceBadgeInputs = useMemo(
+    () => buildWorkspaceRowBadgeInputs(folders, branches),
+    [folders, branches]
+  )
+  const workspaceRowBadges = useWorkspaceRowBadges(workspaceBadgeInputs, locale)
   const ensureGitHead = useAppWorkspaceStore((s) => s.ensureGitHead)
   const loading = useAppWorkspaceStore((s) => s.conversationsLoading)
   const error = useAppWorkspaceStore((s) => s.conversationsError)
@@ -3141,6 +3201,11 @@ export function SidebarConversationList({
         folderAlias={folderEntry?.alias ?? null}
         folderPath={folderEntry?.path ?? ""}
         runningCount={runningCount}
+        pluginBadges={
+          isRootGroup || opts.flat
+            ? undefined
+            : workspaceRowBadges.get(folderId)
+        }
         expanded={expanded}
         themeColor={folderThemeColor(folderId)}
         appThemeColor={appThemeColor}
@@ -3631,7 +3696,7 @@ export function SidebarConversationList({
   }
 
   return (
-    <div className="relative flex flex-col flex-1 min-h-0">
+    <div className="@container/workspace-list relative flex flex-col flex-1 min-h-0">
       {rosterDialogs.node}
       {(loading || refreshing) && (
         // z-20 keeps the refresh spinner above the sticky header overlay (z-10),

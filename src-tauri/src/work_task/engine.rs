@@ -39,7 +39,7 @@ use crate::commands::conversations::{
     create_conversation_core, emit_conversation_upsert, get_folder_conversation_core,
 };
 use crate::commands::folders::{
-    emit_folder_deleted, emit_folder_upsert, get_folder_core, git_worktree_add,
+    emit_folder_deleted, emit_folder_upsert, get_folder_core, git_worktree_add_core,
     open_worktree_folder_core, resolve_git_head,
 };
 use crate::db::entities::conversation::{self, ConversationStatus};
@@ -57,6 +57,7 @@ use crate::forge::{
     DeliveryTarget, ForgeItemKind, ForgeProvider, ForgeSourceMeta, WorkTaskDelivery,
     SOURCE_KIND_ISSUE, SOURCE_KIND_PR,
 };
+use crate::host_plugins::lifecycle::{Event as PluginEvent, Worktree, WorktreeOrigin};
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
 use crate::models::{
     AgentType, FollowUpIntent, WorkTaskConfig, WorkTaskFolderSettings, WorkTaskMergeOp,
@@ -2002,13 +2003,7 @@ impl TaskEngine {
         let mut wt_path = worktree_path_in(&root.path, settings.worktree_root.as_deref(), &dir);
         let mut branch_used = branch.clone();
 
-        if let Err(e) = git_worktree_add(
-            root.path.clone(),
-            branch.clone(),
-            wt_path.clone(),
-            Some(start_at.clone()),
-        )
-        .await
+        if let Err(e) = git_worktree_add_core(&root.path, &branch, &wt_path, Some(&start_at)).await
         {
             // A leftover from a prior attempt may collide — retry once with a
             // generation-scoped suffix.
@@ -2019,21 +2014,22 @@ impl TaskEngine {
                 settings.worktree_root.as_deref(),
                 &format!("{dir}-{suffix}"),
             );
-            git_worktree_add(
-                root.path.clone(),
-                branch_used.clone(),
-                wt_path.clone(),
-                Some(start_at.clone()),
-            )
-            .await
-            .map_err(|_| format!("worktree add failed: {e}"))?;
+            git_worktree_add_core(&root.path, &branch_used, &wt_path, Some(&start_at))
+                .await
+                .map_err(|_| format!("worktree add failed: {e}"))?;
         }
+        self.observe_worktree(
+            root,
+            &wt_path,
+            Some(&branch_used),
+            PluginEvent::WorktreeCreated,
+        );
 
         // Whatever a pull-request checkout fetched is now held by the task's
         // own branch, so the names it was fetched under can go.
         self.drop_pr_fetch_refs(task, root).await;
 
-        let wt = open_worktree_folder_core(&self.db, wt_path, task.folder_id)
+        let wt = open_worktree_folder_core(&self.emitter, &self.db, wt_path, task.folder_id)
             .await
             .map_err(|e| e.to_string())?;
         work_task_service::attach_worktree(
@@ -2235,14 +2231,18 @@ impl TaskEngine {
             );
             return None;
         }
-        let wt = match open_worktree_folder_core(&self.db, path.clone(), task.folder_id).await {
-            Ok(wt) => wt,
-            Err(e) => {
-                // The checkout exists but has no folder row; the fresh-mint
-                // fallback will collide on the path and suffix itself, so the
-                // launch still proceeds.
-                tracing::warn!(
-                    "[work_task] task {}: recreated worktree at {path} but could not open \
+        self.observe_worktree(root, &path, Some(branch), PluginEvent::WorktreeCreated);
+        let wt =
+            match open_worktree_folder_core(&self.emitter, &self.db, path.clone(), task.folder_id)
+                .await
+            {
+                Ok(wt) => wt,
+                Err(e) => {
+                    // The checkout exists but has no folder row; the fresh-mint
+                    // fallback will collide on the path and suffix itself, so the
+                    // launch still proceeds.
+                    tracing::warn!(
+                        "[work_task] task {}: recreated worktree at {path} but could not open \
                      its folder: {e}",
                     task.id
                 );
@@ -2271,6 +2271,23 @@ impl TaskEngine {
             folder_id: wt.id,
             path: wt.path,
         })
+    }
+
+    fn observe_worktree(
+        &self,
+        root: &crate::models::FolderDetail,
+        path: &str,
+        branch: Option<&str>,
+        event: PluginEvent,
+    ) {
+        Worktree {
+            folder_id: Some(root.id),
+            repository_path: &root.path,
+            path,
+            branch,
+            origin: WorktreeOrigin::Task,
+        }
+        .observe(&self.emitter, event);
     }
 
     /// The task's recorded worktree, required to exist on disk — the merge
@@ -4461,6 +4478,12 @@ impl TaskEngine {
         }
         converge_worktree_removal(&self.db, &self.emitter, task_id, wt_id, task.folder_id, &wt.path)
             .await;
+        self.observe_worktree(
+            &root,
+            &wt.path,
+            task.work_branch.as_deref(),
+            PluginEvent::WorktreeArchived,
+        );
     }
 
     /// Whether the task worktree still has anything uncommitted (tracked edits
@@ -7113,6 +7136,12 @@ impl TaskEngine {
             &wt.path,
         )
         .await;
+        self.observe_worktree(
+            &root,
+            &wt.path,
+            task.work_branch.as_deref(),
+            PluginEvent::WorktreeArchived,
+        );
         true
     }
 
@@ -11143,9 +11172,14 @@ mod tests {
 
         let db = fresh_in_memory_db().await;
         let root_id = seed_folder(&db, "/tmp/repo").await;
-        let wt = open_worktree_folder_core(&db, "/tmp/repo-task-1".to_string(), root_id)
-            .await
-            .expect("worktree folder");
+        let wt = open_worktree_folder_core(
+            &EventEmitter::Noop,
+            &db,
+            "/tmp/repo-task-1".to_string(),
+            root_id,
+        )
+        .await
+        .expect("worktree folder");
         let conv = conversation_service::create(&db.conn, wt.id, AgentType::ClaudeCode, None, None)
             .await
             .expect("conversation");
@@ -11258,9 +11292,14 @@ mod tests {
 
         let db = fresh_in_memory_db().await;
         let root_id = seed_folder(&db, "/tmp/repo3").await;
-        let wt = open_worktree_folder_core(&db, "/tmp/repo3-task-1".to_string(), root_id)
-            .await
-            .expect("worktree folder");
+        let wt = open_worktree_folder_core(
+            &EventEmitter::Noop,
+            &db,
+            "/tmp/repo3-task-1".to_string(),
+            root_id,
+        )
+        .await
+        .expect("worktree folder");
         let conv = conversation_service::create(&db.conn, wt.id, AgentType::ClaudeCode, None, None)
             .await
             .expect("conversation");
