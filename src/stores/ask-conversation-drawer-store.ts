@@ -1,6 +1,10 @@
 import { create } from "zustand"
 import type { LinkedConversationKind } from "@/hooks/use-ask-conversations"
 import type { AgentType, PromptDraft } from "@/lib/types"
+import {
+  clearConnectSelection,
+  setConnectSelection,
+} from "@/lib/selector-prefs-storage"
 import { randomUUID } from "@/lib/utils"
 
 /** What the ask drawer shows. */
@@ -51,13 +55,16 @@ interface AskConversationDrawerState {
     workingDir: string | null
   }) => boolean
   /** Open a new ask that sends `initialSend` once connected. `false` when
-   *  refused. */
+   *  refused. `configValues` are the config options the ask's composer
+   *  showed: its connection starts from them (`setConnectSelection`) rather
+   *  than from the agent's saved new-conversation default alone. */
   openNew: (args: {
     parentConversationId: number
     agentType: AgentType
     folderId: number
     workingDir: string | null
     initialSend: { draft: PromptDraft; modeId: string | null }
+    configValues?: Record<string, string> | null
   }) => boolean
   /** The open draft's first send created its row, filed under
    *  `parentConversationId`. Ignored for any other key. */
@@ -98,6 +105,13 @@ export const useAskConversationDrawerStore =
       set({ discardArmed: true })
       return false
     }
+    /** The target on show is going away: its surface unmounts with it, so the
+     *  one-off selection its connection started from has nobody left to read
+     *  it. */
+    const release = () => {
+      const current = get().target
+      if (current) clearConnectSelection(current.contextKey)
+    }
     return {
       target: null,
       discardArmed: false,
@@ -106,6 +120,7 @@ export const useAskConversationDrawerStore =
         const current = get().target
         if (current?.conversationId === args.conversationId) return true
         if (!mayLeave()) return false
+        release()
         set({
           discardArmed: false,
           target: {
@@ -119,14 +134,21 @@ export const useAskConversationDrawerStore =
         })
         return true
       },
-      openNew: (args) => {
+      openNew: ({ configValues, ...args }) => {
         if (!mayLeave()) return false
+        release()
+        const contextKey = `ask-drawer-new-${randomUUID()}`
+        // Registered before the target is published, so it is in place
+        // before the drawer's surface can connect.
+        if (configValues) {
+          setConnectSelection(contextKey, args.agentType, configValues)
+        }
         set({
           discardArmed: false,
           target: {
             ...args,
             kind: "ask",
-            contextKey: `ask-drawer-new-${randomUUID()}`,
+            contextKey,
             conversationId: null,
           },
         })
@@ -152,6 +174,7 @@ export const useAskConversationDrawerStore =
       },
       close: () => {
         if (!mayLeave()) return false
+        release()
         set({ discardArmed: false, target: null })
         return true
       },

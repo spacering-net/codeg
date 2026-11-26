@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest"
 
+import { getSavedPrefsForConnect } from "@/lib/selector-prefs-storage"
 import { useAskConversationDrawerStore } from "./ask-conversation-drawer-store"
 
 const draft = {
@@ -93,5 +94,45 @@ describe("ask conversation drawer store", () => {
     expect(openExisting(5)).toBe(true)
     expect(useAskConversationDrawerStore.getState().target).toBe(before)
     expect(before?.contextKey).toBe("ask-drawer-5")
+  })
+
+  it("starts a new ask's connection from the composer's config picks", () => {
+    const store = useAskConversationDrawerStore.getState()
+    expect(
+      store.openNew({
+        parentConversationId: 1,
+        agentType: "codex",
+        folderId: 3,
+        workingDir: "/repo",
+        initialSend: { draft, modeId: null },
+        configValues: { model: "gpt-6.2" },
+      })
+    ).toBe(true)
+    const key = useAskConversationDrawerStore.getState().target!.contextKey
+    expect(getSavedPrefsForConnect("codex", key).configValues).toEqual({
+      model: "gpt-6.2",
+    })
+
+    // Sent, then closed: the selection goes with the surface.
+    useAskConversationDrawerStore.getState().consumeInitialSend(key)
+    expect(useAskConversationDrawerStore.getState().close()).toBe(true)
+    expect(getSavedPrefsForConnect("codex", key).configValues).toBeNull()
+  })
+
+  it("registers nothing when the new ask is refused", () => {
+    openNew()
+    const refused = useAskConversationDrawerStore.getState().openNew({
+      parentConversationId: 1,
+      agentType: "codex",
+      folderId: 3,
+      workingDir: "/repo",
+      initialSend: { draft, modeId: null },
+      configValues: { model: "gpt-6.2" },
+    })
+    expect(refused).toBe(false)
+    // The unsent ask on show keeps its place.
+    expect(useAskConversationDrawerStore.getState().target?.agentType).toBe(
+      "claude_code"
+    )
   })
 })

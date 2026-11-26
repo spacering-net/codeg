@@ -8222,7 +8222,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         // regressed when the snapshot path replaced the event path on tab
         // re-open (the snapshot frame doesn't carry a `session_modes` event,
         // so the apply-on-event hook never fired).
-        const savedPrefs = getSavedPrefsForConnect(agentType)
+        // With any one-off selection this surface was opened with (the ask
+        // composer's pick, `setConnectSelection`) laid over the default.
+        const savedPrefs = getSavedPrefsForConnect(agentType, contextKey)
         const connectionId = await acpConnect(
           agentType,
           workingDir,

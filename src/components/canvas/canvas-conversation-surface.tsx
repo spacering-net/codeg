@@ -1006,9 +1006,18 @@ export function CanvasConversationSurface({
     if (!connectionReady || selectorsLoading) return
     initialSendDoneRef.current = true
     onInitialSendConsumed?.()
-    handleSend(pending.draft, pending.modeId ?? selectedModeId)
+    // Same rule as the composer's own send: a standalone mode applies only
+    // where the agent has no config options — where it does, its mode is one
+    // of them, already set at connect, and a (legacy) saved mode id pushed on
+    // top would override the mode the message was written for.
+    handleSend(
+      pending.draft,
+      pending.modeId ??
+        (connectionConfigOptions.length === 0 ? selectedModeId : null)
+    )
   }, [
     connStatus,
+    connectionConfigOptions.length,
     connectionReady,
     handleSend,
     onInitialSendConsumed,
