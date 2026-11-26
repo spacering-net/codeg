@@ -50,6 +50,9 @@ vi.mock("./session-details-insights", () => ({
     return <div data-testid="session-insights" />
   },
 }))
+vi.mock("./session-collaborators", () => ({
+  SessionCollaborators: () => <div data-testid="session-collaborators" />,
+}))
 
 vi.mock("@/contexts/aux-panel-context", () => ({ useAuxPanelContext: vi.fn() }))
 vi.mock("@/contexts/tab-context", () => ({ useTabStore: vi.fn() }))

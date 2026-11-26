@@ -870,6 +870,13 @@ pub struct SessionState {
     /// `ConnectionManager::submit_feedback_native`, which re-checks it across
     /// attachment hydration so a steered note cannot ride into the next turn.
     pub turns_completed: u64,
+    pub(crate) last_turn_complete_seq: u64,
+    pub(crate) settled_turn_seq: u64,
+    pub(crate) active_turn_id: Option<String>,
+    pub(crate) pending_turn_id: Option<String>,
+    pub(crate) turn_database: Option<sea_orm::DatabaseConnection>,
+    pub(crate) completed_turns: BTreeMap<u64, (String, Option<String>)>,
+    pub(crate) pending_delivery: Option<crate::db::service::turn_delivery_service::DeliveryPolicy>,
 
     /// Auto-preview work scheduled by `apply_event` for the files the running
     /// turn's tool calls name (see `crate::agent_turn_files`). `apply_event`
@@ -1093,6 +1100,13 @@ impl SessionState {
             turn_in_flight: false,
             agent_initiated_turn: false,
             turns_completed: 0,
+            last_turn_complete_seq: 0,
+            settled_turn_seq: 0,
+            active_turn_id: None,
+            pending_turn_id: None,
+            turn_database: None,
+            completed_turns: BTreeMap::new(),
+            pending_delivery: None,
             turn_file_jobs: Vec::new(),
             last_turn_ended_abnormally: false,
             config_stale: false,
@@ -1175,6 +1189,15 @@ impl SessionState {
             _ => None,
         };
         self.apply_event_inner(payload);
+        if matches!(payload, AcpEvent::TurnComplete { .. }) {
+                self.last_turn_complete_seq = self.event_seq + 1;
+                if let Some(turn_id) = self.active_turn_id.take() {
+                    self.completed_turns.insert(
+                        self.event_seq + 1,
+                        (turn_id, self.last_assistant_text.clone()),
+                    );
+                }
+        }
         self.track_turn_files(payload, was_prompting, tool_call_before);
     }
 
@@ -3342,6 +3365,23 @@ mod tests {
             "win-test".to_string(),
             None,
         )
+    }
+
+    #[test]
+    fn completed_delivery_text_is_frozen_before_next_turn() {
+        let mut state = fresh_state();
+        state.active_turn_id = Some("stable-first".into());
+        state.last_assistant_text = Some("first answer".into());
+        state.apply_event(&AcpEvent::TurnComplete {
+            session_id: "session".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        });
+        state.active_turn_id = Some("stable-second".into());
+        state.last_assistant_text = Some("second answer".into());
+        let frozen = state.completed_turns.get(&1).unwrap();
+        assert_eq!(frozen.0, "stable-first");
+        assert_eq!(frozen.1.as_deref(), Some("first answer"));
     }
 
     /// `ConversationLinked` must forget the live-title skip-cache.

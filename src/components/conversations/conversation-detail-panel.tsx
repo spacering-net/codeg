@@ -63,6 +63,7 @@ import {
 } from "@/components/message/goal-control-context"
 import { useAdvertisedGoalActions } from "@/hooks/use-goal-actions"
 import { ConversationShell } from "@/components/chat/conversation-shell"
+import { registerDigestSender } from "@/hooks/use-session-digest"
 import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale-banner"
 import { PiProjectTrustBanner } from "@/components/chat/pi-project-trust-banner"
 import { FeedbackNotesDisplay } from "@/components/chat/feedback-notes-display"
@@ -1556,10 +1557,88 @@ const ConversationTabView = memo(function ConversationTabView({
     ]
   )
 
+  const handleDigestAnswer = useCallback(
+    async (text: string, clientMessageId: string) => {
+      const persistedId = dbConvIdRef.current
+      if (
+        !persistedId ||
+        !connectionReady ||
+        connStatusRef.current !== "connected" ||
+        mqGetQueueLength() > 0
+      )
+        return false
+      const draft: PromptDraft = {
+        blocks: [{ type: "text", text }],
+        displayText: text,
+      }
+      const optimisticTurn = {
+        ...buildOptimisticUserTurnFromDraft(
+          draft,
+          sharedT("attachedResources")
+        ),
+        id: clientMessageId,
+      }
+      appendOptimisticTurn(
+        effectiveConversationId,
+        optimisticTurn,
+        clientMessageId
+      )
+      setSendSignal((prev) => prev + 1)
+      setSyncState(effectiveConversationId, "awaiting_persist")
+      let sent = true
+      const failed = () => {
+        sent = false
+        removeOptimisticTurn(effectiveConversationId, clientMessageId)
+      }
+      await lifecycleSend(draft, selectedModeId, {
+        folderId,
+        conversationId: persistedId,
+        clientMessageId,
+        onTurnInProgress: failed,
+        onSendFailed: failed,
+      })
+      return sent
+    },
+    [
+      connectionReady,
+      mqGetQueueLength,
+      sharedT,
+      appendOptimisticTurn,
+      effectiveConversationId,
+      setSyncState,
+      lifecycleSend,
+      selectedModeId,
+      folderId,
+      removeOptimisticTurn,
+    ]
+  )
+
   // Sync handleSend ref for auto-send effect (declared before handleSend)
   useEffect(() => {
     handleSendRef.current = handleSend
   }, [handleSend])
+
+  // The right-hand progress panel answers digest questions through this
+  // panel's composer (queue guards, optimistic bubble, lifecycle send).
+  useEffect(() => {
+    if (
+      dbConversationId == null ||
+      dbConversationId <= 0 ||
+      !isActive ||
+      !connectionReady ||
+      connStatus !== "connected" ||
+      msgQueue.length > 0
+    )
+      return
+    return registerDigestSender(dbConversationId, handleDigestAnswer)
+  }, [
+    dbConversationId,
+    handleDigestAnswer,
+    isActive,
+    connectionReady,
+    connStatus,
+    msgQueue.length,
+  ])
 
   // "Fork from here": fork at a rendered assistant turn, sending nothing. The
   // ONLY fork entry point — the composer's fork-and-send was removed once this
@@ -3008,6 +3087,11 @@ function SplitStripCornerReserve({ side }: { side: "left" | "right" }) {
 }
 
 export function ConversationDetailPanel() {
+  const { openTab: openAuxTab } = useAuxPanelContext()
+  const openSessionProgress = useCallback(
+    () => openAuxTab("session_details"),
+    [openAuxTab]
+  )
   const t = useTranslations("Folder.conversation")
   const tDetails = useTranslations("Folder.sessionDetails")
   const {
@@ -3527,6 +3611,7 @@ export function ConversationDetailPanel() {
               folderPath={selTabFolder?.path}
               title={selTab.title}
               status={selTab.status as ConversationStatus | undefined}
+              onOpenProgress={openSessionProgress}
             />
           </div>
         )}
@@ -3579,6 +3664,7 @@ export function ConversationDetailPanel() {
             folderPath={activeTabFolder?.path}
             title={activeTab.title}
             status={activeTab.status as ConversationStatus | undefined}
+            onOpenProgress={openSessionProgress}
           />
         )}
         <ContextMenu

@@ -1,4 +1,14 @@
 {
+  "SessionCollaboration": {
+    "progress": "세션 진행 상황",
+    "title": "협업 세션",
+    "brief": "인수 메모",
+    "link": "연결",
+    "choose": "세션 선택",
+    "unlink": "연결 해제",
+    "empty": "협업 세션 없음",
+    "error": "협업 세션을 업데이트할 수 없습니다."
+  },
   "HtmlCodePreview": {
     "code": "코드",
     "preview": "미리 보기",
@@ -837,6 +847,8 @@
     "generalConfigDescriptionClaude": "API URL, API Key, Claude 모델을 설정하고 네이티브 JSON 구성과 동기화합니다.",
     "generalConfigDescriptionDefault": "API URL, API Key, Model을 설정하고 네이티브 JSON 구성을 관리합니다.",
     "multiAgent": {
+      "sessionMessaging": "세션 간 통신",
+      "sessionMessagingHint": "에이전트가 독립 세션을 만들고 메시지를 주고받을 수 있습니다. 기존 세션은 다시 연결하면 도구를 사용할 수 있습니다.",
       "title": "다중 에이전트 협업",
       "description": "활성 에이전트가 하위 작업을 다른 에이전트에게 위임할 수 있도록 합니다.",
       "enable": "위임 사용",
@@ -3900,6 +3912,7 @@
         "downloadFailed": "{name} 다운로드 실패"
       },
       "messageList": {
+        "sessionMessageSource": "보낸 세션: {session}",
         "loading": "불러오는 중...",
         "loadBackgroundActivity": "백그라운드 활동 불러오기",
         "loadEarlier": "이전 메시지 불러오기",
@@ -4099,6 +4112,13 @@
         "htmlPreviewHide": "미리보기 닫기"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "{session} 세션에 메시지 보내기",
+          "send": "세션 메시지 보내기",
+          "create": "세션 만들기",
+          "current": "현재 세션 보기",
+          "list": "세션 찾기"
+        },
         "oauth": {
           "waiting": "{server} 승인 대기 중",
           "reconnecting": "{server}에 다시 연결 중…",
@@ -13294,5 +13314,20 @@
       "rateLimited": "SRN이 잠시 후 다시 시도하라고 요청했습니다.",
       "server": "SRN이 오류를 반환했습니다."
     }
+  },
+  "SessionDigest": {
+    "title": "세션 요약",
+    "now": "진행 중",
+    "news": "새 소식",
+    "needsYou": "답변 대기",
+    "suggestions": "제안",
+    "recommended": "추천",
+    "dismiss": "{title} 거절",
+    "updatedAt": "업데이트 {time}",
+    "pendingCount": "답변 대기 {count}개",
+    "inProgress": "진행 중",
+    "answerWhenReady": "세션 연결 후 현재 턴과 메시지 대기열이 완료되면 답변할 수 있습니다.",
+    "sendFailed": "답변을 보내지 못했습니다. 다시 시도하세요.",
+    "actionFailed": "변경 사항을 저장하지 못했습니다."
   }
 }

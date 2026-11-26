@@ -210,6 +210,20 @@ pub struct BrokerSessionRequest {
     pub max_messages: Option<u32>,
 }
 
+/// Rename the calling conversation or one of its direct delegation children.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerRenameSessionRequest {
+    pub token: String,
+    pub session_id: Option<i32>,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerStopSessionRequest {
+    pub token: String,
+    pub session_id: Option<i32>,
+}
+
 /// Report a progress milestone for the work task driving the parent session.
 /// Backs the `task_progress` MCP tool. Authenticated by the per-launch `token`;
 /// the listener resolves the parent connection from it and the task engine maps
@@ -472,10 +486,29 @@ pub enum BrokerMessage {
     Status(BrokerStatusRequest),
     CancelTask(BrokerCancelTaskRequest),
     ResumeTask(BrokerResumeTaskRequest),
+    SessionMessage(BrokerSessionMessageRequest),
+    SessionBrief {
+        token: String,
+        args: crate::db::service::conversation_context_service::BriefOperation,
+    },
+    SessionDigest {
+        token: String,
+        args: crate::db::service::session_digest_service::DigestInput,
+    },
+    CreateSession(BrokerCreateSessionRequest),
+    GetCurrentSession {
+        token: String,
+    },
+    ListSessions {
+        token: String,
+        args: ListSessionsArgs,
+    },
     Feedback(BrokerFeedbackRequest),
     CommitFeedback(BrokerCommitFeedbackRequest),
     Ask(BrokerAskRequest),
     SessionInfo(BrokerSessionRequest),
+    RenameSession(BrokerRenameSessionRequest),
+    StopSession(BrokerStopSessionRequest),
     TaskProgress(BrokerTaskProgressRequest),
     TaskComplete(BrokerTaskCompleteRequest),
     ResultSchema(BrokerResultSchemaRequest),
@@ -504,6 +537,7 @@ pub enum BrokerMessage {
     /// empty list when the lookup fails, so a companion never mistakes a
     /// refusal for an old listener (see `Ping`).
     ListAssistants(BrokerListAssistantsRequest),
+    ListAgentOptions(BrokerListAgentOptionsRequest),
     /// Liveness and capability probe, carrying no `token`: the answer reveals
     /// nothing beyond "the socket is being served" and what this listener
     /// understands. Sent by codeg's own service-status check
@@ -521,6 +555,12 @@ pub enum BrokerMessage {
     Ping,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerListAgentOptionsRequest {
+    pub token: String,
+    pub agent_type: String,
+}
+
 /// See [`BrokerMessage::ListAssistants`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerListAssistantsRequest {
@@ -530,6 +570,91 @@ pub struct BrokerListAssistantsRequest {
     /// `assistant_id`.
     #[serde(default)]
     pub bots: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListSessionsArgs {
+    #[serde(default)]
+    pub current_folder: bool,
+    pub folder_id: Option<i32>,
+    pub agent_type: Option<crate::models::agent::AgentType>,
+    pub search: Option<String>,
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub offset: u32,
+}
+
+pub async fn client_current_session_round_trip(
+    socket_path: &str,
+    token: String,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::GetCurrentSession { token }).await
+}
+
+pub async fn client_list_sessions_round_trip(
+    socket_path: &str,
+    token: String,
+    args: ListSessionsArgs,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ListSessions { token, args }).await
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerCreateSessionRequest {
+    pub token: String,
+    pub agent_type: Option<crate::models::agent::AgentType>,
+    pub title: String,
+    pub message: String,
+    pub folder_path: Option<String>,
+    pub mode_id: Option<String>,
+    #[serde(default)]
+    pub config_values: std::collections::BTreeMap<String, String>,
+}
+
+impl BrokerCreateSessionRequest {
+    pub(super) fn validate(&self) -> Result<(), &'static str> {
+        if self.title.trim().is_empty() || self.message.trim().is_empty() {
+            return Err("title and message must not be empty");
+        }
+        if !self
+            .mode_id
+            .as_deref()
+            .is_some_and(|mode| !mode.trim().is_empty())
+        {
+            return Err("create_session requires mode_id");
+        }
+        if self.config_values.len() != 2 {
+            return Err("create_session requires one model and one reasoning option in config_values");
+        }
+        if self.config_values.values().any(|value| value.trim().is_empty()) {
+            return Err("config_values must not contain empty values");
+        }
+        Ok(())
+    }
+}
+
+pub async fn client_create_session_round_trip(
+    socket_path: &str,
+    req: BrokerCreateSessionRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::CreateSession(req)).await
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerSessionMessageRequest {
+    pub token: String,
+    pub conversation_id: i32,
+    pub message: String,
+    pub mode: String,
+    pub reply: bool,
+}
+
+pub async fn client_session_message_round_trip(
+    socket_path: &str,
+    req: BrokerSessionMessageRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::SessionMessage(req)).await
 }
 
 /// The wrapped outcome the main process returns over the same socket.
@@ -760,6 +885,21 @@ pub async fn client_ask_round_trip(
     message_round_trip(socket_path, &BrokerMessage::Ask(req.clone())).await
 }
 
+/// Dispatch an authenticated rename request.
+pub async fn client_stop_session_round_trip(
+    socket_path: &str,
+    req: BrokerStopSessionRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::StopSession(req)).await
+}
+
+pub async fn client_rename_session_round_trip(
+    socket_path: &str,
+    req: BrokerRenameSessionRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::RenameSession(req)).await
+}
+
 /// Dispatch a `get_session_info` request and read back the serialized
 /// [`crate::acp::session_info::SessionInfo`] envelope (metadata + stats, and the
 /// recent messages when `max_messages > 0`).
@@ -976,6 +1116,13 @@ pub async fn client_ping(socket_path: &str) -> io::Result<BrokerResponse> {
     raw_round_trip(socket_path, &BrokerMessage::Ping).await
 }
 
+pub async fn client_list_agent_options_round_trip(
+    socket_path: &str,
+    req: &BrokerListAgentOptionsRequest,
+) -> std::io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ListAgentOptions(req.clone())).await
+}
+
 /// Fetch the assistant roster (see [`BrokerMessage::ListAssistants`]).
 pub async fn client_list_assistants_round_trip(
     socket_path: &str,
@@ -1060,6 +1207,22 @@ pub async fn client_cancel(socket_path: &str, req: &BrokerCancelRequest) -> io::
     Ok(())
 }
 
+pub async fn client_session_brief_round_trip(
+    socket_path: &str,
+    token: String,
+    args: crate::db::service::conversation_context_service::BriefOperation,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::SessionBrief { token, args }).await
+}
+
+pub async fn client_session_digest_round_trip(
+    socket_path: &str,
+    token: String,
+    args: crate::db::service::session_digest_service::DigestInput,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::SessionDigest { token, args }).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1105,6 +1268,32 @@ mod tests {
                 assert_eq!(req.max_messages, Some(20));
             }
             other => panic!("expected SessionInfo variant, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_session_message_round_trip_in_memory() {
+        let (mut a, mut b) = duplex(8 * 1024);
+        write_frame(&mut a, &BrokerMessage::CreateSession(BrokerCreateSessionRequest {
+            token: "tok".into(),
+            agent_type: Some(crate::models::agent::AgentType::ClaudeCode),
+            title: "Conversation C".into(),
+            message: "Continue the story.".into(),
+            folder_path: Some("/projects/story".into()),
+            mode_id: Some("read-only".into()),
+            config_values: [("model".into(), "gpt-6-luna".into())].into(),
+        })).await.unwrap();
+        let got: BrokerMessage = read_frame(&mut b).await.unwrap();
+        match got {
+            BrokerMessage::CreateSession(request) => {
+                assert_eq!(request.title, "Conversation C");
+                assert_eq!(request.agent_type, Some(crate::models::agent::AgentType::ClaudeCode));
+                assert_eq!(request.message, "Continue the story.");
+                assert_eq!(request.folder_path.as_deref(), Some("/projects/story"));
+                assert_eq!(request.mode_id.as_deref(), Some("read-only"));
+                assert_eq!(request.config_values.get("model").map(String::as_str), Some("gpt-6-luna"));
+            }
+            other => panic!("expected CreateSession, got {other:?}"),
         }
     }
 

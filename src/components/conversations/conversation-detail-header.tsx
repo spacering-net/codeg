@@ -64,6 +64,7 @@ import {
 import { SessionDetailsDialog } from "./session-details-dialog"
 import { ConversationHeaderTags } from "./conversation-tag-picker"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { SessionDigestSummary } from "@/components/chat/session-digest-panel"
 
 interface ConversationDetailHeaderProps {
   tabId: string
@@ -77,6 +78,7 @@ interface ConversationDetailHeaderProps {
   folderPath: string | undefined
   title: string
   status: ConversationStatus | undefined
+  onOpenProgress?: () => void
 }
 
 /**
@@ -101,6 +103,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
   folderPath,
   title,
   status,
+  onOpenProgress,
 }: ConversationDetailHeaderProps) {
   const t = useTranslations("Folder.conversationCard")
   const ime = useImeGuard()
@@ -265,7 +268,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     // message canvas below it rather than as a frosted chrome band. With a
     // workspace background image on, the tab strip above it is transparent too,
     // so the whole top of the column reveals the canvas.
-    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/50 px-3">
+    <div className="flex min-h-10 shrink-0 items-center gap-2 border-b border-border/50 px-3 py-1">
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
         {/* Folder selector — replaces the old folder-name breadcrumb. Switches
             folders for a draft; a static chip for a bound conversation. */}
@@ -278,10 +281,14 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
             fully visible — but grows only as far as its own text
             (`max-w-max`), so the tags follow it instead of the far edge. */}
         <span
-          className="min-w-0 max-w-max flex-1 truncate text-sm text-foreground/90"
+          className="min-w-0 max-w-max flex-1 text-sm text-foreground/90"
           title={title}
         >
-          {displayTitle}
+          <span className="block max-w-max truncate">{displayTitle}</span>
+          <SessionDigestSummary
+            conversationId={conversationId}
+            onOpen={onOpenProgress}
+          />
         </span>
         {/* Capped at half the row so a long tag list squeezes its own chips
             (they truncate) before it squeezes the title. */}

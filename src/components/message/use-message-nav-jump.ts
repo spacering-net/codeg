@@ -18,6 +18,10 @@ interface MessageNavJumpOptions {
   ) => Promise<boolean>
 }
 
+type MessageNavTarget =
+  | { threadIndex: number }
+  | Pick<MessageNavEntry, "threadIndex" | "turnIndex" | "turnId">
+
 interface PendingReveal {
   /** Which click this is. Two clicks on one message are two reveals, and
    *  only the latest one's paging may settle or drop it. */
@@ -48,7 +52,7 @@ export function useMessageNavJump({
   smooth,
   loadOlderTurnsThrough,
 }: MessageNavJumpOptions): {
-  select: (entry: MessageNavEntry) => void
+  select: (entry: MessageNavTarget) => void
   revealingTurnId: string | null
 } {
   const [reveal, setReveal] = useState<PendingReveal | null>(null)
@@ -87,7 +91,7 @@ export function useMessageNavJump({
   }, [active, targetIndex, scrollApiRef])
 
   const select = useCallback(
-    (entry: MessageNavEntry) => {
+    (entry: MessageNavTarget) => {
       if (entry.threadIndex != null) {
         setReveal(null)
         scrollApiRef.current?.scrollToIndex(entry.threadIndex, {
@@ -96,7 +100,7 @@ export function useMessageNavJump({
         })
         return
       }
-      if (entry.turnIndex == null) return
+      if (!("turnIndex" in entry) || entry.turnIndex == null) return
       const token = ++lastToken.current
       setReveal({
         token,

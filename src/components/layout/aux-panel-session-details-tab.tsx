@@ -19,6 +19,7 @@ import { MessageNavScrollContext } from "@/components/message/message-nav-scroll
 import { ScrollArea } from "@/components/ui/scroll-area"
 import type { TabItem } from "@/stores/tab-store"
 import { useAuxPanelContext } from "@/contexts/aux-panel-context"
+import { SessionCollaborators } from "./session-collaborators"
 import { SessionDetailsInsights } from "./session-details-insights"
 import { SESSION_DETAILS_COLUMN } from "./session-details-layout"
 
@@ -99,6 +100,14 @@ export function SessionDetailsTab() {
           <MessageNavScrollContext.Provider value={viewport}>
             <div className={SESSION_DETAILS_COLUMN}>
               <SessionDetailsCard summary={summary} model={model} />
+              {active &&
+                activeConversationTab?.conversationId != null &&
+                activeConversationTab.conversationId > 0 && (
+                  <SessionCollaborators
+                    key={activeConversationTab.conversationId}
+                    conversationId={activeConversationTab.conversationId}
+                  />
+                )}
               <SessionDetailsInsights
                 conversationId={activeRuntimeId}
                 dbConversationId={activeConversationTab?.conversationId ?? null}

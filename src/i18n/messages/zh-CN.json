@@ -1,4 +1,14 @@
 {
+  "SessionCollaboration": {
+    "progress": "会话进度",
+    "title": "协作会话",
+    "brief": "接手笔记",
+    "link": "关联",
+    "choose": "选择会话",
+    "unlink": "解除关联",
+    "empty": "暂无协作会话",
+    "error": "无法更新协作会话。"
+  },
   "HtmlCodePreview": {
     "code": "代码",
     "preview": "预览",
@@ -837,6 +847,8 @@
     "generalConfigDescriptionClaude": "快捷配置 API URL、API Key 与 Claude 模型，与原生 JSON 配置同步。",
     "generalConfigDescriptionDefault": "配置 API URL、API Key、Model，并管理原生 JSON 配置。",
     "multiAgent": {
+      "sessionMessaging": "会话间通信",
+      "sessionMessagingHint": "允许智能体创建独立会话并互发消息。已打开的会话重新连接后可使用这些工具。",
       "title": "多智能体协同",
       "description": "允许活跃的智能体把子任务委托给其他智能体。",
       "enable": "启用委托",
@@ -3900,6 +3912,7 @@
         "downloadFailed": "下载 {name} 失败"
       },
       "messageList": {
+        "sessionMessageSource": "来自会话：{session}",
         "loading": "加载中...",
         "loadBackgroundActivity": "加载后台活动",
         "loadEarlier": "加载更早的消息",
@@ -4099,6 +4112,13 @@
         "htmlPreviewHide": "收起预览"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "发消息给会话：{session}",
+          "send": "发送会话消息",
+          "create": "创建会话",
+          "current": "查看当前会话",
+          "list": "查找会话"
+        },
         "oauth": {
           "waiting": "等待 {server} 授权",
           "reconnecting": "正在重新连接 {server}…",
@@ -13294,5 +13314,20 @@
       "rateLimited": "SRN 要求 Codeg 稍后再试。",
       "server": "SRN 返回了错误。"
     }
+  },
+  "SessionDigest": {
+    "title": "会话摘要",
+    "now": "正在进行",
+    "news": "最新进展",
+    "needsYou": "待你回答",
+    "suggestions": "建议",
+    "recommended": "推荐",
+    "dismiss": "回绝 {title}",
+    "updatedAt": "更新于 {time}",
+    "pendingCount": "{count} 项待答",
+    "inProgress": "进行中",
+    "answerWhenReady": "会话连接后，等待当前轮和消息队列处理完即可回答。",
+    "sendFailed": "回答未发送，请重试。",
+    "actionFailed": "操作未保存，请重试。"
   }
 }

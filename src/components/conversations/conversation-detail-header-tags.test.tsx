@@ -21,6 +21,9 @@ const h = vi.hoisted(() => ({
   },
 }))
 
+vi.mock("@/hooks/use-session-digest", () => ({
+  useSessionDigest: () => ({ digest: null, refresh: async () => {} }),
+}))
 vi.mock("@/lib/api", () => ({
   updateConversationTitle: vi.fn(),
   deleteConversation: vi.fn(),

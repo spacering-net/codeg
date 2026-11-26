@@ -42,7 +42,161 @@
         "working_dir": {
           "type": "string",
           "description": "Absolute path the sub-agent runs in. Defaults to this session's working directory."
+        },
+        "notify_mode": {
+          "type": "string",
+          "enum": [
+            "poll",
+            "deliver"
+          ],
+          "default": "poll",
+          "description": "poll (default): collect the result with get_delegation_status. deliver: Codeg queues the first completed turn back into this conversation, waking it when offline. After starting your independent tasks, finish your current turn and wait for their messages instead of polling; status/wait still work. Requires session messaging."
+        },
+        "follow": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also deliver results of later turns in this child conversation, even after reconnects. This subscription does not keep its process running. Independent of notify_mode, which controls only the first turn. If reply_back and follow both target you for the same turn, Codeg sends one result. Requires session messaging."
         }
+      }
+    }
+  },
+  {
+    "name": "list_agent_options",
+    "description": "List the models, model-specific reasoning levels, and permission modes for a local agent in one call. Use model_option_id, model slug, reasoning_option_id, reasoning value, and mode_id as inputs to create_session. For the same agent type use inherited_mode_id. The runtime may omit some metadata. For delegate_to_agent, use the model slug and reasoning value.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["agent_type"],
+      "properties": {
+        "agent_type": {
+          "type": "string",
+          "description": "Agent slug, including a configured custom agent."
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": { "readOnlyHint": true }
+  },
+  {
+    "name": "get_current_session",
+    "description": "Read your own Codeg conversation information: conversation ID, title, agent type, status, folder ID and path, and parent conversation ID if present. The conversation_id can be used by another session with send_to_session.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+    "annotations": { "readOnlyHint": true }
+  },
+  {
+    "name": "list_sessions",
+    "description": "Find Codeg conversations, including delegation children, and their conversation IDs for send_to_session. Searches all workspace folders by default. Use current_folder for your own folder or folder_id for a specific folder. Results are most recently updated first. Pass next_offset as offset to get the next page. Use get_current_session to identify yourself.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "current_folder": { "type": "boolean", "description": "Search only the calling session's Codeg folder. Use this instead of folder_id." },
+        "folder_id": { "type": "integer", "minimum": 1, "description": "Search only this Codeg folder." },
+        "agent_type": { "type": "string", "description": "Filter by agent type, e.g. codex or claude_code." },
+        "search": { "type": "string", "description": "Filter by text in the conversation title." },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 },
+        "offset": { "type": "integer", "minimum": 0, "default": 0 }
+      },
+      "additionalProperties": false
+    },
+    "annotations": { "readOnlyHint": true }
+  },
+  {
+    "name": "create_session",
+    "description": "Create an independent Codeg conversation for work that needs its own context and ongoing collaboration. Use it when separate conversations are requested or when a task benefits from several rounds with an independent collaborator. Specify a title, first message, model, reasoning setting, and permission mode. By default it uses your current agent type and folder. Returns conversation_id after starting the first message. The new conversation keeps its own history and is linked as your collaborator. Its first answer comes back automatically. Keep working on independent steps or end your turn while you wait. Resume when the incoming answer wakes your conversation. Use send_to_session with the returned ID for later messages.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "title",
+        "message",
+        "mode_id",
+        "config_values"
+      ],
+      "properties": {
+        "agent_type": {
+          "type": "string",
+          "description": "Omit to use the current conversation's agent type. Set only to choose a different agent, using its exact ID (for example, claude_code).",
+          "enum": [
+            "claude_code",
+            "codex",
+            "open_code",
+            "gemini",
+            "cline",
+            "open_claw",
+            "hermes",
+            "code_buddy",
+            "kimi_code",
+            "pi",
+            "grok",
+            "cursor",
+            "deepseek",
+            "qoder",
+            "antigravity",
+            "kiro",
+            "zcode",
+            "trae",
+            "command_code",
+            "minimax_code"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name displayed in the main conversation list, such as Conversation C."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "description": "First message for the new conversation. Include the task, participants and their conversation IDs when needed."
+        },
+        "folder_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of a folder already registered in Codeg. The new conversation also uses it as its working directory. Omit to use the current conversation's folder."
+        },
+        "mode_id": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Permission mode ID offered by the target agent. For the same agent type, pass the current session's mode ID. For a different agent type, pass a mode ID it offers."
+        },
+        "config_values": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "pattern": "\\S" },
+          "minProperties": 2,
+          "maxProperties": 2,
+          "description": "Use the model_option_id and reasoning_option_id from list_agent_options as keys. Use the chosen model slug and reasoning level as their values. The first message is sent only if the settings take effect."
+        }
+      }
+    }
+  },
+  {
+    "name": "stop_session",
+    "description": "Request that the active turn stop in your own Codeg session or a direct delegation child. Uses the same cancellation as the Stop button. Keeps the conversation and queued messages. Returns idle if there is no active turn. Only call when asked to stop the work.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Codeg conversation ID. Omit to stop your own session."
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": { "destructiveHint": true }
+  },
+  {
+    "name": "send_to_session",
+    "description": "Send a message to an existing Codeg conversation and return its message_id once queued. Codeg wakes offline recipients. Set reply=true when you need an answer to continue. You can end your turn and resume when the answer arrives automatically. Use reply=false for a one-way update or a manual answer. Use the sender ID in the Codeg header when following up. Put your message in the body. Codeg supplies the sender ID and delivers automatic answers as visible incoming messages.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["conversation_id", "message", "mode", "reply"],
+      "properties": {
+        "conversation_id": { "type": "integer", "minimum": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "mode": {
+          "enum": ["queue", "steer"],
+          "description": "Use queue for routine updates, results, and instructions for the next turn. Use steer when the recipient is already working and needs to adjust the current turn, for example to correct a wrong branch before the recipient pushes. If live steering is unavailable, Codeg queues the message for the next available turn. Steer does not guarantee an immediate stop."
+        },
+        "reply": { "type": "boolean", "description": "Send the final answer back automatically." }
       }
     }
   },
@@ -181,8 +335,25 @@
     }
   },
   {
+    "name": "rename_session",
+    "description": "Rename your current Codeg conversation or one of your direct delegated child conversations. Omit session_id to rename yourself. The title is locked against later automatic title refreshes and imports.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["title"],
+      "properties": {
+        "session_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Codeg conversation ID. Defaults to your current conversation. Only your own or a direct child conversation is allowed."
+        },
+        "title": { "type": "string", "minLength": 1, "description": "The new conversation title." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "get_session_info",
-    "description": "Look up a session/conversation the user referenced in their message and return what it is: its title, which agent ran it, its status, workspace folder, git branch, model, message count, and token-usage stats — and, on request, a compact view of its most recent messages. RECOGNIZING A MENTIONED SESSION: the user can @-mention a past session directly in their message — it appears as a Markdown link `[Session title](codeg://session/<number>)`, whose text is that session's title and whose `<number>` is codeg's internal conversation id (e.g. `[Fix auth](codeg://session/214)` is the session titled 'Fix auth'). Such a mention IS the user explicitly pointing you at that session, even when they never name this tool — call it whenever what that session is about or what happened in it matters to the request (e.g. to continue its work, build on its results, answer questions about it, or summarize it). If the message mentions several sessions, make one call per session. Pass the NUMBER from the reference as `session_id` (it is codeg's internal conversation id, NOT the agent's own session id). The result is read-only and never modifies the session. A session that no longer exists returns a `found: false` result you can act on — it is not an error.",
+    "description": "Look up a session/conversation the user referenced in their message and return what it is: its title, which agent ran it, its status, workspace folder, git branch, model, message count, and token-usage stats — and, on request, a compact view of its most recent messages. RECOGNIZING A MENTIONED SESSION: the user can @-mention a past session directly in their message — it appears as a Markdown link `[Session title](codeg://session/<number>)`, whose text is that session's title and whose `<number>` is codeg's internal conversation id (e.g. `[Fix auth](codeg://session/214)` is the session titled 'Fix auth'). Such a mention IS the user explicitly pointing you at that session, even when they never name this tool — call it whenever what that session is about or what happened in it matters to the request (e.g. to continue its work, build on its results, answer questions about it, or summarize it). If the message mentions several sessions, make one call per session. Pass the NUMBER from the reference as `session_id` (it is codeg's internal conversation id, NOT the agent's own session id). Returns up to 200 direct delegation children (session_id, task_id, status), even when the transcript is unavailable. children_truncated indicates additional children. Use get_delegation_status for detailed task reports. Independent collaboration sessions created by this session are listed in collaborators. The result is read-only and never modifies the session. A session that no longer exists returns a `found: false` result you can act on — it is not an error.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -252,7 +423,7 @@
   },
   {
     "name": "create_work_task",
-    "description": "Queue a card on codeg's to-dos. A task is a unit of work an agent later executes on its own branch/worktree, then hands back for the user to review and merge. Use it when the user wants work PARKED rather than done now — 'add a task to…', 'put this on the board', 'we should also fix X later' — or when you are splitting a large request into reviewable pieces and the user asked for that. Do NOT use it to do the thing the user just asked you to do in this conversation, and do NOT queue a task per trivial step. The executing agent starts cold with no view of this chat, so `prompt` must carry the full briefing. Screenshots, mockups, logs or other files that belong to the briefing go in `attachments`. The tool returns the task id; the user tracks it in their to-dos.",
+    "description": "Queue a card on codeg's to-dos. A task is a unit of work an agent later executes on its own branch/worktree, then hands back for the user to review and merge. Use it for work the user wants tracked on the board or for a self-contained part of an agreed long-running plan that needs its own worktree and separate review. Keep steps you can execute here in the current session. The board starts the task through its existing manual or automatic processing settings. For a long-running plan, record the returned task ID in the plan or brief and continue with independent work. The board owns the task status. Use session messaging when you need an automatic reply from an independent collaborator. The executing agent starts cold with no view of this chat, so `prompt` must carry the objective, project context, constraints, and acceptance criteria. Include the plan reference when it helps. Screenshots, mockups, logs or other files that belong to the briefing go in `attachments`. The tool returns the task id; the user tracks it in their to-dos.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -3086,6 +3257,156 @@
     "inputSchema": {
       "type": "object",
       "properties": {}
+    }
+  },
+  {
+    "name": "session_brief",
+    "description": "Read, replace or edit your persistent session brief. For ongoing work, create it once the assignment is clear. Before ending a turn, update it if the goal, a decision, work status, a blocker, or the next action changed. Keep the current state concise. Replace superseded details and keep the relevant conversation, task, or project plan references. For a queued board task that the next step depends on, record its task ID and the result you are waiting for. Skip the write when the brief is still current. Read it after context compaction or when resuming work. Keep it within 12000 characters. Every edit oldText must match exactly once. The entire edit batch commits atomically. The brief is included in get_current_session and in the first prompt of newly delegated children.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "read",
+            "write",
+            "edit"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 12000
+        },
+        "edits": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "oldText": {
+                "type": "string",
+                "minLength": 1
+              },
+              "newText": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "oldText",
+              "newText"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "operation"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "session_digest",
+    "description": "Keep the user-facing session digest current. Before ending a turn that changed user-visible progress, the plan, or a pending decision, update the digest. Replace it in full, carry forward items that still apply, and remove resolved questions and stale items. Skip the write when nothing has changed. Use now for active work, news for meaningful changes, needsYou for decisions that require the user, and suggestions for optional next steps. For board tasks, summarize milestones or review decisions that affect this session and cite the task ID. Limits are 8 now items, 5 news items, 3 questions with up to 4 options each, and 3 suggestions. Each line has at most 300 characters. recommended must exactly equal an option. Keep question IDs stable until the question changes. Dismissed suggestion titles are returned in dismissedSuggestions. Respect them across updates. The user sees the digest above chat and answers through ordinary user messages.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "now": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "news": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "needsYou": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "question": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "options": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                }
+              },
+              "recommended": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              }
+            },
+            "required": [
+              "id",
+              "question",
+              "options"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "suggestions": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "detail": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              }
+            },
+            "required": [
+              "id",
+              "title"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "now",
+        "news",
+        "needsYou",
+        "suggestions"
+      ],
+      "additionalProperties": false
     }
   }
 ]

@@ -1,4 +1,14 @@
 {
+  "SessionCollaboration": {
+    "progress": "Session progress",
+    "title": "Collaboration sessions",
+    "brief": "Takeover notes",
+    "link": "Link",
+    "choose": "Choose a session",
+    "unlink": "Unlink",
+    "empty": "No collaboration sessions",
+    "error": "Could not update collaboration sessions."
+  },
   "HtmlCodePreview": {
     "code": "Code",
     "preview": "Preview",
@@ -837,6 +847,8 @@
     "generalConfigDescriptionClaude": "Set API URL, API Key and Claude models; synced with the native JSON config.",
     "generalConfigDescriptionDefault": "Set API URL, API Key and Model, and manage the native JSON config.",
     "multiAgent": {
+      "sessionMessaging": "Session communication",
+      "sessionMessagingHint": "Allow agents to create independent sessions and message them. Reconnect existing sessions to make the tools available.",
       "title": "Multi-Agent Collaboration",
       "description": "Allow active agents to delegate sub-tasks to other agents.",
       "enable": "Enable delegation",
@@ -3900,6 +3912,7 @@
         "downloadFailed": "Failed to download {name}"
       },
       "messageList": {
+        "sessionMessageSource": "From conversation: {session}",
         "loading": "Loading...",
         "loadBackgroundActivity": "Load background activity",
         "loadEarlier": "Load earlier messages",
@@ -4099,6 +4112,13 @@
         "htmlPreviewHide": "Hide preview"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "Send a message to {session}",
+          "send": "Send a session message",
+          "create": "Create a session",
+          "current": "View current session",
+          "list": "Find sessions"
+        },
         "oauth": {
           "waiting": "Waiting for {server} authorization",
           "reconnecting": "Reconnecting {server}…",
@@ -13294,5 +13314,20 @@
       "rateLimited": "SRN asked Codeg to wait before trying again.",
       "server": "SRN answered with an error."
     }
+  },
+  "SessionDigest": {
+    "title": "Session summary",
+    "now": "In progress",
+    "news": "News",
+    "needsYou": "Needs your answer",
+    "suggestions": "Suggestions",
+    "recommended": "Recommended",
+    "dismiss": "Dismiss {title}",
+    "updatedAt": "Updated {time}",
+    "pendingCount": "{count} awaiting answer",
+    "inProgress": "In progress",
+    "answerWhenReady": "Answers are available when the session is connected and its message queue is empty.",
+    "sendFailed": "Answer could not be sent. Please try again.",
+    "actionFailed": "Could not save this action."
   }
 }

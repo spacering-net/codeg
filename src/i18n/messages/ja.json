@@ -1,4 +1,14 @@
 {
+  "SessionCollaboration": {
+    "progress": "セッションの進捗",
+    "title": "共同作業セッション",
+    "brief": "引き継ぎノート",
+    "link": "関連付け",
+    "choose": "セッションを選択",
+    "unlink": "関連付けを解除",
+    "empty": "共同作業セッションはありません",
+    "error": "共同作業セッションを更新できませんでした。"
+  },
   "HtmlCodePreview": {
     "code": "コード",
     "preview": "プレビュー",
@@ -837,6 +847,8 @@
     "generalConfigDescriptionClaude": "API URL、API Key、Claude モデルを設定し、ネイティブ JSON 設定と同期します。",
     "generalConfigDescriptionDefault": "API URL、API Key、Model を設定し、ネイティブ JSON 設定を管理します。",
     "multiAgent": {
+      "sessionMessaging": "セッション間通信",
+      "sessionMessagingHint": "エージェントが独立したセッションを作成してメッセージを交換できるようにします。既存のセッションでは再接続後にツールを利用できます。",
       "title": "マルチエージェント連携",
       "description": "アクティブなエージェントがサブタスクを他のエージェントに委任できるようにします。",
       "enable": "委任を有効化",
@@ -3900,6 +3912,7 @@
         "downloadFailed": "{name} のダウンロードに失敗しました"
       },
       "messageList": {
+        "sessionMessageSource": "送信元セッション：{session}",
         "loading": "読み込み中...",
         "loadBackgroundActivity": "バックグラウンドの動作を読み込む",
         "loadEarlier": "以前のメッセージを読み込む",
@@ -4099,6 +4112,13 @@
         "htmlPreviewHide": "プレビューを閉じる"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "セッション「{session}」にメッセージを送信",
+          "send": "セッションにメッセージを送信",
+          "create": "セッションを作成",
+          "current": "現在のセッションを表示",
+          "list": "セッションを検索"
+        },
         "oauth": {
           "waiting": "{server} の認可を待機中",
           "reconnecting": "{server} に再接続中…",
@@ -13294,5 +13314,20 @@
       "rateLimited": "SRN から、しばらく待ってから再試行するよう求められました。",
       "server": "SRN がエラーを返しました。"
     }
+  },
+  "SessionDigest": {
+    "title": "セッションの要約",
+    "now": "進行中",
+    "news": "最新情報",
+    "needsYou": "回答待ち",
+    "suggestions": "提案",
+    "recommended": "推奨",
+    "dismiss": "{title} を却下",
+    "updatedAt": "更新 {time}",
+    "pendingCount": "{count} 件の回答待ち",
+    "inProgress": "進行中",
+    "answerWhenReady": "接続後、現在のターンとメッセージキューが完了すると回答できます。",
+    "sendFailed": "回答を送信できませんでした。再試行してください。",
+    "actionFailed": "操作を保存できませんでした。"
   }
 }

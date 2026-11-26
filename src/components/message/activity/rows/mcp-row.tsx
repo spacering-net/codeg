@@ -3,10 +3,12 @@
 import { memo, useMemo } from "react"
 import { useTranslations } from "next-intl"
 
-import { tryParseJson } from "@/lib/activity/json"
+import { asObjectLike, tryParseJson } from "@/lib/activity/json"
 import { mcpResultPayload } from "@/lib/activity/mcp"
+import { formatConversationTitle } from "@/lib/conversation-title"
 import { readKimiMcpOAuth } from "@/lib/kimi-mcp-oauth"
 import { cn } from "@/lib/utils"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useActivityRender } from "../activity-context"
 import { ActivityRow } from "../activity-row"
 import { DetailBox } from "../detail-box"
@@ -47,6 +49,40 @@ export const McpRow = memo(function McpRow({ step }: { step: ToolStep }) {
   const statusText = useStatusText()
   const { recoveredKeys, isStreaming } = useActivityRender()
   const { tool, part } = step
+  const name = tool.target?.text ?? tool.toolName
+  const sessionTool = tool.mcp?.server === "codeg-mcp" ? tool.mcp.tool : null
+  const sending = sessionTool === "send_to_session"
+  const input = sending ? asObjectLike(part.input) : null
+  const destination = (asObjectLike(input?.arguments) ?? input)?.conversation_id
+  const destinationId = typeof destination === "number" ? destination : null
+  const destinationTitle = useAppWorkspaceStore((state) =>
+    destinationId === null
+      ? undefined
+      : state.conversations.find(
+          (conversation) => conversation.id === destinationId
+        )?.title
+  )
+  const session =
+    formatConversationTitle(destinationTitle).trim() ||
+    (destinationId === null ? null : `#${destinationId}`)
+  let action: string | null = null
+  switch (sessionTool) {
+    case "send_to_session":
+      action = session
+        ? t("sessionCall.sendTo", { session })
+        : t("sessionCall.send")
+      break
+    case "create_session":
+      action = t("sessionCall.create")
+      break
+    case "get_current_session":
+      action = t("sessionCall.current")
+      break
+    case "list_sessions":
+      action = t("sessionCall.list")
+      break
+  }
+  const preview = sending ? null : tool.detail
   const failed = tool.status === "failed" || tool.status === "rejected"
   const [open, setOpen] = useDisclosure(step.key, {
     defaultOpen: false,
@@ -83,7 +119,7 @@ export const McpRow = memo(function McpRow({ step }: { step: ToolStep }) {
       expandable={expandable}
       expanded={open}
       onExpandedChange={setOpen}
-      title={tool.detail ?? undefined}
+      title={action ? `${action} · ${name}` : (preview ?? undefined)}
       trailing={<ToolFigure tool={tool} />}
       addon={
         showOAuth && oauth ? (
@@ -117,18 +153,19 @@ export const McpRow = memo(function McpRow({ step }: { step: ToolStep }) {
       )}
     >
       <span className="flex min-w-0 items-baseline gap-2">
-        {tool.mcp ? <McpChip server={tool.mcp.server} /> : null}
+        {tool.mcp && !action ? <McpChip server={tool.mcp.server} /> : null}
         <span
           className={cn(
-            "shrink-0 font-mono text-[0.8125rem] font-semibold",
+            "text-[0.8125rem] font-semibold",
+            action ? "min-w-0 truncate" : "shrink-0 font-mono",
             failed ? "text-tone-danger" : "text-foreground"
           )}
         >
-          {tool.target?.text ?? tool.toolName}
+          {action ?? name}
         </span>
-        {tool.detail ? (
+        {preview ? (
           <span className="min-w-0 truncate text-activity-secondary" dir="auto">
-            {tool.detail}
+            {preview}
           </span>
         ) : null}
       </span>

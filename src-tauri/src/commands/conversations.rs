@@ -136,6 +136,54 @@ pub async fn list_all_conversations(
     .await
 }
 
+pub const COLLABORATION_CHANGED_EVENT: &str = "collaboration://changed";
+
+pub async fn list_conversation_collaborators_core(
+    conn: &sea_orm::DatabaseConnection,
+    conversation_id: i32,
+) -> Result<Vec<crate::models::DbConversationSummary>, AppCommandError> {
+    let mut collaborators = conversation_service::list_collaborators(conn, conversation_id).await?;
+    collaborators.extend(conversation_service::list_children(conn, conversation_id).await?);
+    Ok(collaborators)
+}
+
+pub async fn set_conversation_collaborator_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &crate::web::event_bridge::EventEmitter,
+    conversation_id: i32,
+    target_id: i32,
+    linked: bool,
+) -> Result<(), AppCommandError> {
+    if linked {
+        conversation_service::link_collaborator(conn, conversation_id, target_id).await?;
+    } else {
+        conversation_service::unlink_collaborator(conn, conversation_id, target_id).await?;
+    }
+    crate::web::event_bridge::emit_event(emitter, COLLABORATION_CHANGED_EVENT, conversation_id);
+    Ok(())
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn list_conversation_collaborators(
+    db: tauri::State<'_, AppDatabase>,
+    conversation_id: i32,
+) -> Result<Vec<crate::models::DbConversationSummary>, AppCommandError> {
+    list_conversation_collaborators_core(&db.conn, conversation_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn set_conversation_collaborator(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    conversation_id: i32,
+    target_id: i32,
+    linked: bool,
+) -> Result<(), AppCommandError> {
+    set_conversation_collaborator_core(&db.conn, &EventEmitter::from_app(&app), conversation_id, target_id, linked).await
+}
+
 pub async fn list_child_conversations_core(
     conn: &sea_orm::DatabaseConnection,
     parent_conversation_id: i32,
@@ -3027,7 +3075,7 @@ pub async fn create_chat_dir(app: tauri::AppHandle) -> Result<CreateChatDirResul
     Ok(CreateChatDirResult { path })
 }
 
-async fn detect_git_branch(path: &str) -> Option<String> {
+pub(crate) async fn detect_git_branch(path: &str) -> Option<String> {
     let output = crate::process::tokio_command("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(path)

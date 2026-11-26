@@ -46,11 +46,11 @@
 //! task's terminal STATUS (via [`ChildStatusLookup`]); the full output is always
 //! viewable in the child's own session.
 //!
-//! Cancellation cascade: when a parent session goes away (user-initiated
-//! cancel, parent disconnect), the lifecycle subscriber calls
-//! [`DelegationBroker::cancel_by_parent`] which fans out cancel + disconnect
-//! to every running child of that parent. A normal `end_turn` does NOT cancel
-//! children — they keep running in the background (the whole point of async).
+//! Task ownership follows the parent conversation, not its current driver.
+//! Ordinary disconnect calls [`DelegationBroker::detach_parent`]: running
+//! children and cached results survive, so a new driver can wait or poll them.
+//! Explicit cancellation still fans out to the conversation's running children.
+//! A normal `end_turn` also leaves children running in the background.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -118,6 +118,7 @@ pub trait ConversationDepthLookup: Send + Sync {
 /// child's own session (viewable via the frontend's child-session sheet).
 #[derive(Debug, Clone)]
 pub struct ChildStatusRecord {
+    pub persisted_outcome: Option<DelegationOutcome>,
     pub child_conversation_id: i32,
     pub status: TaskStatus,
     pub agent_type: AgentType,
@@ -235,6 +236,7 @@ impl ChildStatusLookup for NoopChildStatusLookup {
 #[derive(Debug, Clone)]
 pub struct DelegationConfig {
     pub enabled: bool,
+    pub session_messaging_enabled: bool,
     /// Max chain depth a *new* delegation may exist at. With `depth_limit = 2`
     /// the chain root → child → grandchild is allowed; the grandchild trying
     /// to spawn a great-grandchild is rejected. See spec §5.
@@ -255,6 +257,7 @@ impl Default for DelegationConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            session_messaging_enabled: false,
             depth_limit: 1,
             agent_defaults: BTreeMap::new(),
             completed_cache_cap_bytes: DEFAULT_COMPLETED_CACHE_CAP_BYTES,
@@ -273,6 +276,7 @@ struct RunningTask {
     child_connection_id: String,
     child_conversation_id: i32,
     parent_connection_id: String,
+    parent_conversation_id: i32,
     parent_tool_use_id: String,
     /// Target agent — surfaced in status reports.
     agent_type: AgentType,
@@ -320,12 +324,12 @@ struct SurfacedBlock {
 
 /// A terminal delegation result retained so `get_delegation_status` /
 /// `cancel_delegation` can answer after the lifecycle resolved the task.
-/// Parent-scoped, FIFO-evicted once the parent's retained result text exceeds
-/// `PendingInner::completed_cap_bytes`, and dropped wholesale when the parent
-/// connection tears down.
+/// Conversation-scoped, FIFO-evicted once its retained result text exceeds
+/// `PendingInner::completed_cap_bytes`; ordinary driver detach preserves it.
 #[derive(Clone)]
 struct CompletedTask {
     parent_connection_id: String,
+    parent_conversation_id: i32,
     child_conversation_id: i32,
     agent_type: AgentType,
     assistant: Option<AssistantRef>,
@@ -389,18 +393,18 @@ struct PendingInner {
     /// Terminal results retained for `get_delegation_status` / `cancel_delegation`,
     /// keyed by `task_id`. Bounded by the per-parent byte valve
     /// (`completed_cap_bytes` over `completed_bytes`, FIFO-evicted via
-    /// `completed_order`) and dropped per-parent on connection teardown.
+    /// `completed_order`), retained across ordinary connection teardown.
     /// Evicted/unknown tasks fall back to the DB status lookup.
     completed: HashMap<String, CompletedTask>,
     /// Per-parent FIFO index over `completed` for byte-valve eviction and
-    /// per-parent teardown. Keyed by `parent_connection_id`; each deque holds
+    /// explicit parent teardown. Keyed by `parent_conversation_id`; each deque holds
     /// that parent's completed `task_id`s oldest-first.
-    completed_order: HashMap<String, VecDeque<String>>,
+    completed_order: HashMap<i32, VecDeque<String>>,
     /// Per-parent running total of retained completed result-text bytes (the
     /// `CompletedTask::text` lengths). Drives the `completed_cap_bytes` valve in
     /// `insert_completed`; kept in sync on insert/evict and cleared per-parent
     /// on teardown.
-    completed_bytes: HashMap<String, usize>,
+    completed_bytes: HashMap<i32, usize>,
     /// Per-parent byte budget for retained completed result text. `0` =
     /// unlimited (no eviction). Seeded by `set_config` from the live
     /// `DelegationConfig` (default until then: `0`, but `set_config` always runs
@@ -458,6 +462,9 @@ struct PendingInner {
 /// One in-flight `handle_request` setup tracked for parent-cancel coverage.
 struct InflightSetup {
     parent_connection_id: String,
+    parent_conversation_id: i32,
+    /// Stops a late explicit identity claim from rebuilding a detached driver's tracker.
+    detached: bool,
     /// `Some(stamp)` once a parent cancel lands while this delegation is
     /// mid-setup (spawned / sending, not yet parked), where `stamp` is the `seq`
     /// arrival-clock value at that moment. First-write-wins and never cleared,
@@ -559,12 +566,18 @@ impl PendingInner {
     /// has to be atomic under this lock so a concurrent parent cancel sees the
     /// entry in exactly one of `inflight` or `calls`, and a guard firing after
     /// the lock releases would reopen that window.
-    fn register_inflight(&mut self, parent_connection_id: &str) -> u64 {
+    fn register_inflight(
+        &mut self,
+        parent_connection_id: &str,
+        parent_conversation_id: i32,
+    ) -> u64 {
         let id = self.tick();
         self.inflight.insert(
             id,
             InflightSetup {
                 parent_connection_id: parent_connection_id.to_string(),
+                parent_conversation_id,
+                detached: false,
                 canceled_at: None,
             },
         );
@@ -601,10 +614,18 @@ impl PendingInner {
     /// parent's delegations is caught either here (still in-flight → flagged;
     /// `handle_request` tears its child down at the next checkpoint) or by the
     /// parked-call drain (already parked) — never neither.
-    fn mark_inflight_canceled_for_parent(&mut self, parent_connection_id: &str) {
+    fn mark_inflight_canceled_for_parent(
+        &mut self,
+        parent_connection_id: &str,
+        parent_conversation_id: Option<i32>,
+    ) {
         let stamp = self.tick();
         for setup in self.inflight.values_mut() {
-            if setup.parent_connection_id == parent_connection_id && setup.canceled_at.is_none() {
+            if parent_conversation_id.map_or_else(
+                || setup.parent_connection_id == parent_connection_id,
+                |id| setup.parent_conversation_id == id,
+            ) && setup.canceled_at.is_none()
+            {
                 setup.canceled_at = Some(stamp);
             }
         }
@@ -621,15 +642,15 @@ impl PendingInner {
     /// this insert under one lock, then notifies long-poll waiters AFTER
     /// releasing the lock.
     fn insert_completed(&mut self, call_id: &str, task: CompletedTask) {
-        let parent = task.parent_connection_id.clone();
+        let parent = task.parent_conversation_id;
         let task_bytes = task.text.as_ref().map_or(0, |t| t.len());
         self.completed.insert(call_id.to_string(), task);
-        *self.completed_bytes.entry(parent.clone()).or_insert(0) += task_bytes;
+        *self.completed_bytes.entry(parent).or_insert(0) += task_bytes;
         self.completed_order
-            .entry(parent.clone())
+            .entry(parent)
             .or_default()
             .push_back(call_id.to_string());
-        self.evict_completed_over_cap(&parent);
+        self.evict_completed_over_cap(parent);
     }
 
     /// Evict `parent`'s OLDEST completed results until its retained result-text
@@ -638,16 +659,16 @@ impl PendingInner {
     /// session). The newest entry is never evicted: a single result is capped at
     /// [`COMPLETED_TEXT_CAP`] (256 KiB), far below any MB-scale budget, so the
     /// LLM's immediate `get_delegation_status` always hits.
-    fn evict_completed_over_cap(&mut self, parent: &str) {
+    fn evict_completed_over_cap(&mut self, parent: i32) {
         let cap = self.completed_cap_bytes;
         if cap == 0 {
             return;
         }
         loop {
-            if self.completed_bytes.get(parent).copied().unwrap_or(0) <= cap {
+            if self.completed_bytes.get(&parent).copied().unwrap_or(0) <= cap {
                 break;
             }
-            let evicted = match self.completed_order.get_mut(parent) {
+            let evicted = match self.completed_order.get_mut(&parent) {
                 Some(order) if order.len() > 1 => order.pop_front(),
                 _ => None,
             };
@@ -656,7 +677,7 @@ impl PendingInner {
             };
             if let Some(removed) = self.completed.remove(&evicted) {
                 let freed = removed.text.as_ref().map_or(0, |t| t.len());
-                if let Some(slot) = self.completed_bytes.get_mut(parent) {
+                if let Some(slot) = self.completed_bytes.get_mut(&parent) {
                     *slot = slot.saturating_sub(freed);
                 }
             }
@@ -671,10 +692,16 @@ impl PendingInner {
     fn remove_completed(&mut self, call_id: &str) -> Option<CompletedTask> {
         let removed = self.completed.remove(call_id)?;
         let freed = removed.text.as_ref().map_or(0, |t| t.len());
-        if let Some(slot) = self.completed_bytes.get_mut(&removed.parent_connection_id) {
+        if let Some(slot) = self
+            .completed_bytes
+            .get_mut(&removed.parent_conversation_id)
+        {
             *slot = slot.saturating_sub(freed);
         }
-        if let Some(order) = self.completed_order.get_mut(&removed.parent_connection_id) {
+        if let Some(order) = self
+            .completed_order
+            .get_mut(&removed.parent_conversation_id)
+        {
             order.retain(|id| id != call_id);
         }
         Some(removed)
@@ -689,23 +716,29 @@ impl PendingInner {
         if self.completed_cap_bytes == 0 {
             return;
         }
-        let parents: Vec<String> = self.completed_bytes.keys().cloned().collect();
+        let parents: Vec<i32> = self.completed_bytes.keys().copied().collect();
         for parent in parents {
-            self.evict_completed_over_cap(&parent);
+            self.evict_completed_over_cap(parent);
         }
     }
 
-    /// Forget every completed result for a parent. Called on connection
-    /// teardown (the parent is gone — nothing left to query). A turn cancel
+    /// Forget results created by one driver for an explicit legacy cascade.
+    /// Ordinary detach does not call this. A turn cancel
     /// deliberately does NOT call this: the connection stays alive and the LLM
     /// may still query its just-canceled tasks.
     fn drop_completed_for_parent(&mut self, parent_connection_id: &str) {
-        self.completed_bytes.remove(parent_connection_id);
-        if let Some(ids) = self.completed_order.remove(parent_connection_id) {
-            for id in ids {
-                self.completed.remove(&id);
-            }
+        let ids: Vec<_> = self
+            .completed
+            .iter()
+            .filter(|(_, task)| task.parent_connection_id == parent_connection_id)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids {
+            self.remove_completed(&id);
         }
+        self.completed_order.retain(|_, order| !order.is_empty());
+        self.completed_bytes
+            .retain(|id, _| self.completed_order.contains_key(id));
     }
 }
 
@@ -768,6 +801,7 @@ fn terminal_fields(
 /// Build a [`CompletedTask`] from a resolved outcome for the completed-cache.
 fn build_completed(
     parent_connection_id: &str,
+    parent_conversation_id: i32,
     child_conversation_id: i32,
     agent_type: AgentType,
     assistant: Option<&AssistantRef>,
@@ -777,6 +811,7 @@ fn build_completed(
     let (status, text, error_code, message) = terminal_fields(outcome);
     CompletedTask {
         parent_connection_id: parent_connection_id.to_string(),
+        parent_conversation_id,
         child_conversation_id,
         agent_type,
         assistant: assistant.cloned(),
@@ -824,6 +859,7 @@ fn drain_and_record_canceled(
             &k,
             build_completed(
                 &task.parent_connection_id,
+                task.parent_conversation_id,
                 task.child_conversation_id,
                 task.agent_type,
                 task.assistant.as_ref(),
@@ -901,15 +937,17 @@ fn running_ack(
     call_id: String,
     child_conversation_id: i32,
     agent_type: AgentType,
+    deliver_first_result: bool,
 ) -> DelegationTaskReport {
     // Embed the literal task_id in the message so it survives clients that only
     // surface the MCP `content` text (not `structuredContent`) — without it the
     // LLM couldn't call get_delegation_status / cancel_delegation.
-    let message = format!(
-        "Delegation successful. task_id={call_id}. Call get_delegation_status \
-         with this id in the task_ids array (optionally wait_ms) to collect the \
-         result, or cancel_delegation to stop it."
-    );
+    let instructions = if deliver_first_result {
+        "Codeg will send the result back to this session. Finish your current turn after starting your tasks so their replies can arrive. Status and cancellation remain available."
+    } else {
+        "Call get_delegation_status with this id in the task_ids array (optionally wait_ms) to collect the result, or cancel_delegation to stop it."
+    };
+    let message = format!("Delegation successful. task_id={call_id}. {instructions}");
     DelegationTaskReport {
         task_id: Some(call_id),
         status: TaskStatus::Running,
@@ -1184,19 +1222,27 @@ fn unknown_report(task_id: &str) -> DelegationTaskReport {
 }
 
 /// Status report recovered from the DB after the in-memory result was evicted.
-/// Carries status only — the full output lives in the child session.
 fn db_report(task_id: &str, rec: &ChildStatusRecord) -> DelegationTaskReport {
+    let (status, text, error_code, message) = match rec.persisted_outcome.as_ref() {
+        Some(outcome) => terminal_fields(outcome),
+        None => (
+            rec.status,
+            None,
+            (rec.status == TaskStatus::Canceled).then(|| "canceled".to_string()),
+            Some(format!(
+                "Result no longer cached; open child session {} for the full output.",
+                rec.child_conversation_id
+            )),
+        ),
+    };
     DelegationTaskReport {
         task_id: Some(task_id.to_string()),
-        status: rec.status,
+        status,
         child_conversation_id: Some(rec.child_conversation_id),
         agent_type: Some(rec.agent_type),
-        text: None,
-        error_code: (rec.status == TaskStatus::Canceled).then(|| "canceled".to_string()),
-        message: Some(format!(
-            "Result no longer cached; open child session {} for the full output.",
-            rec.child_conversation_id
-        )),
+        text,
+        error_code,
+        message,
         duration_ms: None,
         blocked_on: None,
         assistant_id: None,
@@ -1246,18 +1292,24 @@ enum StatusClass {
 /// held. Mirrors the single-task resolution order — completed cache (parent
 /// scoped) → running set (parent scoped) → not-in-memory — and yields a
 /// cross-parent hit as `unknown` so a task owned by another parent never leaks.
-fn classify_locked(inner: &PendingInner, parent_connection_id: &str, task_id: &str) -> StatusClass {
+fn classify_locked(
+    inner: &PendingInner,
+    parent_conversation_id: Option<i32>,
+    task_id: &str,
+) -> StatusClass {
     if let Some(c) = inner.completed.get(task_id) {
-        if c.parent_connection_id == parent_connection_id {
+        if Some(c.parent_conversation_id) == parent_conversation_id {
             return StatusClass::Settled(completed_report(task_id, c));
         }
         return StatusClass::Settled(unknown_report(task_id));
     }
     match inner.running.get(task_id) {
-        Some(r) if r.parent_connection_id == parent_connection_id => StatusClass::Running {
-            report: running_report(task_id, r),
-            child_connection_id: r.child_connection_id.clone(),
-        },
+        Some(r) if Some(r.parent_conversation_id) == parent_conversation_id => {
+            StatusClass::Running {
+                report: running_report(task_id, r),
+                child_connection_id: r.child_connection_id.clone(),
+            }
+        }
         Some(_) => StatusClass::Settled(unknown_report(task_id)),
         None => StatusClass::NotInMemory,
     }
@@ -2153,6 +2205,17 @@ impl DelegationBroker {
     /// regardless of arrival order.
     async fn consume_explicit_tool_call(&self, parent_connection_id: &str, tool_call_id: &str) {
         let mut map = self.tool_calls.inner.lock().await;
+        if self
+            .pending
+            .inner
+            .lock()
+            .await
+            .inflight
+            .values()
+            .any(|setup| setup.parent_connection_id == parent_connection_id && setup.detached)
+        {
+            return;
+        }
         let bucket = map.entry(parent_connection_id.to_string()).or_default();
         bucket.pending.retain(|p| p.tool_call_id != tool_call_id);
         if !bucket.consumed.iter().any(|(id, _)| id == tool_call_id) {
@@ -2498,15 +2561,30 @@ impl DelegationBroker {
         )
     )]
     pub async fn start_delegation(&self, req: DelegationRequest) -> DelegationTaskReport {
+        self.start_delegation_with_delivery(req, "poll".into(), false)
+            .await
+    }
+
+    pub async fn start_delegation_with_delivery(
+        &self,
+        req: DelegationRequest,
+        notify_mode: String,
+        follow: bool,
+    ) -> DelegationTaskReport {
         // Every report this call returns — the ack, a setup failure, a
         // setup-window terminal — names the assistant the task runs as.
         let identity = req.assistant.as_ref().map(DelegationAssistant::identity);
-        self.start_delegation_inner(req)
+        self.start_delegation_inner(req, notify_mode, follow)
             .await
             .with_assistant(identity.as_ref())
     }
 
-    async fn start_delegation_inner(&self, mut req: DelegationRequest) -> DelegationTaskReport {
+    async fn start_delegation_inner(
+        &self,
+        mut req: DelegationRequest,
+        notify_mode: String,
+        follow: bool,
+    ) -> DelegationTaskReport {
         let identity = req.assistant.as_ref().map(DelegationAssistant::identity);
         // Register this setup as the VERY FIRST thing — before the pre-cancel
         // check's `.await` and the (possibly multi-second) claim poll — so a
@@ -2523,7 +2601,7 @@ impl DelegationBroker {
             .inner
             .lock()
             .await
-            .register_inflight(&req.parent_connection_id);
+            .register_inflight(&req.parent_connection_id, req.parent_conversation_id);
         // Pre-cancel short-circuit. If the MCP companion already received
         // `notifications/cancelled` for this `tools/call` before we even
         // started processing (cancel ran ahead of the UDS round-trip), we
@@ -2663,6 +2741,14 @@ impl DelegationBroker {
             );
         }
 
+        if !matches!(notify_mode.as_str(), "poll" | "deliver")
+            || ((notify_mode == "deliver" || follow) && !cfg.session_messaging_enabled)
+        {
+            self.drop_inflight(inflight_id).await;
+            return report_err(req.agent_type, DelegationError::SpawnFailed(
+                "notify_mode must be poll or deliver; automatic delivery requires session messaging".into()), None);
+        }
+
         // --- Depth pre-check ----------------------------------------------------
         // We walk up to `limit + 1` so we know whether the *new* child would
         // sit at >= limit. Cycles/dead chains saturate at the cap.
@@ -2755,6 +2841,26 @@ impl DelegationBroker {
                 DelegationError::Canceled {
                     reason: "parent canceled".into(),
                 },
+                None,
+            );
+        }
+
+        let deliver_first_result = notify_mode == "deliver";
+        let policy = crate::db::service::turn_delivery_service::DeliveryPolicy {
+            parent_conversation_id: req.parent_conversation_id,
+            notify_mode,
+            follow,
+        };
+        if let Err(error) = self
+            .spawner
+            .configure_delivery(&child_connection_id, policy)
+            .await
+        {
+            let _ = self.spawner.disconnect(&child_connection_id).await;
+            self.drop_inflight(inflight_id).await;
+            return report_err(
+                req.agent_type,
+                DelegationError::SpawnFailed(error.to_string()),
                 None,
             );
         }
@@ -2946,6 +3052,7 @@ impl DelegationBroker {
                     &call_id,
                     build_completed(
                         &req.parent_connection_id,
+                        req.parent_conversation_id,
                         child_conversation_id,
                         req.agent_type,
                         identity.as_ref(),
@@ -2995,6 +3102,7 @@ impl DelegationBroker {
                             child_connection_id: child_connection_id.clone(),
                             child_conversation_id,
                             parent_connection_id: req.parent_connection_id.clone(),
+                            parent_conversation_id: req.parent_conversation_id,
                             parent_tool_use_id: req.parent_tool_use_id.clone(),
                             agent_type: req.agent_type,
                             assistant: identity.clone(),
@@ -3107,6 +3215,7 @@ impl DelegationBroker {
                             &call_id,
                             build_completed(
                                 &req.parent_connection_id,
+                                req.parent_conversation_id,
                                 child_conversation_id,
                                 req.agent_type,
                                 identity.as_ref(),
@@ -3163,7 +3272,7 @@ impl DelegationBroker {
 
         // Registered and running in the background — return the ack. The child
         // resolves later via the lifecycle → `complete_call` (or a cancel path).
-        running_ack(call_id, child_conversation_id, req.agent_type)
+        running_ack(call_id, child_conversation_id, req.agent_type, deliver_first_result)
     }
 
     /// Called by the child-session lifecycle subscriber on `TurnComplete`
@@ -3208,6 +3317,7 @@ impl DelegationBroker {
                     let duration_ms = task.started_at.elapsed().as_millis() as u64;
                     let mut completed = build_completed(
                         &task.parent_connection_id,
+                        task.parent_conversation_id,
                         task.child_conversation_id,
                         task.agent_type,
                         task.assistant.as_ref(),
@@ -3502,14 +3612,48 @@ impl DelegationBroker {
         self.result_notify.notify_waiters();
     }
 
-    /// Cascade-cancel every pending delegation owned by `parent_connection_id`
-    /// when the parent **connection tears down** (disconnect / `run_connection`
-    /// exit). Drops the parent's entire tool_call tracker bucket (`pending` +
+    /// Forget per-launch tool identities on ordinary disconnect. Task ownership
+    /// and retained results belong to the conversation and survive this driver.
+    pub async fn detach_parent(&self, parent_connection_id: &str) {
+        {
+            let mut inner = self.pending.inner.lock().await;
+            for setup in inner.inflight.values_mut() {
+                if setup.parent_connection_id == parent_connection_id {
+                    setup.detached = true;
+                }
+            }
+        }
+        self.drop_pending_tool_calls_for_parent(parent_connection_id)
+            .await;
+    }
+
+    /// Explicit user Cancel from the current driver also reaches tasks started
+    /// by a previous driver of this same conversation, without touching a fork.
+    pub async fn cancel_by_parent_turn_for_conversation(
+        &self,
+        parent_connection_id: &str,
+        parent_conversation_id: Option<i32>,
+    ) {
+        let Some(parent_conversation_id) = parent_conversation_id else {
+            return;
+        };
+        let drained = self
+            .drain_for_parent_cancel(parent_connection_id, Some(parent_conversation_id), true)
+            .await;
+        let broker = self.clone();
+        tokio::spawn(async move {
+            broker.finalize_parent_cancel(drained).await;
+        });
+    }
+
+    /// Explicit connection-scoped cascade, retained for callers that intend to
+    /// cancel all work launched by this driver. Ordinary disconnect uses
+    /// `detach_parent` instead. Drops the parent's entire tool_call tracker bucket (`pending` +
     /// `consumed`) since the connection is going away. Runs fully inline — the
     /// connection is already exiting, so there is no next prompt to unblock.
     pub async fn cancel_by_parent(&self, parent_connection_id: &str) {
         let drained = self
-            .drain_for_parent_cancel(parent_connection_id, false)
+            .drain_for_parent_cancel(parent_connection_id, None, false)
             .await;
         self.finalize_parent_cancel(drained).await;
     }
@@ -3534,7 +3678,7 @@ impl DelegationBroker {
     /// `drop_tool_calls_for_parent`.
     pub async fn cancel_by_parent_turn(&self, parent_connection_id: &str) {
         let drained = self
-            .drain_for_parent_cancel(parent_connection_id, true)
+            .drain_for_parent_cancel(parent_connection_id, None, true)
             .await;
         // The fast drain above already ran inline (scoped to the just-ended
         // turn); background only the slow child teardown.
@@ -3559,6 +3703,7 @@ impl DelegationBroker {
     async fn drain_for_parent_cancel(
         &self,
         parent_connection_id: &str,
+        parent_conversation_id: Option<i32>,
         keep_consumed: bool,
     ) -> Vec<(RunningTask, u64)> {
         // Also drain any tool_call ids captured ahead of an MCP round-trip that
@@ -3574,11 +3719,16 @@ impl DelegationBroker {
             // caught either here (mid-setup → `start_delegation` tears its child
             // down at the next checkpoint) or by the running drain below (already
             // registered) — there is no interleaving where both miss it.
-            inner.mark_inflight_canceled_for_parent(parent_connection_id);
+            inner.mark_inflight_canceled_for_parent(parent_connection_id, parent_conversation_id);
             let keys: Vec<String> = inner
                 .running
                 .iter()
-                .filter(|(_, v)| v.parent_connection_id == parent_connection_id)
+                .filter(|(_, v)| {
+                    parent_conversation_id.map_or_else(
+                        || v.parent_connection_id == parent_connection_id,
+                        |id| v.parent_conversation_id == id,
+                    )
+                })
                 .map(|(k, _)| k.clone())
                 .collect();
             if keep_consumed {
@@ -3727,7 +3877,7 @@ impl DelegationBroker {
     /// already-reported block goes back to waiting rather than spinning.
     pub async fn get_tasks_status(
         &self,
-        parent_connection_id: &str,
+        _parent_connection_id: &str,
         parent_conversation_id: Option<i32>,
         task_ids: &[String],
         wait: StatusWait,
@@ -3756,7 +3906,7 @@ impl DelegationBroker {
                 let inner = self.pending.inner.lock().await;
                 task_ids
                     .iter()
-                    .map(|id| classify_locked(&inner, parent_connection_id, id))
+                    .map(|id| classify_locked(&inner, parent_conversation_id, id))
                     .collect()
             };
             let running_count = classes
@@ -3992,20 +4142,20 @@ impl DelegationBroker {
     /// can't be canceled). Parent-scoped like `get_task_status`.
     pub async fn cancel_task_by_id(
         &self,
-        parent_connection_id: &str,
+        _parent_connection_id: &str,
         parent_conversation_id: Option<i32>,
         task_id: &str,
     ) -> DelegationTaskReport {
         let drained = {
             let mut inner = self.pending.inner.lock().await;
             if let Some(c) = inner.completed.get(task_id) {
-                if c.parent_connection_id == parent_connection_id {
+                if Some(c.parent_conversation_id) == parent_conversation_id {
                     return completed_report(task_id, c);
                 }
                 return unknown_report(task_id);
             }
             match inner.running.get(task_id) {
-                Some(r) if r.parent_connection_id == parent_connection_id => {
+                Some(r) if Some(r.parent_conversation_id) == parent_conversation_id => {
                     drain_and_record_canceled(
                         &mut inner,
                         vec![task_id.to_string()],
@@ -4103,7 +4253,7 @@ impl DelegationBroker {
             .inner
             .lock()
             .await
-            .register_inflight(&req.parent_connection_id);
+            .register_inflight(&req.parent_connection_id, req.parent_conversation_id);
         // Pre-cancel short-circuit — the companion already received
         // `notifications/cancelled` for this `tools/call` before we started.
         // No tool-call claim to drain here: the resume tool never claims
@@ -4165,7 +4315,7 @@ impl DelegationBroker {
         let gate = {
             let mut inner = self.pending.inner.lock().await;
             if let Some(c) = inner.completed.get(&req.task_id) {
-                if c.parent_connection_id != req.parent_connection_id {
+                if c.parent_conversation_id != req.parent_conversation_id {
                     MemGate::Refuse(Box::new(unknown_report(&req.task_id)))
                 } else {
                     // Copy the report fields out so the `completed` borrow ends
@@ -4213,7 +4363,7 @@ impl DelegationBroker {
                     }
                 }
             } else if let Some(r) = inner.running.get(&req.task_id) {
-                if r.parent_connection_id != req.parent_connection_id {
+                if r.parent_conversation_id != req.parent_conversation_id {
                     MemGate::Refuse(Box::new(unknown_report(&req.task_id)))
                 } else {
                     MemGate::Refuse(Box::new(not_resumable_report(
@@ -4265,14 +4415,14 @@ impl DelegationBroker {
         {
             let inner = self.pending.inner.lock().await;
             if let Some(c) = inner.completed.get(&req.task_id) {
-                return if c.parent_connection_id == req.parent_connection_id {
+                return if c.parent_conversation_id == req.parent_conversation_id {
                     (Some(c.agent_type), c.assistant.clone())
                 } else {
                     (None, None)
                 };
             }
             if let Some(r) = inner.running.get(&req.task_id) {
-                return if r.parent_connection_id == req.parent_connection_id {
+                return if r.parent_conversation_id == req.parent_conversation_id {
                     (Some(r.agent_type), r.assistant.clone())
                 } else {
                     (None, None)
@@ -4644,6 +4794,7 @@ impl DelegationBroker {
                     &call_id,
                     build_completed(
                         &req.parent_connection_id,
+                        req.parent_conversation_id,
                         ctx.child_conversation_id,
                         ctx.agent_type,
                         identity.as_ref(),
@@ -4686,6 +4837,7 @@ impl DelegationBroker {
                             child_connection_id: child_connection_id.clone(),
                             child_conversation_id: ctx.child_conversation_id,
                             parent_connection_id: req.parent_connection_id.clone(),
+                            parent_conversation_id: req.parent_conversation_id,
                             parent_tool_use_id: parent_tool_use_id.clone(),
                             agent_type: ctx.agent_type,
                             assistant: identity.clone(),
@@ -4784,6 +4936,7 @@ impl DelegationBroker {
                             &call_id,
                             build_completed(
                                 &req.parent_connection_id,
+                                req.parent_conversation_id,
                                 ctx.child_conversation_id,
                                 ctx.agent_type,
                                 identity.as_ref(),
@@ -5039,7 +5192,22 @@ impl ChildStatusLookup for DbChildStatusLookup {
         .await
         .ok()
         .flatten()?;
+        let persisted_outcome =
+            crate::db::service::turn_delivery_service::delegation_result(&self.db.conn, summary.id)
+                .await
+                .map_err(|error| tracing::warn!(%error, conversation_id = summary.id, "Could not read persisted delegation result"))
+                .ok()
+                .flatten()
+                .and_then(|turn| {
+                    Some(crate::acp::lifecycle::delegation_turn_outcome(
+                        summary.id,
+                        summary.agent_type,
+                        turn.stop_reason.as_deref()?,
+                        turn.result_text,
+                    ))
+                });
         Some(ChildStatusRecord {
+            persisted_outcome,
             child_conversation_id: summary.id,
             status: task_status_from_row(&summary.status),
             agent_type: summary.agent_type,
@@ -6034,6 +6202,210 @@ mod tests {
             other => panic!("expected Ok, got {other:?}"),
         }
         assert_eq!(mock.disconnects.lock().await.as_slice(), &["c1"]);
+    }
+
+    #[tokio::test]
+    async fn detached_parent_tasks_and_results_are_owned_by_conversation() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("child-detached".into())).await;
+        mock.queue_send(Ok(99)).await;
+        let broker = DelegationBroker::new(mock.clone(), shallow_lookup());
+        enable_delegation(&broker).await;
+        let task_id = broker
+            .start_delegation(request(1, "tool-detached"))
+            .await
+            .task_id
+            .unwrap();
+        broker.detach_parent("parent-conn").await;
+        assert_eq!(broker.running_delegation_count().await, 1);
+        assert!(mock.cancels.lock().await.is_empty());
+        assert!(mock.disconnects.lock().await.is_empty());
+        assert_eq!(
+            broker
+                .get_task_status("new-parent", Some(1), &task_id, StatusWait::Immediate)
+                .await
+                .status,
+            TaskStatus::Running
+        );
+        // Reusing the exact old connection for another conversation grants no access.
+        for (conn, conversation) in [
+            ("new-parent", Some(2)),
+            ("parent-conn", Some(2)),
+            ("parent-conn", None),
+        ] {
+            assert_eq!(
+                broker
+                    .get_task_status(conn, conversation, &task_id, StatusWait::Infinite)
+                    .await
+                    .status,
+                TaskStatus::Unknown
+            );
+        }
+        let wait = broker.get_task_status("new-parent", Some(1), &task_id, StatusWait::Infinite);
+        tokio::pin!(wait);
+        assert!(tokio::time::timeout(Duration::from_millis(20), &mut wait)
+            .await
+            .is_err());
+        broker
+            .complete_call(
+                &task_id,
+                DelegationOutcome::Ok(DelegationSuccess {
+                    text: "survived disconnect".into(),
+                    child_conversation_id: 99,
+                    child_agent_type: AgentType::ClaudeCode,
+                    turn_count: 1,
+                    duration_ms: 1,
+                    token_usage: None,
+                }),
+            )
+            .await;
+        let result = tokio::time::timeout(Duration::from_secs(2), wait)
+            .await
+            .unwrap();
+        assert_eq!(result.status, TaskStatus::Completed);
+        assert_eq!(result.text.as_deref(), Some("survived disconnect"));
+        broker.detach_parent("parent-conn").await;
+        assert_eq!(broker.completed_count().await, 1);
+        assert_eq!(
+            broker
+                .get_task_status("third-parent", Some(1), &task_id, StatusWait::Immediate)
+                .await
+                .text
+                .as_deref(),
+            Some("survived disconnect")
+        );
+        assert_eq!(
+            broker
+                .cancel_task_by_id("parent-conn", Some(2), &task_id)
+                .await
+                .status,
+            TaskStatus::Unknown
+        );
+    }
+
+    #[tokio::test]
+    async fn reconnected_parent_can_explicitly_cancel_detached_task() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("child-detached".into())).await;
+        mock.queue_send(Ok(99)).await;
+        let broker = DelegationBroker::new(mock.clone(), shallow_lookup());
+        enable_delegation(&broker).await;
+        let task_id = broker
+            .start_delegation(request(1, "tool-detached"))
+            .await
+            .task_id
+            .unwrap();
+        broker.detach_parent("parent-conn").await;
+        assert_eq!(
+            broker
+                .cancel_task_by_id("parent-conn", Some(2), &task_id)
+                .await
+                .status,
+            TaskStatus::Unknown
+        );
+        assert!(mock.cancels.lock().await.is_empty());
+        let report = broker
+            .cancel_task_by_id("new-parent", Some(1), &task_id)
+            .await;
+        assert_eq!(report.status, TaskStatus::Canceled);
+        assert_eq!(mock.cancels.lock().await.as_slice(), &["child-detached"]);
+        assert_eq!(
+            broker
+                .get_task_status("new-parent", Some(1), &task_id, StatusWait::Immediate)
+                .await
+                .status,
+            TaskStatus::Canceled
+        );
+    }
+
+    #[tokio::test]
+    async fn reconnected_parent_cancel_covers_conversation_and_preserves_other_conversations() {
+        let mock = Arc::new(MockSpawner::new());
+        for i in 0..2 {
+            mock.queue_spawn(Ok(format!("child-{i}"))).await;
+            mock.queue_send(Ok(100 + i)).await;
+        }
+        let broker = DelegationBroker::new(mock.clone(), shallow_lookup());
+        enable_delegation(&broker).await;
+        let owned = broker
+            .start_delegation(request(1, "owned"))
+            .await
+            .task_id
+            .unwrap();
+        let other = broker
+            .start_delegation(request(2, "other"))
+            .await
+            .task_id
+            .unwrap();
+        broker.detach_parent("parent-conn").await;
+        broker
+            .cancel_by_parent_turn_for_conversation("new-parent", Some(1))
+            .await;
+        assert_eq!(
+            broker
+                .get_task_status("new-parent", Some(1), &owned, StatusWait::Immediate)
+                .await
+                .status,
+            TaskStatus::Canceled
+        );
+        assert_eq!(
+            broker
+                .get_task_status("new-parent", Some(2), &other, StatusWait::Immediate)
+                .await
+                .status,
+            TaskStatus::Running
+        );
+    }
+
+    #[tokio::test]
+    async fn detach_during_setup_keeps_task_and_does_not_recreate_driver_tracker() {
+        let mock = Arc::new(MockSpawner::new());
+        let broker = DelegationBroker::new(mock, shallow_lookup());
+        let setup = broker
+            .pending
+            .inner
+            .lock()
+            .await
+            .register_inflight("old-parent", 1);
+        broker
+            .consume_explicit_tool_call("old-parent", "old-tool")
+            .await;
+        broker.detach_parent("old-parent").await;
+        broker
+            .consume_explicit_tool_call("old-parent", "late-tool")
+            .await;
+        assert!(!broker
+            .tool_calls
+            .inner
+            .lock()
+            .await
+            .contains_key("old-parent"));
+        assert!(!broker.pending.inner.lock().await.inflight_canceled(setup));
+        broker
+            .cancel_by_parent_turn_for_conversation("new-parent", Some(2))
+            .await;
+        assert!(!broker.pending.inner.lock().await.inflight_canceled(setup));
+        broker
+            .cancel_by_parent_turn_for_conversation("new-parent", Some(1))
+            .await;
+        assert!(broker.pending.inner.lock().await.inflight_canceled(setup));
+    }
+
+    #[test]
+    fn completed_budget_is_shared_across_parent_reconnections() {
+        let mut inner = PendingInner {
+            completed_cap_bytes: 100,
+            ..Default::default()
+        };
+        let mut first = completed_with_text("p1", 60);
+        first.parent_connection_id = "old-parent".into();
+        let mut second = completed_with_text("p1", 60);
+        second.parent_connection_id = "new-parent".into();
+        inner.insert_completed("old-task", first);
+        inner.insert_completed("new-task", second);
+        assert!(!inner.completed.contains_key("old-task"));
+        assert!(inner.completed.contains_key("new-task"));
+        assert_eq!(inner.completed_bytes.get(&1), Some(&60));
     }
 
     // -- Task 4.6: parent-cancel cascade -----------------------------------
@@ -9856,7 +10228,7 @@ mod tests {
     /// can still call get_delegation_status / cancel_delegation.
     #[test]
     fn running_ack_message_embeds_task_id() {
-        let report = running_ack("task-xyz".into(), 42, AgentType::Codex);
+        let report = running_ack("task-xyz".into(), 42, AgentType::Codex, false);
         assert_eq!(report.task_id.as_deref(), Some("task-xyz"));
         assert!(
             report.message.as_deref().unwrap().contains("task-xyz"),
@@ -9888,6 +10260,7 @@ mod tests {
     fn completed_with_text(parent: &str, text_len: usize) -> CompletedTask {
         CompletedTask {
             parent_connection_id: parent.to_string(),
+            parent_conversation_id: if parent == "p1" { 1 } else { 2 },
             child_conversation_id: 1,
             agent_type: AgentType::ClaudeCode,
             status: TaskStatus::Completed,
@@ -9914,8 +10287,8 @@ mod tests {
         assert!(inner.completed.contains_key("b"));
         assert!(inner.completed.contains_key("c"), "newest must be retained");
         // Counter + order reflect only the two retained entries.
-        assert_eq!(inner.completed_bytes.get("p1").copied(), Some(800));
-        assert_eq!(inner.completed_order.get("p1").map(|o| o.len()), Some(2));
+        assert_eq!(inner.completed_bytes.get(&1).copied(), Some(800));
+        assert_eq!(inner.completed_order.get(&1).map(|o| o.len()), Some(2));
         // Survivors keep their FULL text — the valve drops whole entries, it
         // never truncates a survivor.
         assert_eq!(
@@ -9942,7 +10315,7 @@ mod tests {
         };
         inner.insert_completed("solo", completed_with_text("p1", 500));
         assert!(inner.completed.contains_key("solo"));
-        assert_eq!(inner.completed_bytes.get("p1").copied(), Some(500));
+        assert_eq!(inner.completed_bytes.get(&1).copied(), Some(500));
     }
 
     #[test]
@@ -9952,7 +10325,7 @@ mod tests {
             inner.insert_completed(&format!("t{i}"), completed_with_text("p1", 10_000));
         }
         assert_eq!(inner.completed.len(), 50, "cap 0 disables eviction");
-        assert_eq!(inner.completed_bytes.get("p1").copied(), Some(500_000));
+        assert_eq!(inner.completed_bytes.get(&1).copied(), Some(500_000));
     }
 
     #[test]
@@ -9971,8 +10344,8 @@ mod tests {
             inner.completed.contains_key("b1"),
             "p2 must be untouched by p1 overflow"
         );
-        assert_eq!(inner.completed_bytes.get("p1").copied(), Some(600));
-        assert_eq!(inner.completed_bytes.get("p2").copied(), Some(600));
+        assert_eq!(inner.completed_bytes.get(&1).copied(), Some(600));
+        assert_eq!(inner.completed_bytes.get(&2).copied(), Some(600));
     }
 
     #[test]
@@ -9984,11 +10357,11 @@ mod tests {
         assert!(!inner.completed.contains_key("a"));
         assert!(inner.completed.contains_key("b"));
         assert_eq!(
-            inner.completed_bytes.get("p1"),
+            inner.completed_bytes.get(&1),
             None,
             "byte counter must be cleared on teardown"
         );
-        assert_eq!(inner.completed_bytes.get("p2").copied(), Some(100));
+        assert_eq!(inner.completed_bytes.get(&2).copied(), Some(100));
     }
 
     #[tokio::test]
@@ -10010,7 +10383,7 @@ mod tests {
                 inner.insert_completed(&format!("t{i}"), completed_with_text("p1", 400));
             }
             assert_eq!(inner.completed.len(), 5);
-            assert_eq!(inner.completed_bytes.get("p1").copied(), Some(2000));
+            assert_eq!(inner.completed_bytes.get(&1).copied(), Some(2000));
         }
         // Lower the cap to 1000 bytes — existing results must be pruned NOW,
         // not only on the next completion (which may never arrive).
@@ -10022,7 +10395,7 @@ mod tests {
             .await;
         let inner = broker.pending.inner.lock().await;
         assert!(
-            inner.completed_bytes.get("p1").copied().unwrap_or(0) <= 1000,
+            inner.completed_bytes.get(&1).copied().unwrap_or(0) <= 1000,
             "retained bytes must fit the lowered cap"
         );
         assert!(
@@ -10049,6 +10422,7 @@ mod tests {
     impl ChildStatusLookup for MockResumeLookup {
         async fn find_by_call_id(&self, _call_id: &str) -> Option<ChildStatusRecord> {
             self.ctx.lock().await.as_ref().map(|c| ChildStatusRecord {
+                persisted_outcome: None,
                 child_conversation_id: c.child_conversation_id,
                 status: c.status,
                 agent_type: c.agent_type,
@@ -10230,6 +10604,52 @@ mod tests {
         assert_eq!(report.status, TaskStatus::Completed);
     }
 
+    #[tokio::test]
+    async fn resumed_task_keeps_conversation_owner_across_driver_reconnection() {
+        let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
+        mock.queue_spawn(Ok("original-child".into())).await;
+        mock.queue_send(Ok(42)).await;
+        let task_id = broker
+            .start_delegation(request(1, "original-tool"))
+            .await
+            .task_id
+            .unwrap();
+        broker
+            .cancel_task_by_id("parent-conn", Some(1), &task_id)
+            .await;
+        broker.detach_parent("parent-conn").await;
+        let mut other = resume_request(&task_id);
+        other.parent_conversation_id = 2;
+        assert_eq!(
+            broker.resume_delegation(other).await.status,
+            TaskStatus::Unknown
+        );
+        assert!(mock.resume_spawn_args.lock().await.is_empty());
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("resumed-child")))
+            .await;
+        mock.queue_resume_send(Ok(())).await;
+        let mut request = resume_request(&task_id);
+        request.parent_connection_id = "new-parent".into();
+        assert_eq!(
+            broker.resume_delegation(request).await.status,
+            TaskStatus::Running
+        );
+        assert_eq!(
+            broker
+                .get_task_status("third-parent", Some(1), &task_id, StatusWait::Immediate)
+                .await
+                .status,
+            TaskStatus::Running
+        );
+        assert_eq!(
+            broker
+                .get_task_status("new-parent", Some(2), &task_id, StatusWait::Immediate)
+                .await
+                .status,
+            TaskStatus::Unknown
+        );
+    }
+
     /// A still-running task is NOT resumable — and stays untouched.
     #[tokio::test]
     async fn resume_refuses_running_task() {
@@ -10345,7 +10765,7 @@ mod tests {
         assert_eq!(report.status, TaskStatus::Unknown);
         assert!(mock.resume_spawn_args.lock().await.is_empty());
 
-        // Canceled cache entry owned by ANOTHER parent connection: opaque.
+        // Canceled cache entry owned by ANOTHER parent conversation: opaque.
         let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
         mock.queue_spawn(Ok("child-conn-1".into())).await;
         mock.queue_send(Ok(42)).await;
@@ -10356,6 +10776,7 @@ mod tests {
             .await;
         let mut req = resume_request(&task_id);
         req.parent_connection_id = "other-parent".into();
+        req.parent_conversation_id = 2;
         let report = broker.resume_delegation(req).await;
         assert_eq!(report.status, TaskStatus::Unknown);
     }
@@ -10822,6 +11243,7 @@ mod tests {
 
         let mut foreign = resume_request(&task_id);
         foreign.parent_connection_id = "someone-else".into();
+        foreign.parent_conversation_id = 2;
         let refused = broker.resume_delegation(foreign).await;
         assert_eq!(refused.agent_type, None);
         assert_eq!(refused.assistant_id, None, "no identity for a foreign caller");

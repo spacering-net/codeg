@@ -97,6 +97,13 @@ impl ResumedSpawn {
 /// and DB; the mock returns immediately.
 #[async_trait]
 pub trait ConnectionSpawner: Send + Sync {
+    /// Stage the durable delivery subscription before the first child prompt.
+    async fn configure_delivery(
+        &self,
+        connection_id: &str,
+        policy: crate::db::service::turn_delivery_service::DeliveryPolicy,
+    ) -> Result<(), SpawnerError>;
+
     /// Spawn a fresh child ACP connection of `agent_type` in `working_dir`.
     /// Delegation children are always brand-new sessions (no resume), but the
     /// broker may inject per-agent defaults configured in
@@ -327,6 +334,14 @@ pub mod mock {
 
     #[async_trait]
     impl ConnectionSpawner for MockSpawner {
+        async fn configure_delivery(
+            &self,
+            _: &str,
+            _: crate::db::service::turn_delivery_service::DeliveryPolicy,
+        ) -> Result<(), SpawnerError> {
+            Ok(())
+        }
+
         async fn spawn(
             &self,
             parent_connection_id: &str,

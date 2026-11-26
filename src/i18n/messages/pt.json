@@ -1,4 +1,14 @@
 {
+  "SessionCollaboration": {
+    "progress": "Progresso da sessão",
+    "title": "Sessões de colaboração",
+    "brief": "Notas de transferência",
+    "link": "Vincular",
+    "choose": "Escolher sessão",
+    "unlink": "Desvincular",
+    "empty": "Nenhuma sessão de colaboração",
+    "error": "Não foi possível atualizar as sessões de colaboração."
+  },
   "HtmlCodePreview": {
     "code": "Código",
     "preview": "Prévia",
@@ -837,6 +847,8 @@
     "generalConfigDescriptionClaude": "Configure API URL, API Key e modelos Claude; sincronizado com a configuração JSON nativa.",
     "generalConfigDescriptionDefault": "Configure API URL, API Key e Model e gerencie a configuração JSON nativa.",
     "multiAgent": {
+      "sessionMessaging": "Comunicação entre sessões",
+      "sessionMessagingHint": "Permite que os agentes criem sessões independentes e troquem mensagens. Reconecte as sessões existentes para usar as ferramentas.",
       "title": "Colaboração multiagente",
       "description": "Permite que agentes ativos deleguem subtarefas a outros agentes.",
       "enable": "Ativar delegação",
@@ -3900,6 +3912,7 @@
         "downloadFailed": "Falha ao baixar {name}"
       },
       "messageList": {
+        "sessionMessageSource": "Da sessão: {session}",
         "loading": "Carregando...",
         "loadBackgroundActivity": "Carregar atividade em segundo plano",
         "loadEarlier": "Carregar mensagens anteriores",
@@ -4099,6 +4112,13 @@
         "htmlPreviewHide": "Ocultar pré-visualização"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "Enviar uma mensagem para {session}",
+          "send": "Enviar uma mensagem para uma sessão",
+          "create": "Criar uma sessão",
+          "current": "Ver a sessão atual",
+          "list": "Procurar sessões"
+        },
         "oauth": {
           "waiting": "Aguardando autorização de {server}",
           "reconnecting": "Reconectando a {server}…",
@@ -13294,5 +13314,20 @@
       "rateLimited": "O SRN pediu que o Codeg espere antes de tentar novamente.",
       "server": "O SRN respondeu com um erro."
     }
+  },
+  "SessionDigest": {
+    "title": "Resumo da sessão",
+    "now": "Em andamento",
+    "news": "Novidades",
+    "needsYou": "Aguardando sua resposta",
+    "suggestions": "Sugestões",
+    "recommended": "Recomendado",
+    "dismiss": "Recusar {title}",
+    "updatedAt": "Atualizado {time}",
+    "pendingCount": "{count} respostas pendentes",
+    "inProgress": "Em andamento",
+    "answerWhenReady": "Você pode responder quando a sessão estiver conectada e a fila de mensagens estiver vazia.",
+    "sendFailed": "Não foi possível enviar a resposta. Tente novamente.",
+    "actionFailed": "Não foi possível salvar esta ação."
   }
 }

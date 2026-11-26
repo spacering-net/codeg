@@ -1,4 +1,14 @@
 {
+  "SessionCollaboration": {
+    "progress": "Progression de la session",
+    "title": "Sessions de collaboration",
+    "brief": "Notes de passation",
+    "link": "Associer",
+    "choose": "Choisir une session",
+    "unlink": "Dissocier",
+    "empty": "Aucune session de collaboration",
+    "error": "Impossible de mettre à jour les sessions de collaboration."
+  },
   "HtmlCodePreview": {
     "code": "Code",
     "preview": "Aperçu",
@@ -837,6 +847,8 @@
     "generalConfigDescriptionClaude": "Configurez l'API URL, l'API Key et les modèles Claude ; synchronisé avec la configuration JSON native.",
     "generalConfigDescriptionDefault": "Configurez l'API URL, l'API Key et le Model, et gérez la configuration JSON native.",
     "multiAgent": {
+      "sessionMessaging": "Communication entre sessions",
+      "sessionMessagingHint": "Permet aux agents de créer des sessions indépendantes et d’échanger des messages. Reconnectez les sessions existantes pour accéder aux outils.",
       "title": "Collaboration multi-agent",
       "description": "Permet aux agents actifs de déléguer des sous-tâches à d’autres agents.",
       "enable": "Activer la délégation",
@@ -3900,6 +3912,7 @@
         "downloadFailed": "Échec du téléchargement de {name}"
       },
       "messageList": {
+        "sessionMessageSource": "De la session : {session}",
         "loading": "Chargement...",
         "loadBackgroundActivity": "Charger l'activité en arrière-plan",
         "loadEarlier": "Charger les messages précédents",
@@ -4099,6 +4112,13 @@
         "htmlPreviewHide": "Masquer l’aperçu"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "Envoyer un message à {session}",
+          "send": "Envoyer un message à une session",
+          "create": "Créer une session",
+          "current": "Afficher la session actuelle",
+          "list": "Rechercher des sessions"
+        },
         "oauth": {
           "waiting": "En attente d’autorisation pour {server}",
           "reconnecting": "Reconnexion à {server}…",
@@ -13294,5 +13314,20 @@
       "rateLimited": "SRN a demandé à Codeg d'attendre avant de réessayer.",
       "server": "SRN a répondu par une erreur."
     }
+  },
+  "SessionDigest": {
+    "title": "Résumé de la session",
+    "now": "En cours",
+    "news": "Nouveautés",
+    "needsYou": "Votre réponse est attendue",
+    "suggestions": "Suggestions",
+    "recommended": "Recommandé",
+    "dismiss": "Refuser {title}",
+    "updatedAt": "Mis à jour {time}",
+    "pendingCount": "{count} réponses attendues",
+    "inProgress": "En cours",
+    "answerWhenReady": "Vous pouvez répondre lorsque la session est connectée et la file de messages est vide.",
+    "sendFailed": "Impossible d’envoyer la réponse. Réessayez.",
+    "actionFailed": "Impossible d’enregistrer cette action."
   }
 }

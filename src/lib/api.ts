@@ -2433,6 +2433,26 @@ export async function listAllConversations(params?: {
   })
 }
 
+export function listConversationCollaborators(
+  conversationId: number
+): Promise<DbConversationSummary[]> {
+  return getTransport().call("list_conversation_collaborators", {
+    conversationId,
+  })
+}
+
+export function setConversationCollaborator(
+  conversationId: number,
+  targetId: number,
+  linked: boolean
+): Promise<void> {
+  return getTransport().call("set_conversation_collaborator", {
+    conversationId,
+    targetId,
+    linked,
+  })
+}
+
 export async function listChildConversations(
   parentConversationId: number
 ): Promise<DbConversationSummary[]> {
@@ -6639,6 +6659,7 @@ export async function listProviderModels(
 
 export interface DelegationSettings {
   enabled: boolean
+  session_messaging_enabled?: boolean
   depth_limit: number
   /** Per-parent byte budget (in MB) for the broker's in-memory cache of
    * completed sub-agent result text. `0` = unlimited. */
@@ -7743,4 +7764,22 @@ export async function forgeAutoScanNow(
   folderId: number
 ): Promise<ForgeAutoScanReport> {
   return getTransport().call("forge_auto_scan_now", { folderId })
+}
+
+export async function sessionDigestAction<T>(
+  conversationId: number,
+  action: import("./session-digest").DigestAction
+): Promise<T> {
+  return getTransport().call<T>("session_digest_action", {
+    conversationId,
+    action,
+  })
+}
+
+/** The conversation's current brief, or null while session messaging is off.
+ *  Unwritten briefs read back with an empty `text`. */
+export async function sessionBriefRead(
+  conversationId: number
+): Promise<import("./session-digest").SessionBrief | null> {
+  return getTransport().call("session_brief_read", { conversationId })
 }

@@ -21,8 +21,8 @@ use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 
 use crate::acp::session_info::{
-    SessionInfo, SessionInfoAccess, SessionInfoConfig, SessionInfoRuntimeConfig, SessionMessageItem,
-    SessionMessages, MAX_SESSION_MESSAGES,
+    SessionChild, SessionCollaborator, SessionInfo, SessionInfoAccess, SessionInfoConfig,
+    SessionInfoRuntimeConfig, SessionMessageItem, SessionMessages, MAX_SESSION_MESSAGES,
 };
 use crate::app_error::AppCommandError;
 use crate::commands::conversations::get_folder_conversation_core;
@@ -74,22 +74,72 @@ const MAX_CONCURRENT_PARSES: usize = 4;
 /// transcript parses. Construct via [`DbSessionInfoLookup::new`].
 pub struct DbSessionInfoLookup {
     pub db: Arc<AppDatabase>,
+    emitter: EventEmitter,
+    config: SessionInfoRuntimeConfig,
     /// Limits concurrent `get_folder_conversation_core` parses (see
     /// [`MAX_CONCURRENT_PARSES`]).
     parse_limit: Arc<tokio::sync::Semaphore>,
 }
 
 impl DbSessionInfoLookup {
-    pub fn new(db: Arc<AppDatabase>) -> Self {
+    pub fn new(
+        db: Arc<AppDatabase>,
+        emitter: EventEmitter,
+        config: SessionInfoRuntimeConfig,
+    ) -> Self {
         Self {
             db,
+            emitter,
+            config,
             parse_limit: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PARSES)),
         }
     }
 }
 
+pub(crate) async fn authorize_session_control(
+    conn: &sea_orm::DatabaseConnection,
+    caller_id: i32,
+    session_id: i32,
+) -> Result<(), String> {
+    conversation_service::get_by_id(conn, caller_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let target = conversation_service::get_by_id(conn, session_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    if target.id != caller_id
+        && (target.parent_id != Some(caller_id)
+            || target.kind != crate::db::entities::conversation::ConversationKind::Delegate)
+    {
+        return Err("You can only control your own session or a direct delegation child".into());
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl SessionInfoAccess for DbSessionInfoLookup {
+    async fn rename(&self, caller_id: i32, session_id: i32, title: String) -> Result<(), String> {
+        if !self.config.is_enabled().await {
+            return Err("Session tools are disabled".into());
+        }
+        let title = title.trim();
+        if title.is_empty() {
+            return Err("title must not be empty".into());
+        }
+        let conn = &self.db.conn;
+        authorize_session_control(conn, caller_id, session_id).await?;
+        crate::commands::conversations::update_conversation_title_core(
+            conn,
+            session_id,
+            title.to_owned(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        crate::commands::conversations::emit_conversation_upsert(&self.emitter, conn, session_id)
+            .await;
+        Ok(())
+    }
+
     async fn resolve(&self, session_id: i32, max_messages: u32) -> SessionInfo {
         let conn = &self.db.conn;
         // get_by_id is the authoritative existence + metadata source (cheap PK
@@ -125,8 +175,43 @@ impl SessionInfoAccess for DbSessionInfoLookup {
                 == crate::db::entities::conversation::ConversationKind::Delegate,
             stats: None,
             messages: None,
+            children: Vec::new(),
+            children_truncated: false,
+            collaborators: Vec::new(),
+            collaborators_truncated: false,
             note: None,
         };
+
+        match conversation_service::list_children(conn, session_id).await {
+            Ok(mut children) => {
+                children.retain(|child| {
+                    child.kind == crate::db::entities::conversation::ConversationKind::Delegate
+                });
+                info.children_truncated = children.len() > MAX_SESSION_MESSAGES as usize;
+                info.children = children
+                    .into_iter()
+                    .take(MAX_SESSION_MESSAGES as usize)
+                    .map(|child| SessionChild {
+                        session_id: child.id,
+                        task_id: child.delegation_call_id,
+                        status: child.status,
+                    })
+                    .collect();
+            }
+            Err(_) => info.note = Some("Delegation children could not be read.".into()),
+        }
+
+        match conversation_service::list_collaborators(conn, session_id).await {
+            Ok(rows) => {
+                info.collaborators_truncated = rows.len() > MAX_SESSION_MESSAGES as usize;
+                info.collaborators = rows.into_iter().take(MAX_SESSION_MESSAGES as usize)
+                    .map(|row| SessionCollaborator { session_id: row.id, status: row.status })
+                    .collect();
+            }
+            Err(_) => {
+                info.note.get_or_insert_with(|| "Independent collaborators could not be read.".into());
+            }
+        }
 
         if max_messages == 0 {
             return info;
@@ -661,11 +746,158 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rename_session_limits_writes_to_self_and_direct_children_and_locks_titles() {
+        use crate::acp::delegation::spawner::DelegationLink;
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/rename-session").await;
+        let parent = conversation_service::create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .unwrap()
+            .id;
+        let unrelated = conversation_service::create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("Unrelated".into()),
+            None,
+        )
+        .await
+        .unwrap()
+        .id;
+        let mut children = Vec::new();
+        for parent_id in [parent, unrelated] {
+            children.push(
+                conversation_service::create_with_delegation(
+                    &db.conn,
+                    folder,
+                    AgentType::Codex,
+                    None,
+                    None,
+                    Some(DelegationLink {
+                        parent_conversation_id: parent_id,
+                        parent_tool_use_id: "tool".into(),
+                        delegation_call_id: format!("call-{parent_id}"),
+                        assistant: None,
+                    }),
+                )
+                .await
+                .unwrap()
+                .id,
+            );
+        }
+        let config = SessionInfoRuntimeConfig::new();
+        config.set(SessionInfoConfig { enabled: true }).await;
+        let broadcaster = Arc::new(crate::web::event_bridge::WebEventBroadcaster::new());
+        let mut events = broadcaster.subscribe();
+        let lookup = DbSessionInfoLookup::new(
+            Arc::new(db),
+            EventEmitter::test_web_only(broadcaster),
+            config.clone(),
+        );
+
+        for id in [parent, children[0]] {
+            lookup
+                .rename(parent, id, "Chosen title".into())
+                .await
+                .unwrap();
+            let event = events.try_recv().expect("conversation upsert");
+            assert_eq!(
+                event.channel,
+                crate::web::event_bridge::CONVERSATION_CHANGED_EVENT
+            );
+            assert_eq!(event.payload["summary"]["id"], id);
+            assert!(!conversation_service::refresh_auto_title(
+                &lookup.db.conn,
+                id,
+                "Auto title".into()
+            )
+            .await
+            .unwrap());
+            let summary = conversation_service::get_by_id(&lookup.db.conn, id)
+                .await
+                .unwrap();
+            assert_eq!(summary.title.as_deref(), Some("Chosen title"));
+        }
+        for id in [unrelated, children[1], 999999] {
+            assert!(lookup.rename(parent, id, "Forbidden".into()).await.is_err());
+        }
+        assert!(lookup
+            .rename(children[0], parent, "Parent".into())
+            .await
+            .is_err());
+        assert!(lookup.rename(parent, parent, "   ".into()).await.is_err());
+        config.set(SessionInfoConfig { enabled: false }).await;
+        assert!(lookup
+            .rename(parent, parent, "Disabled".into())
+            .await
+            .is_err());
+        assert_eq!(
+            conversation_service::get_by_id(&lookup.db.conn, parent)
+                .await
+                .unwrap()
+                .title
+                .as_deref(),
+            Some("Chosen title")
+        );
+        assert_eq!(
+            conversation_service::get_by_id(&lookup.db.conn, unrelated)
+                .await
+                .unwrap()
+                .title
+                .as_deref(),
+            Some("Unrelated")
+        );
+    }
+
+    #[tokio::test]
+    async fn session_info_recovers_persisted_children_without_transcript() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let folder = crate::db::test_helpers::seed_folder(&db, "/history-test").await;
+        let parent = conversation_service::create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .unwrap();
+        let child = conversation_service::create_with_delegation(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            None,
+            None,
+            Some(crate::acp::delegation::spawner::DelegationLink {
+                parent_conversation_id: parent.id,
+                parent_tool_use_id: "tool-use".into(),
+                delegation_call_id: "persisted-task".into(),
+                assistant: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let lookup = DbSessionInfoLookup::new(
+            Arc::new(db),
+            EventEmitter::Noop,
+            SessionInfoRuntimeConfig::new(),
+        );
+        let info = lookup.resolve(parent.id, 0).await;
+        assert!(info.found);
+        assert!(info.messages.is_none());
+        assert_eq!(info.children.len(), 1);
+        assert_eq!(info.children[0].session_id, child.id);
+        assert_eq!(info.children[0].task_id.as_deref(), Some("persisted-task"));
+        assert_eq!(info.children[0].status, "in_progress");
+        assert!(!info.children_truncated);
+    }
+
+    #[tokio::test]
     async fn resolve_unknown_id_is_not_found() {
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        let lookup = DbSessionInfoLookup::new(Arc::new(AppDatabase {
-            conn: db.conn.clone(),
-        }));
+        let lookup = DbSessionInfoLookup::new(
+            Arc::new(AppDatabase {
+                conn: db.conn.clone(),
+            }),
+            EventEmitter::Noop,
+            SessionInfoRuntimeConfig::new(),
+        );
         let info = lookup.resolve(999_999, 10).await;
         assert!(!info.found);
         assert_eq!(info.session_id, 999_999);

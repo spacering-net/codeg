@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
-    QueryFilter, QueryOrder, QuerySelect, Set,
+    QueryFilter, QueryOrder, QuerySelect, QueryTrait, Set, TransactionTrait,
 };
 
 use crate::db::entities::conversation::ConversationKind;
@@ -13,7 +13,7 @@ use crate::db::service::conversation_tag_service;
 use crate::models::{AgentType, AssistantRunSnapshot, ConversationSelection, DbConversationSummary};
 
 pub async fn create(
-    conn: &DatabaseConnection,
+    conn: &impl sea_orm::ConnectionTrait,
     folder_id: i32,
     agent_type: AgentType,
     title: Option<String>,
@@ -37,7 +37,7 @@ pub async fn create(
 /// section. Callers must pair it with the hidden chat folder created in the
 /// same flow (`create_chat_conversation_core`).
 pub async fn create_chat(
-    conn: &DatabaseConnection,
+    conn: &impl sea_orm::ConnectionTrait,
     folder_id: i32,
     agent_type: AgentType,
     title: Option<String>,
@@ -242,7 +242,7 @@ pub async fn create_ask(
 
 #[allow(clippy::too_many_arguments)]
 async fn create_inner(
-    conn: &DatabaseConnection,
+    conn: &impl sea_orm::ConnectionTrait,
     folder_id: i32,
     agent_type: AgentType,
     title: Option<String>,
@@ -349,7 +349,7 @@ pub async fn update_status_if(
 /// auto-title backfill ([`refresh_auto_title`]) leaves this row alone, so the
 /// user's hand-picked name survives every subsequent session-file parse.
 pub async fn update_title(
-    conn: &DatabaseConnection,
+    conn: &impl sea_orm::ConnectionTrait,
     conversation_id: i32,
     title: String,
 ) -> Result<(), DbError> {
@@ -1544,14 +1544,14 @@ pub async fn list_live_origin_cwds(conn: &DatabaseConnection) -> Result<Vec<Stri
 }
 
 pub async fn soft_delete(conn: &DatabaseConnection, conversation_id: i32) -> Result<(), DbError> {
-    let conv = conversation::Entity::find_by_id(conversation_id)
-        .filter(conversation::Column::DeletedAt.is_null())
-        .one(conn)
-        .await?
-        .ok_or_else(|| DbError::Migration(format!("Conversation not found: {conversation_id}")))?;
-    let mut active: conversation::ActiveModel = conv.into();
-    active.deleted_at = Set(Some(Utc::now()));
-    active.update(conn).await?;
+    let txn = conn.begin().await?;
+    let deleted = conversation::Entity::update_many()
+        .col_expr(conversation::Column::DeletedAt, sea_orm::sea_query::Expr::value(Utc::now()))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::DeletedAt.is_null()).exec(&txn).await?;
+    if deleted.rows_affected != 1 { return Err(DbError::NotFound(format!("Conversation {conversation_id}"))); }
+    crate::db::entities::conversation_context::Entity::delete_by_id(conversation_id).exec(&txn).await?;
+    txn.commit().await?;
     Ok(())
 }
 
@@ -2062,6 +2062,62 @@ pub async fn list_children(
     Ok(summaries)
 }
 
+/// Independent collaboration links are directional and separate from delegation.
+pub async fn link_collaborator(
+    conn: &impl sea_orm::ConnectionTrait,
+    source_id: i32,
+    target_id: i32,
+) -> Result<(), DbError> {
+    use sea_orm::{DbBackend, Statement};
+    let result = conn.execute(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "INSERT INTO conversation_collaborator (source_id, target_id)
+         SELECT source.id, target.id FROM conversation source, conversation target
+         WHERE source.id = ? AND target.id = ? AND source.id <> target.id
+           AND source.deleted_at IS NULL AND target.deleted_at IS NULL
+           AND target.parent_id IS NULL
+         ON CONFLICT (source_id, target_id) DO UPDATE SET target_id = excluded.target_id",
+        [source_id.into(), target_id.into()],
+    )).await?;
+    if result.rows_affected() == 0 {
+        return Err(DbError::Validation("Choose an existing independent conversation other than the current one".into()));
+    }
+    Ok(())
+}
+
+pub async fn unlink_collaborator(
+    conn: &DatabaseConnection,
+    source_id: i32,
+    target_id: i32,
+) -> Result<(), DbError> {
+    crate::db::entities::conversation_collaborator::Entity::delete_by_id((source_id, target_id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+pub async fn list_collaborators(
+    conn: &DatabaseConnection,
+    source_id: i32,
+) -> Result<Vec<DbConversationSummary>, DbError> {
+    use crate::db::entities::conversation_collaborator as link;
+
+    let linked = link::Entity::find()
+        .select_only()
+        .column(link::Column::TargetId)
+        .filter(link::Column::SourceId.eq(source_id))
+        .into_query();
+    let rows = conversation::Entity::find()
+        .filter(conversation::Column::Id.in_subquery(linked))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .order_by_desc(conversation::Column::CreatedAt)
+        .order_by_desc(conversation::Column::Id)
+        .all(conn).await?;
+    let mut summaries: Vec<_> = rows.into_iter().map(conv_to_summary).collect();
+    fill_summary_extras(conn, &mut summaries).await?;
+    Ok(summaries)
+}
+
 /// The ask conversations of `parent_conversation_id` — its children of kind
 /// `ask` — newest first (`created_at` DESC, id DESC as the tie-break).
 /// Soft-deleted rows are left out.
@@ -2155,6 +2211,30 @@ mod tests {
     use super::*;
     use crate::acp::delegation::spawner::DelegationLink;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
+    #[tokio::test]
+    async fn independent_collaboration_does_not_change_delegation_links() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-collaborator").await;
+        let (parent, child) = seed_parent_with_child(&db.conn, folder).await;
+        let peer = create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .unwrap();
+        link_collaborator(&db.conn, parent, peer.id).await.unwrap();
+        link_collaborator(&db.conn, parent, peer.id).await.unwrap();
+
+        let peers = list_collaborators(&db.conn, parent).await.unwrap();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].id, peer.id);
+        assert!(peers[0].parent_id.is_none());
+        let children = list_children(&db.conn, parent).await.unwrap();
+        assert_eq!(
+            children.iter().map(|row| row.id).collect::<Vec<_>>(),
+            vec![child]
+        );
+        assert!(link_collaborator(&db.conn, parent, child).await.is_err());
+        assert!(link_collaborator(&db.conn, parent, parent).await.is_err());
+    }
 
     #[tokio::test]
     async fn a_check_is_created_under_the_conversation_it_checks_until_converted() {

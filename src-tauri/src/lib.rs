@@ -1347,6 +1347,8 @@ mod tauri_app {
                                 std::sync::Arc::new(db::AppDatabase {
                                     conn: db_conn.clone(),
                                 }),
+                                crate::web::event_bridge::EventEmitter::from_app(app.handle()),
+                                session_info_config.clone(),
                             ),
                         ),
                         std::sync::Arc::new(crate::work_task::EngineWorkTaskTools),
@@ -1381,6 +1383,12 @@ mod tauri_app {
                     // accept-loop handle around, which is what lets the
                     // workspace status indicator report why the broker socket
                     // is down and rebind it without an app restart.
+                    let _ = listener.session_message_db.set(db_conn.clone());
+                    let _ = listener.session_creator.set(crate::acp::session_messages::SessionCreator {
+                        db: db_conn.clone(),
+                        manager: std::sync::Arc::new(cm_state.clone_ref()),
+                        data_dir: effective_data_dir.clone(),
+                    });
                     let service = crate::acp::delegation::service::DelegationService::new(
                         listener,
                         socket_path,
@@ -1407,11 +1415,20 @@ mod tauri_app {
                         .state::<std::sync::Arc<crate::acp::InternalEventBus>>()
                         .inner()
                         .clone();
+                    let message_db = db_conn.clone();
+                    let message_manager = std::sync::Arc::new(cm.clone_ref());
                     tauri::async_runtime::spawn(crate::acp::lifecycle_subscriber_task(
                         db_conn,
                         cm,
                         bus,
-                        Some(broker_for_lifecycle),
+                        Some(broker_for_lifecycle.clone()),
+                    ));
+                    tauri::async_runtime::spawn(crate::acp::session_messages::start(
+                        message_db,
+                        message_manager,
+                        broker_for_lifecycle,
+                        effective_data_dir.clone(),
+                        web::event_bridge::EventEmitter::from_app(app.handle()),
                     ));
                 }
 
@@ -1913,6 +1930,8 @@ mod tauri_app {
                 conversations::get_conversation,
                 conversations::list_all_conversations,
                 conversations::list_child_conversations,
+                conversations::list_conversation_collaborators,
+                conversations::set_conversation_collaborator,
                 conversations::list_opened_tabs,
                 conversations::save_opened_tabs,
                 conversations::import_local_conversations,
@@ -1933,6 +1952,8 @@ mod tauri_app {
                 conversations::create_chat_dir,
                 conversations::update_conversation_status,
                 conversations::update_conversation_title,
+                crate::commands::session_digest::session_digest_action,
+                crate::commands::session_digest::session_brief_read,
                 conversations::update_conversation_pinned,
                 assistant_commands::assistant_list,
                 crate::commands::personal_agent::personal_agent_get,

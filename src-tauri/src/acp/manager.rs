@@ -1730,6 +1730,23 @@ impl ConnectionManager {
                 "[ACP][{conn_id}] removed the reserved routing separator from an outgoing prompt"
             );
         }
+        let digest_answer_token = client_message_id
+            .as_deref()
+            .filter(|id| id.starts_with(crate::db::service::session_digest_service::ANSWER_PREFIX))
+            .map(str::to_owned);
+        let digest_answer_text = if digest_answer_token.is_some() {
+            if conversation_id.is_none() || delegation.is_some() {
+                return Err(AcpError::protocol("Digest answers require an existing conversation"));
+            }
+            match blocks.as_slice() {
+                [PromptInputBlock::Text { text }] => Some(text.clone()),
+                _ => return Err(AcpError::protocol(
+                    "Digest answers must contain only the reserved text",
+                )),
+            }
+        } else {
+            None
+        };
         // Caller-supplied conversation_id requires folder_id (we include it in
         // the emitted ConversationLinked event so subscribers don't have to
         // re-query the DB). Validate before touching any state.
@@ -1807,7 +1824,23 @@ impl ConnectionManager {
         // ever clears it) — keeps a rejected prompt from flipping the row to
         // InProgress or broadcasting a phantom user message. The frontend turns
         // this rejection into a queued message above the input box.
-        if turn_in_flight {
+        let session_message = client_message_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with(super::session_messages::PROMPT_ID_PREFIX));
+        if session_message
+            && bound_conversation_id.is_some()
+            && bound_conversation_id != conversation_id
+        {
+            return Err(AcpError::protocol("recipient connection changed conversations"));
+        }
+        let prior_turn_pending = if session_message {
+            let state = state_arc.read().await;
+            state.last_turn_complete_seq > state.settled_turn_seq
+                || state.status == ConnectionStatus::Prompting
+        } else {
+            false
+        };
+        if turn_in_flight || prior_turn_pending {
             // Distinct from `send_prompt_inner`'s send-gate line so a log reader
             // can tell which of the two checks bounced the prompt.
             tracing::debug!(
@@ -2265,19 +2298,66 @@ impl ConnectionManager {
         // for a prompt that never reached the agent, so without this the
         // lifecycle subscriber's PendingReview write also never fires and the
         // row would be stuck until a follow-up `send_prompt_linked` re-flipped it.
-        match self
-            .send_prompt_inner(
-                conn_id,
-                blocks,
-                user_message,
-                internal_suffix,
-                reply_token,
-                receipt,
-                hold_token.as_deref(),
+        if let Some(cid) = conversation_id_for_status {
+            let input_id = user_message
+                .as_ref()
+                .and_then(|(id, _)| id.strip_prefix(super::session_messages::PROMPT_ID_PREFIX));
+            let policy = state_arc.read().await.pending_delivery.clone();
+            let turn_id = crate::db::service::turn_delivery_service::admit(
+                &db.conn,
+                cid,
+                input_id,
+                policy.as_ref(),
             )
             .await
-        {
+            .map_err(|error| AcpError::protocol(error.to_string()))?;
+            let mut state = state_arc.write().await;
+            state.pending_turn_id = Some(turn_id);
+            state.turn_database = Some(db.conn.clone());
+            state.pending_delivery = None;
+        }
+        // Final question validation shares the normal send-failure path: a
+        // rejected/expired reservation must also settle the status written above.
+        let digest_admission = if let (Some(token), Some(text), Some(cid)) = (
+            digest_answer_token.as_deref(),
+            digest_answer_text.as_deref(),
+            conversation_id_for_status,
+        ) {
+            if crate::commands::delegation::load_delegation_settings(&db.conn)
+                .await.session_messaging_enabled
+            {
+                crate::db::service::session_digest_service::admit_answer(
+                    &db.conn, cid, token, text,
+                )
+                .await
+                .map(Some)
+                .map_err(|e| AcpError::protocol(e.to_string()))
+            } else {
+                Err(AcpError::protocol("Session messaging is disabled"))
+            }
+        } else if digest_answer_token.is_some() {
+            Err(AcpError::protocol("Digest answer has no conversation"))
+        } else {
+            Ok(None)
+        };
+        let (digest_transaction, sent) = match digest_admission {
+            Ok(txn) => (txn, self.send_prompt_inner(
+                conn_id, blocks, user_message, internal_suffix, reply_token, receipt, hold_token.as_deref(),
+            ).await),
+            Err(error) => (None, Err(error)),
+        };
+        match sent {
             Ok(()) => {
+                if let Some(txn) = digest_transaction {
+                    txn.commit().await.map_err(|e| AcpError::protocol(format!(
+                        "Digest answer was enqueued but its confirmation failed: {e}"
+                    )))?;
+                    if let Some(cid) = conversation_id_for_status {
+                        crate::db::service::session_digest_service::broadcast(
+                            &db.conn, &emitter, cid,
+                        ).await;
+                    }
+                }
                 // The prompt reached the agent: surface it to the chat-channel
                 // "user message" event feed. Notification-only — never gates the
                 // send result.
@@ -2319,6 +2399,24 @@ impl ConnectionManager {
                 Ok(conversation_id_for_status)
             }
             Err(send_err) => {
+                if let Some(txn) = digest_transaction {
+                    if let Err(error) = txn.rollback().await {
+                        tracing::warn!(%error, "could not release digest answer transaction");
+                    }
+                }
+                let rejected_turn = state_arc.write().await.pending_turn_id.take();
+                if let Some(turn_id) = rejected_turn {
+                    if let Err(error) = crate::db::service::turn_delivery_service::complete(
+                        &db.conn,
+                        &turn_id,
+                        "send_failed",
+                        "",
+                    )
+                    .await
+                    {
+                        tracing::error!(%error, "could not persist rejected turn");
+                    }
+                }
                 if let Some(cid) = conversation_id_for_status {
                     match conversation_service::update_status(
                         &db.conn,
@@ -2583,6 +2681,31 @@ impl ConnectionManager {
         reply_rx
             .await
             .map_err(|_| AcpError::protocol("Async task stop reply channel closed".to_string()))?
+    }
+
+    /// Stop an active, already-bound conversation without waking an idle one.
+    pub(crate) async fn cancel_conversation_turn(
+        &self,
+        db: &DatabaseConnection,
+        conversation_id: i32,
+    ) -> Result<bool, AcpError> {
+        let Some(conn_id) = self.find_connection_by_conversation_id(conversation_id).await else {
+            return Ok(false);
+        };
+        let lock = self.clone_prompt_lock(&conn_id).await?;
+        let _guard = lock.lock().await;
+        let Some(state) = self.get_state(&conn_id).await else {
+            return Ok(false);
+        };
+        let state = state.read().await;
+        if state.conversation_id != Some(conversation_id)
+            || !(state.turn_in_flight || state.status == ConnectionStatus::Prompting)
+        {
+            return Ok(false);
+        }
+        drop(state);
+        self.cancel(db, &conn_id).await?;
+        Ok(true)
     }
 
     /// Send an edited message in place of the one it replaces: as
@@ -3592,7 +3715,7 @@ impl ConnectionManager {
     /// from a clean "ready with no options" snapshot lets the UI tell the
     /// user "the agent never published its options — retry" instead of
     /// silently claiming the agent has nothing to configure.
-    async fn wait_for_session_options(
+    pub(crate) async fn wait_for_session_options(
         &self,
         conn_id: &str,
         timeout: Duration,
@@ -4318,8 +4441,9 @@ impl ConnectionManager {
         }
 
         if native {
-            return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, blocks)
-                .await;
+            return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, blocks, None)
+                .await
+                .map(|(item, _)| item);
         }
 
         // The pull tool delivers plain text (`PendingFeedback`), so a draft
@@ -4387,6 +4511,37 @@ impl ConnectionManager {
     ///   injection can cause. The frontend relies on that ordering to tell the
     ///   agent's own copy of the message from the same words sent in an
     ///   earlier round (`suppressPersistedSteeredPrompts`).
+    pub(crate) async fn steer_session_message(
+        &self,
+        conn_id: &str,
+        text: String,
+        message_delivery: super::session_messages::SessionMessageDelivery,
+    ) -> Result<SteerOutcome, AcpError> {
+        if text.chars().count() > MAX_FEEDBACK_CHARS {
+            return Err(AcpError::FeedbackDisabled);
+        }
+        let (state, cmd_tx, emitter) = {
+            let connections = self.connections.lock().await;
+            let conn = connections.get(conn_id)
+                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.to_owned()))?;
+            (conn.state.clone(), conn.cmd_tx.clone(), conn.emitter.clone())
+        };
+        if !state.read().await.native_steering_available {
+            return Err(AcpError::FeedbackDisabled);
+        }
+        Self::submit_feedback_native(
+            conn_id,
+            state,
+            cmd_tx,
+            emitter,
+            text,
+            None,
+            Some(message_delivery),
+        )
+        .await
+        .map(|(_, outcome)| outcome)
+    }
+
     async fn submit_feedback_native(
         conn_id: &str,
         state: Arc<tokio::sync::RwLock<crate::acp::session_state::SessionState>>,
@@ -4394,7 +4549,8 @@ impl ConnectionManager {
         emitter: EventEmitter,
         text: String,
         blocks: Option<Vec<PromptInputBlock>>,
-    ) -> Result<FeedbackItem, AcpError> {
+        message_delivery: Option<super::session_messages::SessionMessageDelivery>,
+    ) -> Result<(FeedbackItem, SteerOutcome), AcpError> {
         // Cheap pre-flight, NOT the authoritative check (that's the loop's
         // idle arm replying `NoActiveTurn`): skip the round-trip when no turn
         // is in flight at all. The counter read alongside it identifies WHICH
@@ -4487,7 +4643,7 @@ impl ConnectionManager {
             .filter(|projected| crate::acp::feedback::attachment_bytes(projected) > 0);
         let conn_id_for_task = conn_id.to_string();
         let handle = tokio::spawn(async move {
-            let outcome: Result<FeedbackItem, AcpError> = async {
+            let outcome: Result<(FeedbackItem, SteerOutcome), AcpError> = async {
                 // Stamped BEFORE the command goes out, so the note's instant is
                 // causally earlier than anything the injection can cause. The
                 // adapter pushes the text to the agent before it answers, and
@@ -4504,6 +4660,7 @@ impl ConnectionManager {
                 cmd_tx
                     .send(ConnectionCommand::Steer {
                         blocks: wire_blocks,
+                        message_delivery,
                         reply: reply_tx,
                     })
                     .await
@@ -4545,7 +4702,7 @@ impl ConnectionManager {
                     AcpEvent::FeedbackSubmitted { item: item.clone() },
                 )
                 .await;
-                Ok(item)
+                Ok((item, steer))
             }
             .await;
             // Surface real failures even when the caller is gone (the
@@ -5599,6 +5756,20 @@ pub struct ConnectionManagerSpawner {
 
 #[async_trait::async_trait]
 impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpawner {
+    async fn configure_delivery(
+        &self,
+        connection_id: &str,
+        policy: crate::db::service::turn_delivery_service::DeliveryPolicy,
+    ) -> Result<(), crate::acp::delegation::spawner::SpawnerError> {
+        let state = self.manager.get_state(connection_id).await.ok_or_else(|| {
+            crate::acp::delegation::spawner::SpawnerError::Spawn(
+                "child connection is unavailable".into(),
+            )
+        })?;
+        state.write().await.pending_delivery = Some(policy);
+        Ok(())
+    }
+
     async fn spawn(
         &self,
         parent_connection_id: &str,
@@ -5707,6 +5878,9 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
                 .await
                 .map_err(|e| SpawnerError::Send(format!("ensure_folder_for_path: {e}")))?;
 
+        let shared = crate::db::service::conversation_context_service::read_brief(&self.db.conn, link.parent_conversation_id)
+            .await.map_err(|e| SpawnerError::Send(e.to_string()))?;
+        let brief = crate::db::service::conversation_context_service::delegation_brief(link.parent_conversation_id, &shared.text, brief);
         let result = self
             .manager
             .send_prompt_linked_with_suffix(
@@ -10164,6 +10338,132 @@ mod tests {
     /// the row is a follow-up prompt happening to succeed — fragile, and on
     /// the server-side / chat-channel paths there may be no follow-up at all.
     #[tokio::test]
+    async fn digest_answer_uses_prompt_enqueue_and_rolls_back_a_failed_send() {
+        use crate::db::service::{app_metadata_service, session_digest_service as digest};
+        use crate::db::test_helpers;
+        for send_succeeds in [false, true] {
+            let db = test_helpers::fresh_in_memory_db().await;
+            app_metadata_service::upsert_value(
+                &db.conn,
+                crate::commands::delegation::KEY_SESSION_MESSAGING_ENABLED,
+                "true",
+            )
+            .await
+            .unwrap();
+            let folder = test_helpers::seed_folder(&db, "/tmp/digest-send").await;
+            let id = test_helpers::seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+            let input = serde_json::from_value(serde_json::json!({"now":[],"news":[],"needsYou":[{"id":"q","question":"Choose","options":["A","B"]}],"suggestions":[]})).unwrap();
+            let saved = digest::update(&db.conn, id, input).await.unwrap();
+            let claim = digest::reserve(&db.conn, id, saved.revision, "q", "A")
+                .await
+                .unwrap();
+            let mgr = ConnectionManager::new();
+            let rx = insert_live_connection(
+                &mgr,
+                "digest-send",
+                AgentType::ClaudeCode,
+                Some(PathBuf::from("/tmp/digest-send")),
+            )
+            .await;
+            mgr.get_state("digest-send")
+                .await
+                .unwrap()
+                .write()
+                .await
+                .conversation_id = Some(id);
+            let mut rx = if send_succeeds {
+                Some(rx)
+            } else {
+                drop(rx);
+                None
+            };
+            let sent = mgr
+                .send_prompt_linked_with_message_id(
+                    &db,
+                    "digest-send",
+                    vec![PromptInputBlock::Text {
+                        text: claim.text.clone(),
+                    }],
+                    Some(folder),
+                    Some(id),
+                    None,
+                    Some(claim.token.clone()),
+                )
+                .await;
+            assert_eq!(sent.is_ok(), send_succeeds);
+            let stored = digest::read(&db.conn, id).await.unwrap().unwrap();
+            assert_eq!(stored.answers["q"].sent, send_succeeds);
+            if let Some(rx) = rx.as_mut() {
+                assert!(matches!(
+                    rx.try_recv().unwrap(),
+                    crate::acp::connection::ConnectionCommand::Prompt { .. }
+                ));
+            } else {
+                digest::release(&db.conn, id, &claim.token).await.unwrap();
+                let current = digest::read(&db.conn, id).await.unwrap().unwrap();
+                assert!(digest::reserve(&db.conn, id, current.revision, "q", "B")
+                    .await
+                    .is_ok());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_digest_answer_does_not_enqueue_or_leave_the_conversation_in_progress() {
+        use crate::db::service::{app_metadata_service, session_digest_service as digest};
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        app_metadata_service::upsert_value(
+            &db.conn,
+            crate::commands::delegation::KEY_SESSION_MESSAGING_ENABLED,
+            "true",
+        )
+        .await
+        .unwrap();
+        let folder = test_helpers::seed_folder(&db, "/tmp/digest-stale-send").await;
+        let id = test_helpers::seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let mgr = ConnectionManager::new();
+        let mut rx = insert_live_connection(
+            &mgr,
+            "digest-stale",
+            AgentType::ClaudeCode,
+            Some(PathBuf::from("/tmp/digest-stale-send")),
+        )
+        .await;
+        mgr.get_state("digest-stale")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .conversation_id = Some(id);
+        let result = mgr
+            .send_prompt_linked_with_message_id(
+                &db,
+                "digest-stale",
+                vec![PromptInputBlock::Text {
+                    text: "Choose\nA".into(),
+                }],
+                Some(folder),
+                Some(id),
+                None,
+                Some(format!("{}stale", digest::ANSWER_PREFIX)),
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(rx.try_recv().is_err());
+        assert!(
+            !mgr.get_state("digest-stale")
+                .await
+                .unwrap()
+                .read()
+                .await
+                .turn_in_flight
+        );
+        let stored = conversation_service::get_by_id(&db.conn, id).await.unwrap();
+        assert_eq!(stored.status, "cancelled");
+    }
+
+    #[tokio::test]
     async fn send_prompt_linked_rolls_back_to_cancelled_on_send_failure() {
         use crate::db::entities::conversation;
         use crate::db::test_helpers;
@@ -11447,7 +11747,7 @@ mod tests {
     ) -> tokio::task::JoinHandle<Vec<PromptInputBlock>> {
         tokio::spawn(async move {
             match rx.recv().await {
-                Some(ConnectionCommand::Steer { blocks, reply }) => {
+                Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
                     let _ = reply.send(outcome);
                     blocks
                 }

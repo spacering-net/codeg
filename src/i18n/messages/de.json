@@ -1,4 +1,14 @@
 {
+  "SessionCollaboration": {
+    "progress": "Sitzungsfortschritt",
+    "title": "Zusammenarbeitssitzungen",
+    "brief": "Übergabevermerk",
+    "link": "Verknüpfen",
+    "choose": "Sitzung auswählen",
+    "unlink": "Verknüpfung lösen",
+    "empty": "Keine Zusammenarbeitssitzungen",
+    "error": "Die Zusammenarbeitssitzungen konnten nicht aktualisiert werden."
+  },
   "HtmlCodePreview": {
     "code": "Code",
     "preview": "Vorschau",
@@ -837,6 +847,8 @@
     "generalConfigDescriptionClaude": "API-URL, API-Key und Claude-Modelle festlegen; synchron mit der nativen JSON-Konfiguration.",
     "generalConfigDescriptionDefault": "API URL, API Key und Model festlegen und die native JSON-Konfiguration verwalten.",
     "multiAgent": {
+      "sessionMessaging": "Kommunikation zwischen Sitzungen",
+      "sessionMessagingHint": "Agenten dürfen eigenständige Sitzungen erstellen und Nachrichten austauschen. Verbinde bestehende Sitzungen erneut, um die Werkzeuge zu nutzen.",
       "title": "Multi-Agent-Zusammenarbeit",
       "description": "Erlaubt aktiven Agenten, Teilaufgaben an andere Agenten zu delegieren.",
       "enable": "Delegation aktivieren",
@@ -3900,6 +3912,7 @@
         "downloadFailed": "Herunterladen von {name} fehlgeschlagen"
       },
       "messageList": {
+        "sessionMessageSource": "Von Sitzung: {session}",
         "loading": "Lädt...",
         "loadBackgroundActivity": "Hintergrundaktivität laden",
         "loadEarlier": "Frühere Nachrichten laden",
@@ -4099,6 +4112,13 @@
         "htmlPreviewHide": "Vorschau ausblenden"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "Nachricht an {session} senden",
+          "send": "Nachricht an eine Sitzung senden",
+          "create": "Sitzung erstellen",
+          "current": "Aktuelle Sitzung anzeigen",
+          "list": "Sitzungen suchen"
+        },
         "oauth": {
           "waiting": "Warten auf Autorisierung für {server}",
           "reconnecting": "Verbindung zu {server} wird wiederhergestellt…",
@@ -13294,5 +13314,20 @@
       "rateLimited": "SRN hat Codeg gebeten, vor einem neuen Versuch zu warten.",
       "server": "SRN hat mit einem Fehler geantwortet."
     }
+  },
+  "SessionDigest": {
+    "title": "Sitzungsübersicht",
+    "now": "In Bearbeitung",
+    "news": "Neuigkeiten",
+    "needsYou": "Antwort erforderlich",
+    "suggestions": "Vorschläge",
+    "recommended": "Empfohlen",
+    "dismiss": "{title} ablehnen",
+    "updatedAt": "Aktualisiert {time}",
+    "pendingCount": "{count} Antworten ausstehend",
+    "inProgress": "In Bearbeitung",
+    "answerWhenReady": "Antworten sind möglich, wenn die Sitzung verbunden und die Nachrichtenwarteschlange leer ist.",
+    "sendFailed": "Die Antwort konnte nicht gesendet werden. Bitte erneut versuchen.",
+    "actionFailed": "Die Aktion konnte nicht gespeichert werden."
   }
 }

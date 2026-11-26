@@ -101,6 +101,14 @@ pub struct SessionInfo {
     pub stats: Option<SessionStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub messages: Option<SessionMessages>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<SessionChild>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub children_truncated: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub collaborators: Vec<SessionCollaborator>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub collaborators_truncated: bool,
     /// Human-readable note for a not-found result, or a partial one (e.g. the
     /// transcript parse timed out so `messages` is absent). `None` on a clean
     /// full result.
@@ -124,6 +132,19 @@ impl SessionInfo {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionCollaborator {
+    pub session_id: i32,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionChild {
+    pub session_id: i32,
+    pub task_id: Option<String>,
+    pub status: String,
+}
+
 /// Listener-facing access to resolve a session by its codeg conversation id. The
 /// production impl (`crate::commands::session_info::DbSessionInfoLookup`) reads
 /// the DB + parses the on-disk transcript; tests use an in-memory stub. Mirrors
@@ -136,6 +157,11 @@ pub trait SessionInfoAccess: Send + Sync {
     /// most recent compacted turns (capped at [`MAX_SESSION_MESSAGES`]). A
     /// missing / deleted id yields [`SessionInfo::not_found`].
     async fn resolve(&self, session_id: i32, max_messages: u32) -> SessionInfo;
+
+    /// The listener supplies the caller from its authenticated connection.
+    async fn rename(&self, _caller_id: i32, _session_id: i32, _title: String) -> Result<(), String> {
+        Err("Session rename is unavailable".into())
+    }
 }
 
 /// The hot-swappable feature config read at MCP injection time. Kept tiny and
