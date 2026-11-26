@@ -64,6 +64,7 @@ pub mod profile;
 pub mod projects;
 pub mod reach;
 pub mod ready;
+pub mod refusal;
 pub mod reminders;
 pub mod routines;
 pub mod rules;

@@ -58,6 +58,13 @@ export function useQuoteExcerpt(): (row: TimelineRow) => string {
         const text = excerptOf(row.body)
         return text || t("attachment")
       }
+      // A reminder card: what it reminds of, not codeg's English line.
+      case "notice": {
+        const summary = str(row.data, "summary")
+        if (str(row.data, "notice") === "reminder" && summary)
+          return t("reminder", { summary: excerptOf(summary) })
+        return excerptOf(row.body) || t("noText")
+      }
       default:
         return excerptOf(row.body) || t("noText")
     }

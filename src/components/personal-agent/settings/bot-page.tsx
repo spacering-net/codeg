@@ -40,7 +40,7 @@ import {
   type BotTab,
 } from "@/stores/personal-agent-ui-store"
 
-import { defaultFaceOf } from "../bot-avatar"
+import { defaultFaceOf, faceColorOf } from "../bot-avatar"
 import { useBotLook, useBotName } from "../shared"
 import { usePendingFace, useSaveFace } from "../face-save"
 import { BotHero } from "./bot-hero"
@@ -186,9 +186,7 @@ export function BotPage() {
         ref={frameRef}
         className="relative h-full min-h-0 overflow-hidden"
         data-pa-bot-frame
-        data-pa-face={
-          face.shown?.kind === "face" ? face.shown.color : undefined
-        }
+        data-pa-face={faceColorOf(face.shown) ?? undefined}
         data-wide={wide || undefined}
         data-pa-bot-page-layout={wide ? "wide" : "narrow"}
       >

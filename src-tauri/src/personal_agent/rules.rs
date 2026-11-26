@@ -1677,9 +1677,10 @@ impl PersonalAgentEngine {
             ("session", "open") | ("uncommitted", "open") => Ok(("opened".into(), json!({}))),
             ("idle", "close") => {
                 let item = id_of("item_id").ok_or("the card names no matter")?;
-                self.settle_item(item, "drop", None)
+                self.settle_item_from(item, "drop", None, super::reminders::OpSource::RuleCard)
                     .await
                     .map(|_| ("closed".into(), json!({ "item_id": item })))
+                    .map_err(String::from)
             }
             ("behind", "rebase") => self.rebase_behind(&facts).await,
             ("undo", "ask_first") => self

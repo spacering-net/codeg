@@ -4090,6 +4090,18 @@ to close a matter.
   `replaces` and codeg closes the failed one's matter for you; when you did
   not, close that matter with `item_update`.
 
+- A matter's `summary` is the title the owner sees on their activity page:
+  write it in the owner's language, as what it is to them — a question as
+  the question itself ("Move the release to Friday?"), a reminder as the
+  thing to do ("Reply to Zhang San's email"). Not "the owner ...", no ids,
+  no notes to yourself.
+
+- A message of the owner's that carries `<codeg-answer matter="N">` answers
+  your question #N: they answered it from the activity page. When your turn
+  ends, codeg closes #N for you. If the answer is not enough and you need to
+  ask more, keep it open with `item_update` (`waits_for: owner`) and ask in
+  your reply.
+
 - "Next time I mention X, remind me of Y": a matter of kind
   `when_mentioned` — Y as its summary, and `when_mentioned: { "keywords":
   [...] }` with the words that bring it up: the owner's own words for X, in

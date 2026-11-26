@@ -1429,6 +1429,14 @@ pub enum ConnectionCommand {
         task_id: String,
         reply: tokio::sync::oneshot::Sender<Result<bool, AcpError>>,
     },
+    /// Cut the session back to just before a user message
+    /// (`_session/rewind`, see `crate::acp::rewind`). Between turns only: the
+    /// manager checks `turn_in_flight` first, and the mid-turn arm answers
+    /// `TurnInProgress` rather than dropping the reply.
+    Rewind {
+        cursor_id: String,
+        reply: tokio::sync::oneshot::Sender<Result<crate::acp::rewind::RewindOutcome, AcpError>>,
+    },
     Disconnect,
 }
 
@@ -7767,11 +7775,30 @@ fn build_client_capabilities(
     // until they settle, so their tool calls stream into the Agent card inside
     // the turn; codeg draws a Claude cycle outside a turn from the transcript
     // only. See (iiii) of the claude entry in `registry.rs`.
+    //
+    // claude-agent-acp 0.112.0 and codex-acp 2.12.0 add "sessionRewind": the
+    // `_session/rewind` method behind a user message's "edit and resend"
+    // (`crate::acp::rewind`). Declaring it registers the method and nothing
+    // else — measured live on both, every other frame is unchanged. Its
+    // companion `clientCapabilities.session.cursors` stays out: it would make
+    // both adapters send `cursor_update`, which the schema crate cannot read,
+    // and codeg builds the cursor from the transcript instead.
     if matches!(agent_type, AgentType::ClaudeCode | AgentType::Codex) {
         let capabilities: &[&str] = if agent_type == AgentType::Codex {
-            &["sessionFailure", "asyncTasks", "recommendedValue", "diffPatch"]
+            &[
+                "sessionFailure",
+                "asyncTasks",
+                "recommendedValue",
+                "diffPatch",
+                crate::acp::rewind::SESSION_REWIND_CAPABILITY,
+            ]
         } else {
-            &["sessionFailure", "asyncTasks", "recommendedValue"]
+            &[
+                "sessionFailure",
+                "asyncTasks",
+                "recommendedValue",
+                crate::acp::rewind::SESSION_REWIND_CAPABILITY,
+            ]
         };
         meta.insert(
             "jetbrains".to_string(),
@@ -9569,12 +9596,17 @@ async fn run_connection(
                 .session_capabilities
                 .close
                 .is_some();
+            // Echoed back only to a client that declared it (see
+            // `build_client_capabilities`), so it is the version gate too.
+            let supports_rewind = matches!(agent_type, AgentType::ClaudeCode | AgentType::Codex)
+                && crate::acp::rewind::agent_offers_rewind(init_resp.meta.as_ref());
             tracing::info!(
-                "[ACP] Agent capabilities: load_session={}, fork={}, resume={}, close={}",
+                "[ACP] Agent capabilities: load_session={}, fork={}, resume={}, close={}, rewind={}",
                 init_resp.agent_capabilities.load_session,
                 supports_fork,
                 supports_resume,
-                supports_close
+                supports_close,
+                supports_rewind
             );
 
             // Native live-feedback steering, synthesized ONCE from three gates
@@ -9795,6 +9827,14 @@ async fn run_connection(
                 &emitter_clone,
                 AcpEvent::ForkSupported {
                     supported: supports_fork,
+                },
+            )
+            .await;
+            emit_with_state(
+                &state,
+                &emitter_clone,
+                AcpEvent::RewindSupported {
+                    supported: supports_rewind,
                 },
             )
             .await;
@@ -12757,6 +12797,45 @@ fn is_model_config_option(option: &SessionConfigOption) -> bool {
         || option.id.to_string() == MODEL_CONFIG_OPTION_ID
 }
 
+/// Whether an advertised option is the agent's session-mode selector: the
+/// `mode` category or the conventional `mode` id, the pair `SessionState`
+/// follows the session's mode from. Grok's effort list carries the category
+/// too, which is why callers also check the value is one of the session's
+/// modes.
+fn is_mode_config_option(option: &SessionConfigOption) -> bool {
+    matches!(option.category, Some(SessionConfigOptionCategory::Mode))
+        || option.id.to_string() == "mode"
+}
+
+/// Whether a `select` option lists `value` as one of its rows. Unlike
+/// [`config_option_rejects_value`], an empty or undecodable list says no.
+fn select_offers_value(option: &SessionConfigOption, value: &str) -> bool {
+    let SessionConfigKind::Select(select) = &option.kind else {
+        return false;
+    };
+    match &select.options {
+        SessionConfigSelectOptions::Ungrouped(options) => {
+            options.iter().any(|o| o.value.to_string() == value)
+        }
+        SessionConfigSelectOptions::Grouped(groups) => groups
+            .iter()
+            .any(|group| group.options.iter().any(|o| o.value.to_string() == value)),
+        _ => false,
+    }
+}
+
+/// Point every mode selector in `options` that lists `mode_id` at it.
+fn point_mode_options_at(options: &mut [SessionConfigOption], mode_id: &str) {
+    for option in options.iter_mut() {
+        if !is_mode_config_option(option) || !select_offers_value(option, mode_id) {
+            continue;
+        }
+        if let SessionConfigKind::Select(select) = &mut option.kind {
+            select.current_value = mode_id.to_string().into();
+        }
+    }
+}
+
 /// Saved preferences in application order: the model selector first, then every
 /// other id in its natural (sorted) order.
 ///
@@ -12888,9 +12967,19 @@ async fn apply_preferred_session_options(
     session_models: Option<&serde_json::Value>,
     initial_config_options: Vec<SessionConfigOption>,
 ) -> Vec<SessionConfigOption> {
+    let mut options = initial_config_options;
+    // Ids this launch must not replay a saved preference for — see
+    // `config_option_never_replayed`, which the option probe shares.
+    let (pinned, agent_type) = {
+        let guard = state.read().await;
+        (guard.env_pinned_config_option_ids.clone(), guard.agent_type)
+    };
+    let never_replayed =
+        |config_id: &str| config_option_never_replayed(agent_type, &pinned, config_id);
     let mode_option = preferred_mode_id.and_then(|mode| {
-        initial_config_options.iter().find(|option| {
-            matches!(option.category, Some(SessionConfigOptionCategory::Mode))
+        options.iter().find(|option| {
+            is_mode_config_option(option)
+                && !never_replayed(&option.id.to_string())
                 && matches!(option.kind, SessionConfigKind::Select(_))
                 && !config_option_rejects_value(option, mode)
         })
@@ -12903,7 +12992,29 @@ async fn apply_preferred_session_options(
     } else {
         preferred_config_values
     };
-    if let Some(pref_mode) = preferred_mode_id.filter(|_| mode_option.is_none()) {
+    // When the agent's own mode selector is among the saved options, the replay
+    // below restores the mode through it, and the saved legacy mode is not sent
+    // as well: a row saved before the session followed that selector can hold
+    // a stale one next to it (#1309 — `modeId: default` beside `mode: yolo`),
+    // and `session/set_mode` for it would switch the agent back while the
+    // selector, read before the switch, still showed the saved value.
+    let mode_restored_by_option = session.modes().as_ref().is_some_and(|modes| {
+        options.iter().any(|option| {
+            let config_id = option.id.to_string();
+            is_mode_config_option(option)
+                && !never_replayed(&config_id)
+                && preferred_config_values
+                    .get(&config_id)
+                    .is_some_and(|value| {
+                        select_offers_value(option, value)
+                            && modes
+                                .available_modes
+                                .iter()
+                                .any(|mode| mode.id.to_string() == *value)
+                    })
+        })
+    });
+    if let Some(pref_mode) = preferred_mode_id.filter(|_| !mode_restored_by_option && mode_option.is_none()) {
         let needs_apply = session
             .modes()
             .as_ref()
@@ -12921,31 +13032,25 @@ async fn apply_preferred_session_options(
                  the agent no longer offers that mode"
             );
         } else if needs_apply {
-            if let Err(e) = set_session_mode(session, state, emitter, pref_mode.to_string()).await {
-                tracing::error!(
+            match set_session_mode(session, state, emitter, pref_mode.to_string()).await {
+                // The list emitted below was read before the switch, and an
+                // agent need not push a fresh one for it (Antigravity 1.5.2
+                // answers `set_mode` with `{}`): point its mode selector at the
+                // mode, or the screen shows the old one and the session's mode
+                // follows that selector back (`SessionState`).
+                Ok(()) => point_mode_options_at(&mut options, pref_mode),
+                Err(e) => tracing::error!(
                     "[ACP] failed to apply preferred mode '{pref_mode}' on connect: {e}"
-                );
+                ),
             }
         }
     }
 
     if preferred_config_values.is_empty() {
-        return initial_config_options;
+        return options;
     }
 
     let session_id = session.session_id().clone();
-    let mut options = initial_config_options;
-    // Ids this launch must not replay a saved preference for — see
-    // `config_option_never_replayed`, which the option probe shares.
-    let (pinned, agent_type) = {
-        let guard = state.read().await;
-        (
-            guard.env_pinned_config_option_ids.clone(),
-            guard.agent_type,
-        )
-    };
-    let never_replayed =
-        |config_id: &str| config_option_never_replayed(agent_type, &pinned, config_id);
     // A model pick saved under a spelling the agent has since renamed — a
     // retired `[1m]` lane, or a concrete id re-spelled as its family alias —
     // replays as the spelling it lists now (see `heal_retired_model_pick`).
@@ -16967,6 +17072,13 @@ async fn run_conversation_loop(
                                     disconnect_requested = true;
                                     break;
                                 }
+                                Some(ConnectionCommand::Rewind { reply, .. }) => {
+                                    // A rewind needs the turn to have ended
+                                    // (the adapters refuse with `busy` too).
+                                    // Reply — never drop — so the manager's
+                                    // await cannot hang on the oneshot.
+                                    let _ = reply.send(Err(AcpError::TurnInProgress));
+                                }
                                 Some(ConnectionCommand::Prompt { .. }) => {
                                     // Tripwire, not a user-facing case. The
                                     // `turn_in_flight` gate in `send_prompt_inner`
@@ -17116,6 +17228,23 @@ async fn run_conversation_loop(
                 let cx = session.connection();
                 let sid = session.session_id().clone();
                 let _ = reply.send(send_stop_async_task_request(&cx, &sid, &task_id).await);
+            }
+            Some(ConnectionCommand::Rewind { cursor_id, reply }) => {
+                if !state.read().await.rewind_supported {
+                    let _ = reply.send(Err(AcpError::protocol(
+                        "This agent does not support editing a sent message".to_string(),
+                    )));
+                    continue;
+                }
+                let cx = session.connection();
+                let sid = session.session_id().clone();
+                tracing::info!(
+                    "[ACP] Sending _session/rewind for session_id={} cursor_id={cursor_id}",
+                    sid.0
+                );
+                let _ = reply.send(
+                    crate::acp::rewind::send_rewind_request(&cx, &sid, &cursor_id).await,
+                );
             }
             Some(ConnectionCommand::Cancel) => {
                 let cx = session.connection();
@@ -31674,6 +31803,10 @@ mod tests {
             // left out: "rawInputRendering" (it removes the question text a
             // message-only MCP elicitation's permission card shows) and
             // "planFile" (the plan card renders the plan TEXT).
+            //
+            // "sessionRewind" (claude-agent-acp 0.112.0, codex-acp 2.12.0) IS
+            // wanted from both: it only registers `_session/rewind`, the
+            // user message's "edit and resend" (`crate::acp::rewind`).
             let mut expected: Vec<serde_json::Value> = vec![
                 "sessionFailure".into(),
                 "asyncTasks".into(),
@@ -31682,6 +31815,7 @@ mod tests {
             if agent == AgentType::Codex {
                 expected.push("diffPatch".into());
             }
+            expected.push("sessionRewind".into());
             assert_eq!(
                 capabilities, &expected,
                 "{agent:?} advertises an unexpected AIR capability set"
@@ -49091,6 +49225,254 @@ mod tests {
         let current =
             current_config_option_values(state.config_options.as_deref().unwrap_or_default());
         (received, current)
+    }
+
+    /// One establishment against a fake Antigravity 1.5.2 whose answer to the
+    /// session request runs in `current` mode, as both its `modes` and its
+    /// `mode` selector report it. Like 1.5.2 it answers `set_mode` with `{}` and
+    /// pushes nothing. Returns the requests it received (`set_mode:<id>` or
+    /// `<configId>:<value>`), and the session's mode and mode selector after.
+    async fn establish_antigravity_with_saved_mode(
+        current: &str,
+        preferred_mode_id: Option<&str>,
+        preferred: BTreeMap<String, String>,
+    ) -> (Vec<String>, String, Option<String>) {
+        use agent_client_protocol::schema::v1::{
+            SetSessionConfigOptionResponse, SetSessionModeResponse,
+        };
+
+        fn mode_options(current: &str) -> serde_json::Value {
+            serde_json::json!([{
+                "type": "select",
+                "id": "mode",
+                "name": "Session Mode",
+                "category": "mode",
+                "currentValue": current,
+                "options": [
+                    {"value": "default", "name": "Default"},
+                    {"value": "auto_edit", "name": "Auto Edit"},
+                    {"value": "yolo", "name": "YOLO"},
+                ],
+            }])
+        }
+        let answer: NewSessionResponse = serde_json::from_value(serde_json::json!({
+            "sessionId": "s1",
+            "modes": {
+                "currentModeId": current,
+                "availableModes": [
+                    {"id": "default", "name": "Default"},
+                    {"id": "auto_edit", "name": "Auto Edit"},
+                    {"id": "yolo", "name": "YOLO"},
+                ],
+            },
+            "configOptions": mode_options(current),
+        }))
+        .expect("parses");
+        let received = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let (mode_received, option_received) = (Arc::clone(&received), Arc::clone(&received));
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let agent_answer = answer.clone();
+        let agent = tokio::spawn(async move {
+            let _ = Agent
+                .builder()
+                .on_receive_request(
+                    async move |_req: NewSessionRequest,
+                                responder: Responder<NewSessionResponse>,
+                                _cx: ConnectionTo<Client>| {
+                        responder.respond(agent_answer.clone())
+                    },
+                    on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |req: SetSessionModeRequest,
+                                responder: Responder<SetSessionModeResponse>,
+                                _cx: ConnectionTo<Client>| {
+                        mode_received
+                            .lock()
+                            .unwrap()
+                            .push(format!("set_mode:{}", req.mode_id));
+                        responder.respond(SetSessionModeResponse::new())
+                    },
+                    on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |req: SetSessionConfigOptionRequest,
+                                responder: Responder<SetSessionConfigOptionResponse>,
+                                _cx: ConnectionTo<Client>| {
+                        let wire = serde_json::to_value(&req).expect("serializes");
+                        let value = wire["value"].as_str().unwrap_or_default().to_string();
+                        option_received.lock().unwrap().push(format!(
+                            "{}:{value}",
+                            wire["configId"].as_str().unwrap_or_default()
+                        ));
+                        responder.respond(SetSessionConfigOptionResponse::new(
+                            serde_json::from_value::<Vec<SessionConfigOption>>(mode_options(
+                                &value,
+                            ))
+                            .expect("parses"),
+                        ))
+                    },
+                    on_receive_request!(),
+                )
+                .connect_with(agent_end, async |_cx: ConnectionTo<Client>| {
+                    std::future::pending::<Result<(), agent_client_protocol::Error>>().await
+                })
+                .await;
+        });
+
+        let state = Arc::new(RwLock::new(SessionState::new(
+            "conn-antigravity-mode".to_string(),
+            AgentType::Antigravity,
+            None,
+            "antigravity-mode-replay".to_string(),
+            None,
+        )));
+        let establishment_state = Arc::clone(&state);
+        let preferred_mode_id = preferred_mode_id.map(str::to_string);
+        Client
+            .builder()
+            .connect_with(client_end, async move |cx: ConnectionTo<Agent>| {
+                let raw = cx
+                    .send_request_to(
+                        Agent,
+                        UntypedMessage::new("session/new", NewSessionRequest::new("/tmp"))?,
+                    )
+                    .block_task()
+                    .await?;
+                let response: NewSessionResponse = serde_json::from_value(raw)
+                    .map_err(agent_client_protocol::Error::into_internal_error)?;
+                let initial = response.config_options.clone().unwrap_or_default();
+                let mut session = AgentSession::attach(&cx, response)?;
+                emit_session_modes(&establishment_state, &EventEmitter::Noop, session.modes())
+                    .await;
+                apply_and_emit_session_config_options(
+                    &cx,
+                    &mut session,
+                    &establishment_state,
+                    &EventEmitter::Noop,
+                    AgentType::Antigravity,
+                    None,
+                    None,
+                    None,
+                    preferred_mode_id.as_deref(),
+                    &preferred,
+                    initial,
+                )
+                .await;
+                Ok(())
+            })
+            .await
+            .expect("the establishment runs");
+        agent.abort();
+
+        let received = received.lock().unwrap().clone();
+        let state = state.read().await;
+        let mode = state.modes.as_ref().expect("modes").current_mode_id.clone();
+        let option =
+            current_config_option_values(state.config_options.as_deref().unwrap_or_default())
+                .get("mode")
+                .cloned();
+        (received, mode, option)
+    }
+
+    /// #1309: a row saved while the session's mode lagged its mode selector
+    /// holds `modeId: default` next to `mode: yolo`. Resuming a session that
+    /// runs YOLO must leave it there — no `set_mode` back to `default` — and the
+    /// session's mode must say YOLO, not just the selector.
+    #[tokio::test]
+    async fn a_stale_saved_mode_does_not_switch_antigravity_out_of_its_mode_selector() {
+        let saved = BTreeMap::from([("mode".to_string(), "yolo".to_string())]);
+        let (received, mode, option) =
+            establish_antigravity_with_saved_mode("yolo", Some("default"), saved.clone()).await;
+        assert_eq!(received, Vec::<String>::new());
+        assert_eq!(mode, "yolo");
+        assert_eq!(option.as_deref(), Some("yolo"));
+
+        // A session that came back in `default` is put in YOLO through the
+        // selector, once.
+        let (received, mode, option) =
+            establish_antigravity_with_saved_mode("default", Some("default"), saved).await;
+        assert_eq!(received, ["mode:yolo"]);
+        assert_eq!(mode, "yolo");
+        assert_eq!(option.as_deref(), Some("yolo"));
+    }
+
+    /// A live `session/set_mode` (the selection composer's channel) that
+    /// Antigravity answers with `{}` leaves the row's two fields agreeing, so
+    /// the next connect restores that switch rather than the selector's old
+    /// value — whichever way it went (#1309 review).
+    #[tokio::test]
+    async fn a_live_set_mode_survives_the_reconnect_both_ways() {
+        for (before, after) in [("default", "yolo"), ("yolo", "default")] {
+            let (_, mode, option) =
+                establish_antigravity_with_saved_mode(before, None, BTreeMap::new()).await;
+            assert_eq!((mode.as_str(), option.as_deref()), (before, Some(before)));
+            // What `set_session_mode` records once the agent acknowledged.
+            let mut live = SessionState::new(
+                "conn-live".to_string(),
+                AgentType::Antigravity,
+                None,
+                "antigravity-live".to_string(),
+                None,
+            );
+            live.modes = Some(SessionModeStateInfo {
+                current_mode_id: before.to_string(),
+                available_modes: ["default", "auto_edit", "yolo"]
+                    .map(|id| SessionModeInfo {
+                        id: id.to_string(),
+                        name: id.to_string(),
+                        description: None,
+                    })
+                    .to_vec(),
+            });
+            live.apply_event(&AcpEvent::SessionConfigOptions {
+                config_options: map_session_config_options(
+                    &serde_json::from_value::<Vec<SessionConfigOption>>(serde_json::json!([{
+                        "type": "select", "id": "mode", "name": "Session Mode",
+                        "category": "mode", "currentValue": before,
+                        "options": [
+                            {"value": "default", "name": "Default"},
+                            {"value": "auto_edit", "name": "Auto Edit"},
+                            {"value": "yolo", "name": "YOLO"},
+                        ],
+                    }]))
+                    .expect("parses"),
+                ),
+            });
+            live.apply_event(&AcpEvent::ModeChanged {
+                mode_id: after.to_string(),
+            });
+            let row = crate::acp::selection::selection_snapshot(&live);
+            assert_eq!(row.mode_id.as_deref(), Some(after));
+            assert_eq!(
+                row.config_values.get("mode").map(String::as_str),
+                Some(after)
+            );
+
+            // The agent comes back in the mode it ran before the switch.
+            let (received, mode, option) = establish_antigravity_with_saved_mode(
+                before,
+                row.mode_id.as_deref(),
+                row.config_values,
+            )
+            .await;
+            assert_eq!(received, [format!("mode:{after}")]);
+            assert_eq!((mode.as_str(), option.as_deref()), (after, Some(after)));
+        }
+    }
+
+    /// A saved mode with no saved selector value still goes out as
+    /// `session/set_mode`. Antigravity answers it with `{}`, so the selector
+    /// the session emits is pointed at the mode codeg switched to, and the
+    /// session's mode does not follow a stale selector back.
+    #[tokio::test]
+    async fn a_saved_legacy_mode_moves_antigravitys_mode_selector_too() {
+        let (received, mode, option) =
+            establish_antigravity_with_saved_mode("default", Some("auto_edit"), BTreeMap::new())
+                .await;
+        assert_eq!(received, ["set_mode:auto_edit"]);
+        assert_eq!(mode, "auto_edit");
+        assert_eq!(option.as_deref(), Some("auto_edit"));
     }
 
     /// The replay end to end, against live-shaped Antigravity 1.4.0 answers: a

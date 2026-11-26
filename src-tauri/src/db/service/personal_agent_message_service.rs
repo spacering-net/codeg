@@ -18,7 +18,9 @@ use sea_orm::{
     QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 
-use super::personal_agent_service::{is_unique_violation, LedgerSlot, Ledgered, NewRow};
+use super::personal_agent_service::{
+    closing_exprs, is_unique_violation, Closer, Closing, LedgerSlot, Ledgered, NewRow,
+};
 use crate::db::entities::personal_agent::{self as agent, BotKind};
 use crate::db::entities::personal_agent_action::{self as action, ActionState};
 use crate::db::entities::personal_agent_event::{self as event, EventState};
@@ -54,7 +56,7 @@ fn event_key(message_id: i32) -> String {
 }
 
 /// A message's event key as stored for receiver `to`.
-async fn stored_event_key(
+pub(crate) async fn stored_event_key(
     conn: &impl sea_orm::ConnectionTrait,
     to: i32,
     message_id: i32,
@@ -339,6 +341,11 @@ pub async fn send_message(
                 act_spec: Set(None),
                 fired_at: Set(None),
                 mention: Set(None),
+                closed_at: Set(None),
+                closed_by: Set(None),
+                closed_how: Set(None),
+                answer_row_id: Set(None),
+                answer_state: Set(None),
             }
             .insert(&txn)
             .await?,
@@ -374,7 +381,12 @@ pub async fn send_message(
                 .one(&txn)
                 .await?;
             if let Some(w) = waiting {
-                item::Entity::update_many()
+                closing_exprs(
+                    item::Entity::update_many(),
+                    ItemStatus::Done,
+                    Some(Closing::new(Closer::Codeg, "replied")),
+                    now,
+                )
                     .col_expr(item::Column::Status, Expr::value(ItemStatus::Done))
                     .col_expr(
                         item::Column::WaitsFor,

@@ -5475,6 +5475,12 @@ button.pa-choice:enabled:not(.pa-choice-chosen):hover {
   transform: scaleY(0.1);
 }
 
+/* Thinking: tilting its head one way and the other, lifting a little each
+   time — moving the whole time it thinks, not only its eyes. */
+.pa-face[data-bot-look="thinking"] .pa-face-body {
+  animation: pa-face-ponder var(--motion-breathe) ease-in-out infinite;
+}
+
 .pa-face[data-bot-look="working"] .pa-face-body {
   animation: pa-face-bob var(--motion-bounce) ease-in-out infinite;
 }
@@ -5507,6 +5513,121 @@ button.pa-choice:enabled:not(.pa-choice-chosen):hover {
    ring round it says so. */
 .pa-face-ring {
   animation: pa-face-ring var(--motion-bounce) ease-in-out infinite;
+}
+
+/* A picture, an emoji or a monogram moves with its look too, whole, from
+   its foot: as a face does while it thinks, works and waits, and its hops
+   once done, a shake once failed (in its own sizes: a picture is no
+   100 × 100 box). */
+.pa-face-pic {
+  display: inline-flex;
+  transform-origin: 50% 100%;
+}
+
+.pa-face[data-bot-look="thinking"] > .pa-face-pic {
+  animation: pa-pic-ponder var(--motion-breathe) ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="working"] > .pa-face-pic {
+  animation: pa-pic-bob var(--motion-bounce) ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="waiting"] > .pa-face-pic {
+  animation: pa-face-breathe var(--motion-breathe) ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="done"] > .pa-face-pic {
+  animation: pa-pic-hop 640ms var(--motion-ease-standard) 2;
+}
+
+.pa-face[data-bot-look="failed"] > .pa-face-pic {
+  animation: pa-pic-shake 700ms var(--motion-ease-standard);
+}
+
+/* Thinking: its head tilted one way, then the other, lifted a little. */
+@keyframes pa-face-ponder {
+  0%,
+  50%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-4px) rotate(-7deg);
+  }
+  75% {
+    transform: translateY(-4px) rotate(7deg);
+  }
+}
+
+@keyframes pa-pic-ponder {
+  0%,
+  50%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-4%) rotate(-7deg);
+  }
+  75% {
+    transform: translateY(-4%) rotate(7deg);
+  }
+}
+
+@keyframes pa-pic-bob {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  14% {
+    transform: translateY(0) scale(1.07, 0.92);
+  }
+  42% {
+    transform: translateY(-10%) scale(0.95, 1.06);
+  }
+  64% {
+    transform: translateY(0) scale(1.05, 0.94);
+  }
+  80% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+
+@keyframes pa-pic-hop {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  16% {
+    transform: translateY(0) scale(1.08, 0.9);
+  }
+  45% {
+    transform: translateY(-20%) scale(0.94, 1.08);
+  }
+  70% {
+    transform: translateY(0) scale(1.06, 0.93);
+  }
+  85% {
+    transform: translateY(-3%) scale(1, 1);
+  }
+}
+
+@keyframes pa-pic-shake {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  20% {
+    transform: rotate(-12deg);
+  }
+  40% {
+    transform: rotate(10deg);
+  }
+  60% {
+    transform: rotate(-7deg);
+  }
+  80% {
+    transform: rotate(4deg);
+  }
 }
 
 /* Working: a bounce — down into a squash, up stretched, landing squashed. */

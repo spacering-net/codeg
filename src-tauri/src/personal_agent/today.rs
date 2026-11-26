@@ -150,6 +150,20 @@ pub struct TodayRow {
     /// meanwhile (C1): said after its state.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub queued: bool,
+    /// A matter settled today (`matter_closed`): who settled it (`owner`,
+    /// `agent`, `codeg`) and how (`done`, `dropped`, `withdrawn`, ...).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed_how: Option<String>,
+    /// ... a message's: the assistant it waited on (`{ id, name, avatar,
+    /// gone }`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer: Option<Value>,
+    /// ... what takes the owner's act on the panel back while it still can
+    /// be (`personal_agent_item_undo`); a card's [Undo] is `undo`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matter_undo: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -184,8 +198,139 @@ impl TodayRow {
             check_dispatch_id: None,
             round: None,
             queued: false,
+            closed_by: None,
+            closed_how: None,
+            peer: None,
+            matter_undo: None,
         }
     }
+}
+
+/// The assistant a message's matter waits on, as its sender's line keeps
+/// it: by its name now, or — deleted — the one it had.
+pub(crate) async fn item_peer(db: &AppDatabase, i: &item_entity::Model) -> Option<Value> {
+    if i.kind != item_entity::ItemKind::Message {
+        return None;
+    }
+    let line = svc::get_row(&db.conn, i.origin_timeline_id?).await.ok().flatten()?;
+    let data = line
+        .data
+        .as_deref()
+        .and_then(|d| serde_json::from_str::<Value>(d).ok())?;
+    let id = data["to_bot_id"].as_i64().and_then(|v| i32::try_from(v).ok())?;
+    let snapshot = &data["peer"];
+    let bot = svc::get_bot_any(&db.conn, id).await.ok().flatten();
+    let avatar = |b: &AgentModel| serde_json::from_str::<Value>(&b.avatar).unwrap_or(Value::Null);
+    Some(match bot {
+        Some(b) => serde_json::json!({
+            "id": id,
+            "name": b.name,
+            "avatar": avatar(&b),
+            "gone": b.deleted_at.is_some(),
+        }),
+        None => serde_json::json!({
+            "id": id,
+            "name": snapshot["name"],
+            "avatar": snapshot["avatar"],
+            "gone": true,
+        }),
+    })
+}
+
+/// The matters of `bots` settled since `from` (§3.7): who settled each and
+/// how, the latest first — not handed-out work (its own rows say it), nor
+/// one the assistant wrote settled from the start. An act of the owner's on
+/// the panel that can still be taken back carries what takes it back.
+pub async fn closed_matters(
+    db: &AppDatabase,
+    bots: &[i32],
+    from: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Vec<TodayRow> {
+    use crate::db::entities::personal_agent_item::ItemKind;
+    use crate::db::entities::personal_agent_message as message_entity;
+    use crate::db::entities::personal_agent_timeline as timeline_entity;
+    let items = item_entity::Entity::find()
+        .filter(item_entity::Column::BotId.is_in(bots.to_vec()))
+        .filter(item_entity::Column::ClosedAt.gte(from))
+        .filter(item_entity::Column::Kind.ne(ItemKind::Dispatch))
+        .filter(item_entity::Column::Status.is_in([ItemStatus::Done, ItemStatus::Dropped]))
+        .order_by_desc(item_entity::Column::ClosedAt)
+        .all(&db.conn)
+        .await
+        .or_failed();
+    let mut out = Vec::new();
+    for i in items {
+        let Some(closed_at) = i.closed_at else {
+            continue;
+        };
+        let born_dropped = i.closed_by.as_deref() == Some("agent")
+            && i.closed_how.as_deref() == Some("dropped")
+            && closed_at == i.created_at;
+        if born_dropped {
+            continue;
+        }
+        let mut row = TodayRow::new(
+            format!("matter_closed:{}", i.id),
+            "matter_closed",
+            one_line(&i.summary),
+            closed_at,
+        );
+        row.bot_id = i.bot_id;
+        row.item_id = Some(i.id);
+        row.state = Some(super::engine::enum_str(&i.kind));
+        row.closed_by = i.closed_by.clone();
+        row.closed_how = i.closed_how.clone();
+        row.peer = item_peer(db, &i).await;
+        // Where it goes: an answered question to the answer, a message
+        // answered to the answer, the rest to where it came from.
+        row.row_id = match (i.kind, i.closed_how.as_deref()) {
+            (ItemKind::Question, Some("answered")) => i.answer_row_id.or(i.origin_timeline_id),
+            (ItemKind::Message, Some("replied")) => {
+                let mut to = i.origin_timeline_id;
+                if let Some(line) = match i.origin_timeline_id {
+                    Some(id) => svc::get_row(&db.conn, id).await.ok().flatten(),
+                    None => None,
+                } {
+                    let sent = line
+                        .ref_id
+                        .as_deref()
+                        .and_then(|r| r.strip_prefix('m'))
+                        .and_then(|m| m.parse::<i32>().ok());
+                    if let Some(sent) = sent {
+                        let reply = message_entity::Entity::find()
+                            .filter(message_entity::Column::ReplyTo.eq(sent))
+                            .order_by_desc(message_entity::Column::Id)
+                            .one(&db.conn)
+                            .await
+                            .ok()
+                            .flatten();
+                        if let Some(reply) = reply {
+                            let at = timeline_entity::Entity::find()
+                                .filter(timeline_entity::Column::BotId.eq(i.bot_id))
+                                .filter(timeline_entity::Column::RefId.eq(format!("m{}", reply.id)))
+                                .one(&db.conn)
+                                .await
+                                .ok()
+                                .flatten();
+                            to = at.map(|r| r.id).or(to);
+                        }
+                    }
+                }
+                to
+            }
+            _ => i.origin_timeline_id,
+        };
+        if i.closed_by.as_deref() == Some("owner") {
+            row.matter_undo =
+                crate::db::service::personal_agent_matter_service::item_undo_token(&db.conn, &i, now)
+                    .await
+                    .ok()
+                    .flatten();
+        }
+        out.push(row);
+    }
+    out
 }
 
 /// A changed card's changes and the names they use, from its row's data;

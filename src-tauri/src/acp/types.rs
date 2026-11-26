@@ -585,6 +585,9 @@ pub enum AcpEvent {
     },
     /// Whether the agent supports session/fork
     ForkSupported { supported: bool },
+    /// Whether the agent offers `_session/rewind` (the "edit and resend" of a
+    /// user message; see `crate::acp::rewind`).
+    RewindSupported { supported: bool },
     /// Current session mode changed
     ModeChanged { mode_id: String },
     /// The composer's pending mode pick for this connection changed (see

@@ -247,6 +247,19 @@ describe("a face's pose", () => {
     )
   })
 
+  it("turns most per move close by, nearly all the way a face's size off", () => {
+    const rest = restPose("gear", "idle").gx
+    const turn = (d: number) => poseAt("gear", "idle", 0, [d, 0]).gx - rest
+    const full = turn(4)
+    // Over the face itself it already turns plainly...
+    expect(turn(0.25) / full).toBeGreaterThan(0.5)
+    // ...a step there turns it more than the same step further out...
+    expect(turn(0.3) - turn(0.1)).toBeGreaterThan(2 * (turn(1.2) - turn(1)))
+    // ...and a face's size off it is all but full, never past it.
+    expect(turn(1) / full).toBeGreaterThan(0.95)
+    expect(turn(1) / full).toBeLessThanOrEqual(1)
+  })
+
   it("moves only in a look that moves, a turn and a shake once", () => {
     expect(isMoving("idle", 5)).toBe(false)
     expect(isMoving("sleeping", 5)).toBe(false)

@@ -26,7 +26,7 @@ use crate::db::entities::personal_agent_timeline::TimelineKind;
 use crate::db::service::personal_agent_service as svc;
 use crate::db::AppDatabase;
 use crate::models::personal_agent::{
-    DispatchInfo, ItemInfo, PersonalAgentDayStat, PersonalAgentDraft, PersonalAgentWorkStat,
+    DispatchInfo, ItemActResult, ItemInfo, PersonalAgentDayStat, PersonalAgentDraft, PersonalAgentWorkStat,
     PersonalAgentFile, PersonalAgentInfo, PersonalAgentSnapshot, PersonalAgentStats,
     PersonalAgentUsagePoint, TimelineChanges, TimelineCursor, TimelinePage, TimelineRow,
 };
@@ -58,6 +58,15 @@ async fn engine(bot_id: Option<i32>) -> Result<Arc<PersonalAgentEngine>, AppComm
 
 fn refused(message: String) -> AppCommandError {
     AppCommandError::invalid_input(message)
+}
+
+/// A refusal the page words in the owner's language when it can.
+fn refusal(r: crate::personal_agent::refusal::Refusal) -> AppCommandError {
+    let err = AppCommandError::invalid_input(r.message);
+    match r.key {
+        Some(key) => err.with_i18n(key, r.params),
+        None => err,
+    }
 }
 
 /// The assistant a page call is about: `bot_id`, which must exist, or — when
@@ -166,18 +175,22 @@ pub async fn personal_agent_items_core(
     let items = svc::list_items(&db.conn, bot, &statuses, 500).await?;
     let mut out = Vec::with_capacity(items.len());
     for i in items {
-        let dispatch_state = match i.dispatch_id {
-            Some(id) => svc::get_dispatch(&db.conn, id).await?.map(|d| d.state),
-            None => None,
-        };
-        out.push(item_info(i, dispatch_state));
+        out.push(item_info_now(db, i).await?);
     }
     Ok(out)
+}
+
+async fn item_peer(
+    db: &AppDatabase,
+    i: &crate::db::entities::personal_agent_item::Model,
+) -> Option<serde_json::Value> {
+    crate::personal_agent::today::item_peer(db, i).await
 }
 
 fn item_info(
     i: crate::db::entities::personal_agent_item::Model,
     dispatch_state: Option<DispatchState>,
+    peer: Option<serde_json::Value>,
 ) -> ItemInfo {
     ItemInfo {
         id: i.id,
@@ -197,6 +210,12 @@ fn item_info(
         act_spec: i.act_spec.as_deref().and_then(|a| serde_json::from_str(a).ok()),
         fired_at: i.fired_at,
         mention: i.mention.as_deref().and_then(|m| serde_json::from_str(m).ok()),
+        closed_at: i.closed_at,
+        closed_by: i.closed_by,
+        closed_how: i.closed_how,
+        answer_row_id: i.answer_row_id,
+        answer_state: i.answer_state,
+        peer,
     }
 }
 
@@ -671,26 +690,60 @@ pub async fn personal_agent_turn_steps_core(
 }
 
 /// The owner settles one of an assistant's open matters on the panel or a
-/// card: done, dropped, later (it waits with no time), or snoozed `until`
-/// — `15m`, `1h`, `tomorrow` (morning) or a time (6.1). Handed-out work
-/// ends with the work itself.
+/// card (`from`: `panel`, the default, or `card`): done, dropped, later (it
+/// waits with no time), or snoozed `until` — `15m`, `1h`, `tomorrow`
+/// (morning) or a time (6.1). Handed-out work ends with the work itself.
+/// The panel's act comes with what takes it back (`undo`).
 pub async fn personal_agent_item_act_core(
     db: &AppDatabase,
     bot_id: Option<i32>,
     item_id: i32,
     act: String,
     until: Option<String>,
+    from: Option<String>,
+) -> Result<ItemActResult, AppCommandError> {
+    let engine = engine(bot_id).await?;
+    let acted = engine
+        .settle_item_from(
+            item_id,
+            &act,
+            until.as_deref(),
+            crate::personal_agent::reminders::OpSource::from_page(from.as_deref()),
+        )
+        .await
+        .map_err(refusal)?;
+    Ok(ItemActResult {
+        item: item_info_now(db, acted.item).await?,
+        undo: acted.undo,
+        withdrawn: acted.withdrawn,
+    })
+}
+
+/// The owner takes back what they just did to one of an assistant's
+/// matters on the panel (`undo`, the token the act gave): within ten
+/// minutes, and only while nothing changed since.
+pub async fn personal_agent_item_undo_core(
+    db: &AppDatabase,
+    bot_id: Option<i32>,
+    item_id: i32,
+    undo: i32,
 ) -> Result<ItemInfo, AppCommandError> {
     let engine = engine(bot_id).await?;
-    let item = engine
-        .settle_item(item_id, &act, until.as_deref())
-        .await
-        .map_err(refused)?;
+    let item = engine.undo_item(item_id, undo).await.map_err(refusal)?;
+    item_info_now(db, item).await
+}
+
+/// A matter as the page shows it, with its work's state as it is now.
+async fn item_info_now(
+    db: &AppDatabase,
+    item: crate::db::entities::personal_agent_item::Model,
+) -> Result<ItemInfo, AppCommandError> {
     let dispatch_state = match item.dispatch_id {
         Some(id) => svc::get_dispatch(&db.conn, id).await?.map(|d| d.state),
         None => None,
     };
-    Ok(item_info(item, dispatch_state))
+    let peer = item_peer(db, &item).await;
+    Ok(item_info(item, dispatch_state, peer))
 }
 
 /// One codeg window's beat (6.2, 1.12): whether it has the focus, and how
@@ -753,17 +806,22 @@ async fn activity_in(
         .await?
         .is_some_and(|b| b.kind == crate::db::entities::personal_agent::BotKind::Primary);
     let now = crate::personal_agent::clock::now();
-    let (today, mut rows) = crate::personal_agent::today::today_from(db, manager, now, None).await;
+    let (mut today, mut rows) = crate::personal_agent::today::today_from(db, manager, now, None).await;
     // Its open matters, all of them, as they are now — none another's work
     // took over (B1); on the primary's page, every assistant's, as "today"
     // has.
-    let page_bots = if primary {
+    let page_bots: Vec<i32> = if primary {
         svc::list_bots(&db.conn).await?.into_iter().map(|b| b.id).collect()
     } else {
         vec![bot]
     };
+    // And those settled today, with who did it and how (§3.7).
+    today.done.extend(
+        crate::personal_agent::today::closed_matters(db, &page_bots, today.day_start, now).await,
+    );
+    today.done.sort_by_key(|r| std::cmp::Reverse(r.at));
     let mut open = Vec::new();
-    for b in page_bots {
+    for &b in &page_bots {
         open.extend(
             svc::list_items(&db.conn, b, &[ItemStatus::Open, ItemStatus::Waiting], i64::MAX as u64)
                 .await?,
@@ -803,6 +861,7 @@ async fn activity_in(
                     i.id,
                     ItemCard {
                         row_id: card.id,
+                        notice_id: notice.id,
                         open: notice.state == NoticeState::Open && state.as_deref() == Some("open"),
                         handed: state.as_deref() == Some("handed"),
                     },
@@ -810,7 +869,8 @@ async fn activity_in(
             }
         }
         item_bots.insert(i.id, i.bot_id.unwrap_or(bot));
-        items.push(item_info(i, dispatch.map(|d| d.state)));
+        let peer = item_peer(db, &i).await;
+        items.push(item_info(i, dispatch.map(|d| d.state), peer));
     }
     let routines = crate::personal_agent::routines::routines_of(db, Some(bot))
         .await
@@ -1195,11 +1255,15 @@ pub async fn personal_agent_send_core(
     blocks: Option<Vec<PromptInputBlock>>,
     reply_to: Option<i32>,
     card: Option<crate::personal_agent::card_acts::CardClick>,
+    answers_item: Option<i32>,
 ) -> Result<TimelineRow, AppCommandError> {
     let engine = engine(bot_id).await?;
     // From a button on one of the assistant's cards (9.2): it quotes that
     // card, and the card keeps the press.
     if let Some(card) = card {
+        if answers_item.is_some() {
+            return Err(refused("a button's message answers no question".to_string()));
+        }
         let Some(row_id) = reply_to else {
             return Err(refused("a button's message quotes its card".to_string()));
         };
@@ -1212,9 +1276,9 @@ pub async fn personal_agent_send_core(
             .map_err(refused);
     }
     engine
-        .send_owner_message(text, blocks.unwrap_or_default(), reply_to)
+        .send_from_page(text, blocks.unwrap_or_default(), reply_to, answers_item)
         .await
-        .map_err(refused)
+        .map_err(refusal)
 }
 
 /// The owner pressed a button on one of the assistant's cards that acts
@@ -1452,9 +1516,9 @@ pub async fn personal_agent_notice_act_core(
 ) -> Result<TimelineRow, AppCommandError> {
     engine(bot_id)
         .await?
-        .act_on_notice_with(notice_id, &action, text)
+        .act_on_notice_worded(notice_id, &action, text)
         .await
-        .map_err(refused)
+        .map_err(refusal)
 }
 
 pub async fn personal_agent_answer_question_core(
@@ -1752,8 +1816,20 @@ pub async fn personal_agent_item_act(
     item_id: i32,
     act: String,
     until: Option<String>,
+    from: Option<String>,
+) -> Result<ItemActResult, AppCommandError> {
+    personal_agent_item_act_core(&db, bot_id, item_id, act, until, from).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_item_undo(
+    db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
+    item_id: i32,
+    undo: i32,
 ) -> Result<ItemInfo, AppCommandError> {
-    personal_agent_item_act_core(&db, bot_id, item_id, act, until).await
+    personal_agent_item_undo_core(&db, bot_id, item_id, undo).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -2026,8 +2102,9 @@ pub async fn personal_agent_send(
     blocks: Option<Vec<PromptInputBlock>>,
     reply_to: Option<i32>,
     card: Option<crate::personal_agent::card_acts::CardClick>,
+    answers_item: Option<i32>,
 ) -> Result<TimelineRow, AppCommandError> {
-    personal_agent_send_core(bot_id, text, blocks, reply_to, card).await
+    personal_agent_send_core(bot_id, text, blocks, reply_to, card, answers_item).await
 }
 
 #[cfg(feature = "tauri-runtime")]

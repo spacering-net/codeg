@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useMemo, useRef, useSyncExternalStore } from "react"
+import type { PromptRewindTarget } from "@/lib/api"
 import {
   useAcpActions,
   useConnectionStore,
@@ -73,6 +74,8 @@ export interface UseConnectionReturn {
   connectError: ConnectErrorInfo | null
   promptCapabilities: PromptCapabilitiesInfo
   supportsFork: boolean
+  /** See `ConnectionState.supportsRewind`. */
+  supportsRewind: boolean
   selectorsReady: boolean
   /** The composer's pending mode pick recorded on this connection (see
    *  `ConnectionState.composerModeId`), or `null`. */
@@ -165,8 +168,9 @@ export interface UseConnectionReturn {
       folderId?: number | null
       conversationId?: number | null
       clientMessageId?: string | null
+      rewind?: PromptRewindTarget | null
     }
-  ) => Promise<void>
+  ) => Promise<boolean>
   setMode: (modeId: string) => Promise<void>
   setConfigOption: (
     configId: string,
@@ -308,6 +312,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
   const promptCapabilities =
     connection?.promptCapabilities ?? DEFAULT_PROMPT_CAPABILITIES
   const supportsFork = connection?.supportsFork ?? false
+  const supportsRewind = connection?.supportsRewind ?? false
   const selectorsReady = connection?.selectorsReady ?? false
   const composerModeId = connection?.composerModeId ?? null
   const selectorsLocked = connection?.selectorsLocked ?? false
@@ -381,6 +386,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
         folderId?: number | null
         conversationId?: number | null
         clientMessageId?: string | null
+        rewind?: PromptRewindTarget | null
       }
     ) => actions.sendPrompt(contextKey, blocks, opts),
     [actions, contextKey]
@@ -449,6 +455,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       connectError,
       promptCapabilities,
       supportsFork,
+      supportsRewind,
       selectorsReady,
       composerModeId,
       selectorsLocked,
@@ -502,6 +509,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       connectError,
       promptCapabilities,
       supportsFork,
+      supportsRewind,
       selectorsReady,
       composerModeId,
       selectorsLocked,

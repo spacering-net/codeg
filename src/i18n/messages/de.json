@@ -2416,6 +2416,10 @@
       "forkSessionSuccess": "Sitzung erfolgreich geforkt",
       "forkSessionFailed": "Sitzung konnte nicht geforkt werden: {error}",
       "forkSessionBusy": "Verzweigen fehlgeschlagen: Ein Zug läuft",
+      "editMessageRefused": "Nachricht konnte nicht bearbeitet werden: {reason, select, busy {der Agent arbeitet noch} backgroundWork {es läuft noch Hintergrundarbeit} beforeCompaction {die Nachricht stammt von vor der Komprimierung des Gesprächs} clearedContext {das Gespräch wurde danach geleert} unavailable {der Agent kann nicht zu dieser Nachricht zurück} other {der Agent hat abgelehnt}}",
+      "editMessageBusy": "Nachricht konnte nicht bearbeitet werden: ein Durchgang läuft",
+      "editMessageFailed": "Nachricht konnte nicht bearbeitet werden: {error}",
+      "editMessageQueued": "Nachricht konnte nicht bearbeitet werden: zuerst die wartenden Nachrichten senden oder entfernen",
       "exportConversation": "Konversation exportieren",
       "exportImage": "Bild",
       "exportMarkdown": "Markdown",
@@ -3915,6 +3919,11 @@
         "systemMessage": "Systemnachricht",
         "turnFailed": "Runde fehlgeschlagen: {message}",
         "copyMessage": "Kopieren",
+        "editMessage": "Nachricht bearbeiten",
+        "editMessageBusy": "Zum Bearbeiten warten, bis die Antwort fertig ist",
+        "editMessageHint": "Alles nach dieser Nachricht wird ersetzt",
+        "editMessageCancel": "Abbrechen",
+        "editMessageSend": "Senden",
         "forkFromHere": "Ab hier verzweigen",
         "forkBusy": "Verzweigen nicht möglich, während ein Zug läuft",
         "forkNotReady": "Von dieser Antwort kann noch nicht verzweigt werden – bitte gleich erneut versuchen",
@@ -10351,13 +10360,6 @@
     "items": {
       "waitingAnswer": "Wartet auf die Antwort von {name}: {text}",
       "wroteToYou": "{name} schrieb: {text}",
-      "waits": {
-        "owner": "Wartet auf dich",
-        "agent": "Für den Agenten",
-        "external": "In Arbeit",
-        "time": "Später",
-        "none": "Sonstiges"
-      },
       "kind": {
         "dispatch": "Zuweisung",
         "reminder": "Erinnerung",
@@ -11276,7 +11278,8 @@
       "jump": "Zur ursprünglichen Nachricht",
       "dismiss": "Zitat entfernen",
       "preview": "Ursprüngliche Nachricht",
-      "previewHint": "Die zitierte Nachricht, zu weit zurück, um sie hier zu laden."
+      "previewHint": "Die zitierte Nachricht, zu weit zurück, um sie hier zu laden.",
+      "reminder": "Erinnerung: {summary}"
     },
     "step": {
       "awaiting": "Wartet auf dich: {title}",
@@ -11815,7 +11818,10 @@
       "loading": "Schritte werden geladen…",
       "empty": "Noch keine Schritte",
       "fold": "Schritte ausblenden",
-      "openWork": "Arbeit öffnen"
+      "openWork": "Arbeit öffnen",
+      "replied": "Geantwortet",
+      "workDone": "Arbeit erledigt",
+      "notFinished": "Nicht fertig geworden"
     },
     "sending": {
       "waking": "{name} wird geweckt…",
@@ -11846,13 +11852,6 @@
       "notify": "Benachrichtigen",
       "notifyHint": "Wenn er etwas abschließt oder auf dich wartet",
       "item": {
-        "done": "Erledigt",
-        "later": "Später",
-        "drop": "Verwerfen",
-        "in15m": "In 15 Min.",
-        "in1h": "In 1 Stunde",
-        "tomorrow": "Morgen früh",
-        "untimed": "Ohne feste Zeit",
         "act": "Erledigt es zur Zeit"
       },
       "output": {
@@ -12019,8 +12018,8 @@
       "snooze15m": "In 15 Min.",
       "snooze1h": "In 1 Stunde",
       "snoozeTomorrow": "Morgen früh",
-      "handOver": "An den Assistenten geben",
-      "handOverText": "Kümmere dich um Erinnerung #{id}: {summary}",
+      "handOver": "An {name} übergeben",
+      "handOverText": "Bitte kümmere dich um diese Erinnerung: {summary}",
       "state": {
         "done": "Erledigt",
         "snoozed": "Verschoben auf {when}",
@@ -12046,7 +12045,6 @@
       "handed": "An {name} übergeben",
       "checking": "Wird geprüft · Runde {round}",
       "queued": "zum Mergen eingereiht",
-      "waitsAgent": "Wartet darauf, dass {name} es erledigt",
       "routineRunning": "Läuft",
       "routineLast": "Letzter Lauf: {outcome}",
       "fold": "Details ausblenden",
@@ -13050,6 +13048,121 @@
       "title": "{name} hat noch kein Gehirn",
       "body": "Er stammt aus den Kollaborationseinstellungen. Richte den Hauptassistenten ein, dann bekommt er eine Kopie dessen Gehirns – danach kannst du mit ihm sprechen. Bis dahin kannst du ihn in Unterhaltungen weiterhin per @ erwähnen.",
       "setUp": "Hauptassistenten einrichten"
+    },
+    "matter": {
+      "act": {
+        "done": "Erledigt",
+        "doneThis": "Diesmal erledigt",
+        "doneEarly": "Vorzeitig erledigt",
+        "skipThis": "Diesmal überspringen",
+        "merged": "Gemergt",
+        "ack": "Verstanden",
+        "snooze": "Verschieben",
+        "setTime": "Zeit festlegen",
+        "in15m": "In 15 Min.",
+        "in1h": "In 1 Stunde",
+        "tomorrow": "Morgen früh",
+        "handOver": "An {name} übergeben",
+        "answer": "Antworten",
+        "drop": "Nicht mehr nötig",
+        "stop": "Nicht mehr erinnern",
+        "undo": "Rückgängig"
+      },
+      "hint": {
+        "doneNext": "Diesmal erledigt; danach wie gewohnt: {rule}",
+        "skipNext": "Diesmal übersprungen; danach wie gewohnt: {rule}",
+        "snoozeNotify": "Du wirst dann erneut erinnert",
+        "snoozeAct": "{name} erledigt es dann",
+        "setTimeNotify": "Du wirst dann erinnert",
+        "setTimeAct": "{name} erledigt es dann",
+        "handOver": "{name} kümmert sich darum",
+        "answer": "Im Gespräch mit {name} antworten",
+        "drop": "Von der Liste nehmen; {name} verfolgt es nicht weiter",
+        "dropQuestion": "Keine Antwort nötig; {name} erfährt es",
+        "dropMessage": "Zieht die Nachricht zurück; geht das nicht mehr, wartet {name} nicht weiter auf die Antwort von {peer}",
+        "stop": "Keine Erinnerungen mehr",
+        "merged": "Sagt {name}, dass der Pull Request gemergt ist",
+        "ack": "Von der Liste nehmen"
+      },
+      "toast": {
+        "done": "Erledigt: {title}",
+        "doneNext": "Diesmal erledigt — nächstes Mal {when}",
+        "doneEnded": "Erledigt — das war das letzte Mal",
+        "skipNext": "Diesmal übersprungen — nächstes Mal {when}",
+        "skipEnded": "Übersprungen — das war das letzte Mal",
+        "snoozeNotify": "Du wirst {when} erinnert",
+        "snoozeAct": "{name} erledigt es {when}",
+        "dropped": "Entfernt: {title}",
+        "withdrawn": "Die Nachricht an {peer} wurde zurückgezogen",
+        "notWithdrawn": "Die Nachricht wurde nicht zurückgezogen; {name} wartet nicht mehr auf die Antwort von {peer}",
+        "stopped": "Keine Erinnerungen mehr: {title}",
+        "handed": "An {name} übergeben",
+        "undone": "Rückgängig gemacht"
+      },
+      "meta": {
+        "reminds": "{name} erinnert dich · fällig {when}",
+        "remindsLate": "{name} erinnert dich · fällig {when}, vor {late}",
+        "willRemind": "{name} erinnert dich {when}",
+        "willDo": "{name} erledigt es {when}",
+        "repeats": "{name} erinnert dich: {rule} · nächstes Mal {when}",
+        "asks": "{name} fragt dich · wartet seit {wait}",
+        "asked": "{name} fragt dich",
+        "answered": "Du hast geantwortet · wartet darauf, dass {name} es liest",
+        "interrupted": "Der Durchlauf von {name} wurde nicht beendet und hat deine Antwort vielleicht nicht gelesen · antworte bei Bedarf noch einmal",
+        "needsYou": "{name} braucht dich · wartet seit {wait}",
+        "following": "{name} bleibt dran · {wait}",
+        "external": "{name} wartet auf etwas außerhalb · {wait}",
+        "message": "{name} wartet auf die Antwort von {peer} · {wait}",
+        "setAside": "Zurückgestellt · keine Zeit festgelegt",
+        "mention": "Wenn du {words} erwähnst, erinnert dich {name} · {times} von {max} Mal · bis {until}",
+        "justNow": "gerade eben",
+        "someone": "der andere Assistent"
+      },
+      "closed": {
+        "done": "Von dir erledigt · {time}",
+        "dropped": "Von dir entfernt · {time}",
+        "withdrawn": "Du hast die Nachricht an {peer} zurückgezogen · {time}",
+        "stoppedWaiting": "Du wartest nicht mehr auf die Antwort von {peer} · {time}",
+        "agentDone": "{name} hat es erledigt · {time}",
+        "agentDropped": "{name} verfolgt es nicht mehr · {time}",
+        "answered": "{name} hat deine Antwort gelesen · {time}",
+        "replied": "{peer} hat geantwortet · {time}",
+        "gone": "{peer} wurde gelöscht; es kommt keine Antwort · {time}",
+        "planCanceled": "Der Plan wurde abgebrochen; {name} wartet nicht mehr auf die Antwort von {peer} · {time}",
+        "usedUp": "Die Erinnerung bei Erwähnung ist aufgebraucht · {time}",
+        "expired": "Die Erinnerung bei Erwähnung ist abgelaufen · {time}",
+        "ended": "Beendet · {time}"
+      }
+    },
+    "matterErrors": {
+      "gone": "Das gibt es nicht mehr",
+      "settled": "Das ist bereits beendet",
+      "changed": "Das hat sich gerade geändert — sieh noch einmal nach",
+      "workRunning": "Diese Arbeit läuft noch; halte sie über Stoppen in ihrer Aufgabenleiste an",
+      "workNoTime": "Übergebene Arbeit lässt sich nicht auf eine Zeit verschieben",
+      "messageNoTime": "Das wartet auf die Antwort von {peer} und lässt sich nicht auf eine Zeit verschieben",
+      "mentionNoTime": "Das kommt, wenn du es erwähnst, nicht zu einer Zeit",
+      "notEarlier": "Das ist schon für {when} festgelegt; Verschieben geht nur nach hinten",
+      "hasTime": "Das ist schon für {when} festgelegt",
+      "inOtherHands": "Das liegt bei {bot} und lässt sich nicht auf eine Zeit verschieben",
+      "badTime": "Diese Zeit wurde nicht verstanden",
+      "undoNone": "Das lässt sich nicht rückgängig machen",
+      "undoExpired": "Mehr als 10 Minuten sind vergangen; das lässt sich nicht mehr rückgängig machen",
+      "undoFired": "Die Erinnerung kam gerade; das lässt sich nicht mehr rückgängig machen",
+      "undoChanged": "Das hat sich gerade geändert; das lässt sich nicht mehr rückgängig machen",
+      "undoReplied": "{peer} hat schon geantwortet; das lässt sich nicht mehr rückgängig machen",
+      "undoPeerGone": "{peer} wurde gelöscht; das lässt sich nicht mehr rückgängig machen",
+      "undoAnswerRead": "{bot} hat deine Antwort schon gelesen; das lässt sich nicht mehr rückgängig machen",
+      "answerChanged": "Die Frage hat sich gerade geändert. Die Nachricht wurde nicht gesendet; dein Text steht noch im Eingabefeld",
+      "answerQueued": "Diese Frage steht für {bot} in der Warteschlange. Um etwas zu ergänzen, entferne „Antworten“ und sende es als normale Nachricht",
+      "reminderAnswered": "Diese Erinnerung wurde schon beantwortet"
+    },
+    "answer": {
+      "bar": "Antwort: {question}",
+      "dismiss": "Nicht als Antwort senden",
+      "label": "Antwort: {question}",
+      "ended": "Diese Frage ist beendet; keine Antwort nötig",
+      "alreadyAnswered": "Diese Frage wartet schon darauf, dass {name} deine Antwort liest"
     }
   },
   "MessageCheck": {
