@@ -93,6 +93,11 @@ function ProjectKnowledgePanel({
   const [saveError, setSaveError] = useState(false)
   const [busy, setBusy] = useState(false)
   const title = (entry: Summary) => entry.title || t("untitled")
+  const updatedAt = (entry: Summary) =>
+    format.dateTime(new Date(entry.updatedAt), {
+      dateStyle: "medium",
+      timeStyle: "short",
+    })
   const EntryIcon = kind === "notes" ? NotebookPen : FileText
 
   useEffect(() => {
@@ -313,6 +318,12 @@ function ProjectKnowledgePanel({
           ) : (
             current && (
               <div className="min-h-0 flex-1 overflow-auto px-3 py-2 select-text [scrollbar-width:thin]">
+                <time
+                  dateTime={current.updatedAt}
+                  className="mb-2 block text-xs text-muted-foreground"
+                >
+                  {updatedAt(current)}
+                </time>
                 <MessageResponse
                   mode="static"
                   className="plan-markdown [&_ol]:ps-5! [&_ul]:ps-5!"
@@ -421,12 +432,12 @@ function ProjectKnowledgePanel({
                         >
                           {title(entry)}
                         </span>
-                        <span className="text-xs text-muted-foreground">
-                          {format.dateTime(new Date(entry.updatedAt), {
-                            month: "short",
-                            day: "numeric",
-                          })}
-                        </span>
+                        <time
+                          dateTime={entry.updatedAt}
+                          className="text-xs text-muted-foreground"
+                        >
+                          {updatedAt(entry)}
+                        </time>
                       </span>
                     </button>
                     {sessionTabId && (

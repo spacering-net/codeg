@@ -169,3 +169,24 @@ it("previews a Markdown plan, retains it on remount, and isolates projects", asy
     await screen.findByRole("button", { name: /release plan/i })
   ).toBeInTheDocument()
 })
+
+it.each([
+  { kind: "note", tab: "Notes" },
+  { kind: "plan", tab: "Plans" },
+])("shows the last update date and time for a $kind", async ({ kind, tab }) => {
+  const user = userEvent.setup()
+  entries.set("1" + kind, [
+    {
+      id: "1",
+      title: "Release review",
+      body: "Release review",
+      updatedAt: "2026-11-26T09:43:00Z",
+    },
+  ])
+  render(panel())
+  await user.click(screen.getByRole("tab", { name: tab }))
+  const row = await screen.findByRole("button", { name: /release review/i })
+  expect(row).toHaveTextContent("Nov 26, 2026, 9:43 AM")
+  await user.click(row)
+  expect(screen.getByText("Nov 26, 2026, 9:43 AM")).toBeInTheDocument()
+})
