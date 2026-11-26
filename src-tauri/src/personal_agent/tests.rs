@@ -5033,6 +5033,82 @@ async fn a_message_wakes_its_receiver_and_its_answer_closes_the_wait() {
     );
 }
 
+/// "Done today" reads its matters in the same number of queries whether one
+/// closed or fifty, and says of each what it said reading them one at a
+/// time: a replied message (going to the reply), one taken back (with its
+/// [Undo]), the owner's own acts (with theirs), an answered question.
+#[tokio::test]
+async fn done_today_reads_in_a_fixed_number_of_queries() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let p = primary.bot().await;
+    // Replied.
+    let id = sent_id(&say(&primary, json!({ "to": w.to_string(), "text": "Fix the login." })).await);
+    say(&worker, json!({ "reply_to": format!("m{id}"), "text": "Fixed." })).await;
+    // Taken back by the owner, undoable.
+    let id2 = sent_id(&say(&primary, json!({ "to": w.to_string(), "text": "Check the logs." })).await);
+    let line = msvc::lines_of_message(&primary.db.conn, id2)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|l| l.bot_id == Some(p))
+        .unwrap();
+    let waiting = msvc::waiting_item_of_line(&primary.db.conn, p, line.id).await.unwrap().unwrap();
+    primary.settle_item_from(waiting.id, "drop", None, OpSource::Panel).await.unwrap();
+    // An answered question the owner dropped while its answer waited.
+    let q = call(&primary, "item_update", json!({ "kind": "question", "summary": "Friday?" })).await;
+    let q = q.data["item_id"].as_i64().unwrap() as i32;
+    primary.send_from_page("Yes.".into(), Vec::new(), None, Some(q)).await.unwrap();
+    primary.settle_item_from(q, "drop", None, OpSource::Panel).await.unwrap();
+    // The owner's own, undoable and not.
+    let close = |n: usize| {
+        let primary = primary.clone();
+        async move {
+            for k in 0..n {
+                let out = call(&primary, "item_update", json!({ "kind": "reminder", "summary": format!("Errand {k}") })).await;
+                let id = out.data["item_id"].as_i64().unwrap() as i32;
+                let act = if k % 2 == 0 { "done" } else { "drop" };
+                primary.settle_item_from(id, act, None, OpSource::Panel).await.unwrap();
+            }
+        }
+    };
+    let counted = |db: &crate::db::AppDatabase, hits: Arc<AtomicUsize>| {
+        let mut conn = db.conn.clone();
+        conn.set_metric_callback(move |_| {
+            hits.fetch_add(1, Ordering::SeqCst);
+        });
+        crate::db::AppDatabase { conn }
+    };
+    let day = chrono::Utc::now() - chrono::Duration::days(1);
+    let read = |n: Arc<AtomicUsize>| {
+        let db = counted(&primary.db, n);
+        async move { super::today::closed_matters(&db, &[p, w], day, chrono::Utc::now()).await }
+    };
+    close(1).await;
+    let one = Arc::new(AtomicUsize::new(0));
+    let rows = read(one.clone()).await;
+    close(49).await;
+    let fifty = Arc::new(AtomicUsize::new(0));
+    let many = read(fifty.clone()).await;
+    assert_eq!(many.len(), rows.len() + 49);
+    assert!(one.load(Ordering::SeqCst) > 0, "queries are counted");
+    assert_eq!(one.load(Ordering::SeqCst), fifty.load(Ordering::SeqCst), "the same number of queries");
+    // As one at a time said it.
+    let now = chrono::Utc::now();
+    let batched = super::today::closed_matters(&primary.db, &[p, w], day, now).await;
+    let single = super::today::closed_matters_one_by_one(&primary.db, &[p, w], day, now).await;
+    assert_eq!(serde_json::to_value(&batched).unwrap(), serde_json::to_value(&single).unwrap());
+    let replied = batched.iter().find(|r| r.closed_how.as_deref() == Some("replied")).unwrap();
+    let origin = svc::get_item(&primary.db.conn, replied.item_id.unwrap()).await.unwrap().unwrap().origin_timeline_id;
+    assert!(replied.row_id.is_some() && replied.row_id != origin, "goes to the reply");
+    let withdrawn = batched.iter().find(|r| r.closed_how.as_deref() == Some("withdrawn")).unwrap();
+    assert!(withdrawn.matter_undo.is_some());
+    assert_eq!(withdrawn.written.as_deref(), Some("Check the logs."));
+    assert!(batched.iter().filter(|r| r.closed_by.as_deref() == Some("owner")).all(|r| r.matter_undo.is_some()));
+}
+
 #[tokio::test]
 async fn a_delivery_carries_a_message_as_the_other_assistants_words() {
     let (host, w, _tmp) = hosted().await;

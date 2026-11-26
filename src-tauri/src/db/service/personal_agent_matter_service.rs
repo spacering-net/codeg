@@ -319,20 +319,27 @@ pub async fn answer_now(
     conn: &impl ConnectionTrait,
     row_id: Option<i32>,
 ) -> Result<AnswerNow, DbError> {
-    let Some(row) = (match row_id {
+    let row = match row_id {
         Some(id) => timeline::Entity::find_by_id(id).one(conn).await?,
         None => None,
-    }) else {
-        return Ok(AnswerNow::Interrupted);
     };
-    let status = match row.batch_id {
+    let status = match row.as_ref().and_then(|r| r.batch_id) {
         Some(b) => batch::Entity::find_by_id(b).one(conn).await?.map(|b| b.status),
         None => None,
     };
-    Ok(match row.status {
+    Ok(answer_now_from(row.as_ref(), status))
+}
+
+/// [`answer_now`] of the answer's row `row` as read, its batch's status
+/// `status`.
+fn answer_now_from(row: Option<&timeline::Model>, status: Option<BatchStatus>) -> AnswerNow {
+    let Some(row) = row else {
+        return AnswerNow::Interrupted;
+    };
+    match row.status {
         Some(OwnerStatus::Queued) => AnswerNow::Linked,
         Some(OwnerStatus::Interrupted) | None => AnswerNow::Interrupted,
-        Some(OwnerStatus::Delivered | OwnerStatus::Answered) if !confirmed(&row) => {
+        Some(OwnerStatus::Delivered | OwnerStatus::Answered) if !confirmed(row) => {
             AnswerNow::Linked
         }
         // Delivered: its turn runs, or ended and the row was not moved
@@ -343,7 +350,7 @@ pub async fn answer_now(
             Some(BatchStatus::Running) => AnswerNow::Linked,
             _ => AnswerNow::Interrupted,
         },
-    })
+    }
 }
 
 /// Why the message an act took back (or stopped waiting for) keeps it
@@ -353,37 +360,46 @@ async fn message_refusal(
     conn: &impl ConnectionTrait,
     m: &NoteMessage,
 ) -> Result<Option<UndoRefused>, DbError> {
-    let peer = m.to_bot_id;
-    let gone = agent::Entity::find_by_id(peer)
-        .one(conn)
-        .await?
-        .is_none_or(|b| b.deleted_at.is_some());
-    if gone {
-        return Ok(Some(UndoRefused::PeerGone { peer }));
-    }
+    let peer = agent::Entity::find_by_id(m.to_bot_id).one(conn).await?;
     // A receiver may still answer a message taken back or stopped: the
     // answer is what matters, not the message's state.
     let replied = message::Entity::find()
         .filter(message::Column::ReplyTo.eq(m.id))
-        .filter(message::Column::FromBotId.eq(peer))
+        .filter(message::Column::FromBotId.eq(m.to_bot_id))
         .one(conn)
         .await?
         .is_some();
-    if replied {
-        return Ok(Some(UndoRefused::Replied { peer }));
+    let msg = message::Entity::find_by_id(m.id).one(conn).await?;
+    Ok(message_refusal_from(m, peer.as_ref(), replied, msg.as_ref()))
+}
+
+/// [`message_refusal`] from what it reads: the receiver (`peer`), whether
+/// it answered the message (`replied`), and the message itself.
+fn message_refusal_from(
+    m: &NoteMessage,
+    peer: Option<&agent::Model>,
+    replied: bool,
+    msg: Option<&message::Model>,
+) -> Option<UndoRefused> {
+    let to = m.to_bot_id;
+    if peer.is_none_or(|b| b.deleted_at.is_some()) {
+        return Some(UndoRefused::PeerGone { peer: to });
     }
-    let Some(msg) = message::Entity::find_by_id(m.id).one(conn).await? else {
-        return Ok(Some(UndoRefused::Changed));
+    if replied {
+        return Some(UndoRefused::Replied { peer: to });
+    }
+    let Some(msg) = msg else {
+        return Some(UndoRefused::Changed);
     };
     let ok = match m.outcome.as_str() {
         "withdrawn" => msg.state == MessageState::Stopped,
         _ => LIVE_MESSAGE_STATES.contains(&msg.state),
     };
-    Ok(match (ok, msg.state) {
+    match (ok, msg.state) {
         (true, _) => None,
-        (false, MessageState::Replied) => Some(UndoRefused::Replied { peer }),
+        (false, MessageState::Replied) => Some(UndoRefused::Replied { peer: to }),
         (false, _) => Some(UndoRefused::Changed),
-    })
+    }
 }
 
 /// Why the answer the act closed (or dropped) a question on keeps it from
@@ -396,10 +412,15 @@ async fn answer_refusal(
         return Ok((None, None));
     }
     let now = answer_now(conn, before.answer_row_id).await?;
-    Ok(match now {
+    Ok(answer_refusal_from(now))
+}
+
+/// [`answer_refusal`] of a linked answer standing `now`.
+fn answer_refusal_from(now: AnswerNow) -> (Option<UndoRefused>, Option<AnswerNow>) {
+    match now {
         AnswerNow::Read => (Some(UndoRefused::AnswerRead), Some(now)),
         _ => (None, Some(now)),
-    })
+    }
 }
 
 /// Take back the owner's act `token` on `bot`'s matter `item_id` (§4.3),
@@ -629,10 +650,165 @@ pub async fn undo_item_op(
     }))
 }
 
+/// [`item_undo_token`] of each of `items`, by the matter's id — in a fixed
+/// number of reads, however many there are ("done today" lists them all):
+/// the window's panel lines of their assistants, read once and the latest
+/// of each matter kept; then, for those that could be taken back, the
+/// messages they took back and the receivers, the replies, the answers'
+/// rows and their batches, each read once for all. Judged as one at a time
+/// would be.
+pub async fn item_undo_tokens(
+    conn: &DatabaseConnection,
+    items: &[item::Model],
+    now: DateTime<Utc>,
+) -> Result<std::collections::HashMap<i32, i32>, DbError> {
+    use std::collections::{HashMap, HashSet};
+    let mut out = HashMap::new();
+    let bots: HashSet<i32> = items.iter().filter_map(|i| i.bot_id).collect();
+    if bots.is_empty() {
+        return Ok(out);
+    }
+    let since = now - chrono::Duration::seconds(UNDO_WINDOW_SECS);
+    let notes = event::Entity::find()
+        .filter(event::Column::BotId.is_in(bots.iter().copied().collect::<Vec<_>>()))
+        .filter(event::Column::Kind.eq(ITEM_NOTE))
+        .filter(event::Column::CreatedAt.gte(since))
+        .order_by_desc(event::Column::Id)
+        .all(conn)
+        .await?;
+    // Each matter's latest line, whatever it is: an older act is not the
+    // one taken back.
+    let mut latest: HashMap<(i32, i32), &event::Model> = HashMap::new();
+    for ev in &notes {
+        let Some(bot) = ev.bot_id else {
+            continue;
+        };
+        let item_id = ev
+            .payload
+            .as_deref()
+            .and_then(|p| serde_json::from_str::<Value>(p).ok())
+            .and_then(|p| p["item_id"].as_i64())
+            .and_then(|id| i32::try_from(id).ok());
+        if let Some(item_id) = item_id {
+            latest.entry((bot, item_id)).or_insert(ev);
+        }
+    }
+    // The acts that could be taken back, as far as the matter goes.
+    let mut open: Vec<(&item::Model, &event::Model, UndoNote)> = Vec::new();
+    for i in items {
+        let Some(bot) = i.bot_id else {
+            continue;
+        };
+        let Some(ev) = latest.get(&(bot, i.id)) else {
+            continue;
+        };
+        let Some(note) = note_of(ev, i.id) else {
+            continue;
+        };
+        if note.after.updated_at != i.updated_at || note.after.status != i.status {
+            continue;
+        }
+        open.push((i, ev, note));
+    }
+    if open.is_empty() {
+        return Ok(out);
+    }
+    // What their checks read, once for all (a few hundred ids a query, well
+    // under SQLite's bound on a statement's variables).
+    const CHUNK: usize = 500;
+    let messages: Vec<&NoteMessage> = open.iter().filter_map(|(_, _, n)| n.message.as_ref()).collect();
+    let to_bots: Vec<i32> = messages
+        .iter()
+        .map(|m| m.to_bot_id)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let mut peers: HashMap<i32, agent::Model> = HashMap::new();
+    for ids in to_bots.chunks(CHUNK) {
+        for b in agent::Entity::find()
+            .filter(agent::Column::Id.is_in(ids.to_vec()))
+            .all(conn)
+            .await?
+        {
+            peers.insert(b.id, b);
+        }
+    }
+    let message_ids: Vec<i32> = messages.iter().map(|m| m.id).collect();
+    let mut sent: HashMap<i32, message::Model> = HashMap::new();
+    let mut replies: Vec<message::Model> = Vec::new();
+    for ids in message_ids.chunks(CHUNK) {
+        for m in message::Entity::find()
+            .filter(message::Column::Id.is_in(ids.to_vec()))
+            .all(conn)
+            .await?
+        {
+            sent.insert(m.id, m);
+        }
+        replies.extend(
+            message::Entity::find()
+                .filter(message::Column::ReplyTo.is_in(ids.to_vec()))
+                .all(conn)
+                .await?,
+        );
+    }
+    let answer_rows: Vec<i32> = open
+        .iter()
+        .filter(|(_, _, n)| n.before.answer_state.as_deref() == Some("linked"))
+        .filter_map(|(_, _, n)| n.before.answer_row_id)
+        .collect();
+    let mut rows: HashMap<i32, timeline::Model> = HashMap::new();
+    for ids in answer_rows.chunks(CHUNK) {
+        for r in timeline::Entity::find()
+            .filter(timeline::Column::Id.is_in(ids.to_vec()))
+            .all(conn)
+            .await?
+        {
+            rows.insert(r.id, r);
+        }
+    }
+    let batch_ids: Vec<i32> = rows
+        .values()
+        .filter_map(|r| r.batch_id)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let mut batches: HashMap<i32, BatchStatus> = HashMap::new();
+    for ids in batch_ids.chunks(CHUNK) {
+        for b in batch::Entity::find()
+            .filter(batch::Column::Id.is_in(ids.to_vec()))
+            .all(conn)
+            .await?
+        {
+            batches.insert(b.id, b.status);
+        }
+    }
+    for (i, ev, note) in open {
+        if let Some(m) = &note.message {
+            let replied = replies
+                .iter()
+                .any(|r| r.reply_to == Some(m.id) && r.from_bot_id == m.to_bot_id);
+            if message_refusal_from(m, peers.get(&m.to_bot_id), replied, sent.get(&m.id)).is_some() {
+                continue;
+            }
+        }
+        if note.before.answer_state.as_deref() == Some("linked") {
+            let row = note.before.answer_row_id.and_then(|id| rows.get(&id));
+            let status = row.and_then(|r| r.batch_id).and_then(|b| batches.get(&b).copied());
+            if answer_refusal_from(answer_now_from(row, status)).0.is_some() {
+                continue;
+            }
+        }
+        out.insert(i.id, ev.id);
+    }
+    Ok(out)
+}
+
 /// What takes back the owner's latest act on `item` from the panel, while
 /// it still would (§4.6, "done today"'s [Undo]): within the window, the
 /// matter not written since, and nothing it set going in the way — the
-/// same checks `undo_item_op` makes.
+/// same checks `undo_item_op` makes. One at a time; "done today" reads
+/// them all at once ([`item_undo_tokens`]).
+#[cfg(test)]
 pub async fn item_undo_token(
     conn: &DatabaseConnection,
     item: &item::Model,
