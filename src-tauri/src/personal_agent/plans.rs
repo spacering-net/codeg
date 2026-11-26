@@ -2962,7 +2962,14 @@ impl PersonalAgentEngine {
             if !moved.is_empty() {
                 self.refresh_lines(mid, "stopped").await;
                 if let Ok(Some(m)) = msvc::get_message(&self.db.conn, mid).await {
-                    self.drop_waiting(&m).await;
+                    self.drop_waiting(
+                        &m,
+                        crate::db::service::personal_agent_service::Closing::new(
+                            crate::db::service::personal_agent_service::Closer::Codeg,
+                            "plan_canceled",
+                        ),
+                    )
+                    .await;
                 }
             }
         }

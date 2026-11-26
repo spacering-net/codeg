@@ -12786,26 +12786,47 @@ pub async fn acp_set_composer_mode(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[allow(clippy::too_many_arguments)]
 pub async fn acp_prompt(
     connection_id: String,
     blocks: Vec<PromptInputBlock>,
     folder_id: Option<i32>,
     conversation_id: Option<i32>,
     client_message_id: Option<String>,
+    // An edited message: cut the session back to just before the message it
+    // replaces, in the same step (see `crate::acp::rewind`).
+    rewind: Option<crate::acp::rewind::RewindTarget>,
     db: State<'_, crate::db::AppDatabase>,
     manager: State<'_, ConnectionManager>,
 ) -> Result<(), AcpError> {
-    manager
-        .send_prompt_linked_with_message_id(
-            &db,
-            &connection_id,
-            blocks,
-            folder_id,
-            conversation_id,
-            None,
-            client_message_id,
-        )
-        .await?;
+    match rewind {
+        Some(rewind) => {
+            manager
+                .send_prompt_linked_rewinding(
+                    &db,
+                    &connection_id,
+                    blocks,
+                    folder_id,
+                    conversation_id,
+                    client_message_id,
+                    rewind,
+                )
+                .await?
+        }
+        None => {
+            manager
+                .send_prompt_linked_with_message_id(
+                    &db,
+                    &connection_id,
+                    blocks,
+                    folder_id,
+                    conversation_id,
+                    None,
+                    client_message_id,
+                )
+                .await?
+        }
+    };
     // A person typed this in a codeg window: a dispatch they write in is
     // theirs from now on.
     crate::personal_agent::note_owner_prompt(&connection_id, conversation_id);

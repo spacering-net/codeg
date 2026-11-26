@@ -1015,6 +1015,10 @@ impl PersonalAgentEngine {
                     ItemWrite {
                         status: Some(crate::db::entities::personal_agent_item::ItemStatus::Dropped),
                         waits_for: Some(None),
+                        closing: Some(crate::db::service::personal_agent_service::Closing::new(
+                            crate::db::service::personal_agent_service::Closer::Codeg,
+                            "gone",
+                        )),
                         ..Default::default()
                     },
                 )

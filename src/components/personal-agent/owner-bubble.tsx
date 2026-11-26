@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils"
 
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
+import { AnswerLabel } from "./answer-bar"
 import { QuoteBar } from "./quote-bar"
 import { num, UnreadMark, usePageScope } from "./shared"
 
@@ -55,6 +56,18 @@ function hitsOf(data: unknown): MentionHit[] {
       typeof (h as MentionHit).keyword === "string" &&
       typeof (h as MentionHit).text === "string"
   )
+}
+
+/** The question of the assistant's a message answers, as its row keeps it
+ *  (`data.answers_item`). */
+function answeredOf(data: unknown): string | null {
+  const a =
+    data && typeof data === "object"
+      ? (data as Record<string, unknown>).answers_item
+      : null
+  if (!a || typeof a !== "object") return null
+  const summary = (a as Record<string, unknown>).summary
+  return typeof summary === "string" && summary.trim() ? summary.trim() : null
 }
 
 /** A reminder the message brought up, under it. */
@@ -114,6 +127,7 @@ export function OwnerBubble({ item }: { item: OwnerItem }) {
   const botId = useBotId()
   const [busy, setBusy] = useState(false)
   const resentAs = num(row.data, "resent_as")
+  const answered = answeredOf(row.data)
   const images = Array.isArray(row.data?.blocks)
     ? (row.data.blocks as ImageBlock[]).filter(
         (b) => b.type === "image" && b.data
@@ -210,6 +224,11 @@ export function OwnerBubble({ item }: { item: OwnerItem }) {
           >
             👍
           </span>
+        ) : null}
+        {answered ? (
+          <div className="mb-1">
+            <AnswerLabel summary={answered} />
+          </div>
         ) : null}
         {row.reply_to != null ? (
           <QuoteBar targetId={row.reply_to} tone="light" className="mb-1.5" />
