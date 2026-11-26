@@ -18,6 +18,7 @@ import type { DiffViewMode } from "@/lib/diff-view-mode-prefs"
 
 export type SessionDetailsSection =
   | "plan"
+  | "progress"
   | "askConversations"
   | "checkConversations"
   | "messageNav"

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { describe, expect, it, vi } from "vitest"
 import enMessages from "@/i18n/messages/en.json"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import type { DbConversationSummary } from "@/lib/types"
 
 const api = vi.hoisted(() => ({
@@ -35,7 +36,7 @@ const digestState = vi.hoisted(() => ({
     answers: {},
     dismissedSuggestions: [],
   },
-  brief: { text: "Own the server migration.", updatedAt: null },
+  brief: { text: "**Own the server migration.**", updatedAt: null },
 }))
 const actions = vi.hoisted(() => ({
   answer: vi.fn(async () => {}),
@@ -66,15 +67,10 @@ const related: DbConversationSummary = {
   status: "in_progress",
   parent_id: null,
 } as DbConversationSummary
-vi.mock("@/stores/app-workspace-store", () => ({
-  useAppWorkspaceStore: (
-    sel: (s: { conversations: DbConversationSummary[] }) => unknown
-  ) => sel({ conversations: [related] }),
-}))
-
 import { SessionCollaborators } from "./session-collaborators"
 
 function show() {
+  useAppWorkspaceStore.setState({ conversations: [related] })
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <SessionCollaborators conversationId={5} />
@@ -89,7 +85,21 @@ describe("SessionCollaborators progress entry", () => {
     expect(screen.getByText("Migrating the server")).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: /^A/ }))
     await waitFor(() => expect(actions.answer).toHaveBeenCalledWith("q", "A"))
-    expect(screen.getByText("Own the server migration.")).toBeInTheDocument()
+    expect(
+      screen.getByText("Own the server migration.", {
+        selector: '[data-streamdown="strong"]',
+      })
+    ).toBeInTheDocument()
+    const toggle = screen.getByRole("button", { name: "Session progress" })
+    expect(toggle).toHaveAttribute("aria-expanded", "true")
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute("aria-expanded", "false")
+    expect(screen.queryByText("Migrating the server")).not.toBeInTheDocument()
+    expect(
+      screen.queryByText("Own the server migration.")
+    ).not.toBeInTheDocument()
+    fireEvent.click(toggle)
+    expect(screen.getByText("Migrating the server")).toBeInTheDocument()
   })
 
   it("jumps to a collaboration session tab", async () => {
@@ -114,6 +124,9 @@ describe("SessionCollaborators progress entry", () => {
     expect(
       screen.queryByText("Own the server migration.")
     ).not.toBeInTheDocument()
-    digestState.brief = { text: "Own the server migration.", updatedAt: null }
+    digestState.brief = {
+      text: "**Own the server migration.**",
+      updatedAt: null,
+    }
   })
 })
