@@ -182,6 +182,13 @@ fn enum_spec_for(key: &str) -> Option<EnumSpec> {
 /// [`NULLABLE_BOOL_FIELDS`]. Re-probed against the 0.171.0 binary: every field
 /// here and every enum set above behaves as on 0.170.0, and so do the nested
 /// `model_messages` texts.
+///
+/// 0.172.0 (codex-acp 2.12.1 moves `@openai/codex` ^0.171.0 → ^0.172.0) ships
+/// the bundled catalog as 0.171.0 did and adds no top-level `ModelInfo` field;
+/// `available_access_programs` gains the optional `daybreak_availability`,
+/// which no bundled model sets and the editor does not offer. Re-probed
+/// against the 0.172.0 binary: the snapshot loads whole, and `"yes"` in a
+/// boolean or an optional boolean still takes the catalog down.
 const BOOL_FIELDS: &[&str] = &[
     "use_responses_lite",
     "supported_in_api",
@@ -944,7 +951,7 @@ mod tests {
         assert_eq!(
             models.len(),
             14,
-            "snapshot should carry the catalog codex 0.171.0 ships (0.170.0's)"
+            "snapshot should carry the catalog codex 0.172.0 ships (0.170.0's)"
         );
         // 0.158.0 deleted gpt-5.4 outright (it had shipped hidden, as a
         // retirement stub) rather than hiding it any further.

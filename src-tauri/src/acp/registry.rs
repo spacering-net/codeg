@@ -467,7 +467,7 @@ pub const PI_MIN_RUNTIME_VERSION: &str = "0.81.0";
 /// for when the installed copy's own package.json cannot be read. A runtime
 /// resolved to this value is marked unconfirmed (`codex_runtime`), so it never
 /// counts as the version a catalog was checked against. Move it with the pin.
-pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.171.0";
+pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.172.0";
 
 /// The npm package the built-in Claude Code entry runs — and the name the
 /// adapter reports as `agentInfo.name` at `initialize`, which is its
@@ -5409,9 +5409,58 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // client declaring `session.cursors` (and to every v2 client), a
             // `session/fork` `cursorId` is new and optional, and the
             // `thread/status/changed` suppression only covers a running rewind.
+            //
+            // 2.12.1 (2026-11-26) is #800 alone: `@openai/codex` ^0.171.0 →
+            // **^0.172.0** (a fresh install resolves 0.172.0) and the app-server
+            // bindings regenerated from it. The bundled `dist/index.js` is 2.12.0's
+            // byte for byte bar the version and that range; ACP SDK stays ~2.9.1
+            // and `engines` is still absent. codex 0.172.0's bundled catalog is
+            // 0.171.0's (same 14 models, same JSON), so the offline snapshot
+            // stands; `CODEX_NESTED_VERSION_FALLBACK` moves. Under codeg's exact
+            // `clientCapabilities` (`sessionRewind` included) the forty live
+            // scenarios replay as on 2.12.0 — timing, request order, the model
+            // prompt's hashes and the version only.
+            //
+            // (ooo) **Spend limits by scope** (codex #62329). A provider's
+            // `api_key_spend_limit_exceeded` / `project_spend_limit_exceeded` /
+            // `organization_spend_limit_exceeded` (HTTP 429 or a streamed
+            // `response.failed`) now ends the turn as
+            // `apiKeySpendLimitExceeded` / `projectSpendLimitExceeded` /
+            // `organizationSpendLimitExceeded`, titled "Your API key|project|
+            // organization has reached its spend limit.", never retried. 0.171
+            // gave the project and organization ones `usageLimitExceeded`
+            // ("Quota exceeded. …"), which the adapter files as
+            // `quota_exhausted` — a `limit` with no actions. Its error table has
+            // no entry for the new values, so measured live they arrive as
+            // `provider_error`: category `service` with a Retry that can only
+            // fail again. `connection::reclassify_codex_spend_limit` puts the
+            // three titles back among the limits without Retry; the rollout's
+            // `task_complete.error` carries the new title and snake-case code,
+            // and a reload draws the title as before.
+            //
+            // (ppp) **Lazy stdio MCP startup** (#62366, now on by default). When
+            // a thread republishes its MCP servers with a tool catalog the
+            // process has already cached, an optional stdio server is no longer
+            // started until its first tool call. Measured with a stdio stand-in
+            // passed as `codeg-mcp` on `session/new`: a new session still starts
+            // it eagerly; after a rewind's thread reload 2.12.0 spawned a fresh
+            // process at once, while 2.12.1 spawns none until the next call to
+            // one of its tools. codeg-mcp holds no state between calls, so
+            // nothing depends on when it starts.
+            //
+            // (qqq) Inert otherwise. #62348 persists a child agent's queued final
+            // reply as the addressed `response_item.agent_message` when the
+            // parent turn is interrupted, the shape `parsers::codex` already
+            // folds into the child's capsule. `ModelInfo.available_access_programs`
+            // gains an optional `daybreak_availability` (no bundled model sets
+            // it, and codeg's own fields and overrides never do — only a native
+            // provider catalog can carry one through, as codex itself would
+            // read it); `[permissions.<profile>.credentials]`,
+            // per-tool app `approvals_reviewer`, Bedrock Runtime login and the
+            // realtime items are keys and methods codeg does not write or call.
             distribution: AgentDistribution::Npx {
-                version: "2.12.0",
-                package: "@agentclientprotocol/codex-acp@2.12.0",
+                version: "2.12.1",
+                package: "@agentclientprotocol/codex-acp@2.12.1",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -10617,8 +10666,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.12.0",
-            "@agentclientprotocol/codex-acp@2.12.0",
+            "2.12.1",
+            "@agentclientprotocol/codex-acp@2.12.1",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.35", "pi-acp@0.0.35", Some("22.0.0"));

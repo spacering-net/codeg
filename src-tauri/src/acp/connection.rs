@@ -20823,7 +20823,7 @@ fn parse_session_failure_record(value: &serde_json::Value) -> Option<SessionFail
             .unwrap_or(default)
             .to_string()
     };
-    Some(SessionFailureRecord {
+    let mut record = SessionFailureRecord {
         id: id.to_string(),
         revision,
         category: text("category", "unknown"),
@@ -20849,7 +20849,37 @@ fn parse_session_failure_record(value: &serde_json::Value) -> Option<SessionFail
         resolved: false,
         // codeg's own mark: an adapter's record never carries it.
         echoed_in_reply: false,
-    })
+    };
+    reclassify_codex_spend_limit(&mut record);
+    Some(record)
+}
+
+/// The titles codex 0.172 gives a request refused by an API spend limit
+/// (`CodexErrorDetails::APISpendLimitExceeded`, one per scope), verbatim.
+const CODEX_SPEND_LIMIT_TITLES: [&str; 3] = [
+    "Your API key has reached its spend limit.",
+    "Your API project has reached its spend limit.",
+    "Your API organization has reached its spend limit.",
+];
+
+/// Put a codex spend-limit failure back among the limits.
+///
+/// codex 0.172 (codex-acp 2.12.1) reports a provider's
+/// `api_key_spend_limit_exceeded` / `project_spend_limit_exceeded` /
+/// `organization_spend_limit_exceeded` as three new `codexErrorInfo` values.
+/// Until 0.171 the last two were `usageLimitExceeded`, which codex-acp files as
+/// `quota_exhausted` (category `limit`, no actions). Its error table does not
+/// know the new values, so they fall to `provider_error` (category `service`,
+/// action `retry`), and the banner offers a Retry that cannot succeed — codex
+/// itself treats the error as final and does not retry it. The record carries
+/// only the title, not the code, so the title is what identifies it; once
+/// codex-acp maps the codes itself the record arrives as `limit` and this is
+/// a no-op.
+fn reclassify_codex_spend_limit(record: &mut SessionFailureRecord) {
+    if record.category == "service" && CODEX_SPEND_LIMIT_TITLES.contains(&record.title.as_str()) {
+        record.category = "limit".to_string();
+        record.actions.retain(|action| action != "retry");
+    }
 }
 
 /// The terminal AIR failure riding on a prompt RESPONSE's `_meta`, if any.
@@ -31568,6 +31598,52 @@ mod tests {
         assert_eq!(record.title, "");
         assert_eq!(record.details, None);
         assert_eq!(record.actions, vec!["retry".to_string(), "sing".to_string()]);
+    }
+
+    /// codex-acp 2.12.1's record for a project spend limit (codex 0.172),
+    /// verbatim off the prompt response: it reads as a limit without Retry, as
+    /// codex 0.171 reported the same refusal. Anything else stays as sent.
+    #[test]
+    fn parse_session_failure_record_files_codex_spend_limits_as_limits() {
+        for title in CODEX_SPEND_LIMIT_TITLES {
+            let raw = serde_json::json!({
+                "id": "019abc:error",
+                "revision": 1,
+                "category": "service",
+                "severity": "error",
+                "title": title,
+                "actions": ["retry"],
+            });
+            let record = parse_session_failure_record(&raw).expect("record");
+            assert_eq!(record.category, "limit", "{title}");
+            assert!(record.actions.is_empty(), "{title}");
+            assert_eq!(record.title, title);
+        }
+
+        // codex-acp's own quota record, and a service failure with any other
+        // title, pass through untouched.
+        let quota = serde_json::json!({
+            "id": "q:error",
+            "revision": 1,
+            "category": "limit",
+            "severity": "error",
+            "title": "Quota exceeded. Check your plan and billing details.",
+            "actions": [],
+        });
+        let record = parse_session_failure_record(&quota).expect("record");
+        assert_eq!(record.category, "limit");
+        assert!(record.actions.is_empty());
+        let other = serde_json::json!({
+            "id": "o:error",
+            "revision": 1,
+            "category": "service",
+            "severity": "error",
+            "title": "Your API key has reached its spend limit. Contact your admin.",
+            "actions": ["retry"],
+        });
+        let record = parse_session_failure_record(&other).expect("record");
+        assert_eq!(record.category, "service");
+        assert_eq!(record.actions, vec!["retry".to_string()]);
     }
 
     /// claude-agent-acp 0.74.0's mid-session sign-out record, verbatim off the
