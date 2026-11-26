@@ -745,6 +745,12 @@ impl PersonalAgentEngine {
             DispatchAuth::Routine { label, .. } => Some(label.clone()),
             _ => None,
         };
+        // The turn's own batch, for where its card goes among what the turn
+        // wrote — never the batch in flight for an older call let through.
+        let ledger_batch = match &auth {
+            DispatchAuth::Ledgered { batch_id, .. } => Some(*batch_id),
+            _ => None,
+        };
         let new = NewDispatch {
             bot_id: self.bot().await,
             mode,
@@ -868,12 +874,20 @@ impl PersonalAgentEngine {
                 }
             }
         };
-        // The card, then the ledger entry pointing back at it.
+        // The card, then the ledger entry pointing back at it — after the
+        // text the turn wrote before it, which is pushed first.
+        let turn = match ledger_batch {
+            Some(b) => self.turn_mark(b).await,
+            None => None,
+        };
+        self.push_reply_now().await;
         let mut card = NewRow::new(TimelineKind::Dispatch, title.clone());
         card.dispatch_id = Some(row.id);
         card.segment_id = self.state.lock().await.connection_segment;
         card.batch_id = row.origin_batch_id;
         card.data = Some(serde_json::json!({
+            // Where it goes among what its turn wrote (P6).
+            "turn": turn,
             "mode": row.mode,
             "agent_type": snapshot.agent_type,
             "folder_id": folder_id,
@@ -3355,8 +3369,26 @@ impl PersonalAgentEngine {
     /// reply of the turn that asked for it, and the results it brings follow
     /// up on that reply — so the dispatch's source is that turn, from before
     /// the round can report. Returns the card.
-    async fn record_followup(&self, d: &dispatch_entity::Model, message: &str) -> Option<i32> {
+    async fn record_followup(
+        &self,
+        d: &dispatch_entity::Model,
+        message: &str,
+        op_id: &str,
+    ) -> Option<i32> {
         let batch = self.current_batch().await;
+        // Where its pill goes among what its turn wrote: the turn of the
+        // call's own entry only (one let through from a card has none).
+        let own_batch = svc::get_op(&self.db.conn, op_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|op| op.batch_id)
+            .filter(|b| *b > 0);
+        let turn = match own_batch {
+            Some(b) => self.turn_mark(b).await,
+            None => None,
+        };
+        self.push_reply_now().await;
         if let Some(b) = batch {
             let _ = svc::update_dispatch(
                 &self.db.conn,
@@ -3376,6 +3408,7 @@ impl PersonalAgentEngine {
         card.batch_id = batch;
         card.data = Some(serde_json::json!({
             "followup": true,
+            "turn": turn,
             "excerpt": cut(message, 200),
             "mode": d.mode,
             "agent_type": work.agent_type,
@@ -3429,7 +3462,7 @@ impl PersonalAgentEngine {
         match task.status {
             WorkTaskStatus::Review => {
                 let intent = FollowUpIntent::from_wire(intent.as_deref())?;
-                let card = self.record_followup(d, &message).await;
+                let card = self.record_followup(d, &message, op_id).await;
                 if let Err(e) = engine
                     .return_task_with_op(task_id, intent, message, Vec::new(), Some(op_id.to_string()))
                     .await
@@ -3448,7 +3481,7 @@ impl PersonalAgentEngine {
                 if intent.is_some() {
                     return Err("a failed task is retried; `intent` applies to a task in review".into());
                 }
-                let card = self.record_followup(d, &message).await;
+                let card = self.record_followup(d, &message, op_id).await;
                 if let Err(e) = engine
                     .retry_with_op(task_id, Some(message), Vec::new(), false, Some(op_id.to_string()))
                     .await
@@ -3520,7 +3553,7 @@ impl PersonalAgentEngine {
             };
             // Recorded as it is queued: it is the turn asking for it now that
             // it belongs to, whenever a slot frees up.
-            self.record_followup(d, &message).await;
+            self.record_followup(d, &message, op_id).await;
             self.reopen_item(d.id, op_id).await;
             self.emit(PersonalAgentChange::Dispatch { id: d.id });
             self.emit(PersonalAgentChange::Status);
@@ -3530,7 +3563,7 @@ impl PersonalAgentEngine {
                 d.id
             ));
         }
-        let card = self.record_followup(d, &message).await;
+        let card = self.record_followup(d, &message, op_id).await;
         let sent = self.send_followup(d, message.clone(), FOLLOWUP_FROM, op_id).await;
         // Its session still winding the round before down — stopped a moment
         // ago, the executor not done yet: it waits its turn in the queue, as

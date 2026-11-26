@@ -4096,9 +4096,9 @@ async fn workers_have_their_own_git_repositories_and_no_owner_file() {
     assert!(!workdir::skill_md(false, Default::default()).contains("You have no `USER.md`"));
 }
 
-/// The skill says how a result is reported (A3): the card above the reply
-/// says what the work is and how it stands, the reply what it means, a
-/// marker for each result reported — with many findings, in the shape the
+/// The skill says how a result is reported (A3, P6): the reply names each
+/// piece of work and its result, a marker for each result reported in its
+/// conclusion — with many findings, in the shape the
 /// owner's preference for cards asks.
 #[test]
 fn the_skill_says_how_a_result_is_reported_under_each_preference_for_cards() {
@@ -4107,9 +4107,10 @@ fn the_skill_says_how_a_result_is_reported_under_each_preference_for_cards() {
         let skill = workdir::skill_md(false, cards);
         for want in [
             "### Reporting a result",
-            "Lead with the conclusion and what the owner needs to do",
-            "do not link\n  the work's session",
+            "Name each piece of work and its result, then say what the owner needs to\n  do",
+            "Do not link\n  the work's session",
             "Write `[[quote:#N]]` for each result you report",
+            "in your conclusion: the text after\n  your last tool call",
             "but for the results of work you report (below)",
             "so do not say it was merged",
             "reply\n  `[[silent]]` alone",
@@ -4971,6 +4972,139 @@ async fn a_message_sent_in_a_turn_keeps_the_text_the_turn_wrote_before_it() {
     let out = rows_of(&primary, p, TimelineKind::Exchange).await;
     let last = out.iter().max_by_key(|r| r.id).unwrap();
     assert!(data_of(last).get("turn").is_none(), "{:?}", last.data);
+}
+
+/// Work a turn hands out says where it went in the turn, as a message does
+/// (P6): the step it was handed out at and the text written before it. The
+/// reply keeps every run it said, its body still the last; what the
+/// assistant reads back leaves out what it said on the way.
+#[tokio::test]
+async fn work_a_turn_hands_out_keeps_its_place_and_the_reply_every_run() {
+    let (primary, tmp) = configured().await;
+    role_assistant(&primary, "Coder", true).await;
+    let (other, mut drx, _dst, _) =
+        live_session_dispatch(&primary, &tmp, "x-p6", DispatchState::Completed).await;
+    let p = primary.bot().await;
+    let seg = open_segment(&primary).await;
+    let (mut rx, state) = live_connection(&primary, seg, "pa-p6").await;
+    primary
+        .send_owner_message("research X, and nudge the investigation".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    primary.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    emit(&primary, &state, "pa-p6", text("I'll hand X out."), true).await;
+    emit(&primary, &state, "pa-p6", tool("t1", "dispatch"), true).await;
+    let made = call(
+        &primary,
+        "dispatch",
+        json!({ "mode": "chat", "title": "Research X", "prompt": "Find out X." }),
+    )
+    .await;
+    assert!(made.ok, "{}", made.text);
+    emit(&primary, &state, "pa-p6", text("Now the investigation."), true).await;
+    emit(&primary, &state, "pa-p6", tool("t2", "dispatch_followup"), true).await;
+    let sent = call(
+        &primary,
+        "dispatch_followup",
+        json!({ "dispatch_id": other, "message": "and check the tests" }),
+    )
+    .await;
+    assert!(sent.ok, "{}", sent.text);
+    take_followup(&mut drx);
+    let cards = rows_of(&primary, p, TimelineKind::Dispatch).await;
+    let card = cards
+        .iter()
+        .find(|r| data_of(r).get("followup").is_none())
+        .expect("the dispatch's card");
+    let turn = data_of(card)["turn"].clone();
+    assert_eq!(turn["n"], 2, "{turn}");
+    assert_eq!(turn["said"], json!({ "n": 1, "text": "I'll hand X out." }));
+    let pill = cards
+        .iter()
+        .find(|r| data_of(r)["followup"] == json!(true))
+        .expect("the follow-up's pill");
+    let turn = data_of(pill)["turn"].clone();
+    assert_eq!(turn["n"], 4, "{turn}");
+    assert_eq!(turn["said"]["text"], "Now the investigation.", "{turn}");
+    // The reply: every run, its body the last.
+    emit(&primary, &state, "pa-p6", text("Both are moving."), true).await;
+    emit(&primary, &state, "pa-p6", turn_complete("end_turn"), true).await;
+    let reply = reply_of(&primary, card.batch_id.expect("handed out in the delivery")).await;
+    assert_eq!(reply.body, "Both are moving.");
+    let data = data_of(&reply);
+    assert_eq!(data["last_text_n"], 5);
+    assert_eq!(
+        data["texts"],
+        json!([
+            { "n": 1, "text": "I'll hand X out." },
+            { "n": 3, "text": "Now the investigation." },
+            { "n": 5, "text": "Both are moving." },
+        ])
+    );
+    // Read back by the assistant: the conclusion, and where each line went.
+    let read = call(&primary, "timeline_read", json!({})).await;
+    assert!(read.ok, "{}", read.text);
+    let rows = read.data["rows"].as_array().unwrap();
+    let of = |id: i32| {
+        rows.iter()
+            .find(|r| r["id"] == json!(id))
+            .unwrap_or_else(|| panic!("row {id} read back"))["data"]
+            .clone()
+    };
+    assert!(of(reply.id).get("texts").is_none(), "{}", of(reply.id));
+    assert!(!read.text.contains("I'll hand X out."), "{}", read.text);
+    for line in [card.id, pill.id] {
+        let turn = of(line)["turn"].clone();
+        assert!(turn.get("said").is_none() && turn["n"].is_number(), "{turn}");
+    }
+}
+
+#[test]
+fn what_the_assistant_reads_back_keeps_no_process_talk() {
+    let reply = super::tools::without_process_talk(json!({
+        "texts": [{ "n": 1, "text": "maybe config" }],
+        "last_text_n": 3,
+    }));
+    assert_eq!(reply, json!({ "last_text_n": 3 }));
+    let line = super::tools::without_process_talk(json!({
+        "turn": { "n": 2, "said": { "n": 1, "text": "maybe config" } },
+        "peer": "Dev",
+    }));
+    assert_eq!(line, json!({ "turn": { "n": 2 }, "peer": "Dev" }));
+    assert_eq!(super::tools::without_process_talk(json!(null)), json!(null));
+}
+
+/// A reply's checkpoints, written in tasks of their own, never put an older
+/// copy over a newer one.
+#[tokio::test]
+async fn an_older_checkpoint_never_lands_over_a_newer_one() {
+    let (engine, _tmp) = configured().await;
+    let (seg, batch) = owner_turn(&engine, "pa-ck").await;
+    let row = svc::insert_row(&engine.db.conn, engine.bot().await, {
+        let mut r = NewRow::new(TimelineKind::Reply, String::new());
+        r.segment_id = Some(seg);
+        r.batch_id = Some(batch);
+        r.data = Some(json!({ "state": "running" }));
+        r
+    })
+    .await
+    .unwrap();
+    let write = |ver: u64, text: &str| {
+        svc::checkpoint_reply_row(
+            &engine.db.conn,
+            row.id,
+            json!({ "state": "running", "ver": ver, "texts": [{ "n": 1, "text": text }] }),
+            ver,
+        )
+    };
+    assert!(write(7, "newer").await.unwrap());
+    assert!(!write(5, "older").await.unwrap(), "an older copy is not written");
+    assert!(!write(7, "same").await.unwrap());
+    let now = svc::get_row(&engine.db.conn, row.id).await.unwrap().unwrap();
+    assert_eq!(data_of(&now)["texts"][0]["text"], "newer");
+    assert!(write(9, "newest").await.unwrap());
 }
 
 /// The message a line is of (`m<id>`).

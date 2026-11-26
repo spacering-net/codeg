@@ -2171,10 +2171,20 @@ export type ReplyStep =
       awaiting?: boolean
     }
 
-/** The reply in flight, as a snapshot carries it. */
+/** One text run of a reply's turn: its step's ordinal, and what it says. */
+export interface ReplyText {
+  n: number
+  text: string
+}
+
+/** The reply in flight, as a snapshot carries it: the step it is on, every
+ *  text run so far (the one being written last), and the version of that
+ *  copy — a later copy of the same reply has a greater one. */
 export interface LiveReply {
   row_id: number
   current: ReplyStep | null
+  texts: ReplyText[]
+  ver: number
 }
 
 export interface SegmentInfo {
@@ -4204,7 +4214,14 @@ export interface PersonalAgentStats {
  *  it is about (0: the primary, before it is set up). */
 export type PersonalAgentChange = { bot_id?: number } & (
   | { kind: "timeline"; rows: TimelineRow[] }
-  | { kind: "reply"; row_id: number; current: ReplyStep | null }
+  | {
+      kind: "reply"
+      row_id: number
+      current: ReplyStep | null
+      /** Every text run so far, whole (not what changed). */
+      texts: ReplyText[]
+      ver: number
+    }
   | { kind: "status" }
   | { kind: "agent" }
   | { kind: "dispatch"; id: number }

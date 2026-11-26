@@ -6,20 +6,17 @@
  * there, in their own words, as chat bubbles — the other one's on the left,
  * this one's on the right — with their avatars and times, the work handed
  * out on the exchange as pills (either side's opens in the drawer), and
- * [Open the other one's conversation].
+ * [Open the other one's conversation]. A bubble over what opened it (P6):
+ * a line of the list, a card's link, a notice's [View]; it goes with that
+ * as the list scrolls, hides when that scrolled out of sight, and closes
+ * with a press outside, Esc, or on its way to what it opens.
  */
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { ArrowLeftRight, MessageSquare } from "lucide-react"
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import { Button } from "@/components/ui/button"
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -81,32 +78,63 @@ function endsOf(row: TimelineRow): { me: number | null; peer: number | null } {
     : { me: to, peer: from }
 }
 
+/** The message a line of the list is of (`m<id>`). */
+export function lineMessageOf(row: TimelineRow): number | null {
+  const m = /^m(\d+)$/.exec(row.ref_id ?? "")
+  return m ? Number(m[1]) : null
+}
+
 export function ExchangeSheet({
   row,
   onClose,
+  anchor,
+  target = null,
 }: {
   row: TimelineRow | null
   onClose: () => void
+  /** What opened it, which it stands over. */
+  anchor: React.RefObject<HTMLElement | null>
+  /** The message to scroll to and mark — a line's of the list, when it is
+   *  on this exchange; the latest otherwise. */
+  target?: number | null
 }) {
   const t = useTranslations("PersonalAgent.exchange")
+  const open = row != null
+  // What opened it gone from the page (its row drawn no more): it closes.
+  useEffect(() => {
+    if (open && anchor.current && !anchor.current.isConnected) onClose()
+  })
   return (
-    <Dialog open={row != null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-xl">
-        {row != null ? <SheetBody row={row} onClose={onClose} /> : null}
-        <DialogDescription className="sr-only">
-          {t("sheetHint")}
-        </DialogDescription>
-      </DialogContent>
-    </Dialog>
+    <Popover open={open} onOpenChange={(next) => !next && onClose()}>
+      <PopoverAnchor
+        virtualRef={
+          anchor as React.RefObject<{ getBoundingClientRect(): DOMRect }>
+        }
+      />
+      <PopoverContent
+        className="w-[26rem] max-w-[calc(100vw-2rem)] gap-3 p-3"
+        collisionPadding={8}
+        hideWhenDetached
+        aria-describedby={undefined}
+        data-pa-exchange-sheet
+      >
+        {row != null ? (
+          <SheetBody row={row} onClose={onClose} target={target} />
+        ) : null}
+        <p className="sr-only">{t("sheetHint")}</p>
+      </PopoverContent>
+    </Popover>
   )
 }
 
 function SheetBody({
   row,
   onClose,
+  target,
 }: {
   row: TimelineRow
   onClose: () => void
+  target: number | null
 }) {
   const t = useTranslations("PersonalAgent.exchange")
   const tState = useTranslations("PersonalAgent.state")
@@ -139,10 +167,22 @@ function SheetBody({
       (m.from_bot_id === me && m.to_bot_id === peer) ||
       (m.from_bot_id === peer && m.to_bot_id === me)
   )
+  // The line's own message when it is on this exchange; the latest else.
+  const focus =
+    target != null && between.some((m) => m.id === target)
+      ? target
+      : (between[between.length - 1]?.id ?? null)
+  const list = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (focus == null) return
+    list.current
+      ?.querySelector<HTMLElement>(`[data-pa-thread-message="${focus}"]`)
+      ?.scrollIntoView({ block: "nearest" })
+  }, [focus])
   return (
     <>
-      <DialogHeader>
-        <DialogTitle className="flex items-center gap-2 text-sm">
+      <div>
+        <h2 className="flex items-center gap-2 text-sm font-medium">
           {mine ? (
             <BotAvatar avatar={mine.avatar} name={botName(mine)} size={20} />
           ) : null}
@@ -159,8 +199,8 @@ function SheetBody({
               size={20}
             />
           ) : null}
-        </DialogTitle>
-      </DialogHeader>
+        </h2>
+      </div>
       {failed ? (
         <p role="alert" className="text-sm text-destructive">
           {t("unavailable", { error: failed })}
@@ -170,18 +210,21 @@ function SheetBody({
           <SyncedSpinner small className="size-4" />
         </div>
       ) : (
-        <ScrollArea className="max-h-[60vh]">
-          <div className="flex flex-col gap-3 pe-2">
+        <ScrollArea className="max-h-[50vh]">
+          <div ref={list} className="flex flex-col gap-3 pe-2">
             {between.map((m) => {
               const own = m.from_bot_id === me
               const who = own ? mine : theirs
+              const marked = target != null && m.id === target
               return (
                 <div
                   key={m.id}
                   data-pa-thread-message={m.id}
+                  data-pa-thread-target={marked || undefined}
                   className={cn(
-                    "flex items-end gap-2",
-                    own ? "flex-row-reverse" : "flex-row"
+                    "flex items-end gap-2 rounded-lg",
+                    own ? "flex-row-reverse" : "flex-row",
+                    marked && "bg-primary/5 ring-1 ring-primary/30"
                   )}
                 >
                   <BotAvatar
@@ -220,14 +263,17 @@ function SheetBody({
               <div className="flex flex-wrap gap-1.5 border-t pt-3">
                 {view.dispatches.map((d) => {
                   const info = dispatchById.get(d.id)
-                  const target = info ? workTargetOf(info) : threadTarget(d)
-                  const openable = canOpenWork(target)
+                  const work = info ? workTargetOf(info) : threadTarget(d)
+                  const openable = canOpenWork(work)
                   return (
                     <button
                       key={d.id}
                       type="button"
                       disabled={!openable}
-                      onClick={() => openWork(target)}
+                      onClick={() => {
+                        onClose()
+                        openWork(work)
+                      }}
                       className={cn(
                         "inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs",
                         INSET_SURFACE,

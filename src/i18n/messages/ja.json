@@ -11339,6 +11339,7 @@
       "source": "元のメッセージ",
       "showText": "原文を表示",
       "hideText": "原文を隠す",
+      "fold": "折りたたむ",
       "makeRoutine": "ルーティンにする…",
       "note": {
         "boot": "codeg が再起動しました",
@@ -11498,6 +11499,8 @@
     "exchange": {
       "sentTo": "<peer></peer> にメッセージを送信",
       "from": "<peer></peer> からのメッセージ",
+      "sentToName": "{name} にメッセージを送信",
+      "fromName": "{name} からのメッセージ",
       "exchanged": "{names} と {count} 件のやり取り",
       "state": {
         "stopped": "取り消し済み",

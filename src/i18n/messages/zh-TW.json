@@ -11339,6 +11339,7 @@
       "source": "來源",
       "showText": "展開原文",
       "hideText": "收起原文",
+      "fold": "收合",
       "makeRoutine": "設成例程…",
       "note": {
         "boot": "codeg 重新啟動了",
@@ -11498,6 +11499,8 @@
     "exchange": {
       "sentTo": "已傳訊息給 <peer></peer>",
       "from": "訊息來自 <peer></peer>",
+      "sentToName": "已傳訊息給 {name}",
+      "fromName": "訊息來自 {name}",
       "exchanged": "與 {names} 往來 {count} 則訊息",
       "state": {
         "stopped": "已收回",

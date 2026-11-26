@@ -11339,6 +11339,7 @@
       "source": "출처",
       "showText": "원문 보기",
       "hideText": "원문 접기",
+      "fold": "접기",
       "makeRoutine": "루틴으로 만들기…",
       "note": {
         "boot": "codeg가 다시 시작되었습니다",
@@ -11498,6 +11499,8 @@
     "exchange": {
       "sentTo": "<peer></peer>에게 메시지 보냄",
       "from": "<peer></peer>의 메시지",
+      "sentToName": "{name}에게 메시지 보냄",
+      "fromName": "{name}의 메시지",
       "exchanged": "{names}와(과) 메시지 {count}개 주고받음",
       "state": {
         "stopped": "회수됨",

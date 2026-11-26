@@ -1493,6 +1493,7 @@ pub async fn checkpoint_reply_row(
     conn: &DatabaseConnection,
     id: i32,
     data: serde_json::Value,
+    ver: u64,
 ) -> Result<bool, DbError> {
     let res = timeline::Entity::update_many()
         .col_expr(timeline::Column::Data, Expr::value(data.to_string()))
@@ -1500,6 +1501,11 @@ pub async fn checkpoint_reply_row(
         .filter(timeline::Column::Id.eq(id))
         .filter(timeline::Column::Kind.eq(TimelineKind::Reply))
         .filter(still_running())
+        // Never an older copy over a newer one.
+        .filter(Expr::cust_with_values(
+            "COALESCE(CASE WHEN json_valid(data) THEN json_extract(data, '$.ver') END, -1) < ?",
+            [sea_orm::Value::from(ver as i64)],
+        ))
         .exec(conn)
         .await?;
     Ok(res.rows_affected == 1)

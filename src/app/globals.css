@@ -5229,21 +5229,6 @@ button.pa-choice:enabled:not(.pa-choice-chosen):hover {
     motion-grow var(--motion-widget) var(--motion-ease-enter) backwards;
 }
 
-/* A reply split into short bubbles (10.7), new to the page: after its
-   first, each bubble rises in 120ms after the one before. */
-.motion-message-enter [data-pa-bubble-part]:not([data-pa-bubble-part="0"]) {
-  animation: motion-rise var(--motion-row) var(--motion-ease-enter) backwards;
-}
-.motion-message-enter [data-pa-bubble-part="1"] {
-  animation-delay: 120ms;
-}
-.motion-message-enter [data-pa-bubble-part="2"] {
-  animation-delay: 240ms;
-}
-.motion-message-enter [data-pa-bubble-part="3"] {
-  animation-delay: 360ms;
-}
-
 @keyframes motion-rise {
   from {
     opacity: 0;
@@ -5760,10 +5745,6 @@ button.pa-choice:enabled:not(.pa-choice-chosen):hover {
   .motion-pill {
     animation: motion-fade var(--motion-enter) var(--motion-ease-standard)
       backwards;
-  }
-
-  .motion-message-enter [data-pa-bubble-part] {
-    animation: none;
   }
 
   .motion-pill,

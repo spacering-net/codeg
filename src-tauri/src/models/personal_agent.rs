@@ -344,6 +344,10 @@ pub struct TimelineChanges {
 pub struct LiveReply {
     pub row_id: i32,
     pub current: Option<crate::acp::reply_turn::ReplyStep>,
+    /// Every text run of the turn so far, the one being written last, and
+    /// the version of this copy (`ver`: newer copies are greater).
+    pub texts: Vec<crate::acp::reply_turn::ReplyText>,
+    pub ver: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -820,6 +824,11 @@ pub enum PersonalAgentChange {
     Reply {
         row_id: i32,
         current: Option<crate::acp::reply_turn::ReplyStep>,
+        /// All the turn said so far — whole, not what changed: a run written
+        /// between two pushes is in the next.
+        texts: Vec<crate::acp::reply_turn::ReplyText>,
+        /// This copy's version: the page keeps the newest it saw.
+        ver: u64,
     },
     Status,
     Agent,

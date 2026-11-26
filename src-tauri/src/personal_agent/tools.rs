@@ -125,6 +125,21 @@ pub async fn call(parent_connection_id: &str, tool: &str, args: Value) -> ToolOu
     answer(&engine, tool, args).await
 }
 
+/// A row's data as the assistant reads it back: a reply's earlier runs
+/// (`texts`) and the run a line was written after (`turn.said`) taken out —
+/// what it said on the way, which its conclusion may have put right. The
+/// conclusion is the row's text; where a line went in its turn (`turn.n`)
+/// stays.
+pub(super) fn without_process_talk(mut data: Value) -> Value {
+    if let Some(map) = data.as_object_mut() {
+        map.remove("texts");
+        if let Some(turn) = map.get_mut("turn").and_then(Value::as_object_mut) {
+            turn.remove("said");
+        }
+    }
+    data
+}
+
 /// A card's data as an assistant reads it: every field about an executor
 /// config taken out, however deep — they are the owner's, and the
 /// assistants know only who does the work.
@@ -840,7 +855,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     "kind": row.kind,
                     "at": row.created_at,
                     "text": body,
-                    "data": row.data.map(without_executors),
+                    "data": row.data.map(without_executors).map(without_process_talk),
                 }));
             }
             let mut text = if lines.is_empty() {

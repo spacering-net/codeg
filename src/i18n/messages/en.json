@@ -11339,6 +11339,7 @@
       "source": "Source",
       "showText": "Show original",
       "hideText": "Hide original",
+      "fold": "Collapse",
       "makeRoutine": "Make it a routine…",
       "note": {
         "boot": "codeg restarted",
@@ -11498,6 +11499,8 @@
     "exchange": {
       "sentTo": "Sent a message to <peer></peer>",
       "from": "Message from <peer></peer>",
+      "sentToName": "Sent a message to {name}",
+      "fromName": "Message from {name}",
       "exchanged": "Exchanged {count, plural, one {# message} other {# messages}} with {names}",
       "state": {
         "stopped": "taken back",

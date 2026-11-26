@@ -23,7 +23,6 @@ const api = vi.hoisted(() => ({
 const pa = vi.hoisted(() => ({
   dispatchById: new Map<number, unknown>(),
   liveReplies: new Map<number, unknown>(),
-  liveTexts: new Map<number, { n: number; text: string }>(),
   snapshot: null as unknown,
 }))
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
@@ -37,7 +36,6 @@ vi.mock("@/contexts/personal-agent-context", () => ({
   useBotId: () => null,
   usePersonalAgent: () => ({
     liveReplies: pa.liveReplies,
-    liveTexts: pa.liveTexts,
     dispatchById: pa.dispatchById,
     snapshot: pa.snapshot,
     quoted: new Map(),
@@ -58,6 +56,7 @@ import { MessageActions } from "./message-actions"
 import { buildMessageItems, type MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { OwnerBubble } from "./owner-bubble"
+import { QuoteBar } from "./quote-bar"
 import { ReplyBubble, SaidBubble } from "./reply-bubble"
 import {
   AGENT_SURFACE,
@@ -165,7 +164,6 @@ beforeEach(() => {
   api.personalAgentCancel.mockResolvedValue(undefined)
   pa.dispatchById = new Map()
   pa.liveReplies = new Map()
-  pa.liveTexts = new Map()
   pa.snapshot = null
   usePersonalAgentUi.setState({ work: null, workOpen: false })
 })
@@ -611,28 +609,60 @@ describe("the bubbles", () => {
     expect(words).not.toContain("Quote")
   })
 
-  it("does not draw again, while the turn runs, the text drawn over its line", () => {
-    // The turn is on a step after the message; the bubble would keep its
-    // last text, which is the one over the line.
+  it("draws, while the turn runs, only what it wrote after its line", () => {
+    // The turn is on a step after the message: what it wrote before is
+    // over the line, its reply's part has nothing yet.
     pa.liveReplies.set(2, {
-      t: "step",
-      n: 3,
-      kind: "read",
-      title: "Read notes.md",
+      current: { t: "step", n: 3, kind: "read", title: "Read notes.md" },
+      texts: [{ n: 1, text: "I'll hand it to Dev." }],
+      ver: 5,
     })
-    pa.liveTexts.set(2, { n: 1, text: "I'll hand it to Dev." })
     const { reply } = handedTurn({ data: { state: "running" } })
-    expect(reply.saidNs).toEqual([1])
+    expect(reply.part.lo).toBe(2)
     const { container, unmount } = draw(<ReplyBubble item={reply} />)
     expect(container.querySelector("[data-bubble]")).toBeNull()
     unmount()
-    // What it writes next is its own again.
-    pa.liveReplies.set(2, { t: "text", n: 4, text: "Dev has it." })
-    pa.liveTexts.set(2, { n: 4, text: "Dev has it." })
+    // What it writes next is its part's, after the text it kept.
+    pa.liveReplies.set(2, {
+      current: { t: "text", n: 4, text: "Dev has it." },
+      texts: [
+        { n: 1, text: "I'll hand it to Dev." },
+        { n: 4, text: "Dev has it." },
+      ],
+      ver: 7,
+    })
     const again = draw(<ReplyBubble item={reply} />)
     expect(again.container.querySelector("[data-bubble]")?.textContent).toBe(
       "Dev has it."
     )
+  })
+
+  it("draws every run of its part in one bubble, only the conclusion's cards acting", () => {
+    const card =
+      '```spec\n{"root":"a","elements":{"a":{"type":"Button","props":{"label":"Go"}}}}\n```'
+    const item = itemOf(
+      [
+        row(12, "reply", {
+          batch_id: 7,
+          body: `Done:\n\n${card}`,
+          data: {
+            state: "done",
+            last_text_n: 3,
+            texts: [
+              { n: 1, text: `Maybe:\n\n${card}` },
+              { n: 3, text: `Done:\n\n${card}` },
+            ],
+          },
+        }),
+      ],
+      "reply"
+    ) as Extract<MessageItem, { kind: "reply" }>
+    const { container } = draw(<ReplyBubble item={item} />)
+    expect(container.querySelectorAll("[data-bubble]")).toHaveLength(1)
+    const runs = [...container.querySelectorAll("[data-pa-run]")]
+    expect(runs.map((r) => r.getAttribute("data-pa-run"))).toEqual(["1", "3"])
+    expect(runs[0].textContent).toContain("Maybe:")
+    expect(runs[1].textContent).toContain("Done:")
   })
 
   it("draws a reply that is one card as the card, no bubble round it", () => {
@@ -725,7 +755,7 @@ describe("the bubbles", () => {
     ).not.toBeNull()
   })
 
-  it("splits a reply of short paragraphs into bubbles that act as one", async () => {
+  it("keeps a reply of short paragraphs in one bubble", async () => {
     const item = itemOf(
       [
         row(8, "reply", {
@@ -738,22 +768,8 @@ describe("the bubbles", () => {
     ) as Extract<MessageItem, { kind: "reply" }>
     const { container } = draw(<ReplyBubble item={item} />)
     const bubbles = [...container.querySelectorAll("[data-bubble]")]
-    expect(bubbles.map((b) => b.textContent)).toEqual([
-      "Done.",
-      "The build is green.",
-      "Next: the PR.",
-    ])
-    expect(bubbles.map((b) => b.getAttribute("data-pa-bubble-part"))).toEqual([
-      "0",
-      "1",
-      "2",
-    ])
-    // One message: one frame, its menu from any of them.
-    expect(container.querySelectorAll("[data-row-id='8']")).toHaveLength(1)
-    // Side by side in a column that fits each to its text, each is still no
-    // wider than the frame: a line that does not wrap (a quote's title, a
-    // long name in code) cannot widen one past the column.
-    bubbles.forEach((b) => expect(b.className).toContain("max-w-full"))
+    expect(bubbles).toHaveLength(1)
+    expect(bubbles[0].className).toContain("max-w-full")
     fireEvent.contextMenu(bubbles[0])
     const items = await screen.findAllByRole("menuitem")
     expect(items.map((i) => i.textContent)).toContain("Quote")
@@ -1709,7 +1725,7 @@ describe("a result card and the reply that reports it (A1, A2)", () => {
     expect(container.querySelector("[data-pa-gist]")).toBeNull()
   })
 
-  it("folds its text and note away once reported, its head and buttons kept, opened as left after a remount", () => {
+  it("folds to a line once reported (D8), opened to the whole card and back, as left after a remount", () => {
     pa.dispatchById = new Map()
     const rows = [
       card({}, { dispatch_id: null }),
@@ -1721,23 +1737,73 @@ describe("a result card and the reply that reports it (A1, A2)", () => {
     ]
     const first = draw(<EventCard item={eventOf(rows)} />)
     const c = first.container
+    // A line: how it stands, the work, in a word.
+    const line = c.querySelector<HTMLElement>("[data-pa-event-line]")!
+    expect(line).not.toBeNull()
+    expect(line.textContent).toContain("Analyse my-app")
+    expect(line.textContent).toContain("Failed")
+    expect(c.textContent).not.toContain("the model ran out of credit")
+    expect(c.querySelector("[data-pa-work]")).toBeNull()
+    // Opened: the whole card, its text whole and why it failed.
+    fireEvent.click(c.querySelector("[data-pa-event-unfold]")!)
+    expect(c.querySelector("[data-pa-event-line]")).toBeNull()
     expect(c.querySelector("[data-pa-work]")?.textContent).toContain(
       "Analyse my-app"
     )
-    expect(c.querySelector("[data-pa-gist]")).toBeNull()
-    expect(c.textContent).not.toContain("the model ran out of credit")
-    const show = c.querySelector<HTMLButtonElement>("[data-pa-show-text]")!
-    expect(show.getAttribute("aria-expanded")).toBe("false")
-    fireEvent.click(show)
     expect(c.textContent).toContain("the model ran out of credit")
     expect(c.querySelector("h2")?.textContent).toBe("Overview")
-    // The list unmounts it (scrolled away) and mounts it again.
+    // The list unmounts it (scrolled away) and mounts it again: as left.
     first.unmount()
     const again = draw(<EventCard item={eventOf(rows)} />)
     expect(again.container.querySelector("h2")?.textContent).toBe("Overview")
+    // Folded again from its head.
+    fireEvent.click(again.container.querySelector("[data-pa-event-fold]")!)
+    expect(again.container.querySelector("[data-pa-event-line]")).not.toBeNull()
   })
 
-  it("never cuts a gist that is all there is, and closes a note it opened", () => {
+  it("keeps the whole card for a board task, or a retry that failed since", () => {
+    const reported = (patch: Record<string, unknown>) => [
+      card(patch),
+      row(31, "reply", {
+        batch_id: 9,
+        body: "Reported.",
+        data: { state: "done", covers: [30] },
+      }),
+    ]
+    for (const patch of [
+      { mode: "task" },
+      { auto_retry: { state: "failed", error: "no credit" } },
+    ]) {
+      const { container, unmount } = draw(
+        <EventCard item={eventOf(reported(patch))} />
+      )
+      expect(container.querySelector("[data-pa-event-line]")).toBeNull()
+      expect(container.querySelector("[data-pa-work]")).not.toBeNull()
+      unmount()
+    }
+  })
+
+  it("folds a stop to a line that says who stopped it", () => {
+    const { container } = draw(
+      <EventCard
+        item={eventOf([
+          card({
+            state: "canceled",
+            cause: "stopped",
+            stopped_by: "owner",
+            note: null,
+          }),
+        ])}
+      />
+    )
+    const line = container.querySelector("[data-pa-event-line]")!
+    expect(line.textContent).toContain("Analyse my-app")
+    expect(line.textContent).toContain("You stopped it")
+    fireEvent.click(container.querySelector("[data-pa-event-unfold]")!)
+    expect(container.querySelector("[data-pa-work]")).not.toBeNull()
+  })
+
+  it("never cuts a gist that is all there is", () => {
     const short = draw(
       <EventCard
         item={eventOf([card({ excerpt: "my-app is a demo.", note: null })])}
@@ -1746,25 +1812,6 @@ describe("a result card and the reply that reports it (A1, A2)", () => {
     const gist = short.container.querySelector("[data-pa-gist]")!
     expect(gist.className).not.toContain("line-clamp")
     expect(short.container.querySelector("[data-pa-show-text]")).toBeNull()
-    cleanup()
-    // Reported, with nothing but its note to open: opened, it closes again.
-    const rows = [
-      card({ excerpt: null, gist: null }),
-      row(31, "reply", {
-        batch_id: 9,
-        body: "It ran out of credit.",
-        data: { state: "done", covers: [30] },
-      }),
-    ]
-    const { container } = draw(<EventCard item={eventOf(rows)} />)
-    fireEvent.click(container.querySelector("[data-pa-show-text]")!)
-    expect(container.textContent).toContain("the model ran out of credit")
-    const hide = container.querySelector<HTMLButtonElement>(
-      "[data-pa-show-text]"
-    )!
-    expect(hide.getAttribute("aria-expanded")).toBe("true")
-    fireEvent.click(hide)
-    expect(container.textContent).not.toContain("the model ran out of credit")
   })
 
   it("opens to the whole text, not a preview cut again", () => {
@@ -1932,5 +1979,36 @@ describe("a result card and the reply that reports it (A1, A2)", () => {
     expect(metaOf({ ...WORK, bot_uid: "u-other" })).toBe(
       "Aide · Work session · my-app"
     )
+  })
+})
+
+describe("a quote of news or of a line between assistants (P6.3)", () => {
+  it("names the work news is of, and a line as the list draws it, never its words", () => {
+    const news = row(60, "result", {
+      dispatch_id: 4,
+      body: "news",
+      data: { title: "Analyse my-app", excerpt: "## Overview\n\nlong" },
+    })
+    const sent = row(61, "exchange", {
+      body: "Fix the login bug, please.",
+      data: { direction: "out", peer: { id: 5, name: "Dev" } },
+    })
+    const rowsById = new Map([
+      [60, news],
+      [61, sent],
+    ])
+    pa.dispatchById = new Map([[4, { id: 4, title: "Analyse my-app (v2)" }]])
+    const one = draw(<QuoteBar targetId={60} />, { rowsById })
+    expect(one.container.textContent).toContain("Analyse my-app (v2)")
+    expect(one.container.textContent).not.toContain("Overview")
+    one.unmount()
+    const jumpTo = vi.fn()
+    const two = draw(<QuoteBar targetId={61} />, { rowsById, jumpTo })
+    const quote = two.container.querySelector("[data-pa-quote-exchange]")!
+    expect(quote.textContent).toBe("Sent a message to Dev")
+    expect(two.container.textContent).not.toContain("login")
+    fireEvent.click(quote.closest("button")!)
+    expect(jumpTo).toHaveBeenCalledWith(61)
+    pa.dispatchById = new Map()
   })
 })

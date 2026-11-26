@@ -350,6 +350,11 @@ struct ReplyContent {
     body_quotes: Vec<i64>,
     /// The paths its `read` calls named (7.7).
     reads: Vec<String>,
+    /// Every text run of the turn, the body's last — what the page shows of
+    /// it. `None` from a checkpoint an older codeg wrote, which kept only
+    /// the last: the page then reads the earlier runs off the turn's lines
+    /// (`turn.said`), and a list of the last alone would hide them.
+    texts: Option<Vec<crate::acp::reply_turn::ReplyText>>,
 }
 
 impl ReplyContent {
@@ -361,6 +366,7 @@ impl ReplyContent {
             quotes: s.quotes.clone(),
             body_quotes: s.last_text.as_ref().map(|t| t.quotes.clone()).unwrap_or_default(),
             reads: s.reads.clone(),
+            texts: Some(s.texts.clone()),
         }
     }
 
@@ -406,6 +412,9 @@ impl ReplyContent {
                         .collect()
                 })
                 .unwrap_or_default(),
+            texts: data
+                .get("texts")
+                .and_then(|t| serde_json::from_value(t.clone()).ok()),
         }
     }
 }
@@ -2031,10 +2040,28 @@ impl PersonalAgentEngine {
         self.emit(PersonalAgentChange::Reply {
             row_id,
             current: snap.current.clone(),
+            texts: snap.texts.clone(),
+            ver: snap.ver,
         });
         if checkpoint {
             self.checkpoint_reply(row_id, &snap).await;
         }
+    }
+
+    /// Push the reply in flight now, not after the push's usual gather: a
+    /// row the turn writes next (a message, a piece of work) is shown after
+    /// the text it was written after, never before it. (Its checkpoint is
+    /// the usual push's to write.)
+    pub(super) async fn push_reply_now(&self) {
+        let Some((row_id, snap)) = self.reply_snapshot().await else {
+            return;
+        };
+        self.emit(PersonalAgentChange::Reply {
+            row_id,
+            current: snap.current,
+            texts: snap.texts,
+            ver: snap.ver,
+        });
     }
 
     /// The checkpoint a push left for later.
@@ -2071,6 +2098,11 @@ impl PersonalAgentEngine {
             );
             map.insert("step_count".into(), snap.step_count.into());
             map.insert(
+                "texts".into(),
+                serde_json::to_value(&snap.texts).unwrap_or_default(),
+            );
+            map.insert("ver".into(), snap.ver.into());
+            map.insert(
                 "quotes".into(),
                 serde_json::to_value(&snap.quotes).unwrap_or_default(),
             );
@@ -2079,7 +2111,9 @@ impl PersonalAgentEngine {
                 serde_json::to_value(&snap.reads).unwrap_or_default(),
             );
         }
-        if let Ok(true) = svc::checkpoint_reply_row(&self.db.conn, row_id, data).await {
+        // Written in tasks of their own, an older checkpoint may come after a
+        // newer one: it is not written over it.
+        if let Ok(true) = svc::checkpoint_reply_row(&self.db.conn, row_id, data, snap.ver).await {
             if let Ok(Some(updated)) = svc::get_row(&self.db.conn, row_id).await {
                 self.emit_rows(vec![svc::to_row(updated)]);
             }
@@ -2149,6 +2183,14 @@ impl PersonalAgentEngine {
         let mut data = data;
         if let (Some(covers), Some(map)) = (covers.as_ref(), data.as_object_mut()) {
             map.insert("covers".into(), serde_json::json!(covers));
+        }
+        // Every run it said — not from a checkpoint an older codeg wrote: the
+        // page reads those runs off the turn's lines, as it did.
+        if let (Some(texts), Some(map)) = (content.texts.as_ref(), data.as_object_mut()) {
+            map.insert(
+                "texts".into(),
+                serde_json::to_value(texts).unwrap_or_default(),
+            );
         }
         match svc::settle_reply_row(&self.db.conn, row_id, content.text, data, reply_to).await {
             Ok(Some(row)) => {
@@ -4128,6 +4170,8 @@ impl PersonalAgentEngine {
                 self.emit(PersonalAgentChange::Reply {
                     row_id,
                     current: snap.current.clone(),
+                    texts: snap.texts.clone(),
+                    ver: snap.ver,
                 });
             }
             reported = self.settle_reply(
@@ -5911,16 +5955,24 @@ impl PersonalAgentEngine {
         status.connection_id = conn.clone();
         if let Some(t) = turn.as_ref() {
             if let (Some(row_id), Some(token)) = (t.reply_row_id, t.reply_token.as_deref()) {
-                let current = match self.manager.get_state(&t.conn_id).await {
-                    Some(state) => state
-                        .read()
-                        .await
-                        .reply_turns
-                        .snapshot(token)
-                        .and_then(|s| s.current),
+                let snap = match self.manager.get_state(&t.conn_id).await {
+                    Some(state) => state.read().await.reply_turns.snapshot(token),
                     None => None,
                 };
-                status.live_reply = Some(LiveReply { row_id, current });
+                status.live_reply = Some(match snap {
+                    Some(s) => LiveReply {
+                        row_id,
+                        current: s.current,
+                        texts: s.texts,
+                        ver: s.ver,
+                    },
+                    None => LiveReply {
+                        row_id,
+                        current: None,
+                        texts: Vec::new(),
+                        ver: 0,
+                    },
+                });
             }
         }
         status.turn = turn.as_ref().map(|t| TurnInfo {

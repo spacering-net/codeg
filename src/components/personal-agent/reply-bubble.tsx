@@ -31,13 +31,19 @@ import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentResend } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { useBotId } from "@/contexts/personal-agent-context"
-import type { ReplyMemory } from "@/lib/types"
+import type { ReplyMemory, ReplyText, TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { DispatchAttachments } from "./dispatch-attachments"
 import { BlockingPrompts } from "./live-turn"
-import type { MessageItem } from "./message-items"
+import {
+  partEntries,
+  replyState,
+  turnMarkOf,
+  type MessageItem,
+  type PartEntry,
+} from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { PaReplyScope } from "./pa-card-scope"
 import { QuoteBar } from "./quote-bar"
@@ -48,6 +54,13 @@ import {
   type SlotView,
 } from "./reply-view"
 import {
+  conclusionOf,
+  silentSoFar,
+  textsIn,
+  turnTexts,
+  type TurnPart,
+} from "./turn-texts"
+import {
   AGENT_SURFACE,
   BUBBLE_MARKDOWN,
   CardMessage,
@@ -57,7 +70,7 @@ import {
   usePageScope,
 } from "./shared"
 import { isChoiceQuestionRow, QuestionChoiceCard } from "./question-choice-card"
-import { isOneCard, splitReply } from "./reply-split"
+import { isOneCard } from "./reply-split"
 import { StepSlot } from "./step-slot"
 import { TidyLines, tidyRowsOf } from "./tidy-lines"
 
@@ -192,12 +205,6 @@ function RequestInputs({ rows }: { rows: ReplyItem["attached"] }) {
   )
 }
 
-/** Text so far that may yet be a routine's `[[silent]]`. */
-function silentSoFar(text: string): boolean {
-  const t = text.trim()
-  return t.length > 0 && "[[silent]]".startsWith(t)
-}
-
 function routineOf(
   v: unknown
 ): { id: number | null; title: string; seq: number | null } | null {
@@ -268,56 +275,127 @@ function briefOf(v: unknown): "brief" | "wrap" | null {
   return kind === "brief" || kind === "wrap" ? kind : null
 }
 
+/**
+ * What a part of a turn draws, in the order it came (`partEntries`): every
+ * run its own block — keyed by its reply and its ordinal, so a run that
+ * grows, and the same run settling, stay one element — and the work handed
+ * out between runs as pills, each group with its own "N more". Only the
+ * conclusion's cards act (while it runs: its latest run's, whose buttons
+ * wait); what the turn said on the way is drawn read-only — its conclusion
+ * may have put it right.
+ */
+function PartBody({
+  row,
+  entries,
+  running,
+  latest,
+  readOnly = false,
+}: {
+  row: TimelineRow | null
+  entries: readonly PartEntry[]
+  running: boolean
+  /** The turn's latest run, while it runs: it streams. */
+  latest: number | null
+  /** None of them the conclusion (a part not the reply's). */
+  readOnly?: boolean
+}) {
+  const conclusion = row ? conclusionOf(row) : null
+  return (
+    <>
+      {entries.map((e, i) => {
+        if (e.kind === "pills") {
+          return (
+            <DispatchAttachments
+              key={`p${e.group}`}
+              rows={e.rows}
+              group={e.group}
+            />
+          )
+        }
+        const t = e.run
+        const streaming = running && t.n === latest
+        const acts =
+          !readOnly && (running ? t.n === latest : t.n === conclusion)
+        return (
+          <div
+            key={`${row?.id}:${t.n}`}
+            data-pa-run={t.n}
+            className={cn(i > 0 && "mt-2")}
+          >
+            <PaReplyScope row={row} running={running} readOnly={!acts}>
+              <MessageResponse
+                className={cn("text-sm", MARKDOWN_LIST_ROOM, BUBBLE_MARKDOWN)}
+                mode={streaming ? "streaming" : undefined}
+                parseIncompleteMarkdown={streaming ? true : undefined}
+              >
+                {t.text}
+              </MessageResponse>
+            </PaReplyScope>
+          </div>
+        )
+      })}
+    </>
+  )
+}
+
+/** The runs part `part` of reply `row`'s turn draws, from every copy the
+ *  page has of it (`turnTexts`): a routine's "nothing to say" as it
+ *  streams in is not one (6.9). `latest`: the turn's latest run while it
+ *  runs. */
+function usePartTexts(
+  row: TimelineRow | null,
+  part: TurnPart
+): { texts: ReplyText[]; latest: number | null } {
+  const { liveReplies } = usePersonalAgent()
+  const heard = row ? liveReplies.get(row.id) : undefined
+  return useMemo(() => {
+    if (!row) return { texts: [], latest: null }
+    const all = turnTexts(row, heard, part.lines)
+    const running = replyState(row) === "running"
+    const last = all[all.length - 1]
+    const shown =
+      running && last && silentSoFar(last.text) ? all.slice(0, -1) : all
+    return {
+      texts: textsIn(shown, part),
+      latest: running ? (last?.n ?? null) : null,
+    }
+  }, [row, heard, part])
+}
+
 export function ReplyBubble({ item }: { item: ReplyItem }) {
   const tr = useTranslations("PersonalAgent.routines")
   const tb = useTranslations("PersonalAgent.brief")
   const scope = usePageScope()
-  const { liveReplies, liveTexts } = usePersonalAgent()
+  const { liveReplies } = usePersonalAgent()
   const row = item.row
-  const live =
-    row && liveReplies.has(row.id) ? liveReplies.get(row.id) : undefined
+  const heard = row ? liveReplies.get(row.id) : undefined
   const view = useMemo(
     () =>
       replyView({
         row,
-        live,
-        // Work whose news this reply reported is drawn by that news's card.
-        attached: item.reported?.length
-          ? item.attached.filter((r) => !item.reported!.includes(r.id))
-          : item.attached,
+        live: heard ? heard.current : undefined,
+        attached: item.attached,
         owners: item.owners,
+        pills: item.pills,
       }),
-    [row, live, item.attached, item.reported, item.owners]
+    [row, heard, item.attached, item.owners, item.pills]
   )
+  const { texts, latest } = usePartTexts(row, item.part)
+  // Its runs and the work handed out between them, in the order they came;
+  // work its turn handed out at no recorded step comes after the answers,
+  // as it always did.
+  const entries = partEntries(
+    texts,
+    item.partPills.filter((r) => turnMarkOf(r) != null),
+    item.pills
+  )
+  const unplaced = item.pills.filter((r) => turnMarkOf(r) == null)
+  const unplacedGroup =
+    item.partPills.find((r) => turnMarkOf(r) == null)?.id ?? null
   const liveTurn = view.running && row != null && row.id === scope.liveRowId
   // While the turn runs, the bubble holds only what it wrote: the other
-  // steps are the status line's (10.7). Its last text stays while it goes on
-  // with them; with none yet, there is no bubble at all — unless the turn
-  // asks the owner something here. A text it wrote before sending a message
-  // is drawn above that message's line already (`said`): not here again.
-  const drawnAbove = (n: number | undefined) =>
-    n != null && item.saidNs.includes(n)
-  const kept = row ? liveTexts?.get(row.id) : undefined
-  const said = kept && !drawnAbove(kept.n) ? kept : undefined
-  const streamed: SlotView | null =
-    view.running && view.slot?.kind !== "text"
-      ? said
-        ? {
-            kind: "text",
-            key: `t${said.n}`,
-            text: said.text,
-            streaming: true,
-            n: said.n,
-          }
-        : null
-      : view.running && view.slot?.kind === "text" && drawnAbove(view.slot.n)
-        ? null
-        : view.slot
-  // A routine's "nothing to say" as it streams in is not shown (6.9).
-  const slot: SlotView | null =
-    view.running && streamed?.kind === "text" && silentSoFar(streamed.text)
-      ? null
-      : streamed
+  // steps are the status line's (10.7). With nothing written yet, there is
+  // no bubble at all — unless the turn asks the owner something here.
   const asks = item.attached.some(
     (r) =>
       (r.kind === "question" || r.kind === "permission") &&
@@ -325,33 +403,35 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
   )
   if (
     view.running &&
-    slot == null &&
+    texts.length === 0 &&
     !asks &&
     view.answered.length === 0 &&
     view.dispatches.length === 0
   ) {
     return null
   }
+  // Ended without a word anywhere in its turn: what it did instead.
+  const note: SlotView | null =
+    !view.running && view.slot?.kind === "note" && texts.length === 0
+      ? view.slot
+      : null
   const copyText =
-    !view.running && view.slot?.kind === "text" ? view.slot.text : null
+    !view.running && texts.length > 0
+      ? texts.map((t) => t.text).join("\n\n")
+      : null
   // The brain's own questions, as choice cards in the bubble (10.7).
   const questionRows = item.attached.filter(isChoiceQuestionRow)
   const questionsShown = new Set(
     questionRows.map((r) => r.ref_id).filter((id): id is string => !!id)
   )
-  // Short paragraphs, no code and no card: a bubble each (10.7). While it
-  // streams too, so the bubbles it ends with are the ones it grew.
-  const parts = slot?.kind === "text" ? splitReply(slot.text) : null
-  const paragraphs = parts != null && parts.length > 1 ? parts : null
   // A reply that is one card and nothing else is the card: no bubble round
   // it (what it is of — a brief, a routine, the message it answers — and
   // what it drew on stay small lines over and under it).
   const bare =
     !view.running &&
     !liveTurn &&
-    paragraphs == null &&
-    slot?.kind === "text" &&
-    isOneCard(slot.text) &&
+    texts.length === 1 &&
+    isOneCard(texts[0].text) &&
     questionRows.length === 0 &&
     view.answered.length === 0 &&
     view.dispatches.length === 0 &&
@@ -362,11 +442,6 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
   // the other news codeg brings is; a report that is one card is that card.
   const routine = routineOf(row?.data?.routine)
   const routineCard = routine != null && !bare
-  const split = routineCard ? null : paragraphs
-  const lastSlot: SlotView | null =
-    split && slot?.kind === "text"
-      ? { ...slot, text: split[split.length - 1] }
-      : slot
   // The morning brief or the wrap-up it is (6.4, 6.5).
   const brief = briefOf(row?.data?.brief)
   const tidied = tidyRowsOf(tidiedOf(row?.data?.brief))
@@ -396,16 +471,22 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
           <span className="min-w-0 truncate">{routineWords}</span>
         </p>
       ) : null}
-      {row?.reply_to != null && !item.quotesPrevious ? (
+      {item.quote && row?.reply_to != null && !item.quotesPrevious ? (
         <QuoteBar targetId={row.reply_to} tone="light" className="mb-2" />
       ) : null}
     </>
   )
   const rest = (
     <>
-      {lastSlot ? (
-        <StepSlot view={lastSlot} running={view.running} row={row} />
+      {entries.length > 0 ? (
+        <PartBody
+          row={row}
+          entries={entries}
+          running={view.running}
+          latest={latest}
+        />
       ) : null}
+      {note ? <StepSlot view={note} running={false} row={row} /> : null}
       {liveTurn && !scope.readOnly && scope.connectionId && scope.agentType ? (
         <div className="mt-2 flex flex-col gap-2 empty:hidden">
           <BlockingPrompts
@@ -422,8 +503,8 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
       {view.answered.map((line) => (
         <Answered key={line.rowId} line={line} />
       ))}
-      {view.dispatches.length > 0 ? (
-        <DispatchAttachments rows={view.dispatches} />
+      {unplaced.length > 0 ? (
+        <DispatchAttachments rows={unplaced} group={unplacedGroup} />
       ) : null}
       {!view.running ? (
         <UsedMemory memories={memoriesOf(row?.data?.memories)} />
@@ -438,32 +519,6 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
         <Resend ids={view.resend} />
       ) : null}
     </>
-  )
-  const bubble = (
-    part: number,
-    tail: boolean,
-    children: React.ReactNode,
-    live = false
-  ) => (
-    <div
-      key={part}
-      data-bubble
-      data-pa-bubble-part={split ? part : undefined}
-      data-pa-bare={bare || undefined}
-      className={cn(
-        !bare && AGENT_SURFACE,
-        !bare && bubbleCorners("start", tail),
-        // No wider than the message's share of the column, beside its
-        // others too: a line that does not wrap (a quote's title, a long
-        // name in code) must not widen it past the column.
-        "max-w-full min-w-0 text-sm break-words text-foreground [&>:first-child]:mt-0",
-        !bare && "p-3"
-      )}
-      aria-live={live ? "polite" : undefined}
-      aria-busy={live || undefined}
-    >
-      {children}
-    </div>
   )
   return (
     <MessageRow
@@ -501,34 +556,25 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
             {rest}
           </SheetPart>
         </CardMessage>
-      ) : split ? (
-        <div className="flex min-w-0 flex-col items-start gap-1">
-          {split.slice(0, -1).map((text, i) =>
-            bubble(
-              i,
-              false,
-              <>
-                {i === 0 ? quote : null}
-                <MessageResponse
-                  className={cn("text-sm", MARKDOWN_LIST_ROOM, BUBBLE_MARKDOWN)}
-                >
-                  {text}
-                </MessageResponse>
-              </>
-            )
-          )}
-          {bubble(split.length - 1, item.tail, rest, liveTurn)}
-        </div>
       ) : (
-        bubble(
-          0,
-          item.tail,
-          <>
-            {quote}
-            {rest}
-          </>,
-          liveTurn
-        )
+        <div
+          data-bubble
+          data-pa-bare={bare || undefined}
+          className={cn(
+            !bare && AGENT_SURFACE,
+            !bare && bubbleCorners("start", item.tail),
+            // No wider than the message's share of the column, beside its
+            // others too: a line that does not wrap (a quote's title, a long
+            // name in code) must not widen it past the column.
+            "max-w-full min-w-0 text-sm break-words text-foreground [&>:first-child]:mt-0",
+            !bare && "p-3"
+          )}
+          aria-live={liveTurn ? "polite" : undefined}
+          aria-busy={liveTurn || undefined}
+        >
+          {quote}
+          {rest}
+        </div>
       )}
     </MessageRow>
   )
@@ -537,38 +583,19 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
 type SaidItem = Extract<MessageItem, { kind: "said" }>
 
 /**
- * What a turn wrote before a message it sent to another assistant, over
- * that message's line — where it was written: the turn's reply keeps only
- * its last text, and without this the line would sit above everything the
- * turn said. Drawn as the reply's text is (short paragraphs a bubble each);
- * its actions copy it, with no quote — it is no message of its own.
+ * A part of a turn that is not its reply's (P6): what the turn said, and
+ * the work it handed out, between the lines it wrote to other assistants —
+ * where it said it. One bubble; its cards are read-only (the conclusion is
+ * the reply's). Its pills all made way and nothing said: drawn empty, so
+ * the lines round it stay apart. Its actions copy it, with no quote — it is
+ * no message of its own.
  */
 export function SaidBubble({ item }: { item: SaidItem }) {
-  const parts = splitReply(item.text)
-  const bubble = (part: number, tail: boolean, text: string) => (
-    <div
-      key={part}
-      data-bubble
-      data-pa-said
-      data-pa-bubble-part={parts.length > 1 ? part : undefined}
-      className={cn(
-        AGENT_SURFACE,
-        bubbleCorners("start", tail),
-        // No wider than the message's share of the column, beside its
-        // others too: a line that does not wrap (a quote's title, a long
-        // name in code) must not widen it past the column.
-        "max-w-full min-w-0 p-3 text-sm break-words text-foreground [&>:first-child]:mt-0"
-      )}
-    >
-      <PaReplyScope row={null} running={false}>
-        <MessageResponse
-          className={cn("text-sm", MARKDOWN_LIST_ROOM, BUBBLE_MARKDOWN)}
-        >
-          {text}
-        </MessageResponse>
-      </PaReplyScope>
-    </div>
-  )
+  const { texts, latest } = usePartTexts(item.reply, item.part)
+  const entries = partEntries(texts, item.partPills, item.pills)
+  const running = replyState(item.reply) === "running"
+  if (texts.length === 0 && item.pills.length === 0) return null
+  const text = texts.map((t) => t.text).join("\n\n")
   return (
     <MessageRow
       side="start"
@@ -576,20 +603,41 @@ export function SaidBubble({ item }: { item: SaidItem }) {
       tail={item.tail}
       actions={{
         rowId: item.row.id,
-        text: item.text,
+        text: text || null,
         at: item.row.created_at,
         quote: false,
       }}
     >
-      {parts.length > 1 ? (
-        <div className="flex min-w-0 flex-col items-start gap-1">
-          {parts.map((text, i) =>
-            bubble(i, i === parts.length - 1 && item.tail, text)
-          )}
-        </div>
-      ) : (
-        bubble(0, item.tail, parts[0] ?? item.text)
-      )}
+      <div
+        data-bubble
+        data-pa-said
+        className={cn(
+          AGENT_SURFACE,
+          bubbleCorners("start", item.tail),
+          // No wider than the message's share of the column, beside its
+          // others too: a line that does not wrap (a quote's title, a long
+          // name in code) must not widen it past the column.
+          "max-w-full min-w-0 p-3 text-sm break-words text-foreground [&>:first-child]:mt-0"
+        )}
+      >
+        {item.quote && item.reply.reply_to != null && !item.quotesPrevious ? (
+          <QuoteBar
+            targetId={item.reply.reply_to}
+            tone="light"
+            className="mb-2"
+          />
+        ) : null}
+        {entries.length > 0 ? (
+          <PartBody
+            row={item.reply}
+            entries={entries}
+            running={running}
+            latest={latest}
+            // Its runs are all on the way: none is the conclusion.
+            readOnly
+          />
+        ) : null}
+      </div>
     </MessageRow>
   )
 }

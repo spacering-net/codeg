@@ -826,6 +826,8 @@ impl PersonalAgentEngine {
         if let (Some(line), Some(turn)) = (sender_line.as_object_mut(), turn) {
             line.insert("turn".into(), turn);
         }
+        // What the turn wrote before it reaches the page first.
+        self.push_reply_now().await;
         let (ledger, ledger_notice, sent_batch_id) = match &auth {
             MessageAuth::Ledgered { batch_id, .. } => (
                 Some(LedgerSlot::in_batch(*batch_id, key.clone(), super::ledger::fresh_op_id())),

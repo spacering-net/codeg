@@ -117,13 +117,14 @@ afterEach(() => {
 })
 
 describe("ExchangeRow", () => {
-  it("names who a message went to, and shows its first line on hover", () => {
+  it("names who a message went to, never its words", () => {
     draw([line(1, "out")])
     const button = screen.getByRole("button", { name: /Sent a message to/ })
     expect(button.textContent).toContain("Dev")
-    expect(button.getAttribute("title")).toBe(
-      "Fix the cold-start white screen."
-    )
+    // Not on hover either (P6.3 2): what assistants say to each other is
+    // read in the exchange.
+    expect(button.getAttribute("title")).toBeNull()
+    expect(document.body.textContent).not.toContain("cold-start")
     // Words and the peer's face, no arrow in front of them.
     const arrows = '[class*="lucide-arrow"]'
     expect(button.querySelectorAll(arrows)).toHaveLength(0)
@@ -263,16 +264,28 @@ describe("ExchangeRow", () => {
     expect(screen.getByText("Aide ⇄ Dev")).toBeTruthy()
     expect(screen.getByText("Fix it, please.")).toBeTruthy()
     expect(screen.getByText("Fix the white screen")).toBeTruthy()
-    // Dev's own work, which this page does not hold, opens all the same.
+    // The line's own message, marked (it is on this exchange).
+    expect(
+      document
+        .querySelector("[data-pa-thread-target]")
+        ?.getAttribute("data-pa-thread-message")
+    ).toBe("41")
+    // Dev's own work, which this page does not hold, opens all the same —
+    // the bubble closed on its way.
     const pill = screen.getByText("Fix the white screen").closest("button")!
     expect(pill.disabled).toBe(false)
     fireEvent.click(pill)
     const ui = usePersonalAgentUi.getState()
     expect(ui.workOpen).toBe(true)
     expect(ui.work?.workTaskId).toBe(3)
-    // [Open Dev's conversation]: Dev's page, the sheet closed.
+    await waitFor(() => expect(screen.queryByText("Aide ⇄ Dev")).toBeNull())
+    // [Open Dev's conversation]: Dev's page, the bubble closed.
+    fireEvent.click(screen.getByRole("button", { name: /Sent a message to/ }))
+    await waitFor(() => expect(screen.getByText("Aide ⇄ Dev")).toBeTruthy())
+    // (jsdom lays nothing out: the bubble counts as scrolled out of sight,
+    // hidden from roles.)
     fireEvent.click(
-      screen.getByRole("button", { name: "Open Dev's conversation" })
+      screen.getByText("Open Dev's conversation").closest("button")!
     )
     expect(usePersonalAgentUi.getState().viewBot).toBe(2)
     await waitFor(() => expect(screen.queryByText("Aide ⇄ Dev")).toBeNull())

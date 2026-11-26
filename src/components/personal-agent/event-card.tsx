@@ -66,7 +66,7 @@ import {
   useWorkStoppable,
   WorkStopButton,
 } from "./task-strip"
-import { WorkRow } from "./work-card"
+import { StateIcon, WorkRow } from "./work-card"
 
 type EventItem = Extract<MessageItem, { kind: "event" }>
 
@@ -311,6 +311,7 @@ function ResultText({
   text,
   covered,
   whole = false,
+  unfolded = false,
 }: {
   rowId: number
   gist: string | null
@@ -319,10 +320,30 @@ function ResultText({
   text: string | null
   covered: boolean
   whole?: boolean
+  /** A card folded to a line, opened (D8): its whole text shows, and the
+   *  way back is the card's own. */
+  unfolded?: boolean
 }) {
   const t = useTranslations("PersonalAgent.event")
   const asked = usePersonalAgentUi((s) => s.openResults[rowId] === true)
   const setOpen = usePersonalAgentUi((s) => s.setResultOpen)
+  if (unfolded) {
+    if (!note && !(text ?? gist)) return null
+    return (
+      <SheetPart className="flex flex-col gap-1.5" data-pa-result-text>
+        {note ? (
+          <p className="text-xs break-words text-muted-foreground">{note}</p>
+        ) : null}
+        {text ? (
+          <WholeText text={text} />
+        ) : gist ? (
+          <p className="text-sm leading-5 break-words text-foreground">
+            {gist}
+          </p>
+        ) : null}
+      </SheetPart>
+    )
+  }
   const leads = whole && !covered
   const open = asked || leads
   const folded = covered && !open
@@ -433,11 +454,77 @@ export function EventCard({ item }: { item: EventItem }) {
       : null
   // Its acceptance, folded into it as its head (A4).
   const acceptance = item.acceptance
-  // The pill of its work, which the reply that handed it out and reported
-  // this news no longer draws: what done looks like, said here.
-  const doneWhen = item.pill
-    ? (info?.done_when ?? str(item.pill.data, "done_when"))
+  // The pills of its work that made way for it (P6.3 5): what done looks
+  // like, as the work's own pill said it (not a follow-up's).
+  const origin = item.pills.find((p) => p.data?.followup !== true) ?? null
+  const doneWhen = origin
+    ? (info?.done_when ?? str(origin.data, "done_when"))
     : null
+  // Folded to a line (D8): news a reply reported, of work in a chat or a
+  // session — not a board task's, a check's, a work's head with its
+  // acceptance, nor an automatic retry that failed since (why is said on
+  // it alone); and every stop. Opened, the whole card; closed, the line.
+  const autoRetry = data?.auto_retry
+  const retryFailed =
+    autoRetry != null &&
+    typeof autoRetry === "object" &&
+    (autoRetry as { state?: unknown }).state === "failed"
+  const stopped = cause === "stopped"
+  const foldable =
+    checkFor == null &&
+    acceptance == null &&
+    (stopped || (item.covered && mode !== "task" && !retryFailed))
+  const unfolded = usePersonalAgentUi((s) => s.openResults[row.id] === true)
+  const setUnfolded = usePersonalAgentUi((s) => s.setResultOpen)
+  const folded = foldable && !unfolded
+  const actions = {
+    rowId: row.id,
+    text:
+      [str(data, "title"), excerpt].filter(Boolean).join("\n\n") || row.body,
+    at: row.created_at,
+  }
+  if (folded) {
+    return (
+      <MessageRow
+        rowId={row.id}
+        side="start"
+        gap={item.gap}
+        tail={item.tail}
+        roomy
+        actions={actions}
+        aside={unread ? <UnreadMark /> : null}
+      >
+        <CardMessage data-pa-event-card data-pa-event-line>
+          <div className="flex min-w-0 items-center gap-1 px-3 py-1.5">
+            <button
+              type="button"
+              aria-expanded={false}
+              data-pa-event-unfold
+              onClick={() => setUnfolded(row.id, true)}
+              className="flex min-h-7 min-w-0 flex-1 items-center gap-2 rounded-md text-start focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              <StateIcon state={state} />
+              <span className="min-w-0 truncate font-medium text-foreground">
+                {title}
+              </span>
+              <span className="min-w-0 shrink-[2] truncate text-xs text-muted-foreground">
+                {stopped && note
+                  ? note
+                  : state
+                    ? t(`state.${state}` as "state.completed")
+                    : null}
+              </span>
+              <ChevronDown
+                className="size-3.5 shrink-0 text-muted-foreground"
+                aria-hidden
+              />
+            </button>
+            {weekly ? <WorkMenu info={weekly} botId={botId} /> : null}
+          </div>
+        </CardMessage>
+      </MessageRow>
+    )
+  }
   const facts =
     !!doneWhen?.trim() ||
     strip != null ||
@@ -453,13 +540,7 @@ export function EventCard({ item }: { item: EventItem }) {
       gap={item.gap}
       tail={item.tail}
       roomy
-      actions={{
-        rowId: row.id,
-        text:
-          [str(data, "title"), excerpt].filter(Boolean).join("\n\n") ||
-          row.body,
-        at: row.created_at,
-      }}
+      actions={actions}
       aside={unread ? <UnreadMark /> : null}
     >
       {/* The work and its news one card, no bubble round it: the work its
@@ -483,7 +564,27 @@ export function EventCard({ item }: { item: EventItem }) {
           ]
             .filter(Boolean)
             .join(" · ")}
-          menu={weekly ? <WorkMenu info={weekly} botId={botId} /> : null}
+          menu={
+            weekly || foldable ? (
+              <>
+                {weekly ? <WorkMenu info={weekly} botId={botId} /> : null}
+                {foldable ? (
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label={t("event.fold")}
+                    title={t("event.fold")}
+                    aria-expanded
+                    data-pa-event-fold
+                    onClick={() => setUnfolded(row.id, false)}
+                  >
+                    <ChevronUp aria-hidden className="size-4" />
+                  </Button>
+                ) : null}
+              </>
+            ) : null
+          }
           source={
             row.reply_to != null && !item.quotesPrevious
               ? {
@@ -565,6 +666,7 @@ export function EventCard({ item }: { item: EventItem }) {
           // the work its earlier card said, and the owner merged it.
           covered={item.covered || newsLadder === "merged"}
           whole={checkFor != null}
+          unfolded={foldable}
         />
         {/* The task card's buttons, and [Stop] for the work while it moves
             — on its latest news only. */}

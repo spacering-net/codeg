@@ -11339,6 +11339,7 @@
       "source": "المصدر",
       "showText": "عرض النص الأصلي",
       "hideText": "إخفاء النص الأصلي",
+      "fold": "طيّ",
       "makeRoutine": "اجعله روتينًا…",
       "note": {
         "boot": "أُعيد تشغيل codeg",
@@ -11498,6 +11499,8 @@
     "exchange": {
       "sentTo": "أُرسلت رسالة إلى <peer></peer>",
       "from": "رسالة من <peer></peer>",
+      "sentToName": "أُرسلت رسالة إلى {name}",
+      "fromName": "رسالة من {name}",
       "exchanged": "{count, plural, zero {لا رسائل} one {رسالة واحدة} two {رسالتان} few {# رسائل} many {# رسالة} other {# رسالة}} مع {names}",
       "state": {
         "stopped": "سُحبت",
