@@ -2,7 +2,7 @@
 
 /**
  * The roster (10.1, 4.14): the owner's assistants, as the workspace's
- * sidebar lists them under "Personal assistants" (`variant="sidebar"`), and
+ * sidebar lists them under "Assistants" (`variant="sidebar"`), and
  * as the page title's capsule opens them in a popover.
  *
  * - First the primary — or, before it is set up, one row that sets it up —
@@ -326,6 +326,12 @@ function lineTone(tone: RowLine["tone"]): string {
         : "text-muted-foreground"
 }
 
+/** The room under each of the sidebar's rows: what the conversation list's
+ *  rows have (a 1.9375rem pill in a 2rem slot), so the two lists stack alike.
+ *  Under the row, not around it, as there: the first sits flush under its
+ *  head. */
+const SIDEBAR_ROW_SLOT = "pb-[0.0625rem]"
+
 /** The rows of a group, each coming in and going out by its height (the
  *  motion tokens' `motion-rows`). A row gone is kept, closing, for the
  *  length of the motion. */
@@ -389,7 +395,7 @@ function AnimatedRows({
           {/* What folds is this one, clipped to nothing; the room apart
               from the next row is inside it, and folds with it. */}
           <div>
-            <div className="py-0.5">{render(h.entry)}</div>
+            <div className={SIDEBAR_ROW_SLOT}>{render(h.entry)}</div>
           </div>
         </div>
       ))}
@@ -1194,7 +1200,10 @@ export function PersonalAgentRoster({
             data-pa-roster-slot={line}
             className={cn(
               "pointer-events-none absolute inset-x-2 h-0.5 rounded-full bg-primary",
-              line === "before" ? "-top-[3px]" : "-bottom-[3px]"
+              // On the row's own edge: the 1px between rows is too thin to
+              // hold it, and past the row's top it would be clipped (the row
+              // folds inside an overflow-hidden box, `motion-rows`).
+              line === "before" ? "top-0" : "bottom-0"
             )}
           />
         ) : null}
@@ -1451,7 +1460,7 @@ export function PersonalAgentRoster({
         className="flex flex-col px-0.5 pb-1"
       >
         {primary ? (
-          <div className="py-0.5">{row(primary)}</div>
+          <div className={SIDEBAR_ROW_SLOT}>{row(primary)}</div>
         ) : entries ? (
           <div className="py-0.5">{setupRow}</div>
         ) : null}
@@ -1488,7 +1497,7 @@ export function PersonalAgentRoster({
           {hiddenShown.length > 0 ? (
             <div data-pa-roster-group="hidden">
               {hiddenShown.map((b) => (
-                <div key={b.id} className="py-0.5">
+                <div key={b.id} className={SIDEBAR_ROW_SLOT}>
                   {row(b)}
                 </div>
               ))}

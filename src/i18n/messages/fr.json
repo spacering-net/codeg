@@ -950,7 +950,7 @@
         "disableTitle": "Désactiver {name} ?",
         "disableConfirm": "Désactiver"
       },
-      "assistantsMoved": "Assistants : dans le groupe « Agent personnel » de la barre latérale",
+      "assistantsMoved": "Assistants : dans le groupe « Assistants » de la barre latérale",
       "assistantsMovedHint": "Chaque assistant que vous @mentionnez a son propre agent et ses instructions permanentes.",
       "assistantsMovedOpen": "Ouvrir"
     },
@@ -2389,7 +2389,7 @@
       "personalAgent": "Agent personnel",
       "personalAgentUnreadBots": "{count, plural, one {# assistant a des messages non lus} other {# assistants ont des messages non lus}}",
       "personalAgentBadge": "Confiée par l'agent personnel",
-      "sectionAssistants": "Agents personnels",
+      "sectionAssistants": "Assistants",
       "timeGroupPrioritiesTooltip": "Comprend les sessions actuellement en cours d'exécution",
       "recentGroupingModeTime": "Passer au regroupement par date",
       "recentGroupingModeFlat": "Passer à la liste plate"

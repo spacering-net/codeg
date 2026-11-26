@@ -950,7 +950,7 @@
         "disableTitle": "Turn off {name}?",
         "disableConfirm": "Turn off"
       },
-      "assistantsMoved": "Assistants: in the sidebar's \"Personal assistants\" group",
+      "assistantsMoved": "Assistants: in the sidebar's \"Assistants\" group",
       "assistantsMovedHint": "The assistants you @ in conversations each have their own agent and standing instructions.",
       "assistantsMovedOpen": "Open"
     },
@@ -2389,7 +2389,7 @@
       "personalAgent": "Personal agent",
       "personalAgentUnreadBots": "{count, plural, one {# assistant has unread messages} other {# assistants have unread messages}}",
       "personalAgentBadge": "Dispatched by the personal agent",
-      "sectionAssistants": "Personal assistants",
+      "sectionAssistants": "Assistants",
       "timeGroupPrioritiesTooltip": "Includes active sessions currently running",
       "recentGroupingModeTime": "Switch to time grouping",
       "recentGroupingModeFlat": "Switch to flat list"

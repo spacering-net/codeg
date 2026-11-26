@@ -950,7 +950,7 @@
         "disableTitle": "{name} を無効にしますか？",
         "disableConfirm": "無効にする"
       },
-      "assistantsMoved": "アシスタント：サイドバーの「パーソナルエージェント」グループで管理",
+      "assistantsMoved": "アシスタント：サイドバーの「アシスタント」グループで管理",
       "assistantsMovedHint": "会話で @ するアシスタントは、それぞれ自分のエージェントと常駐指示を持ちます。",
       "assistantsMovedOpen": "開く"
     },
@@ -2389,7 +2389,7 @@
       "personalAgent": "パーソナルエージェント",
       "personalAgentUnreadBots": "未読のあるアシスタント {count} 人",
       "personalAgentBadge": "パーソナルエージェントが依頼",
-      "sectionAssistants": "パーソナルエージェント",
+      "sectionAssistants": "アシスタント",
       "timeGroupPrioritiesTooltip": "現在実行中のセッションが含まれます",
       "recentGroupingModeTime": "時間グループ表示に切り替え",
       "recentGroupingModeFlat": "フラットリストに切り替え"

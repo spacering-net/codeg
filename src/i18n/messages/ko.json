@@ -950,7 +950,7 @@
         "disableTitle": "{name}을(를) 사용 중지할까요?",
         "disableConfirm": "사용 중지"
       },
-      "assistantsMoved": "어시스턴트: 사이드바의 ‘개인 에이전트’ 그룹에서 관리",
+      "assistantsMoved": "어시스턴트: 사이드바의 ‘어시스턴트’ 그룹에서 관리",
       "assistantsMovedHint": "대화에서 @하는 어시스턴트는 각자 자기 에이전트와 상시 지침을 가져요.",
       "assistantsMovedOpen": "열기"
     },
@@ -2389,7 +2389,7 @@
       "personalAgent": "개인 에이전트",
       "personalAgentUnreadBots": "읽지 않은 메시지가 있는 어시스턴트 {count}명",
       "personalAgentBadge": "개인 에이전트가 배정함",
-      "sectionAssistants": "개인 에이전트",
+      "sectionAssistants": "어시스턴트",
       "timeGroupPrioritiesTooltip": "현재 실행 중인 세션이 포함됩니다",
       "recentGroupingModeTime": "시간별 그룹으로 전환",
       "recentGroupingModeFlat": "일반 목록으로 전환"

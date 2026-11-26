@@ -950,7 +950,7 @@
         "disableTitle": "停用「{name}」？",
         "disableConfirm": "停用"
       },
-      "assistantsMoved": "助手：在左侧栏的「个人助手」分组里管理",
+      "assistantsMoved": "助手：在左侧栏的「助手」分组里管理",
       "assistantsMovedHint": "会话里 @ 的个人助手，各有自己的智能体和常驻指令。",
       "assistantsMovedOpen": "打开"
     },
@@ -2389,7 +2389,7 @@
       "personalAgent": "个人助手",
       "personalAgentUnreadBots": "{count} 个助手有未读消息",
       "personalAgentBadge": "由个人助手派出",
-      "sectionAssistants": "个人助手",
+      "sectionAssistants": "助手",
       "timeGroupPrioritiesTooltip": "包含当前正在执行的任务",
       "recentGroupingModeTime": "切换为时间分组",
       "recentGroupingModeFlat": "切换为平铺列表"

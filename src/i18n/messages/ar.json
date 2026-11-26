@@ -950,7 +950,7 @@
         "disableTitle": "هل تريد تعطيل {name}؟",
         "disableConfirm": "تعطيل"
       },
-      "assistantsMoved": "المساعدون: في مجموعة «الوكيل الشخصي» في الشريط الجانبي",
+      "assistantsMoved": "المساعدون: في مجموعة «المساعدون» في الشريط الجانبي",
       "assistantsMovedHint": "لكل مساعد تشير إليه بـ @ وكيله وتعليماته الدائمة.",
       "assistantsMovedOpen": "فتح"
     },
@@ -2389,7 +2389,7 @@
       "personalAgent": "الوكيل الشخصي",
       "personalAgentUnreadBots": "{count, plural, zero {لا مساعدين لديهم رسائل غير مقروءة} one {مساعد واحد لديه رسائل غير مقروءة} two {مساعدان لديهما رسائل غير مقروءة} few {# مساعدين لديهم رسائل غير مقروءة} many {# مساعدًا لديهم رسائل غير مقروءة} other {# مساعد لديهم رسائل غير مقروءة}}",
       "personalAgentBadge": "أسندها الوكيل الشخصي",
-      "sectionAssistants": "الوكلاء الشخصيون",
+      "sectionAssistants": "المساعدون",
       "timeGroupPrioritiesTooltip": "يتضمن الجلسات قيد التشغيل حاليًا",
       "recentGroupingModeTime": "التبديل إلى التجميع حسب الوقت",
       "recentGroupingModeFlat": "التبديل إلى قائمة بسيطة"
