@@ -2372,26 +2372,36 @@ export function MessageInput({
         </ContextMenu>
         {hasFolderBranchPicker && (
           // `px-2` mirrors the action bar so this row lines up with the composer
-          // above; the folder icon then aligns with the centered "+" icon (both
-          // add the same 1px transparent border, paired with the picker buttons'
-          // `px-1.5`). The row only renders while attached below the composer, so
+          // above. The row only renders while attached below the composer, so
           // it always takes the rounded-bottom box treatment. Pickers sit at the
           // left edge; the context-usage circle + agent connection status
           // right-align at the trailing edge.
           <div className="flex items-center justify-between gap-2 rounded-b-xl px-2 pt-1 text-xs text-muted-foreground">
-            <div className="flex min-w-0 items-center gap-1">
+            {/* `ps-1` centres the folder icon on the "+" icon's column (u =
+                `--spacing`, which canvas cards pin, hence no rem here). The
+                "+" is a `size-8` square inside the composer's 1px border and
+                the action bar's `px-2`, so its `size-4` icon is centred at
+                1px + 2u + 4u; the folder chip's `size-3` icon sits behind this
+                row's `px-2`, `ps-1`, the chip's 1px border and `px-1.5`:
+                2u + 1u + 1px + 1.5u + 1.5u — the same 1px + 6u. Logical side,
+                so it mirrors with the row in RTL. */}
+            <div className="flex min-w-0 items-center gap-1 ps-1">
               <ConversationFolderBranchPicker
                 tabId={attachmentTabId}
                 override={folderPickerOverride}
               />
             </div>
-            {/* `pr-px` offsets the composer chrome's 1px border: the send button
-                sits INSIDE that border while this status row sits outside it, so
-                without the 1px nudge the trailing icon hangs 1px past the button.
-                With it, the connection icon's RIGHT edge is flush (0px) with the
-                send button's right edge in the action bar above — no centring
-                slot, which would inset the narrow icon and break the alignment. */}
-            <div className="flex shrink-0 items-center gap-3 pr-px">
+            {/* The connection icon's trailing edge lines up with the plain
+                send button's icon above: that `size-4` icon is centred in a
+                `size-8` button (2u inset, u = `--spacing`) that sits INSIDE
+                the composer's 1px border and the action bar's `px-2`, while
+                this row sits outside the border — hence 2u + 1px on top of the
+                row's `px-2`. (The live-feedback split ends in a narrower
+                chevron trigger, so it doesn't line up there.) Padding, not a
+                centring slot: the `size-3.5` heart would land 0.25u further in
+                than the `size-4` send icon. Logical side, so it mirrors in
+                RTL. */}
+            <div className="flex shrink-0 items-center gap-3 pe-[calc(var(--spacing)*2+1px)]">
               <ComposerContextUsage tabId={attachmentTabId ?? null} />
               <ComposerConnectionStatus tabId={attachmentTabId ?? null} />
             </div>
