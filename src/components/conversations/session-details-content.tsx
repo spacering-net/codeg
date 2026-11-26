@@ -322,9 +322,10 @@ function CopyPropertyButton({
 }
 
 /**
- * One label-over-value cell of `SessionDetailsCard`'s properties, centred in
- * its column, the value a size up from its label. The cells of a line share
- * its width evenly and are split by hairlines.
+ * One cell of `SessionDetailsCard`'s properties, centred in its column: the
+ * value, bold and a size up, over its label. The label stays first in the
+ * markup — a `dt` before its `dd` — and is only drawn under it. The cells of a
+ * line share its width evenly and are split by hairlines.
  * The cell groups its label and value for the hover that lights its copy
  * button.
  */
@@ -336,26 +337,56 @@ function PropertyCell({
   children: ReactNode
 }) {
   return (
-    <div className="group/prop min-w-0 px-1.5 text-center">
-      <dt className="truncate text-2xs leading-4 text-muted-foreground">
+    <div className="group/prop flex min-w-0 flex-col-reverse px-2 text-center">
+      <dt className="mt-0.5 truncate text-xs leading-4 text-muted-foreground">
         {label}
       </dt>
-      <dd className="mt-1 flex h-5 min-w-0 items-center justify-center gap-1 text-[0.8125rem] font-medium text-foreground">
+      <dd className="flex h-6 min-w-0 items-center justify-center gap-1 text-[0.9375rem] font-semibold text-foreground">
         {children}
       </dd>
     </div>
   )
 }
 
+/** The properties' tile: a softly tinted, hairlined box, its lines stacked
+ *  with a hairline between each two. Its padding keeps the hairlines between
+ *  the cells short of its edges. */
+const PROPERTY_TILE =
+  "min-w-0 rounded-xl border border-border/60 bg-muted/30 px-1 py-2.5 [&>*+*]:mt-2.5 [&>*+*]:border-t [&>*+*]:border-border/50 [&>*+*]:pt-2.5"
+
+/**
+ * A copyable value of `PropertyCell`, its copy button hanging off its end.
+ * Spacers the button's width flank it: with room to spare the value stays
+ * centred in its cell, and the button sits in the end one. Short of room, the
+ * start spacer gives way first (its shrink outweighs the value's), so the
+ * value moves toward the start and truncates while the button still keeps
+ * inside the cell, short of the hairline into the next one.
+ */
+function CopyableProperty({
+  children,
+  ...button
+}: {
+  children: ReactNode
+  text: string
+  copyLabel: string
+  copiedLabel: string
+}) {
+  return (
+    <>
+      <span aria-hidden="true" className="w-4.5 shrink-[999]" />
+      <span className="relative flex min-w-0">
+        {children}
+        <CopyPropertyButton {...button} />
+      </span>
+      <span aria-hidden="true" className="w-4.5 shrink-0" />
+    </>
+  )
+}
+
 /** A line of property cells, as wide as each other, a hairline between each
  *  two. */
 const PROPERTY_LINE =
-  "grid min-w-0 auto-cols-fr grid-flow-col [&>*+*]:border-s [&>*+*]:border-border/60"
-
-/** The card's own colour (its `bg-muted/40` over the page), for the ring
- *  that cuts the status dot out of the agent icon. */
-const CARD_RING =
-  "ring-[color-mix(in_oklab,var(--muted)_40%,var(--background))]"
+  "grid min-w-0 auto-cols-fr grid-flow-col [&>*+*]:border-s [&>*+*]:border-border/50"
 
 /** The part of the session index (the agent's own id for the session) shown:
  *  its first segment, which is enough to tell two apart at a glance; the
@@ -416,12 +447,12 @@ function SessionAssistantName({
 }
 
 /**
- * The Session Details side panel's summary of the active conversation, as a
- * card. Its head: the agent's icon — the assistant's avatar when it ran as
- * one — the status a dot on its corner as the conversation list draws it;
- * beside it the title, and under the title the assistant's name when it has
- * one, the agent's name and the model. Under a hairline its properties, label
- * over value, a column each, centred: the branch, the conversation's id and
+ * The Session Details side panel's summary of the active conversation, drawn
+ * straight on the panel. Its head: the agent's icon — the assistant's avatar
+ * when it ran as one — the status a dot on its corner as the conversation list
+ * draws it; beside it the title, and under the title the assistant's name
+ * when it has one, the agent's name and the model. Under it a tile of its
+ * properties, value over label, a column each, centred: the branch, the conversation's id and
  * its session index — the agent's own id for it — (both copyable); then the
  * parent conversation when it has one. The panel's room goes to the plan and
  * the message navigator under it; the dialog (`SessionDetailsContent`) is the
@@ -448,7 +479,7 @@ export function SessionDetailsCard({
   const ranAs = summary.assistant_id != null || summary.bot_uid != null
 
   return (
-    <section className="min-w-0 rounded-xl border border-border/70 bg-muted/40 p-3">
+    <section className="min-w-0 py-4">
       <div className="flex min-w-0 items-start gap-3">
         {/* Decorative: the line under the title says which agent (and which
             assistant) it is, the icon's SVG carries a <title> of its own that
@@ -470,8 +501,7 @@ export function SessionDetailsCard({
           <ConversationStatusDot
             status={knownStatus}
             className={cn(
-              "absolute -end-0.5 -bottom-0.5 size-2.5 ring-2",
-              CARD_RING
+              "absolute -end-0.5 -bottom-0.5 size-2.5 ring-2 ring-background"
             )}
           />
         </span>
@@ -509,7 +539,7 @@ export function SessionDetailsCard({
           </p>
         </div>
       </div>
-      <dl className="mt-3 space-y-2.5 border-t border-border/60 pt-3">
+      <dl className={cn("mt-4", PROPERTY_TILE)}>
         <div className={PROPERTY_LINE}>
           <PropertyCell label={t("gitBranch")}>
             {summary.git_branch ? (
@@ -525,18 +555,21 @@ export function SessionDetailsCard({
             )}
           </PropertyCell>
           <PropertyCell label={t("sessionId")}>
-            <span className="relative flex min-w-0">
+            <CopyableProperty
+              text={String(summary.id)}
+              copyLabel={t("copyField", { field: t("sessionId") })}
+              copiedLabel={t("copiedField", { field: t("sessionId") })}
+            >
               <span className="truncate tabular-nums">{summary.id}</span>
-              <CopyPropertyButton
-                text={String(summary.id)}
-                copyLabel={t("copyField", { field: t("sessionId") })}
-                copiedLabel={t("copiedField", { field: t("sessionId") })}
-              />
-            </span>
+            </CopyableProperty>
           </PropertyCell>
           <PropertyCell label={t("externalId")}>
             {summary.external_id ? (
-              <span className="relative flex min-w-0">
+              <CopyableProperty
+                text={summary.external_id}
+                copyLabel={t("copyField", { field: t("externalId") })}
+                copiedLabel={t("copiedField", { field: t("externalId") })}
+              >
                 <span
                   dir="ltr"
                   title={summary.external_id}
@@ -544,12 +577,7 @@ export function SessionDetailsCard({
                 >
                   {externalIdHead(summary.external_id)}
                 </span>
-                <CopyPropertyButton
-                  text={summary.external_id}
-                  copyLabel={t("copyField", { field: t("externalId") })}
-                  copiedLabel={t("copiedField", { field: t("externalId") })}
-                />
-              </span>
+              </CopyableProperty>
             ) : (
               t("none")
             )}
@@ -562,6 +590,79 @@ export function SessionDetailsCard({
             </PropertyCell>
           </div>
         )}
+      </dl>
+    </section>
+  )
+}
+
+/**
+ * `SessionDetailsCard`'s stand-in for a conversation that has no messages yet
+ * — a new tab, or one whose first message is on its way: laid out like it,
+ * with what is already known. Its head: the agent's icon, a status-less "new
+ * session", and the agent's name over the wait for the first message; its
+ * tile: the branch and the folder it will run in. A folderless chat has
+ * neither, and says so. Given a `title`, the conversation is one already
+ * whose summary hasn't come through: its title instead, and no wait.
+ */
+export function DraftSessionDetailsCard({
+  agentType,
+  branch,
+  folder,
+  title = null,
+}: {
+  agentType: AgentType
+  branch: string | null
+  folder: { name: string; path: string } | null
+  title?: string | null
+}) {
+  const t = useTranslations("Folder.sessionDetails")
+  return (
+    <section data-testid="draft-session-details" className="min-w-0 py-4">
+      <div className="flex min-w-0 items-start gap-3">
+        <span aria-hidden="true" className="mt-0.5 flex shrink-0">
+          <AgentIcon agentType={agentType} className="size-9" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p
+            title={title ?? undefined}
+            className="truncate text-sm leading-5 font-semibold text-foreground"
+          >
+            {title ?? t("draftTitle")}
+          </p>
+          <p className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="max-w-[50%] shrink-0 truncate">
+              {getAgentLabel(agentType)}
+            </span>
+            {title == null && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="min-w-0 truncate">{t("draftWaiting")}</span>
+              </>
+            )}
+          </p>
+        </div>
+      </div>
+      <dl className={cn("mt-4", PROPERTY_TILE)}>
+        <div className={PROPERTY_LINE}>
+          <PropertyCell label={t("gitBranch")}>
+            {branch ? (
+              <span dir="ltr" title={branch} className="min-w-0 truncate">
+                {branch}
+              </span>
+            ) : (
+              t("none")
+            )}
+          </PropertyCell>
+          <PropertyCell label={t("folder")}>
+            {folder ? (
+              <span title={folder.path} className="min-w-0 truncate">
+                {folder.name}
+              </span>
+            ) : (
+              t("none")
+            )}
+          </PropertyCell>
+        </div>
       </dl>
     </section>
   )

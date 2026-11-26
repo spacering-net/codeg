@@ -44,6 +44,7 @@ import type {
   PlanEntryInfo,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { SESSION_DETAILS_GUTTER } from "./session-details-layout"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useAskConversationDrawerStore } from "@/stores/ask-conversation-drawer-store"
 import {
@@ -65,7 +66,7 @@ interface SessionDetailsInsightsProps {
 
 /**
  * The part of the Session Details side panel that follows the conversation's
- * transcript, each part a card like the summary above it: the agent's plan,
+ * transcript, each part a section under the summary: the agent's plan,
  * the ask conversations opened from it ("ask about this selection"), the
  * personal agent's checks of its messages ("is this right?") and the message
  * navigator, whose messages carry
@@ -75,9 +76,11 @@ interface SessionDetailsInsightsProps {
  * (see `MessageListView`'s `insightsInSidebar`); each section reads its own
  * part and renders nothing while that part is empty.
  *
- * Both lay their rows, headers included, on one grid: a left column of fixed
- * width — the headers' chevrons, the plan's step icons, the navigator's
- * message numbers — and the text beside it.
+ * Both lay their rows, headers included, on one grid: a narrow left column
+ * — the headers' icons, the plan's step icons, the navigator's message
+ * numbers — and the text beside it. Nothing reaches past the hairlines
+ * between the sections: rows run from where they start to where they end, and
+ * take no fill.
  *
  * The navigator's sub-agent cards open their "查看会话" drawer through a host
  * of their own: the transcript's host is in another branch of the tree, and
@@ -107,23 +110,15 @@ export function SessionDetailsInsights({
   )
 }
 
-/** The panel's cards: the summary card's tint, hairline and corners. */
-const CARD = "min-w-0 rounded-xl border border-border/70 bg-muted/40"
-
-/** A card's own colour (its `bg-muted/40` over the page), for the ring that
- *  cuts a status dot out of the icon it sits on. */
-const CARD_RING =
-  "ring-[color-mix(in_oklab,var(--muted)_40%,var(--background))]"
-
 /**
- * A section of the panel, as a card: a header row — the section's icon and
- * title, then at its end a summary of what it holds and the chevron that
- * folds it — then its body. The icon takes the rows' left column, over their
- * step icons and message numbers, so the title lines up with the text of the
- * rows under it. The body renders in either state: what a section still shows
- * while folded is its own business. A `sticky` header stays at the top of the
- * panel while the section scrolls under it, painted the card's colour over
- * the page's so the rows going under it don't show through.
+ * A section of the panel: a header row — the section's icon and title, then
+ * at its end a summary of what it holds and the chevron that folds it — then
+ * its body. The icon takes the rows' left column, over their step icons and
+ * message numbers, so the title lines up with the text of the rows under it.
+ * The body renders in either state: what a section still shows while folded
+ * is its own business. A `sticky` header stays at the top of the panel while
+ * the section scrolls under it, painted the panel's colour across its full
+ * width so the rows going under it don't show through.
  */
 function InsightsSection({
   icon,
@@ -143,51 +138,43 @@ function InsightsSection({
   children: ReactNode
 }) {
   return (
-    <section className={cn(CARD, "px-3 pt-1", open ? "pb-2" : "pb-1")}>
+    <section className={cn("min-w-0 py-1.5", open && "pb-3")}>
       <h3
         className={cn(
           "min-w-0",
-          // Across the card's padding, so rows scrolling under it never show
-          // at its sides; rounded with the card's inner corners.
-          sticky &&
-            "ws-surface sticky top-0 z-10 -mx-3 rounded-t-[calc(var(--radius-lg)-1px)]"
+          sticky && cn("ws-surface sticky top-0 z-10", SESSION_DETAILS_GUTTER)
         )}
       >
-        <span
-          className={cn(
-            "block",
-            sticky && "rounded-[inherit] bg-muted/40 px-3"
-          )}
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => onOpenChange(!open)}
+          className="group/section flex h-9 w-full min-w-0 items-center gap-2 rounded-md text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
-          <button
-            type="button"
-            aria-expanded={open}
-            onClick={() => onOpenChange(!open)}
-            className="group/section flex h-9 w-full min-w-0 items-center gap-2 rounded-md text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          <span
+            aria-hidden="true"
+            className="flex w-5 shrink-0 justify-center text-foreground [&>svg]:size-4"
           >
-            <span
-              aria-hidden="true"
-              className="flex w-7 shrink-0 justify-center text-foreground [&>svg]:size-4"
-            >
-              {icon}
-            </span>
-            <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-semibold text-foreground">
-              {title}
-            </span>
-            <span className="shrink-0 text-2xs text-muted-foreground tabular-nums transition-colors group-hover/section:text-foreground">
-              {summary}
-            </span>
-            <ChevronDown
-              aria-hidden="true"
-              className={cn(
-                "me-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform group-hover/section:text-foreground",
-                // Folded it points along the line, at the end it sits at;
-                // open, down at what it shows.
-                !open && "-rotate-90 rtl:rotate-90"
-              )}
-            />
-          </button>
-        </span>
+            {icon}
+          </span>
+          {/* Hovered, the header says it is a control the way a link does:
+              its title underlined. */}
+          <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-semibold text-foreground decoration-foreground/40 underline-offset-4 group-hover/section:underline">
+            {title}
+          </span>
+          <span className="shrink-0 text-2xs text-muted-foreground tabular-nums transition-colors group-hover/section:text-foreground">
+            {summary}
+          </span>
+          <ChevronDown
+            aria-hidden="true"
+            className={cn(
+              "size-3.5 shrink-0 text-muted-foreground transition-colors group-hover/section:text-foreground motion-safe:transition-[color,rotate]",
+              // Folded it points along the line, at the end it sits at;
+              // open, down at what it shows.
+              !open && "-rotate-90 rtl:rotate-90"
+            )}
+          />
+        </button>
       </h3>
       {children}
     </section>
@@ -253,7 +240,7 @@ function PlanStepIcon({
 }
 
 /** Plan steps, one line each, the whole step — with its status and priority
- *  — in its tooltip. The step under way is tinted. */
+ *  — in its tooltip. The step under way is set in a heavier weight. */
 function PlanSteps({
   entries,
   streaming,
@@ -271,14 +258,11 @@ function PlanSteps({
           <li
             key={`${entry.content}-${index}`}
             title={`${entry.content}\n${status} · ${priority}`}
-            className={cn(
-              "-mx-1.5 flex h-7 min-w-0 items-center gap-2 rounded-md px-1.5",
-              entry.status === "in_progress" && "bg-blue-500/[0.08]"
-            )}
+            className="flex h-7 min-w-0 items-center gap-2"
           >
             <span
               aria-hidden="true"
-              className="flex w-7 shrink-0 justify-center"
+              className="flex w-5 shrink-0 justify-center"
             >
               <PlanStepIcon status={entry.status} streaming={streaming} />
             </span>
@@ -349,7 +333,7 @@ const LINKED_SECTION = {
  * The conversations linked to this one, newest first — the same rows the
  * sidebar nests under it: the asks opened from its transcript ("ask about this
  * selection"), or the personal agent's checks of its messages ("is this
- * right?"), a card each. A row opens its conversation in the ask drawer to go
+ * right?"), a section each. A row opens its conversation in the ask drawer to go
  * on with it (or watch it), and its button turns it into an ordinary
  * conversation, which moves it to the root of the sidebar. Renders nothing
  * while there are none.
@@ -424,24 +408,21 @@ function LinkedConversationsSection({
             return (
               <li
                 key={ask.id}
-                className={cn(
-                  "group/ask -mx-1.5 flex h-7 min-w-0 items-center rounded-md transition-colors hover:bg-foreground/[0.06]",
-                  openId === ask.id && "bg-foreground/[0.06]"
-                )}
+                className="group/ask flex h-7 min-w-0 items-center gap-1"
               >
                 {/* The agent's icon — the assistant's avatar, for a row run as
                     one — takes the header icon's column, its status a dot on
-                    its corner as the summary card draws it, so the title lines
+                    its corner as the summary draws it, so the title lines
                     up with the section's. */}
                 <button
                   type="button"
                   title={title}
                   onClick={() => handleOpen(ask)}
-                  className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md ps-1.5 text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  className="group/askrow flex h-full min-w-0 flex-1 items-center gap-2 rounded-md text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
                 >
                   <span
                     aria-hidden="true"
-                    className="flex w-7 shrink-0 justify-center"
+                    className="flex w-5 shrink-0 justify-center"
                   >
                     <span className="relative flex">
                       <LinkedRowIcon conversation={ask} />
@@ -449,15 +430,24 @@ function LinkedConversationsSection({
                         status={status}
                         size="sm"
                         className={cn(
-                          "absolute -end-0.5 -bottom-0.5 ring-2",
-                          CARD_RING,
+                          "absolute -end-0.5 -bottom-0.5 ring-2 ring-background",
                           status === "in_progress" &&
                             "motion-safe:animate-pulse"
                         )}
                       />
                     </span>
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground/85">
+                  {/* No fill on hover: only the title turns the accent
+                      colour, as a navigator row's does. The one open in the
+                      drawer stays in it. */}
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate text-[0.8125rem] transition-colors group-hover/askrow:text-primary",
+                      openId === ask.id
+                        ? "font-medium text-primary"
+                        : "text-foreground/85"
+                    )}
+                  >
                     {title}
                   </span>
                 </button>
@@ -469,7 +459,7 @@ function LinkedConversationsSection({
                     setConfirming({ id: ask.id, title })
                     setConfirmOpen(true)
                   }}
-                  className="me-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity outline-none group-hover/ask:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 [@media(hover:none)]:opacity-100"
+                  className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity outline-none group-hover/ask:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 [@media(hover:none)]:opacity-100"
                 >
                   <Unlink className="size-3.5" />
                 </button>
