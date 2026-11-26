@@ -11991,7 +11991,14 @@
       "overdue": "已逾期 · {when} 到期",
       "reminded": "已提醒 · {when} 到期",
       "late": "晚了 {duration}",
-      "missed": "錯過了 {count} 次"
+      "missed": "錯過了 {count} 次",
+      "inSentence": {
+        "today": "{time}",
+        "tomorrow": "明天 {time}",
+        "yesterday": "昨天 {time}",
+        "day": "{day} {time}",
+        "date": "{date} {time}"
+      }
     },
     "reminder": {
       "title": "提醒",
@@ -13054,7 +13061,7 @@
         "skipNext": "這次跳過，之後照常：{rule}",
         "snoozeNotify": "時間到再提醒你",
         "snoozeAct": "時間到{name}再去做",
-        "setTimeNotify": "時間到提醒你",
+        "setTimeNotify": "到你選的時間提醒你",
         "setTimeAct": "時間到{name}去做",
         "handOver": "讓{name}去處理這件事",
         "answer": "到{name}的對話裡回答",
@@ -13079,6 +13086,7 @@
         "stopped": "以後不再提醒：{title}",
         "handed": "已交給{name}",
         "undone": "已復原",
+        "undoneSkip": "你撤回了跳過",
         "notRefreshed": "重新整理失敗，請稍後再試。"
       },
       "meta": {
@@ -13090,9 +13098,9 @@
         "asks": "{name}想問你 · 已等 {wait}",
         "asked": "{name}想問你",
         "answered": "你已回答 · 等{name}看",
-        "interrupted": "{name}那一輪沒有完成，可能沒處理你的回答 · 需要的話再答一次",
+        "interrupted": "{name}沒有處理完，可能沒讀到你的回答 · 需要的話再答一次",
         "needsYou": "{name}需要你處理 · 已等 {wait}",
-        "following": "{name}在跟進 · {wait}",
+        "following": "{name}在跟進 · 已等 {wait}",
         "external": "{name}在等外部結果 · 已等 {wait}",
         "message": "{name}在等{peer}回覆 · 已等 {wait}",
         "setAside": "已擱置 · 沒定時間",
@@ -13102,6 +13110,7 @@
       },
       "closed": {
         "done": "你完成了 · {time}",
+        "skippedLast": "你跳過了最後一次 · {time}",
         "dropped": "你移除了 · {time}",
         "withdrawn": "你撤回了傳給{peer}的訊息 · {time}",
         "stoppedWaiting": "你不再等{peer}回覆 · {time}",
@@ -13120,13 +13129,15 @@
       "gone": "這件事已經不在了",
       "settled": "這件事已經結束了",
       "changed": "這件事剛有了新變化，請再看一眼",
-      "workRunning": "這件工作還在做，要停下請用任務條上的「停止」",
+      "workRunning": "這項工作還在進行，要停下請在它的卡片上按「停止」",
       "workNoTime": "派出去的工作不能按時間延後",
       "messageNoTime": "這則在等{peer}回覆，不能按時間延後",
       "mentionNoTime": "這則會在你提到時出現，不按時間提醒",
       "notEarlier": "這件事本來就定在 {when}，延後只能往後",
       "hasTime": "這件事已經定在 {when} 了",
       "inOtherHands": "這件事在{bot}手裡，不能按時間延後",
+      "waitsOutside": "這件事在等外部的回應，不能延到某個時間",
+      "skipNotRepeating": "只有重複的提醒才能跳過一次",
       "badTime": "沒看懂這個時間",
       "undoNone": "這次操作無法復原",
       "undoExpired": "超過 10 分鐘了，無法復原",

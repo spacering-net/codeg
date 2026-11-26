@@ -11991,7 +11991,14 @@
       "overdue": "Overdue · due {when}",
       "reminded": "Reminded · due {when}",
       "late": "{duration} late",
-      "missed": "{count, plural, one {Missed # time} other {Missed # times}}"
+      "missed": "{count, plural, one {Missed # time} other {Missed # times}}",
+      "inSentence": {
+        "today": "at {time}",
+        "tomorrow": "tomorrow at {time}",
+        "yesterday": "yesterday at {time}",
+        "day": "on {day} at {time}",
+        "date": "on {date} at {time}"
+      }
     },
     "reminder": {
       "title": "Reminder",
@@ -13033,7 +13040,7 @@
     "matter": {
       "act": {
         "done": "Done",
-        "doneThis": "Done for now",
+        "doneThis": "Done this time",
         "doneEarly": "Done early",
         "skipThis": "Skip this time",
         "merged": "Merged",
@@ -13054,7 +13061,7 @@
         "skipNext": "Skips this time; it goes on: {rule}",
         "snoozeNotify": "You are reminded again then",
         "snoozeAct": "{name} does it then",
-        "setTimeNotify": "You are reminded then",
+        "setTimeNotify": "You'll be reminded at the time you pick",
         "setTimeAct": "{name} does it then",
         "handOver": "{name} sees to it",
         "answer": "Answer in {name}'s conversation",
@@ -13079,6 +13086,7 @@
         "stopped": "No more reminders: {title}",
         "handed": "Handed to {name}",
         "undone": "Undone",
+        "undoneSkip": "You took back the skip",
         "notRefreshed": "Couldn't refresh it — try again in a moment."
       },
       "meta": {
@@ -13090,9 +13098,9 @@
         "asks": "{name} asks you · waiting {wait}",
         "asked": "{name} asks you",
         "answered": "You answered · waiting for {name} to read it",
-        "interrupted": "{name}'s turn did not finish and may not have read your answer · answer again if you need to",
+        "interrupted": "{name} did not finish and may not have read your answer · answer again if you need to",
         "needsYou": "{name} needs you · waiting {wait}",
-        "following": "{name} is following up · {wait}",
+        "following": "{name} is following up · waiting {wait}",
         "external": "{name} waits on something outside · {wait}",
         "message": "{name} waits for {peer}'s reply · {wait}",
         "setAside": "Set aside · no time set",
@@ -13102,6 +13110,7 @@
       },
       "closed": {
         "done": "You did it · {time}",
+        "skippedLast": "You skipped the last time · {time}",
         "dropped": "You removed it · {time}",
         "withdrawn": "You took back the message to {peer} · {time}",
         "stoppedWaiting": "You stopped waiting for {peer}'s reply · {time}",
@@ -13111,7 +13120,7 @@
         "replied": "{peer} replied · {time}",
         "gone": "{peer} was deleted; no reply is coming · {time}",
         "planCanceled": "The plan was canceled; {name} no longer waits for {peer}'s reply · {time}",
-        "usedUp": "The reminder on a mention is used up · {time}",
+        "usedUp": "No reminders left for this mention · {time}",
         "expired": "The reminder on a mention ran out · {time}",
         "ended": "Ended · {time}"
       }
@@ -13120,13 +13129,15 @@
       "gone": "This is no longer there",
       "settled": "This has already ended",
       "changed": "This just changed — take another look",
-      "workRunning": "This work is still running; stop it with Stop on its task strip",
+      "workRunning": "This work is still running; stop it from its card",
       "workNoTime": "Handed-out work cannot be put off to a time",
       "messageNoTime": "This waits for {peer}'s reply and cannot be put off to a time",
       "mentionNoTime": "This comes up when you mention it, not at a time",
       "notEarlier": "This is set for {when} already; putting it off only moves it later",
       "hasTime": "This is set for {when} already",
       "inOtherHands": "This is in {bot}'s hands and cannot be put off to a time",
+      "waitsOutside": "This waits on something outside codeg and cannot be put off to a time",
+      "skipNotRepeating": "Only a repeating reminder can skip a time",
       "badTime": "That time was not understood",
       "undoNone": "This cannot be undone",
       "undoExpired": "More than 10 minutes went by; it can no longer be undone",

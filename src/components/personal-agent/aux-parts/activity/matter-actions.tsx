@@ -61,7 +61,7 @@ import {
   messageText,
   peerName,
   useMatterError,
-  useWhen,
+  useWhenInSentence,
 } from "../../matter-text"
 import { useActivityTranslate } from "../../activity-text"
 import { repeatText } from "../../due-text"
@@ -151,16 +151,18 @@ const undoing = new Set<number>()
 export function useUndoMatter(): (
   bot: number | null,
   itemId: number,
-  undo: number
+  undo: number,
+  /** What to say once it is taken back (a generic "Undone" else). */
+  said?: string
 ) => Promise<ItemInfo | null> {
   const t = useTranslations("PersonalAgent.matter.toast")
   const errorText = useMatterError()
-  return (bot, itemId, undo) => {
+  return (bot, itemId, undo, said) => {
     if (undoing.has(undo)) return Promise.resolve(null)
     undoing.add(undo)
     return personalAgentItemUndo(bot, itemId, undo)
       .then((item) => {
-        toast.success(t("undone"))
+        toast.success(said ?? t("undone"))
         refreshActivity()
         return item
       })
@@ -174,7 +176,8 @@ export function useUndoMatter(): (
 }
 
 type Act =
-  | { op: "done"; how: "done" | "doneThis" | "doneEarly" | "skipThis" }
+  | { op: "done"; how: "done" | "doneThis" | "doneEarly" }
+  | { op: "skip" }
   | { op: "done"; how: "merged" | "ack" }
   | { op: "drop"; how: "drop" | "stop" }
   | { op: "snooze"; until: Until }
@@ -199,7 +202,7 @@ export function MatterActions({
   const tw = useActivityTranslate()
   const locale = useLocale()
   const errorText = useMatterError()
-  const when = useWhen()
+  const when = useWhenInSentence()
   const undoMatter = useUndoMatter()
   const showConversation = useShowConversation()
   const name = useRowBotName()(row.bot_id)
@@ -237,7 +240,7 @@ export function MatterActions({
         text = t("toast.notWithdrawn", { name, peer })
       else if (act.how === "stop") text = t("toast.stopped", { title })
       else text = t("toast.dropped", { title })
-    } else if (act.how === "skipThis") {
+    } else if (act.op === "skip") {
       text = ended ? t("toast.skipEnded") : t("toast.skipNext", { when: next })
     } else if (act.how === "doneThis") {
       text = ended ? t("toast.doneEnded") : t("toast.doneNext", { when: next })
@@ -255,7 +258,12 @@ export function MatterActions({
               // The row may be drawn elsewhere by now (another group): it
               // waits by its key, wherever it is.
               onClick: () =>
-                void undoMatter(bot, item.id, undo).then((back) => {
+                void undoMatter(
+                  bot,
+                  item.id,
+                  undo,
+                  act.op === "skip" ? t("toast.undoneSkip") : undefined
+                ).then((back) => {
                   if (back) {
                     waitForSettle(
                       settleKey,
@@ -513,7 +521,7 @@ export function MatterActions({
       return (
         <>
           {button("skip", t("act.skipThis"), nextHint("skipNext"), () =>
-            run({ op: "done", how: "skipThis" })
+            run({ op: "skip" })
           )}
           {dropButton("stop")}
         </>

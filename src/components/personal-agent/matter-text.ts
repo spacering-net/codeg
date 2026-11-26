@@ -14,7 +14,7 @@ import { extractAppCommandError } from "@/lib/app-error"
 import type { ItemInfo } from "@/lib/types"
 
 import { useActivityTranslate } from "./activity-text"
-import { dueWhen, humanDuration } from "./due-text"
+import { dueWhen, dueWhenInSentence, humanDuration } from "./due-text"
 
 /** How long since `iso`, in a few words: "just now", "3 min", "2 h". */
 export function useWaited(): (iso: string, now: number) => string {
@@ -27,11 +27,29 @@ export function useWaited(): (iso: string, now: number) => string {
   }
 }
 
+/** How long since `iso` as a length of time — "1 min" at the least, never
+ *  "just now" — for a sentence that says it waited that long ("waiting
+ *  {wait}", "已等 {wait}"). */
+export function useWaitedFor(): (iso: string, now: number) => string {
+  const tw = useActivityTranslate()
+  return (iso, now) => {
+    const secs = Math.max(0, (now - Date.parse(iso)) / 1000)
+    return humanDuration(tw, Number.isFinite(secs) ? secs : 0)
+  }
+}
+
 /** A time as a row says it, against now. */
 export function useWhen(): (iso: string) => string {
   const tw = useActivityTranslate()
   const locale = useLocale()
   return (iso) => dueWhen(tw, iso, Date.now(), locale)
+}
+
+/** A due time as it reads inside a sentence ("reminds you at 15:00"). */
+export function useWhenInSentence(): (iso: string) => string {
+  const tw = useActivityTranslate()
+  const locale = useLocale()
+  return (iso) => dueWhenInSentence(tw, iso, Date.now(), locale)
 }
 
 /** The words of a key under `PersonalAgent` with the data the backend gave

@@ -591,6 +591,7 @@ pub async fn undo_item_op(
     if unread.rows_affected != 1 {
         let what = match note.op.as_str() {
             "done" => "marking it done",
+            "skip" => "skipping it",
             "drop" => "dropping it",
             "snooze" => "putting it off",
             _ => "setting it aside",

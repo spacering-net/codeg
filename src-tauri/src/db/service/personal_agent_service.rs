@@ -3186,7 +3186,13 @@ pub async fn update_item_with(
                 .filter(notice::Column::Id.eq(n.id))
                 .exec(&txn)
                 .await?;
-            let Some(row_id) = n.timeline_id else {
+            // No row to put back (none, or gone): the card alone, which an
+            // undo opens again as it was.
+            let row = match n.timeline_id {
+                Some(row_id) => timeline::Entity::find_by_id(row_id).one(&txn).await?,
+                None => None,
+            };
+            let Some(row) = row else {
                 cards.push(serde_json::json!({
                     "notice_id": n.id,
                     "from_state": NoticeState::Open,
@@ -3195,9 +3201,7 @@ pub async fn update_item_with(
                 }));
                 continue;
             };
-            let Some(row) = timeline::Entity::find_by_id(row_id).one(&txn).await? else {
-                continue;
-            };
+            let row_id = row.id;
             let mut data = row
                 .data
                 .as_deref()

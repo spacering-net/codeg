@@ -2690,7 +2690,7 @@ export async function personalAgentTurnSteps(
 export async function personalAgentItemAct(
   botId: number | null | undefined,
   itemId: number,
-  act: "done" | "drop" | "later" | "snooze",
+  act: "done" | "skip" | "drop" | "later" | "snooze",
   until?: "15m" | "1h" | "tomorrow" | (string & {}),
   /** Where the owner did it: the activity panel (taken back with the
    *  result's `undo`) or a card the assistant drew. */

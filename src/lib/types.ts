@@ -2839,6 +2839,7 @@ export type ItemClosedBy = "owner" | "agent" | "codeg"
 /** How a matter was settled. */
 export type ItemClosedHow =
   | "done"
+  | "skipped"
   | "dropped"
   | "withdrawn"
   | "stopped_waiting"

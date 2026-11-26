@@ -1063,9 +1063,15 @@ describe("the activity", () => {
       "Post them in #team"
     )
     // Coming up and repeating: skip this time, or stop it.
-    expect(
-      within(row).getByRole("button", { name: "Skip this time" })
-    ).toBeTruthy()
+    fireEvent.click(within(row).getByRole("button", { name: "Skip this time" }))
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.any(Number),
+      "skip",
+      undefined,
+      "panel",
+      expect.any(String)
+    )
     expect(
       within(row).getByRole("button", { name: "Stop reminding" })
     ).toBeTruthy()

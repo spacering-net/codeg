@@ -11991,7 +11991,14 @@
       "overdue": "期限切れ · {when} 期限",
       "reminded": "通知済み · {when} 期限",
       "late": "{duration} 遅れ",
-      "missed": "{count} 回逃しました"
+      "missed": "{count} 回逃しました",
+      "inSentence": {
+        "today": "{time}",
+        "tomorrow": "明日 {time}",
+        "yesterday": "昨日 {time}",
+        "day": "{day} {time}",
+        "date": "{date} {time}"
+      }
     },
     "reminder": {
       "title": "リマインダー",
@@ -13054,7 +13061,7 @@
         "skipNext": "今回はスキップ、以降はいつもどおり：{rule}",
         "snoozeNotify": "その時間にもう一度知らせます",
         "snoozeAct": "その時間に{name}が対応します",
-        "setTimeNotify": "その時間に知らせます",
+        "setTimeNotify": "選んだ時間に知らせます",
         "setTimeAct": "その時間に{name}が対応します",
         "handOver": "{name}に対応してもらいます",
         "answer": "{name}との会話で回答します",
@@ -13079,6 +13086,7 @@
         "stopped": "今後は知らせません：{title}",
         "handed": "{name}に任せました",
         "undone": "元に戻しました",
+        "undoneSkip": "スキップを取り消しました",
         "notRefreshed": "更新できませんでした。しばらくしてからもう一度お試しください。"
       },
       "meta": {
@@ -13090,9 +13098,9 @@
         "asks": "{name}からの質問 · {wait} 待っています",
         "asked": "{name}からの質問",
         "answered": "回答済み · {name}が読むのを待っています",
-        "interrupted": "{name}のターンが終わらず、回答を読めていないかもしれません · 必要ならもう一度回答してください",
+        "interrupted": "{name}が処理を終えられず、回答を読めていないかもしれません · 必要ならもう一度回答してください",
         "needsYou": "{name}があなたの対応を待っています · {wait}",
-        "following": "{name}がフォロー中 · {wait}",
+        "following": "{name}がフォロー中 · {wait}待機中",
         "external": "{name}が外部の結果を待っています · {wait}",
         "message": "{name}が{peer}の返事を待っています · {wait}",
         "setAside": "保留中 · 時間未設定",
@@ -13102,6 +13110,7 @@
       },
       "closed": {
         "done": "あなたが完了 · {time}",
+        "skippedLast": "最後の回をスキップしました · {time}",
         "dropped": "あなたが外しました · {time}",
         "withdrawn": "{peer}へのメッセージを取り消しました · {time}",
         "stoppedWaiting": "{peer}の返事を待つのをやめました · {time}",
@@ -13120,13 +13129,15 @@
       "gone": "これはもうありません",
       "settled": "これはもう終わっています",
       "changed": "これはさっき変わりました。もう一度確認してください",
-      "workRunning": "この作業はまだ進行中です。止めるにはタスクバーの「停止」を使ってください",
+      "workRunning": "この作業はまだ進行中です。止めるにはカードの「停止」を使ってください",
       "workNoTime": "任せた作業は時間で延期できません",
       "messageNoTime": "これは{peer}の返事待ちなので、時間で延期できません",
       "mentionNoTime": "これは言及したときに出てくるもので、時間では知らせません",
       "notEarlier": "これはもともと {when} に設定されています。延期は後ろにしかできません",
       "hasTime": "これはもう {when} に設定されています",
       "inOtherHands": "これは{bot}が対応中なので、時間で延期できません",
+      "waitsOutside": "これは外部の対応を待っているため、時間を指定して延ばせません",
+      "skipNotRepeating": "スキップできるのは繰り返しのリマインダーだけです",
       "badTime": "その時間がわかりませんでした",
       "undoNone": "この操作は元に戻せません",
       "undoExpired": "10 分以上たったので、元に戻せません",

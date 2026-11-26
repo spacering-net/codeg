@@ -91,6 +91,8 @@ pub mod keys {
     pub const NOT_EARLIER: &str = "matterErrors.notEarlier";
     pub const HAS_TIME: &str = "matterErrors.hasTime";
     pub const IN_OTHER_HANDS: &str = "matterErrors.inOtherHands";
+    pub const WAITS_OUTSIDE: &str = "matterErrors.waitsOutside";
+    pub const SKIP_NOT_REPEATING: &str = "matterErrors.skipNotRepeating";
     pub const BAD_TIME: &str = "matterErrors.badTime";
     pub const UNDO_NONE: &str = "matterErrors.undoNone";
     pub const UNDO_EXPIRED: &str = "matterErrors.undoExpired";

@@ -48,7 +48,14 @@ import { repeatText } from "../../due-text"
 import { AnsweredForYou } from "../../event-card"
 import { LadderChip, TaskStopButton, TaskStrip } from "../../task-strip"
 import { useTodayRowProps, type Opener } from "../../today-section"
-import { messageWords, peerName, useWaited, useWhen } from "../../matter-text"
+import {
+  messageWords,
+  peerName,
+  useWaited,
+  useWaitedFor,
+  useWhen,
+  useWhenInSentence,
+} from "../../matter-text"
 import {
   hasItemActions,
   MatterActions,
@@ -477,10 +484,14 @@ function useMatterLine(): (
   const locale = useLocale()
   const nameOf = useRowBotName()
   const waited = useWaited()
+  const waitedFor = useWaitedFor()
   const when = useWhen()
+  const whenIn = useWhenInSentence()
   return (row, item, now) => {
     const name = nameOf(row.bot_id)
     const wait = waited(item.created_at, now)
+    // For "waiting {wait}": a length of time, never "just now".
+    const waitFor = waitedFor(item.created_at, now)
     const plain = (meta: string) => ({ meta, callout: null })
     if (item.kind === "when_mentioned" && item.mention) {
       const m = item.mention
@@ -512,7 +523,7 @@ function useMatterLine(): (
         }
     }
     if (item.due_at && timeAhead(item, now)) {
-      const at = when(item.due_at)
+      const at = whenIn(item.due_at)
       if (item.repeat) {
         const rule = repeatText(tw, item.repeat, now, locale)
         return plain(t("repeats", { name, rule, when: at }))
@@ -535,14 +546,14 @@ function useMatterLine(): (
     if (item.waits_for === "time" && !item.due_at) return plain(t("setAside"))
     switch (item.waits_for) {
       case "agent":
-        return plain(t("following", { name, wait }))
+        return plain(t("following", { name, wait: waitFor }))
       case "external":
         return plain(t("external", { name, wait }))
       default:
         return plain(
           item.kind === "question"
-            ? t("asks", { name, wait })
-            : t("needsYou", { name, wait })
+            ? t("asks", { name, wait: waitFor })
+            : t("needsYou", { name, wait: waitFor })
         )
     }
   }
@@ -650,6 +661,7 @@ function MatterClosedShell({ today, ...p }: ShellProps & { today: TodayRow }) {
   const how = today.closed_how
   const key = ((): string => {
     if (by === "owner") {
+      if (how === "skipped") return "skippedLast"
       if (how === "withdrawn") return "withdrawn"
       if (how === "stopped_waiting") return "stoppedWaiting"
       if (how === "dropped") return "dropped"
@@ -680,6 +692,8 @@ function MatterClosedShell({ today, ...p }: ShellProps & { today: TodayRow }) {
       : today.title
   const undo = today.matter_undo
   const itemId = today.item_id
+  // Taking back a skip says so, as the toast's [Undo] does.
+  const undoneWords = how === "skipped" ? t("toast.undoneSkip") : undefined
   const action =
     !p.scope.readOnly && undo != null && itemId != null ? (
       <Button
@@ -688,7 +702,7 @@ function MatterClosedShell({ today, ...p }: ShellProps & { today: TodayRow }) {
         disabled={acting || settle.waiting}
         onClick={() => {
           setActing(true)
-          void undoMatter(bot, itemId, undo)
+          void undoMatter(bot, itemId, undo, undoneWords)
             .then((done) => {
               if (done) settle.waitFor({ differs: String(undo) })
             })

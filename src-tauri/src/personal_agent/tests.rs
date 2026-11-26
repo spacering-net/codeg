@@ -9538,6 +9538,87 @@ async fn a_missed_reminder_comes_once_late_and_a_repeating_one_goes_on_from_its_
     assert!(item_notes(&engine).await.iter().any(|n| n.summary.contains("done for this time")));
 }
 
+/// "Skip this time" on a repeating matter: on to its next time; the last
+/// time skipped ends it as skipped, said so; only a repeating one skips;
+/// an undo, read by the assistant or not, says what it takes back.
+#[tokio::test]
+async fn skipping_a_repeating_matter_goes_on_or_ends_it_as_skipped() {
+    let (engine, _tmp) = configured().await;
+    engine.fire_due_at(super::clock::now()).await;
+    let (first, first_at) = local_day(&engine, 1, "09:00").await;
+    let out = call(
+        &engine,
+        "item_update",
+        json!({ "kind": "reminder", "summary": "Stand-up", "due": first, "repeat": { "every": "daily" } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let daily = out.data["item_id"].as_i64().unwrap() as i32;
+    let skipped = engine
+        .settle_item_from(daily, "skip", None, super::reminders::OpSource::Panel)
+        .await
+        .unwrap();
+    assert_eq!(skipped.item.status, ItemStatus::Open);
+    assert_eq!(skipped.item.due_at, Some(first_at + chrono::Duration::days(1)), "the next day's");
+    assert!(item_notes(&engine).await.iter().any(|n| n.summary.contains("skipped") && n.summary.contains("this time")));
+    // Taken back after the assistant read the note: it is told so.
+    let notes: Vec<i32> = item_notes(&engine).await.iter().map(|n| n.id).collect();
+    let seg = open_segment(&engine).await;
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None).await.unwrap().id;
+    svc::mark_events_delivered(&engine.db.conn, &notes, batch).await.unwrap();
+    engine.undo_item(daily, skipped.undo.unwrap()).await.unwrap();
+    assert_eq!(matter_of(&engine, daily).await.due_at, Some(first_at));
+    assert!(item_notes(&engine).await.iter().any(|n| n.summary.contains("took back skipping it")));
+
+    // Its last time: over, as skipped.
+    let until = (first_at.with_timezone(&engine.owner_tz().await).date_naive()).to_string();
+    let out = call(
+        &engine,
+        "item_update",
+        json!({ "kind": "reminder", "summary": "Course", "due": first, "repeat": { "every": "daily", "until": until } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let last = out.data["item_id"].as_i64().unwrap() as i32;
+    let ended = engine.settle_item(last, "skip", None).await.unwrap();
+    assert_eq!((ended.status, ended.closed_how.as_deref()), (ItemStatus::Done, Some("skipped")));
+    assert!(item_notes(&engine).await.iter().any(|n| n.summary.contains("skipped the last time")));
+
+    // A one-off has no "this time" to skip.
+    let once = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Dentist", "due": first })).await;
+    let once = once.data["item_id"].as_i64().unwrap() as i32;
+    let e = engine.settle_item(once, "skip", None).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::SKIP_NOT_REPEATING));
+    assert_eq!(matter_of(&engine, once).await.status, ItemStatus::Open);
+}
+
+/// A reminder card whose row is gone is still opened again by an undo of
+/// the act that closed it.
+#[tokio::test]
+async fn an_undo_opens_a_reminder_card_whose_row_is_gone() {
+    use sea_orm::EntityTrait;
+    let (engine, _tmp) = configured().await;
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Pay rent", "due": "1m" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    engine.fire_due_at(super::clock::now() + chrono::Duration::minutes(2)).await;
+    let rows = reminder_rows(&engine, id).await;
+    assert_eq!(rows.len(), 1);
+    let notice = notice_of_row(&rows[0]);
+    crate::db::entities::personal_agent_timeline::Entity::delete_by_id(rows[0].id)
+        .exec(&engine.db.conn)
+        .await
+        .unwrap();
+    let acted = engine
+        .settle_item_from(id, "done", None, super::reminders::OpSource::Panel)
+        .await
+        .unwrap();
+    let closed = svc::get_notice(&engine.db.conn, notice).await.unwrap().unwrap();
+    assert_ne!(closed.state, crate::db::entities::personal_agent_notice::NoticeState::Open);
+    engine.undo_item(id, acted.undo.unwrap()).await.unwrap();
+    let opened = svc::get_notice(&engine.db.conn, notice).await.unwrap().unwrap();
+    assert_eq!(opened.state, crate::db::entities::personal_agent_notice::NoticeState::Open);
+}
+
 #[tokio::test]
 async fn a_matter_the_assistant_is_to_do_wakes_it_with_what_to_do() {
     let (engine, _tmp) = configured().await;
@@ -22269,11 +22350,14 @@ async fn putting_off_never_moves_a_matter_sooner_nor_one_someone_else_has() {
     assert_eq!(e.key, Some(super::refusal::keys::HAS_TIME));
     assert!(engine.settle_item(id, "snooze", Some("tomorrow")).await.is_ok() || due > super::clock::now() + chrono::Duration::hours(20));
     // G3: one in the assistant's hands, or outside codeg's, waits on no time.
-    for waits in [WaitsFor::Agent, WaitsFor::External] {
+    for (waits, key) in [
+        (WaitsFor::Agent, super::refusal::keys::IN_OTHER_HANDS),
+        (WaitsFor::External, super::refusal::keys::WAITS_OUTSIDE),
+    ] {
         let f = new_matter(&engine, ItemKind::Followup, Some(waits), "Chase the vendor").await;
         for (act, until) in [("snooze", Some("1h")), ("later", None)] {
             let e = engine.settle_item(f.id, act, until).await.unwrap_err();
-            assert_eq!(e.key, Some(super::refusal::keys::IN_OTHER_HANDS), "{act} {waits:?}");
+            assert_eq!(e.key, Some(key), "{act} {waits:?}");
         }
         assert_eq!(matter_of(&engine, f.id).await.waits_for, Some(waits));
     }

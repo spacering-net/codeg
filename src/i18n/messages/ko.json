@@ -11991,7 +11991,14 @@
       "overdue": "기한 지남 · {when} 마감",
       "reminded": "알림 보냄 · {when} 마감",
       "late": "{duration} 늦음",
-      "missed": "{count}번 놓침"
+      "missed": "{count}번 놓침",
+      "inSentence": {
+        "today": "{time}",
+        "tomorrow": "내일 {time}",
+        "yesterday": "어제 {time}",
+        "day": "{day} {time}",
+        "date": "{date} {time}"
+      }
     },
     "reminder": {
       "title": "리마인더",
@@ -13054,7 +13061,7 @@
         "skipNext": "이번은 건너뛰고, 이후는 그대로: {rule}",
         "snoozeNotify": "그때 다시 알려 드려요",
         "snoozeAct": "그때 {name}이(가) 처리해요",
-        "setTimeNotify": "그때 알려 드려요",
+        "setTimeNotify": "고른 시간에 알려 드려요",
         "setTimeAct": "그때 {name}이(가) 처리해요",
         "handOver": "{name}이(가) 처리하도록 맡겨요",
         "answer": "{name}와(과)의 대화에서 답해요",
@@ -13079,6 +13086,7 @@
         "stopped": "앞으로 알리지 않아요: {title}",
         "handed": "{name}에게 맡겼어요",
         "undone": "되돌렸어요",
+        "undoneSkip": "건너뛰기를 취소했어요",
         "notRefreshed": "새로 고치지 못했습니다. 잠시 후 다시 시도해 주세요."
       },
       "meta": {
@@ -13090,9 +13098,9 @@
         "asks": "{name}의 질문 · {wait}째 기다리는 중",
         "asked": "{name}의 질문",
         "answered": "답함 · {name}이(가) 읽기를 기다리는 중",
-        "interrupted": "{name}의 턴이 끝나지 않아 답을 못 읽었을 수 있어요 · 필요하면 다시 답해 주세요",
+        "interrupted": "{name}이(가) 처리를 끝내지 못해 답을 못 읽었을 수 있어요 · 필요하면 다시 답해 주세요",
         "needsYou": "{name}이(가) 당신을 기다려요 · {wait}",
-        "following": "{name}이(가) 챙기는 중 · {wait}",
+        "following": "{name}이(가) 챙기는 중 · {wait} 기다림",
         "external": "{name}이(가) 외부 결과를 기다리는 중 · {wait}",
         "message": "{name}이(가) {peer}의 답을 기다리는 중 · {wait}",
         "setAside": "보류 · 시간 없음",
@@ -13102,6 +13110,7 @@
       },
       "closed": {
         "done": "내가 완료 · {time}",
+        "skippedLast": "마지막 회차를 건너뛰었어요 · {time}",
         "dropped": "내가 뺌 · {time}",
         "withdrawn": "{peer}에게 보낸 메시지를 회수함 · {time}",
         "stoppedWaiting": "{peer}의 답을 그만 기다림 · {time}",
@@ -13120,13 +13129,15 @@
       "gone": "이 항목은 더 이상 없어요",
       "settled": "이 항목은 이미 끝났어요",
       "changed": "방금 바뀌었어요. 다시 확인해 주세요",
-      "workRunning": "이 작업은 아직 진행 중이에요. 멈추려면 작업 막대의 「중지」를 사용하세요",
+      "workRunning": "이 작업은 아직 진행 중이에요. 멈추려면 카드의 「중지」를 사용하세요",
       "workNoTime": "맡긴 작업은 시간으로 미룰 수 없어요",
       "messageNoTime": "이 항목은 {peer}의 답을 기다리고 있어서 시간으로 미룰 수 없어요",
       "mentionNoTime": "이 항목은 언급할 때 나타나고, 시간으로 알리지 않아요",
       "notEarlier": "이 항목은 원래 {when}로 정해져 있어요. 미루기는 뒤로만 할 수 있어요",
       "hasTime": "이 항목은 이미 {when}로 정해져 있어요",
       "inOtherHands": "이 항목은 {bot}이(가) 맡고 있어서 시간으로 미룰 수 없어요",
+      "waitsOutside": "이 일은 외부 응답을 기다리고 있어 시간을 정해 미룰 수 없어요",
+      "skipNotRepeating": "반복 알림만 한 번 건너뛸 수 있어요",
       "badTime": "그 시간을 이해하지 못했어요",
       "undoNone": "이 작업은 되돌릴 수 없어요",
       "undoExpired": "10분이 지나 되돌릴 수 없어요",

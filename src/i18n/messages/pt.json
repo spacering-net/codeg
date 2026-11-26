@@ -11991,7 +11991,14 @@
       "overdue": "Atrasado · vencia {when}",
       "reminded": "Lembrado · vence {when}",
       "late": "{duration} de atraso",
-      "missed": "{count, plural, one {Perdido # vez} other {Perdido # vezes}}"
+      "missed": "{count, plural, one {Perdido # vez} other {Perdido # vezes}}",
+      "inSentence": {
+        "today": "às {time}",
+        "tomorrow": "amanhã às {time}",
+        "yesterday": "ontem às {time}",
+        "day": "{day} às {time}",
+        "date": "em {date} às {time}"
+      }
     },
     "reminder": {
       "title": "Lembrete",
@@ -13033,7 +13040,7 @@
     "matter": {
       "act": {
         "done": "Concluído",
-        "doneThis": "Concluído por agora",
+        "doneThis": "Concluído desta vez",
         "doneEarly": "Concluir antes",
         "skipThis": "Pular desta vez",
         "merged": "Mesclado",
@@ -13054,7 +13061,7 @@
         "skipNext": "Pulado desta vez; depois segue igual: {rule}",
         "snoozeNotify": "Você é lembrado de novo nesse horário",
         "snoozeAct": "{name} faz nesse horário",
-        "setTimeNotify": "Você é lembrado nesse horário",
+        "setTimeNotify": "Você é lembrado no horário que escolher",
         "setTimeAct": "{name} faz nesse horário",
         "handOver": "{name} cuida disso",
         "answer": "Responder na conversa com {name}",
@@ -13079,6 +13086,7 @@
         "stopped": "Sem mais lembretes: {title}",
         "handed": "Passado para {name}",
         "undone": "Desfeito",
+        "undoneSkip": "Você desfez o pulo",
         "notRefreshed": "Não foi possível atualizar — tente de novo daqui a pouco."
       },
       "meta": {
@@ -13090,9 +13098,9 @@
         "asks": "{name} pergunta a você · esperando há {wait}",
         "asked": "{name} pergunta a você",
         "answered": "Você respondeu · esperando {name} ler",
-        "interrupted": "O turno de {name} não terminou e talvez sua resposta não tenha sido lida · responda de novo se precisar",
+        "interrupted": "{name} não terminou e talvez não tenha lido sua resposta · responda de novo se precisar",
         "needsYou": "{name} precisa de você · esperando há {wait}",
-        "following": "{name} está acompanhando · {wait}",
+        "following": "{name} está acompanhando · esperando há {wait}",
         "external": "{name} espera algo externo · {wait}",
         "message": "{name} espera a resposta de {peer} · {wait}",
         "setAside": "Deixado de lado · sem horário",
@@ -13102,6 +13110,7 @@
       },
       "closed": {
         "done": "Você concluiu · {time}",
+        "skippedLast": "Você pulou a última vez · {time}",
         "dropped": "Você removeu · {time}",
         "withdrawn": "Você retirou a mensagem para {peer} · {time}",
         "stoppedWaiting": "Você parou de esperar a resposta de {peer} · {time}",
@@ -13120,13 +13129,15 @@
       "gone": "Isto não existe mais",
       "settled": "Isto já terminou",
       "changed": "Isto acabou de mudar — dê outra olhada",
-      "workRunning": "Este trabalho ainda está em andamento; para pará-lo use Parar na barra da tarefa",
+      "workRunning": "Este trabalho ainda está em andamento; para pará-lo use Parar no cartão",
       "workNoTime": "Trabalho repassado não pode ser adiado para um horário",
       "messageNoTime": "Isto espera a resposta de {peer} e não pode ser adiado para um horário",
       "mentionNoTime": "Isto aparece quando você menciona, não em um horário",
       "notEarlier": "Isto já está marcado para {when}; adiar só move para mais tarde",
       "hasTime": "Isto já está marcado para {when}",
       "inOtherHands": "Isto está com {bot} e não pode ser adiado para um horário",
+      "waitsOutside": "Isto espera algo de fora e não pode ser adiado para um horário",
+      "skipNotRepeating": "Só um lembrete que se repete pode pular uma vez",
       "badTime": "Esse horário não foi entendido",
       "undoNone": "Isto não pode ser desfeito",
       "undoExpired": "Passaram mais de 10 minutos; não dá mais para desfazer",

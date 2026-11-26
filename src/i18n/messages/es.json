@@ -11991,7 +11991,14 @@
       "overdue": "Vencido · vencía {when}",
       "reminded": "Recordado · vence {when}",
       "late": "{duration} tarde",
-      "missed": "{count, plural, one {Se perdió # vez} other {Se perdió # veces}}"
+      "missed": "{count, plural, one {Se perdió # vez} other {Se perdió # veces}}",
+      "inSentence": {
+        "today": "a las {time}",
+        "tomorrow": "mañana a las {time}",
+        "yesterday": "ayer a las {time}",
+        "day": "el {day} a las {time}",
+        "date": "el {date} a las {time}"
+      }
     },
     "reminder": {
       "title": "Recordatorio",
@@ -13033,7 +13040,7 @@
     "matter": {
       "act": {
         "done": "Hecho",
-        "doneThis": "Hecho por ahora",
+        "doneThis": "Hecho esta vez",
         "doneEarly": "Hecho antes",
         "skipThis": "Omitir esta vez",
         "merged": "Fusionado",
@@ -13054,7 +13061,7 @@
         "skipNext": "Se omite esta vez; sigue igual: {rule}",
         "snoozeNotify": "Te lo recuerdo entonces otra vez",
         "snoozeAct": "{name} lo hace entonces",
-        "setTimeNotify": "Te lo recuerdo entonces",
+        "setTimeNotify": "Te lo recuerdo a la hora que elijas",
         "setTimeAct": "{name} lo hace entonces",
         "handOver": "{name} se encarga",
         "answer": "Responder en la conversación con {name}",
@@ -13079,6 +13086,7 @@
         "stopped": "No se volverá a recordar: {title}",
         "handed": "Pasado a {name}",
         "undone": "Deshecho",
+        "undoneSkip": "Deshiciste la omisión",
         "notRefreshed": "No se pudo actualizar; inténtalo de nuevo en un momento."
       },
       "meta": {
@@ -13090,9 +13098,9 @@
         "asks": "{name} te pregunta · esperando {wait}",
         "asked": "{name} te pregunta",
         "answered": "Respondiste · esperando a que {name} lo lea",
-        "interrupted": "El turno de {name} no terminó y puede que no haya leído tu respuesta · responde otra vez si hace falta",
+        "interrupted": "{name} no terminó y puede que no haya leído tu respuesta · responde otra vez si hace falta",
         "needsYou": "{name} te necesita · esperando {wait}",
-        "following": "{name} lo está siguiendo · {wait}",
+        "following": "{name} lo está siguiendo · esperando {wait}",
         "external": "{name} espera algo externo · {wait}",
         "message": "{name} espera la respuesta de {peer} · {wait}",
         "setAside": "Aparcado · sin hora",
@@ -13102,6 +13110,7 @@
       },
       "closed": {
         "done": "Lo hiciste · {time}",
+        "skippedLast": "Omitiste la última vez · {time}",
         "dropped": "Lo quitaste · {time}",
         "withdrawn": "Retiraste el mensaje a {peer} · {time}",
         "stoppedWaiting": "Dejaste de esperar la respuesta de {peer} · {time}",
@@ -13120,13 +13129,15 @@
       "gone": "Esto ya no existe",
       "settled": "Esto ya terminó",
       "changed": "Esto acaba de cambiar — échale otro vistazo",
-      "workRunning": "Este trabajo sigue en marcha; para detenerlo usa Detener en su barra de tarea",
+      "workRunning": "Este trabajo sigue en marcha; para detenerlo usa Detener en su tarjeta",
       "workNoTime": "El trabajo encargado no se puede posponer a una hora",
       "messageNoTime": "Esto espera la respuesta de {peer} y no se puede posponer a una hora",
       "mentionNoTime": "Esto aparece cuando lo mencionas, no a una hora",
       "notEarlier": "Esto ya está para {when}; posponer solo lo mueve más tarde",
       "hasTime": "Esto ya está para {when}",
       "inOtherHands": "Esto está en manos de {bot} y no se puede posponer a una hora",
+      "waitsOutside": "Esto espera algo de fuera y no se puede aplazar a una hora",
+      "skipNotRepeating": "Solo un recordatorio que se repite puede omitir una vez",
       "badTime": "No se entendió esa hora",
       "undoNone": "Esto no se puede deshacer",
       "undoExpired": "Pasaron más de 10 minutos; ya no se puede deshacer",

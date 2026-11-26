@@ -65,6 +65,9 @@ pub const ITEM_NOTE_EVENT: &str = "item_note";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ItemOp {
     Done,
+    /// A repeating matter's this time passed over: on to its next, by its
+    /// rule; the last time skipped ends it (`skipped`).
+    Skip,
     Drop,
     /// Set aside, to wait with no time.
     Later,
@@ -73,8 +76,9 @@ pub enum ItemOp {
 }
 
 impl ItemOp {
-    /// An act as the page names it: `done`, `drop`, `later`, `snooze` (with
-    /// `until`: `15m`, `1h`, `tomorrow`, a time; without, `later`).
+    /// An act as the page names it: `done`, `skip`, `drop`, `later`,
+    /// `snooze` (with `until`: `15m`, `1h`, `tomorrow`, a time; without,
+    /// `later`).
     pub fn parse(
         act: &str,
         until: Option<&str>,
@@ -84,6 +88,7 @@ impl ItemOp {
     ) -> Result<Self, String> {
         match (act, until.map(str::trim).filter(|u| !u.is_empty())) {
             ("done", _) => Ok(ItemOp::Done),
+            ("skip", _) => Ok(ItemOp::Skip),
             ("drop", _) => Ok(ItemOp::Drop),
             ("later", None) | ("snooze", None) => Ok(ItemOp::Later),
             ("snooze", Some(u)) | ("later", Some(u)) => {
@@ -833,12 +838,25 @@ impl PersonalAgentEngine {
         let tz = self.owner_tz().await;
         let now = clock::now();
         // Someone else has it: no time to wait for.
-        if timed && matches!(item.waits_for, Some(WaitsFor::Agent | WaitsFor::External)) {
+        if timed && item.waits_for == Some(WaitsFor::External) {
+            return Err(Refusal::new(
+                keys::WAITS_OUTSIDE,
+                "this matter waits on something outside codeg, not for a time",
+            ));
+        }
+        if timed && item.waits_for == Some(WaitsFor::Agent) {
             return Err(Refusal::new(
                 keys::IN_OTHER_HANDS,
                 "this matter is in someone else's hands, not waiting for a time",
             )
             .with("bot", self.bot_name_of(bot).await));
+        }
+        // Only a repeating matter has a "this time" to skip.
+        if op == ItemOp::Skip && item.repeat.is_none() {
+            return Err(Refusal::new(
+                keys::SKIP_NOT_REPEATING,
+                "only a repeating matter can skip a time",
+            ));
         }
         // A time still ahead: putting it off moves it later, never sooner;
         // with no time is not "later" for it.
@@ -896,6 +914,36 @@ impl PersonalAgentEngine {
                     None,
                     format!("The owner marked #{item_id} {name} done."),
                     "done",
+                ),
+            },
+            ItemOp::Skip => match after_done(&item, tz, now) {
+                Some(next) => {
+                    let when = next
+                        .due_at
+                        .map(|t| due::describe(t, tz, now))
+                        .unwrap_or_default();
+                    (
+                        ItemWrite {
+                            waits_for: Some(Some(WaitsFor::Time)),
+                            time: Some(next),
+                            ..Default::default()
+                        },
+                        "done",
+                        None,
+                        format!("The owner skipped #{item_id} {name} this time; it comes up next {when}."),
+                        "skip",
+                    )
+                }
+                None => (
+                    ItemWrite {
+                        status: Some(ItemStatus::Done),
+                        closing: owner("skipped"),
+                        ..Default::default()
+                    },
+                    "done",
+                    None,
+                    format!("The owner skipped the last time of #{item_id} {name}; it is over."),
+                    "skip",
                 ),
             },
             ItemOp::Drop => (
