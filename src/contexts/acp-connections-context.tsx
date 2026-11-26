@@ -4404,6 +4404,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         // you"), so it marks the parent's row. Skip the walk when the child
         // waits on nobody — the common case on every dispatch.
         if (!prompts) continue
+        // A self-parented child is a work-task transcript VIEWER, not a
+        // sub-agent: it answers to no parent row, and when a tab shares its
+        // connection the tab's own entry already carries the prompt. Its
+        // copy is also never settled by the liveness sweep, so routing it
+        // through the tab could revive a mark the tab's settle just dropped.
+        if (conn.parentConnectionId === conn.connectionId) continue
         // Nested delegations chain child → child → root; the guard only stops
         // a malformed cycle from spinning.
         let cursor: ConnectionState = conn
@@ -4424,8 +4430,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           ownerKey = parent ? parentKey : undefined
           if (parent) cursor = parent
         }
-        // A child whose parent this window does not hold has no row to mark.
-        if (ownerKey === undefined) continue
+        // A child whose parent this window does not hold has no row to mark,
+        // and one whose root has gone has no live card to answer it from.
+        if (
+          ownerKey === undefined ||
+          cursor.status === "disconnected" ||
+          cursor.status === "error"
+        ) {
+          continue
+        }
       }
       candidates.push({
         conversationId:

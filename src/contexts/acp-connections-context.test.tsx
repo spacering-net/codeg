@@ -10657,6 +10657,46 @@ describe("AcpConnectionsProvider conversation attention index", () => {
     expect(index().size).toBe(0)
   })
 
+  it("does not revive a dead tab's mark through its transcript viewer", async () => {
+    // The tab and the task's transcript dialog share one connection, so both
+    // hold the permission. The liveness settle flips only the tab (it skips
+    // delegation children); the viewer's retained copy must not re-mark it.
+    const tab = await connectOwner()
+    act(() => {
+      h.actions!.attachDelegationChild({
+        connectionId: "spawned-conn",
+        parentConnectionId: "spawned-conn",
+        parentToolUseId: "",
+        agentType: "claude_code",
+        hydrate: false,
+      })
+    })
+    const viewer = latestAttachHandlers()
+    const permission: EventEnvelope = {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "req-1",
+      tool_call: {},
+      options: [],
+    }
+    emitAcpEvent(tab, permission)
+    emitAcpEvent(viewer, permission)
+    expect(index().get(42)).toBe("permission")
+
+    emitAcpEvent(tab, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "disconnected",
+    })
+    expect(h.store!.getConnection(TAB)?.status).toBe("disconnected")
+    expect(
+      h.store!.getConnection("spawned-conn")?.pendingPermission
+    ).not.toBeNull()
+    expect(index().size).toBe(0)
+  })
+
   it("leaves a self-parented work-task viewer unmarked (and does not spin)", async () => {
     // A work-task transcript viewer attaches as a child whose parent is
     // itself: there is no parent row to attribute the prompt to.
