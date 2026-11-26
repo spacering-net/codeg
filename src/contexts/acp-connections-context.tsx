@@ -4373,13 +4373,29 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     const store = storeRef.current
     // Backend connection id → the store key it lives under, so a delegated
     // child (keyed by its own connection id) can be walked up to the top-level
-    // connection whose conversation the user actually has to open.
+    // connection whose conversation the user actually has to open. Several keys
+    // can share one connection id (a tab viewing a work task's connection and
+    // that task's transcript dialog, attached as a self-parented child), so a
+    // top-level entry wins over a child one: the walk must land on a row, not
+    // loop back into the viewer.
     const keyByConnectionId = new Map<string, string>()
     for (const [key, conn] of store.connections) {
-      keyByConnectionId.set(conn.connectionId, key)
+      const existing = keyByConnectionId.get(conn.connectionId)
+      if (
+        existing === undefined ||
+        (!conn.isDelegationChild &&
+          store.connections.get(existing)?.isDelegationChild)
+      ) {
+        keyByConnectionId.set(conn.connectionId, key)
+      }
     }
     const candidates: AttentionCandidate[] = []
     for (const [key, conn] of store.connections) {
+      // A connection known to be gone can no longer be answered. Leaving a turn
+      // clears the question and plan cards, but a permission survives the
+      // settle to `disconnected` (the liveness fallback dispatches the status
+      // alone), and marking it would point the user at a prompt that is dead.
+      if (conn.status === "disconnected" || conn.status === "error") continue
       const prompts = blockingPrompts(conn)
       let ownerKey: string | undefined = key
       if (conn.isDelegationChild) {

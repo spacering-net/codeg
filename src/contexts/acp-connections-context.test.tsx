@@ -10589,6 +10589,74 @@ describe("AcpConnectionsProvider conversation attention index", () => {
     expect(index().size).toBe(0)
   })
 
+  for (const order of ["tab first", "transcript viewer first"] as const) {
+    it(`keeps the parent's mark when a transcript viewer shares its connection (${order})`, async () => {
+      // A work-task transcript dialog attaches as a self-parented child under
+      // the SAME connection id as the tab; a real sub-agent's walk up must
+      // still land on the tab's row, whichever entry was added last.
+      const attachViewer = () =>
+        act(() => {
+          h.actions!.attachDelegationChild({
+            connectionId: "spawned-conn",
+            parentConnectionId: "spawned-conn",
+            parentToolUseId: "",
+            agentType: "claude_code",
+            hydrate: false,
+          })
+        })
+      h.acpFindConnectionForConversation.mockResolvedValue(null)
+      await mountProvider()
+      if (order === "transcript viewer first") attachViewer()
+      await act(async () => {
+        await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+      })
+      if (order === "tab first") attachViewer()
+
+      act(() => {
+        h.actions!.attachDelegationChild({
+          connectionId: "child-conn",
+          parentConnectionId: "spawned-conn",
+          parentToolUseId: "tool-1",
+          agentType: "claude_code",
+          hydrate: false,
+        })
+      })
+      emitAcpEvent(latestAttachHandlers(), {
+        seq: 1,
+        connection_id: "child-conn",
+        type: "permission_request",
+        request_id: "req-child",
+        tool_call: {},
+        options: [],
+      })
+      expect(index().get(42)).toBe("permission")
+    })
+  }
+
+  it("drops the mark once the connection holding the prompt is gone", async () => {
+    // Leaving a turn clears question and plan cards, but a permission survives
+    // the settle to `disconnected`; a dead prompt must not keep the row marked.
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "req-1",
+      tool_call: {},
+      options: [],
+    })
+    expect(index().get(42)).toBe("permission")
+
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "disconnected",
+    })
+    expect(h.store!.getConnection(TAB)?.pendingPermission).not.toBeNull()
+    expect(index().size).toBe(0)
+  })
+
   it("leaves a self-parented work-task viewer unmarked (and does not spin)", async () => {
     // A work-task transcript viewer attaches as a child whose parent is
     // itself: there is no parent row to attribute the prompt to.
