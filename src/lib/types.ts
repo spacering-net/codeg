@@ -6040,10 +6040,45 @@ export type AcpEvent =
       stale: boolean
       kind: ConfigStaleKind
     }
+  | {
+      type: "session_mcp_state"
+      state: SessionMcpState
+    }
 
 /** Which settings surface drifted (mirror of Rust `ConfigStaleKind`), used to
  *  word the "restart to apply" banner. */
-export type ConfigStaleKind = "agent_config" | "model_provider"
+export type ConfigStaleKind = "agent_config" | "model_provider" | "mcp_config"
+
+export type SessionMcpServerStatus =
+  | "attached"
+  | "configured"
+  | "skipped_transport"
+  | "confirmed"
+  | "failed"
+
+export interface SessionMcpServerEntry {
+  key: string
+  transport: "stdio" | "http" | "sse"
+  origin: "codeg_session" | "agent_file"
+  fingerprint?: string | null
+  status: SessionMcpServerStatus
+  confirmed_tools?: string[]
+  detail?: string | null
+}
+
+export interface SessionMcpCapabilitiesSnapshot {
+  http: boolean
+  sse: boolean
+}
+
+export interface SessionMcpState {
+  delivery: "agent_file" | "codeg_session"
+  supports_mcp: boolean
+  codeg_mcp_attached: boolean
+  capabilities?: SessionMcpCapabilitiesSnapshot | null
+  config_basis?: string | null
+  servers: SessionMcpServerEntry[]
+}
 
 /** A block of a broadcast user prompt (mirror of Rust `UserMessageBlock`).
  *  Narrower than the persisted `ContentBlock`: only what a viewer needs to
@@ -6476,6 +6511,8 @@ export interface LiveSessionSnapshot {
   config_stale?: boolean
   /** Which settings surface drifted; present only while `config_stale`. */
   config_stale_kind?: ConfigStaleKind | null
+  /** Running session MCP delivery and per-server runtime state snapshot. */
+  mcp_state?: SessionMcpState | null
   /** Latest agent/runtime error recoverable after reconnect. */
   last_error?: SessionLastError | null
   /** AIR typed session failure table — resolved entries and their revision

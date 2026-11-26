@@ -17,7 +17,7 @@ import {
   preflightMcpUninstall,
   type McpUninstallDialog as McpUninstallDialogState,
 } from "@/lib/harness/mcp-install-state"
-import { isMcpAppType } from "@/lib/mcp/types"
+import { isMcpAgentId } from "@/lib/mcp/types"
 import { cn } from "@/lib/utils"
 import { MachineText } from "../machine-text"
 import { AgentGlyph } from "../mcp/mcp-bits"
@@ -57,7 +57,7 @@ function AgentRow({
   const labels = useInstallLabels()
   const { slots } = useHarnessView()
   const baseId = useId()
-  const known = isMcpAppType(agent) ? agent : null
+  const known = isMcpAgentId(agent) ? agent : null
   const ticked = known !== null && dialog.agents.includes(known)
   const changed = localStateOf(state) === "changedLocally"
   const busy = dialog.phase === "uninstalling" || dialog.phase === "result"

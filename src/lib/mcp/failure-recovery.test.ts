@@ -97,13 +97,16 @@ describe("combineMcpFailureErrorTexts", () => {
 })
 
 describe("agentTypeToMcpApp", () => {
-  it("maps built-in agent types to McpAppType and returns null for custom/unknown", () => {
+  it("maps built-in and custom ACP agent types to McpAgentId and returns null for unknown/empty", () => {
     expect(agentTypeToMcpApp("claude_code")).toBe("claude_code")
     expect(agentTypeToMcpApp("codex")).toBe("codex")
     expect(agentTypeToMcpApp("gemini")).toBe("gemini")
     expect(agentTypeToMcpApp("open_code")).toBe("open_code")
-    expect(agentTypeToMcpApp("custom:my-agent")).toBeNull()
-    expect(agentTypeToMcpApp("custom:@plugin-deadbeef")).toBeNull()
+    expect(agentTypeToMcpApp("custom:my-agent")).toBe("custom:my-agent")
+    expect(agentTypeToMcpApp("custom:@plugin-deadbeef")).toBe(
+      "custom:@plugin-deadbeef"
+    )
+    expect(agentTypeToMcpApp("custom:")).toBeNull()
     expect(agentTypeToMcpApp("unknown_agent")).toBeNull()
     expect(agentTypeToMcpApp(null)).toBeNull()
     expect(agentTypeToMcpApp(undefined)).toBeNull()

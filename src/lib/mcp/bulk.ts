@@ -18,7 +18,7 @@ import {
   type McpModel,
   type McpServer,
 } from "./model"
-import type { McpAppType, McpDefinition, McpOp } from "./types"
+import type { McpAgentId, McpDefinition, McpOp } from "./types"
 
 export type McpBulkSkipReason =
   | { kind: "notInstalled" }
@@ -35,7 +35,7 @@ export type McpBulkSkipReason =
   | { kind: "differentDefinition" }
 
 export interface McpServerBulkCandidate {
-  agent: McpAppType
+  agent: McpAgentId
   op: McpOp
   effect: "add" | "enable" | "update" | "disable"
 }
@@ -50,7 +50,7 @@ export interface McpServerBulkPlan {
   serverKey: string
   ops: McpServerBulkCandidate[]
   /** Already enabled (for `server_enable`) or already off/paused (for `server_disable`). */
-  alreadyActive: McpAppType[]
+  alreadyActive: McpAgentId[]
   skipped: McpServerBulkSkipped[]
 }
 
@@ -68,7 +68,7 @@ export interface McpAgentBulkSkipped {
 
 export interface McpAgentBulkPlan {
   mode: "agent_enable"
-  agent: McpAppType
+  agent: McpAgentId
   ops: McpAgentBulkCandidate[]
   alreadyActive: string[]
   skipped: McpAgentBulkSkipped[]
@@ -97,7 +97,7 @@ export function planServerBulkEnable(
   model: McpModel
 ): McpServerBulkPlan {
   const ops: McpServerBulkCandidate[] = []
-  const alreadyActive: McpAppType[] = []
+  const alreadyActive: McpAgentId[] = []
   const skipped: McpServerBulkSkipped[] = []
   const isReservedServer =
     server.reserved || model.rules.reserved.includes(server.key)
@@ -227,7 +227,7 @@ export function planServerBulkDisable(
   model: McpModel
 ): McpServerBulkPlan {
   const ops: McpServerBulkCandidate[] = []
-  const alreadyActive: McpAppType[] = []
+  const alreadyActive: McpAgentId[] = []
   const skipped: McpServerBulkSkipped[] = []
   const seen = new Set<string>()
 
@@ -314,7 +314,7 @@ export function planAgentBulkEnable(
   if (!agentInfo.agent) {
     return {
       mode: "agent_enable",
-      agent: agentInfo.id as McpAppType,
+      agent: agentInfo.id as McpAgentId,
       ops,
       alreadyActive,
       skipped: model.servers.map((server) => ({

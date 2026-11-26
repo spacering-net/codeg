@@ -21,6 +21,7 @@ import type { TabItem } from "@/stores/tab-store"
 import { useAuxPanelContext } from "@/contexts/aux-panel-context"
 import { SessionDetailsInsights } from "./session-details-insights"
 import { SESSION_DETAILS_COLUMN } from "./session-details-layout"
+import { SessionMcpSection } from "./session-mcp-section"
 
 /**
  * The aux-panel "Session Details" tab. Shows the active conversation's identity
@@ -99,6 +100,11 @@ export function SessionDetailsTab() {
           <MessageNavScrollContext.Provider value={viewport}>
             <div className={SESSION_DETAILS_COLUMN}>
               <SessionDetailsCard summary={summary} model={model} />
+              <SessionMcpSection
+                contextKey={activeConversationTab?.id ?? null}
+                agentType={summary.agent_type}
+                active={active}
+              />
               <SessionDetailsInsights
                 conversationId={activeRuntimeId}
                 dbConversationId={activeConversationTab?.conversationId ?? null}
@@ -115,6 +121,7 @@ export function SessionDetailsTab() {
           <DraftSessionDetails
             tab={focusedTab}
             pending={focusedTab.conversationId != null}
+            active={active}
           />
         </ScrollArea>
       ) : (
@@ -149,9 +156,11 @@ export function SessionDetailsTab() {
 function DraftSessionDetails({
   tab,
   pending,
+  active,
 }: {
   tab: TabItem
   pending: boolean
+  active: boolean
 }) {
   const t = useTranslations("Folder.sessionDetails")
   const tPlan = useTranslations("Folder.chat.agentPlanOverlay")
@@ -176,6 +185,12 @@ function DraftSessionDetails({
       />
       {!pending && (
         <>
+          <SessionMcpSection
+            contextKey={tab.id}
+            agentType={tab.agentType}
+            active={active}
+            draft
+          />
           <DraftSectionRow icon={<ListChecks />} title={tPlan("title")} />
           <DraftSectionRow icon={<MessagesSquare />} title={tNav("title")} />
           <p className="py-3 text-xs leading-5 text-muted-foreground">

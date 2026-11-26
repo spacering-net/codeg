@@ -42,6 +42,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { useHarnessSlot, useHarnessView } from "@/contexts/harness-view-context"
+import { openSettingsWindow } from "@/lib/api"
 import { useOpenHarness } from "@/hooks/use-open-harness"
 import { harnessLang, pickLocalized } from "@/lib/harness/display"
 import type { McpHarnessMark, McpHarnessSeam } from "@/lib/harness/mcp-marks"
@@ -470,7 +471,10 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
   const extra = holder ? Object.keys(holder.entry.extra) : []
   const skipped =
     holder && holder.entry.enabled && isSkippedInSessions(info, holder.entry)
-  const name = labels.agent(info.id)
+  const name = info.displayName?.trim() || labels.agent(info.id)
+  const mcpDisabledInSettings =
+    info.editBlock?.kind === "file" &&
+    info.editBlock.reason?.code === "mcp_disabled_in_agent_settings"
   const { chips, reasons } = stateParts(state, server, labels, t)
   if (skipped) reasons.push(t("agentState.skipped"))
   const canProbe = Boolean(
@@ -528,6 +532,25 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
                 {reason}
               </span>
             ))}
+            {mcpDisabledInSettings && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    openSettingsWindow("agents").catch((error) => {
+                      console.error(
+                        "[McpServerDetail] failed to open agent settings:",
+                        error
+                      )
+                    })
+                  }}
+                  className="font-medium text-primary underline-offset-4 hover:underline"
+                >
+                  {t("agent.openAgentSettings")}
+                </button>
+              </>
+            )}
           </p>
         )}
         {info.inventory.config.path && (

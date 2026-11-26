@@ -16,6 +16,7 @@ import type {
   RemoteControlInfo,
   SessionConfigOptionInfo,
   SessionFailureRecord,
+  SessionMcpState,
   SessionModeStateInfo,
   SessionUsageUpdateInfo,
   ToolApprovalInfo,
@@ -91,6 +92,8 @@ export interface SnapshotPatch {
    *  that the one-shot `session_config_stale` event won't replay. */
   configStale: boolean
   configStaleKind: ConfigStaleKind | null
+  /** Running session MCP delivery and per-server runtime state snapshot. */
+  mcpState: SessionMcpState | null
   /** Launched-but-unresolved background tasks carried by the snapshot, so a
    *  client attaching mid-episode recovers the sweep exemption the one-shot
    *  `background_activity` events won't replay. `0` when the server omitted
@@ -196,6 +199,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     supportsRewind: wire.rewind_supported ?? false,
     configStale: wire.config_stale ?? false,
     configStaleKind: wire.config_stale_kind ?? null,
+    mcpState: wire.mcp_state ?? null,
     backgroundOutstanding: wire.background_outstanding ?? 0,
     backgroundTasks: wire.background_outstanding_tasks ?? [],
     sessionFailures: wire.session_failures ?? [],

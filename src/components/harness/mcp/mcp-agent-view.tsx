@@ -114,7 +114,7 @@ export const McpAgentRow = memo(function McpAgentRow({
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="flex min-w-0 items-center gap-2">
             <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-              {labels.agent(info.id)}
+              {info.displayName?.trim() || labels.agent(info.id)}
             </span>
             {(problem || info.installed === false || !info.agent) && (
               <span className="flex shrink-0 items-center gap-1">
@@ -206,36 +206,58 @@ function FileFacts({ info }: { info: McpAgentInfo }) {
           </span>
         </p>
         {info.editBlock && info.editBlock.kind !== "unknownAgent" && (
-          <p
-            className={cn(
-              "flex min-w-0 items-start gap-1.5",
-              problem ? "text-foreground" : "text-muted-foreground"
-            )}
-          >
-            {problem && (
-              <TriangleAlert
-                aria-hidden="true"
-                className="mt-0.5 size-3.5 shrink-0 text-tone-warning"
-              />
-            )}
-            <span className="min-w-0">
-              {labels.block(info.editBlock)}
-              {(info.editBlock.kind === "file"
-                ? info.editBlock.reason?.detail
-                : info.editBlock.reason.detail) && (
-                <bdi
-                  dir="ltr"
-                  className="mt-0.5 block font-mono text-2xs text-muted-foreground"
-                >
-                  <MachineText>
-                    {info.editBlock.kind === "file"
-                      ? info.editBlock.reason?.detail
-                      : info.editBlock.reason.detail}
-                  </MachineText>
-                </bdi>
+          <div className="space-y-2">
+            <p
+              className={cn(
+                "flex min-w-0 items-start gap-1.5",
+                problem ? "text-foreground" : "text-muted-foreground"
               )}
-            </span>
-          </p>
+            >
+              {problem && (
+                <TriangleAlert
+                  aria-hidden="true"
+                  className="mt-0.5 size-3.5 shrink-0 text-tone-warning"
+                />
+              )}
+              <span className="min-w-0">
+                {labels.block(info.editBlock)}
+                {(info.editBlock.kind === "file"
+                  ? info.editBlock.reason?.detail
+                  : info.editBlock.reason.detail) && (
+                  <bdi
+                    dir="ltr"
+                    className="mt-0.5 block font-mono text-2xs text-muted-foreground"
+                  >
+                    <MachineText>
+                      {info.editBlock.kind === "file"
+                        ? info.editBlock.reason?.detail
+                        : info.editBlock.reason.detail}
+                    </MachineText>
+                  </bdi>
+                )}
+              </span>
+            </p>
+            {info.editBlock.kind === "file" &&
+              info.editBlock.reason?.code ===
+                "mcp_disabled_in_agent_settings" && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  onClick={() => {
+                    openSettingsWindow("agents").catch((error) => {
+                      console.error(
+                        "[McpAgentDetail] failed to open agent settings:",
+                        error
+                      )
+                    })
+                  }}
+                >
+                  <Settings2 aria-hidden="true" />
+                  {t("openAgentSettings")}
+                </Button>
+              )}
+          </div>
         )}
         {!info.agent && (
           <p className="text-muted-foreground">{t("unknownAgent")}</p>
@@ -602,7 +624,7 @@ export function McpAgentDetail({
                 tabIndex={-1}
                 className={cn("min-w-0 truncate", HARNESS_DETAIL_TITLE_CLASS)}
               >
-                {labels.agent(info.id)}
+                {info.displayName?.trim() || labels.agent(info.id)}
               </h2>
               {info.installed === false && (
                 <DiscoverMark size="sm">

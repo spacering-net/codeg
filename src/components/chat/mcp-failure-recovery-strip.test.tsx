@@ -205,12 +205,96 @@ describe("McpFailureRecoveryStrip", () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it("hides the pause button for custom agents that do not map to an MCP app", () => {
-    renderStrip({
-      agentType: "custom:my-agent",
-      errorText: "MCP load failed for linear: timeout",
+  it("supports pause & reconnect for custom ACP agents and hides the pause button for unknown agents", async () => {
+    const user = userEvent.setup()
+    const onReconnect = vi.fn()
+    mocks.mcpInventory.mockResolvedValue({
+      agents: [
+        {
+          agent: "custom:my-agent",
+          display_name: "My Custom ACP",
+          custom: true,
+          installed: true,
+          writable: true,
+          can_disable: true,
+          disable_mode: "codeg_pause",
+          transports: ["stdio", "http"],
+          delivery: "codeg_session",
+          codeg_mcp: true,
+          session_capabilities: null,
+          config: {
+            path: "/home/u/.codeg/custom-mcp/my-agent.json",
+            format: "json",
+            status: "ok",
+            basis: "basis-custom-1",
+            symlink: false,
+            comments_lost_on_write: false,
+            related: [],
+          },
+          entries: [
+            {
+              key: "linear",
+              definition: { type: "http", url: "https://mcp.linear.app/mcp" },
+              extra: {},
+              enabled: true,
+              paused: false,
+              fingerprint: "fp-1",
+              read_only: false,
+              reserved: false,
+              legacy: false,
+              problems: [],
+            },
+          ],
+        },
+      ],
+      reserved_keys: ["codeg-mcp"],
+      key_pattern: "^[A-Za-z0-9_-]{1,64}$",
+    })
+    mocks.mcpApply.mockResolvedValue({
+      outcome: "applied",
+      ok: true,
+      agents: [
+        {
+          agent: "custom:my-agent",
+          path: "/home/u/.codeg/custom-mcp/my-agent.json",
+          status: "written",
+          basis: "basis-custom-2",
+          issues: [],
+          warnings: [],
+          ops: [{ index: 0, key: "linear", effect: "disabled" }],
+          writes: [],
+          backup_paths: [],
+        },
+      ],
     })
 
+    const { unmount } = renderStrip({
+      agentType: "custom:my-agent",
+      errorText: "MCP load failed for linear: timeout",
+      onReconnect,
+    })
+
+    await user.click(
+      screen.getByRole("button", { name: "Pause linear & reconnect" })
+    )
+    await waitFor(() => expect(onReconnect).toHaveBeenCalledTimes(1))
+    expect(mocks.mcpApply).toHaveBeenCalledWith({
+      basis: { "custom:my-agent": "basis-custom-1" },
+      ops: [
+        {
+          agent: "custom:my-agent",
+          key: "linear",
+          action: "set_enabled",
+          enabled: false,
+        },
+      ],
+    })
+    unmount()
+
+    renderStrip({
+      agentType: "unknown_agent",
+      errorText: "MCP load failed for linear: timeout",
+    })
     expect(screen.getByRole("status")).toBeInTheDocument()
     expect(
       screen.queryByRole("button", { name: /Pause linear/i })

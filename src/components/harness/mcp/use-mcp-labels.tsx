@@ -1,11 +1,18 @@
 "use client"
 
-import { useMemo, type ReactNode } from "react"
+import {
+  useCallback,
+  useMemo,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react"
 import { useLocale, useTranslations } from "next-intl"
 
+import { useOptionalHarnessView } from "@/contexts/harness-view-context"
 import { getAgentLabel } from "@/lib/custom-agents"
+import { MCP_INVENTORY } from "@/lib/harness/mcp-state"
 import type { McpAgentBlock } from "@/lib/mcp/model"
-import { isMcpAppType, type McpIssue, type McpOpIssue } from "@/lib/mcp/types"
+import { isMcpAgentId, type McpIssue, type McpOpIssue } from "@/lib/mcp/types"
 import { Code } from "../discover/detail-sections"
 
 /**
@@ -33,6 +40,7 @@ const FILE_CODES = [
   "root_not_object",
   "container_invalid",
   "managed_by_agent",
+  "mcp_disabled_in_agent_settings",
   "file_not_writable",
   "related_file_unreadable",
 ] as const
@@ -134,8 +142,9 @@ const FORMATS = ["json", "jsonc", "toml", "yaml"] as const
 
 export interface McpLabels {
   locale: string
-  /** An agent's name as the rest of the app shows it; an agent this build
-   *  does not know is shown as the backend spells it. */
+  /** An agent's name as the rest of the app shows it; custom agents prefer
+   *  `display_name` from inventory when available; an agent this build does
+   *  not know is shown as the backend spells it. */
   agent: (id: string) => string
   /** `stdio`, `HTTP`, `SSE` — or the word itself for one this build does not
    *  know. */
@@ -163,7 +172,27 @@ export interface McpLabels {
 export function useMcpLabels(): McpLabels {
   const t = useTranslations("Harness.mcp")
   const locale = useLocale()
+  const harnessView = useOptionalHarnessView()
+  const subscribeInventory = useCallback(
+    (cb: () => void) =>
+      harnessView ? harnessView.slots.subscribe(MCP_INVENTORY, cb) : () => {},
+    [harnessView]
+  )
+  const getInventory = useCallback(
+    () => (harnessView ? harnessView.slots.get(MCP_INVENTORY).inventory : null),
+    [harnessView]
+  )
+  const inventory = useSyncExternalStore(
+    subscribeInventory,
+    getInventory,
+    () => null
+  )
   return useMemo(() => {
+    const displayNames = new Map<string, string>()
+    for (const item of inventory?.agents ?? []) {
+      const name = item.display_name?.trim()
+      if (name) displayNames.set(item.agent, name)
+    }
     const code = (chunks: ReactNode) => <Code>{chunks}</Code>
     const rich = (key: string, values: Record<string, string> = {}) =>
       t.rich(key as never, { ...values, code } as never)
@@ -260,7 +289,11 @@ export function useMcpLabels(): McpLabels {
 
     return {
       locale,
-      agent: (id: string) => (isMcpAppType(id) ? getAgentLabel(id) : id),
+      agent: (id: string) => {
+        const fromInventory = displayNames.get(id)
+        if (fromInventory) return fromInventory
+        return isMcpAgentId(id) ? getAgentLabel(id) : id
+      },
       transport,
       transports: (values: readonly string[]) => list(values.map(transport)),
       issue,
@@ -283,5 +316,5 @@ export function useMcpLabels(): McpLabels {
         return Number.isNaN(date.getTime()) ? iso : dateFormat.format(date)
       },
     }
-  }, [t, locale])
+  }, [t, locale, inventory])
 }

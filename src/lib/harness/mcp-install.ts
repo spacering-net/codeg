@@ -18,7 +18,7 @@
  *   newer revision is not ticked to be taken back to this one.
  */
 import { DEFAULT_KEY_PATTERN, DEFAULT_RESERVED_KEYS } from "@/lib/mcp/keys"
-import { isMcpAppType, type McpAppType, type McpBasis } from "@/lib/mcp/types"
+import { isMcpAgentId, type McpAgentId, type McpBasis } from "@/lib/mcp/types"
 import type {
   HarnessAgentEntry,
   HarnessKeyConflict,
@@ -42,8 +42,8 @@ export interface McpInstallInput {
    */
   values: Readonly<Record<string, string>>
   key: string
-  agents: readonly McpAppType[]
-  replace: readonly McpAppType[]
+  agents: readonly McpAgentId[]
+  replace: readonly McpAgentId[]
   acceptYanked: boolean
   /** Parameters the user set themselves (typed in, chose, or took a
    *  recorded value for): kept over a new plan, and what settles agents'
@@ -116,7 +116,7 @@ export type McpInstallTargetBlock =
 export interface McpInstallTargetRow {
   /** As the backend spells it. */
   id: string
-  agent: McpAppType | null
+  agent: McpAgentId | null
   info: HarnessMcpPlanAgent
   block: McpInstallTargetBlock | null
   /** It has a server under the chosen name already. */
@@ -133,7 +133,7 @@ export function targetBlockOf(
   info: HarnessMcpPlanAgent,
   option: HarnessMcpPlanOption | null
 ): McpInstallTargetBlock | null {
-  if (!isMcpAppType(info.agent)) return { kind: "unknownAgent" }
+  if (!isMcpAgentId(info.agent)) return { kind: "unknownAgent" }
   // A file the plan has no basis for is not one the install may write.
   if (!info.writable || plan.basis[info.agent] === undefined) {
     return { kind: "file", status: info.status }
@@ -176,7 +176,7 @@ export function targetRowsOf(
 ): McpInstallTargetRow[] {
   return plan.agents.map((info) => ({
     id: info.agent,
-    agent: isMcpAppType(info.agent) ? info.agent : null,
+    agent: isMcpAgentId(info.agent) ? info.agent : null,
     info,
     block: targetBlockOf(plan, info, option),
     existing: holdsKey(info, key),
@@ -191,10 +191,10 @@ export function targetRowsOf(
 function allowedTargets(
   plan: HarnessMcpPlan,
   option: HarnessMcpPlanOption | null
-): Set<McpAppType> {
-  const allowed = new Set<McpAppType>()
+): Set<McpAgentId> {
+  const allowed = new Set<McpAgentId>()
   for (const info of plan.agents) {
-    if (isMcpAppType(info.agent) && !targetBlockOf(plan, info, option)) {
+    if (isMcpAgentId(info.agent) && !targetBlockOf(plan, info, option)) {
       allowed.add(info.agent)
     }
   }
@@ -216,19 +216,19 @@ function newerRecorded(plan: HarnessMcpPlan): Set<string> {
 export function defaultTargetsOf(
   plan: HarnessMcpPlan,
   option: HarnessMcpPlanOption | null
-): { agents: McpAppType[]; replace: McpAppType[] } {
+): { agents: McpAgentId[]; replace: McpAgentId[] } {
   if (!option) return { agents: [], replace: [] }
   const allowed = allowedTargets(plan, option)
   const newer = newerRecorded(plan)
   const agents = option.default_targets.filter(
-    (agent): agent is McpAppType =>
-      isMcpAppType(agent) && allowed.has(agent) && !newer.has(agent)
+    (agent): agent is McpAgentId =>
+      isMcpAgentId(agent) && allowed.has(agent) && !newer.has(agent)
   )
   // Only this item's own entries are ever ticked for the user: overwriting
   // anything else is something they tick themselves.
   const replace = option.default_replace.filter(
-    (agent): agent is McpAppType =>
-      isMcpAppType(agent) &&
+    (agent): agent is McpAgentId =>
+      isMcpAgentId(agent) &&
       agents.includes(agent) &&
       conflictOf(plan, agent, plan.key.default)?.owner === "this_item"
   )
@@ -295,8 +295,8 @@ function proposedReplace(
   plan: HarnessMcpPlan,
   option: HarnessMcpPlanOption | null,
   key: string,
-  agents: readonly McpAppType[]
-): McpAppType[] {
+  agents: readonly McpAgentId[]
+): McpAgentId[] {
   if (key !== plan.key.default) return []
   return defaultTargetsOf(plan, option).replace.filter((agent) =>
     agents.includes(agent)
@@ -398,7 +398,7 @@ export function setInstallKey(
 export function toggleTarget(
   plan: HarnessMcpPlan,
   input: McpInstallInput,
-  agent: McpAppType,
+  agent: McpAgentId,
   on: boolean
 ): McpInstallInput {
   const option = chosenOption(plan, input)
@@ -427,7 +427,7 @@ export function toggleTarget(
 
 export function toggleReplace(
   input: McpInstallInput,
-  agent: McpAppType,
+  agent: McpAgentId,
   on: boolean
 ): McpInstallInput {
   return {
@@ -598,7 +598,7 @@ export type McpInstallBlocker =
   | { kind: "targets" }
   /** Ticked agents that have a server under the name, not ticked to be
    *  replaced. */
-  | { kind: "replace"; agents: McpAppType[] }
+  | { kind: "replace"; agents: McpAgentId[] }
   | { kind: "yanked" }
 
 export function installBlockersOf(
