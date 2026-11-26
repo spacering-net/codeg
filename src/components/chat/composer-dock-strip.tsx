@@ -44,6 +44,8 @@ interface ComposerDockStripProps {
   hint?: string
   /** Small trailing note, e.g. "+2 more". */
   meta?: ReactNode
+  /** Optional inline action controls rendered before the details/dismiss icons. */
+  actions?: ReactNode
   /** Body of the expandable disclosure; no chevron when absent. */
   details?: string | null
   /** Close button; omitted when there is no handler. */
@@ -59,6 +61,7 @@ export function ComposerDockStrip({
   title,
   hint,
   meta,
+  actions,
   details,
   onDismiss,
   role,
@@ -82,6 +85,11 @@ export function ComposerDockStrip({
           <span className={muted ? undefined : "font-medium"}>{title}</span>
         </span>
         {meta}
+        {actions && (
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+            {actions}
+          </div>
+        )}
         {details && (
           <button
             type="button"

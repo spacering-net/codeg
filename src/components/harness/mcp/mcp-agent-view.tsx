@@ -6,6 +6,7 @@ import {
   Copy,
   Link2,
   Loader2,
+  PauseCircle,
   Settings2,
   TriangleAlert,
 } from "lucide-react"
@@ -21,12 +22,18 @@ import {
   dismissRow,
   isAgentBusy,
   MCP_BUSY,
+  MCP_PROBES,
   MCP_ROW_WRITES,
+  openAgentBulkEnableDialog,
   openMcpServer,
+  probeEntryKey,
   requestSwitch,
   rowId,
+  runAgentBatchProbe,
+  runMcpProbe,
   writeRow,
 } from "@/lib/harness/mcp-state"
+import { planAgentBulkEnable } from "@/lib/mcp/bulk"
 import {
   agentHasFileProblem,
   agentServerState,
@@ -53,6 +60,7 @@ import {
 } from "../harness-styles"
 import { MachineText } from "../machine-text"
 import { AgentGlyph, McpDetailPart, PathText } from "./mcp-bits"
+import { McpProbeButton, McpProbePanel } from "./mcp-probe-panel"
 import {
   DetailBodySkeleton,
   McpBackBar,
@@ -241,6 +249,9 @@ function FileFacts({ info }: { info: McpAgentInfo }) {
         {config.comments_lost_on_write && (
           <p className="text-tone-warning">{t("commentsLost")}</p>
         )}
+        {info.disableMode === "codeg_pause" && (
+          <p className="text-muted-foreground">{t("pauseReversible")}</p>
+        )}
         {config.related.map((file) => (
           <div key={file.path} className="min-w-0 space-y-0.5 border-t pt-2">
             <p className="text-muted-foreground">{t("pluginGate")}</p>
@@ -308,6 +319,7 @@ function EntryRow({
   const { slots } = useHarnessView()
   const [writes] = useHarnessSlot(MCP_ROW_WRITES)
   const [busy] = useHarnessSlot(MCP_BUSY)
+  const [probes] = useHarnessSlot(MCP_PROBES)
   const stateId = useId()
   const server = model.server(entry.key)
   const state = server ? agentServerState(server, info, model.rules) : null
@@ -330,6 +342,10 @@ function EntryRow({
   const transport = entry.definition
     ? labels.transport(entry.definition.type)
     : t("row.noDefinition")
+  const canProbe = Boolean(info.agent && entry.definition && !entry.reserved)
+  const probeKey =
+    canProbe && info.agent ? probeEntryKey(info.agent, entry.key) : null
+  const probeRecord = probeKey ? probes[probeKey] : undefined
 
   return (
     <li className="flex min-w-0 items-start gap-3 px-4 py-2.5">
@@ -355,6 +371,12 @@ function EntryRow({
           {entry.legacy && (
             <DiscoverMark size="sm">{t("agent.legacy")}</DiscoverMark>
           )}
+          {!entry.enabled && entry.paused && (
+            <DiscoverMark size="sm" tone="warning">
+              <PauseCircle aria-hidden="true" />
+              {t("agentState.paused")}
+            </DiscoverMark>
+          )}
           {skipped && (
             <DiscoverMark size="sm" tone="warning">
               {t("agent.skipped")}
@@ -364,7 +386,11 @@ function EntryRow({
         <p id={stateId} className="mt-0.5 text-xs text-muted-foreground">
           {transport}
           {" · "}
-          {entry.enabled ? t("agentState.on") : t("agentState.off")}
+          {entry.enabled
+            ? t("agentState.on")
+            : entry.paused
+              ? t("agentState.paused")
+              : t("agentState.off")}
           {readOnly && (
             <>
               {" · "}
@@ -399,6 +425,16 @@ function EntryRow({
             ))}
           </ul>
         )}
+        {!entry.enabled && entry.paused && (
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {t("agentState.pausedNote")}
+          </p>
+        )}
+        {probeRecord && (
+          <div className="mt-1.5">
+            <McpProbePanel record={probeRecord} compact />
+          </div>
+        )}
         {write && (
           <RowWriteNotice
             write={write}
@@ -418,6 +454,22 @@ function EntryRow({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-2 pt-0.5">
+        {canProbe && info.agent && probeKey && (
+          <McpProbeButton
+            size="xs"
+            variant="ghost"
+            loading={probeRecord?.phase === "loading"}
+            tested={probeRecord?.phase === "ready"}
+            onClick={() =>
+              void runMcpProbe(
+                slots,
+                probeKey,
+                { agent: info.agent!, key: entry.key },
+                entry.fingerprint
+              )
+            }
+          />
+        )}
         {pending && (
           <Loader2
             aria-label={t("detail.saving")}
@@ -506,6 +558,8 @@ export function McpAgentDetail({
 }: McpAgentDetailProps) {
   const t = useTranslations("Harness.mcp")
   const labels = useMcpLabels()
+  const { slots } = useHarnessView()
+  const [probes] = useHarnessSlot(MCP_PROBES)
   const headingId = useId()
   const headingRef = useRef<HTMLHeadingElement>(null)
   const { ref: scrollerRef, onScroll } = useDetailScroll(`agent:${agentId}`)
@@ -567,14 +621,62 @@ export function McpAgentDetail({
         <SessionFacts info={info} />
         <McpDetailPart
           title={t("agent.entries")}
-          aside={
-            filtered
-              ? t("agents.matching", {
-                  count: shown.length,
-                  total: info.inventory.entries.length,
-                })
-              : undefined
-          }
+          aside={(() => {
+            const testable =
+              !info.unreadable &&
+              Boolean(info.agent) &&
+              info.inventory.entries.some(
+                (entry) => entry.definition !== null && !entry.reserved
+              )
+            const batchLoading =
+              info.agent !== null &&
+              info.inventory.entries.some(
+                (entry) =>
+                  probes[probeEntryKey(info.agent!, entry.key)]?.phase ===
+                  "loading"
+              )
+            const bulkPlan =
+              info.agent && !info.unreadable
+                ? planAgentBulkEnable(info, model)
+                : null
+            const showBulkEnable = Boolean(
+              info.agent && bulkPlan && bulkPlan.ops.length > 0
+            )
+            if (!filtered && !testable && !showBulkEnable) return undefined
+            return (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {filtered && (
+                  <span className="text-xs text-muted-foreground">
+                    {t("agents.matching", {
+                      count: shown.length,
+                      total: info.inventory.entries.length,
+                    })}
+                  </span>
+                )}
+                {testable && (
+                  <McpProbeButton
+                    size="xs"
+                    variant="outline"
+                    loading={batchLoading}
+                    label={t("probe.checkAll")}
+                    onClick={() => void runAgentBatchProbe(slots, info.id)}
+                  />
+                )}
+                {showBulkEnable && info.agent && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={() =>
+                      openAgentBulkEnableDialog(slots, info.agent!)
+                    }
+                  >
+                    {t("bulk.enableAllCompatible")}
+                  </Button>
+                )}
+              </div>
+            )
+          })()}
         >
           {info.unreadable ? (
             <p className="rounded-xl border bg-card px-4 py-3 text-sm text-muted-foreground">

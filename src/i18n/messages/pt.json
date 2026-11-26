@@ -4431,6 +4431,16 @@
         "dismiss": "Dispensar",
         "moreIncidents": "+{count} mais"
       },
+      "mcpRecovery": {
+        "title": "Falha ao inicializar o servidor MCP \"{server}\"",
+        "pauseAndReconnect": "Pausar {server} e reconectar",
+        "pausing": "Pausando…",
+        "openSettings": "Abrir configurações de MCP",
+        "pausedAndReconnecting": "{server} pausado; reconectando…",
+        "serverNotFound": "Não foi possível encontrar \"{server}\" na configuração MCP deste agente.",
+        "cannotPause": "\"{server}\" não pode ser pausado automaticamente para este agente.",
+        "pauseFailed": "Não foi possível pausar \"{server}\"."
+      },
       "backgroundTasks": {
         "settledFallback": "Tarefa em segundo plano concluída ({status})",
         "notifySettledOne": "{agent}: uma tarefa em segundo plano terminou",
@@ -8126,7 +8136,9 @@
         "reserved": "nome do servidor embutido, só listado",
         "readOnly": "somente leitura",
         "skipped": "ignorado nas sessões dele",
-        "entryUnreadable": "O Codeg não consegue ler esta entrada"
+        "entryUnreadable": "O Codeg não consegue ler esta entrada",
+        "paused": "Pausado",
+        "pausedNote": "Pausado temporariamente pelo Codeg; reativar restaura toda a configuração."
       },
       "agents": {
         "showAll": "Mostrar todos os agentes ({count, number} não instalados)",
@@ -8171,7 +8183,8 @@
         "skipped": "Ignorado nas sessões",
         "builtIn": "<code>codeg-mcp</code> (embutido)",
         "builtInNote": "O servidor de colaboração do próprio Codeg. Ele não está neste arquivo; é ativado e desativado em Configurações › Colaboração.",
-        "openCollaboration": "Abrir Configurações"
+        "openCollaboration": "Abrir Configurações",
+        "pauseReversible": "Desativar um servidor aqui o pausa de forma reversível no Codeg sem perder argumentos, variáveis de ambiente ou cabeçalhos."
       },
       "blocks": {
         "unknownAgent": "Este Codeg não conhece este agente; atualize o Codeg para gerenciá-lo.",
@@ -8400,7 +8413,76 @@
         "disableTitle": "Desativar <code>{key}</code> em {agent}?",
         "enableAction": "Ativar",
         "disableAction": "Desativar",
+        "pauseTitle": "Pausar <code>{key}</code> em {agent}?",
+        "pauseBody": "O Codeg removerá temporariamente esta entrada da configuração de {agent} e manterá uma cópia para que reativá-la restaure todos os argumentos, variáveis de ambiente e cabeçalhos.",
+        "pauseAction": "Pausar",
         "commentsLost": "Este arquivo tem comentários, e salvar os remove."
+      },
+      "probe": {
+        "testConnection": "Testar conexão",
+        "retest": "Testar novamente",
+        "testing": "Testando…",
+        "checkAll": "Verificar todos",
+        "latency": "{ms} ms",
+        "unsupported": "Este Codeg é antigo demais para testar servidores MCP. Atualize-o.",
+        "rpcFailed": "Não foi possível contatar o Codeg para testar este servidor.",
+        "authRequiredHint": "Este servidor exige login OAuth interativo. Pause-o se este agente não suportar OAuth.",
+        "sessionIdMismatchHint": "O servidor rejeitou ou alterou o ID de sessão MCP (por exemplo, atrás de um proxy).",
+        "showTools": "{count, plural, one {Mostrar # ferramenta} other {Mostrar # ferramentas}}",
+        "hideTools": "Ocultar ferramentas",
+        "showStderr": "Mostrar stderr",
+        "hideStderr": "Ocultar stderr",
+        "status": {
+          "ok": "{count, plural, one {Saudável · # ferramenta} other {Saudável · # ferramentas}}",
+          "auth_required": "OAuth obrigatório",
+          "forbidden": "403 Proibido",
+          "session_id_mismatch": "ID de sessão incompatível",
+          "spawn_failed": "Falha ao iniciar",
+          "timeout": "Tempo esgotado",
+          "protocol_error": "Erro de protocolo",
+          "network_error": "Erro de rede",
+          "config_error": "Erro de configuração",
+          "unknown": "Falha no teste ({status})"
+        }
+      },
+      "bulk": {
+        "applyCompatible": "Aplicar a agentes compatíveis",
+        "pauseAll": "Pausar em todos",
+        "enableAllCompatible": "Ativar todos compatíveis",
+        "enableServerTitle": "Aplicar <code>{key}</code> a agentes compatíveis",
+        "enableServerDescription": "Adiciona ou ativa este servidor em todos os agentes compatíveis, instalados e graváveis.",
+        "disableServerTitle": "Pausar <code>{key}</code> em todos os agentes",
+        "disableServerDescription": "Desativa ou pausa este servidor onde for suportado, sem remover nenhuma configuração.",
+        "enableAgentTitle": "Ativar servidores compatíveis em {agent}",
+        "enableAgentDescription": "Adiciona ou ativa todos os servidores MCP locais compatíveis para {agent}.",
+        "unavailable": "Esta ação em massa não está mais disponível para a configuração atual.",
+        "nothingToDo": "Nenhuma alteração elegível para aplicar.",
+        "sectionWillApply": "Será aplicado ({count, number})",
+        "sectionWillDisable": "Será pausado / desativado ({count, number})",
+        "sectionAlreadyActive": "Já ativo ({count, number})",
+        "sectionAlreadyOff": "Já desativado ({count, number})",
+        "sectionSkipped": "Ignorado ({count, number})",
+        "effect": {
+          "add": "Adicionar",
+          "enable": "Ativar",
+          "update": "Atualizar",
+          "disable": "Desativar",
+          "pause": "Pausar"
+        },
+        "skip": {
+          "notInstalled": "Não instalado",
+          "unknownAgent": "Agente desconhecido",
+          "readOnly": "Configuração somente leitura",
+          "unreadable": "Configuração ilegível",
+          "unsupportedTransport": "Não suporta servidores {transport}",
+          "reservedKey": "Nome de servidor reservado",
+          "keyNotNew": "O nome não pode ser criado aqui",
+          "entryReadOnly": "Entrada somente leitura",
+          "duplicateKey": "Chave duplicada na configuração",
+          "cannotDisable": "Não suporta desativação (mantido intacto)",
+          "noDefinition": "Sem definição legível",
+          "differentDefinition": "Usa uma definição diferente"
+        }
       },
       "paste": {
         "title": "Colar configuração",

@@ -80,6 +80,7 @@ import { useHarnessHost } from "../harness-host-label"
 import { HarnessRecordProblem } from "../install/install-parts"
 import { MachineText } from "../machine-text"
 import { McpAgentDetail, McpAgentRow, RowListSkeleton } from "./mcp-agent-view"
+import { McpBulkDialog } from "./mcp-bulk-dialog"
 import {
   McpConfirmSwitchDialog,
   McpRemoveDialog,
@@ -343,6 +344,8 @@ function McpDialogs({ model }: { model: McpModel | null }) {
       return (
         <McpConfirmSwitchDialog key={dialog.id} dialog={dialog} model={model} />
       )
+    case "bulk":
+      return <McpBulkDialog key={dialog.id} dialog={dialog} model={model} />
   }
 }
 

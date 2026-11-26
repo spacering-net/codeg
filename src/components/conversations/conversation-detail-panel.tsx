@@ -2484,6 +2484,39 @@ const ConversationTabView = memo(function ConversationTabView({
     [acpActions, tabId]
   )
 
+  const mcpFailureErrorText =
+    acpLoadError ??
+    autoConnectError ??
+    conn.connectError?.detail ??
+    conn.connectError?.title ??
+    null
+
+  const handleMcpFailureReconnect = useCallback(async () => {
+    if (acpLoadError) {
+      handleReloadDetail()
+      return
+    }
+    const reconnected = await conn.reapplyConfig()
+    if (!reconnected && workingDirForConnection) {
+      await conn.connect(
+        selectedAgent,
+        workingDirForConnection,
+        dbConversationId != null && selectedAgent !== "cline"
+          ? externalId
+          : undefined,
+        dbConversationId ?? undefined
+      )
+    }
+  }, [
+    acpLoadError,
+    conn,
+    dbConversationId,
+    externalId,
+    handleReloadDetail,
+    selectedAgent,
+    workingDirForConnection,
+  ])
+
   // The docked composer is the only place a quote can land, so the selection
   // bubble offers "quote" exactly when that composer is on screen (see
   // `hideInput` below). Without a composer the inject would never be consumed
@@ -2720,6 +2753,8 @@ const ConversationTabView = memo(function ConversationTabView({
       claudeApiRetry={conn.claudeApiRetry}
       sessionFailures={conn.sessionFailures}
       onSessionFailureDismiss={handleSessionFailureDismiss}
+      mcpFailureErrorText={mcpFailureErrorText}
+      onReconnect={handleMcpFailureReconnect}
       remoteControl={connIsForOtherAgent ? null : conn.remoteControl}
       onRemoteControlOff={
         // Owners of a live connection only, like the stop above.

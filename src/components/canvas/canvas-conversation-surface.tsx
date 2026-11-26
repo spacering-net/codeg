@@ -1053,6 +1053,28 @@ export function CanvasConversationSurface({
           claudeApiRetry={conn.claudeApiRetry}
           sessionFailures={conn.sessionFailures}
           onSessionFailureDismiss={handleSessionFailureDismiss}
+          mcpFailureErrorText={
+            acpLoadError ??
+            conn.connectError?.detail ??
+            conn.connectError?.title ??
+            null
+          }
+          onReconnect={async () => {
+            if (acpLoadError) {
+              acpActions.clearAcpLoadError(contextKey)
+            }
+            const reconnected = await conn.reapplyConfig()
+            if (!reconnected && workingDir) {
+              await conn.connect(
+                agentType,
+                workingDir,
+                dbConversationId != null && agentType !== "cline"
+                  ? externalId
+                  : undefined,
+                dbConversationId ?? undefined
+              )
+            }
+          }}
           remoteControl={connIsForOtherAgent ? null : conn.remoteControl}
           onRemoteControlOff={
             conn.connectionId !== null && !conn.isViewer
