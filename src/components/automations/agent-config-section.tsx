@@ -83,9 +83,9 @@ export function AgentConfigSection({
         className={cn(
           "flex items-center gap-2 text-xs text-muted-foreground",
           // Inline shares the composer's bottom bar with the "+" button: hold
-          // the same 24px the chip will occupy so the bar neither jumps nor
+          // the same 32px the chip will occupy so the bar neither jumps nor
           // leaves this line sitting lower than the "+" while the probe runs.
-          inline && "h-6"
+          inline && "h-8"
         )}
       >
         <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
@@ -94,11 +94,11 @@ export function AgentConfigSection({
     )
   }
   if (error) {
-    // Same 24px line in the composer bar — a stacked message plus a full-size
+    // Same 32px line in the composer bar — a stacked message plus a full-size
     // button would double the bottom bar's height on a failed probe.
     if (inline) {
       return (
-        <div className="flex h-6 min-w-0 items-center gap-2">
+        <div className="flex h-8 min-w-0 items-center gap-2">
           <p
             className="min-w-0 truncate text-xs text-destructive"
             title={error}
@@ -139,7 +139,7 @@ export function AgentConfigSection({
     <div
       className={cn(
         "flex min-w-0 items-center gap-2",
-        inline ? "h-6" : "justify-between"
+        inline ? "h-8" : "justify-between"
       )}
     >
       <p
