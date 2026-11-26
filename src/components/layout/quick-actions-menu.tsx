@@ -65,6 +65,7 @@ import {
   MenuRow,
   MenuSub,
 } from "@/components/layout/status-bar-menu-rows"
+import { BetaBadge } from "@/components/ui/beta-badge"
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { useAutomationsView } from "@/contexts/automations-view-context"
 import { useHarnessView } from "@/contexts/harness-view-context"
@@ -223,7 +224,15 @@ export function QuickActionsItems({ actions }: { actions: QuickActions }) {
           to its page. */}
       <MenuRow
         icon={<UserRoundStar />}
-        label={tSidebar("personalAgent")}
+        label={
+          // "Beta" hugs the name, as beside the sidebar's "Assistants".
+          <span className="inline-flex max-w-full items-center gap-1.5">
+            <span className="min-w-0 truncate">
+              {tSidebar("personalAgent")}
+            </span>
+            <BetaBadge />
+          </span>
+        }
         onSelect={() => setRoute("personalAgent")}
       />
       <MenuRow

@@ -166,6 +166,7 @@ import {
   useSidebarRosterDialogs,
   SHOW_SIDEBAR_ASSISTANTS_EVENT,
 } from "@/components/personal-agent/sidebar-assistants"
+import { BetaBadge } from "@/components/ui/beta-badge"
 import { SidebarFolderGroupHeader } from "./sidebar-folder-group-header"
 import { ConversationManageDialog } from "./conversation-manage-dialog"
 import { openConversationTagsManager } from "./conversation-tags-manager"
@@ -3278,7 +3279,12 @@ export function SidebarConversationList({
           section="assistants"
           expanded={row.expanded}
           onToggle={toggleSection}
-          labelBadge={row.expanded ? null : <AssistantsSectionBadge />}
+          labelBadge={
+            <>
+              <BetaBadge />
+              {row.expanded ? null : <AssistantsSectionBadge />}
+            </>
+          }
           trailing={(className) => (
             <AssistantsSectionActions
               dialogs={rosterDialogs.api}
