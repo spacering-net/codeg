@@ -396,7 +396,8 @@ export interface ConnectionState {
    * phone for as long as the agent CLI runs. Set by `remote_control`, cleared
    * by its `null`, by a fork (codeg closes the session it leaves) and when the
    * connection goes. While it is set the idle sweep leaves the connection
-   * alone. The backend keeps the same value for the snapshot.
+   * alone — unless it started with the session on its own (`at_startup`,
+   * 0.113.0). The backend keeps the same value for the snapshot.
    */
   remoteControl: RemoteControlInfo | null
   liveMessage: LiveMessage | null
@@ -3602,7 +3603,8 @@ function connectionsReducer(
         (before === null && after === null) ||
         (before !== null &&
           after !== null &&
-          before.session_url === after.session_url)
+          before.session_url === after.session_url &&
+          !before.at_startup === !after.at_startup)
       ) {
         return state
       }
@@ -6954,7 +6956,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             type: "REMOTE_CONTROL",
             contextKey,
             remoteControl: e.remote_control
-              ? { session_url: e.remote_control.session_url ?? null }
+              ? {
+                  session_url: e.remote_control.session_url ?? null,
+                  ...(e.remote_control.at_startup ? { at_startup: true } : {}),
+                }
               : null,
           })
           break

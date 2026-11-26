@@ -661,8 +661,14 @@ fn teardown_blocker(
     // Claude Code's Remote Control runs in the agent CLI: the user handed the
     // session to claude.ai/code or a phone, and disconnecting would end it
     // there. It stays until they turn it off or close the connection
-    // themselves.
-    if state.remote_control.is_some() {
+    // themselves. Not Remote Control that started with the session on its
+    // own (`RemoteControlInfo::at_startup`): nobody handed that one over, and
+    // with the setting on every Claude session would stay up for good.
+    if state
+        .remote_control
+        .as_ref()
+        .is_some_and(|remote_control| !remote_control.at_startup)
+    {
         return Some(ConnectionBusy::RemoteControl);
     }
     // A codeg delegation still running. It outlives the turn that started it,
@@ -9944,6 +9950,7 @@ mod tests {
                 .apply_event(&crate::acp::types::AcpEvent::RemoteControl {
                     remote_control: Some(crate::acp::types::RemoteControlInfo {
                         session_url: Some("https://claude.ai/code/session_01".into()),
+                        at_startup: false,
                     }),
                 });
         }
@@ -9970,6 +9977,39 @@ mod tests {
         backdate_last_activity(&mgr, "remote", 600).await;
         let n = mgr.sweep_idle(Duration::from_secs(300)).await;
         assert_eq!(n, 1, "Remote Control off no longer exempts the sweep");
+    }
+
+    /// Remote Control that started with the session on its own
+    /// (claude-agent-acp 0.113.0, `remoteControlAtStartup` or a rollout) was
+    /// not handed over by the user, so it does not keep the connection up.
+    #[tokio::test]
+    async fn sweep_idle_reaps_remote_control_started_with_the_session() {
+        let mgr = ConnectionManager::new();
+        insert_fake_connection(
+            &mgr,
+            "startup",
+            AgentType::ClaudeCode,
+            None,
+            EventEmitter::Noop,
+        )
+        .await;
+        {
+            let state = mgr.get_state("startup").await.unwrap();
+            let mut state = state.write().await;
+            state.apply_event(&crate::acp::types::AcpEvent::RemoteControl {
+                remote_control: Some(crate::acp::types::RemoteControlInfo {
+                    session_url: Some("https://claude.ai/code/session_01".into()),
+                    at_startup: true,
+                }),
+            });
+            assert!(
+                teardown_blocker(&state, chrono::Utc::now(), |_| false).is_none(),
+                "nor does it block a move"
+            );
+        }
+        backdate_last_activity(&mgr, "startup", 600).await;
+        let n = mgr.sweep_idle(Duration::from_secs(300)).await;
+        assert_eq!(n, 1, "Remote Control started with the session is swept");
     }
 
     /// An async delegation outlives the turn that started it, so its parent

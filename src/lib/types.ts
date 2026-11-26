@@ -5505,6 +5505,12 @@ export interface RemoteControlInfo {
   /** The remote session's claude.ai/code URL; `null` when Claude Code turned
    *  Remote Control on without returning one. */
   session_url: string | null
+  /** Remote Control started with the session on its own
+   *  (`remoteControlAtStartup`, or a rollout the user may never have chosen;
+   *  claude-agent-acp 0.113.0) rather than by the user's `/remote-control`.
+   *  Nobody handed the session over, so it does not keep the connection from
+   *  the idle teardown (`isConnectionBusy`). Absent when false. */
+  at_startup?: boolean
 }
 
 export interface SessionUsageUpdateInfo {

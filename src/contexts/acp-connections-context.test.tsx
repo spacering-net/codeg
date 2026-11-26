@@ -6700,6 +6700,62 @@ describe("Claude Code's Remote Control (claude-agent-acp 0.93.0)", () => {
       vi.useRealTimers()
     }
   })
+
+  it("lets the idle sweep take Remote Control that started with the session, until the user's own /remote-control", async () => {
+    vi.useFakeTimers()
+    try {
+      const handlers = await connectOwner()
+      emitAcpEvent(handlers, {
+        seq: 1,
+        connection_id: "spawned-conn",
+        type: "turn_complete",
+        stop_reason: "end_turn",
+      } as EventEnvelope)
+      emitAcpEvent(handlers, {
+        seq: 2,
+        connection_id: "spawned-conn",
+        type: "remote_control",
+        remote_control: { session_url: SESSION_URL, at_startup: true },
+      })
+      expect(remoteControl()).toEqual({
+        session_url: SESSION_URL,
+        at_startup: true,
+      })
+      // The user's `/remote-control` hands the same remote session over.
+      emitAcpEvent(handlers, {
+        seq: 3,
+        connection_id: "spawned-conn",
+        type: "remote_control",
+        remote_control: { session_url: SESSION_URL },
+      })
+      expect(remoteControl()).toEqual({ session_url: SESSION_URL })
+      h.actions!.setActiveKey("some-other-surface")
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          CONNECTION_IDLE_TIMEOUT_MS + IDLE_SWEEP_INTERVAL_MS + 1000
+        )
+      })
+      expect(h.acpDisconnect).not.toHaveBeenCalled()
+
+      // Reported as started with the session again, the reducer follows the
+      // flag (the backend keeps a handed-over one off): an idle connection
+      // like any other.
+      emitAcpEvent(handlers, {
+        seq: 4,
+        connection_id: "spawned-conn",
+        type: "remote_control",
+        remote_control: { session_url: SESSION_URL, at_startup: true },
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          CONNECTION_IDLE_TIMEOUT_MS + IDLE_SWEEP_INTERVAL_MS + 1000
+        )
+      })
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe("global acp://event listener is mount-once", () => {

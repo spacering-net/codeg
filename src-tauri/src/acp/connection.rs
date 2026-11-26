@@ -3867,11 +3867,26 @@ async fn resolve_permission(
         emitter,
         AcpEvent::PermissionResolved {
             request_id,
-            option_id: Some(option_id),
+            option_id: Some(option_id.clone()),
             origin: Some(origin),
         },
     )
     .await;
+    // A Claude plan approved with a fresh context: the adapter closes the
+    // session's query for a new one, and Remote Control ends with the old
+    // query. The new one does not connect again while it carries the plan
+    // (claude-agent-acp 0.113.0 `ensureConsumer` after the restart), so
+    // nothing else would say so, and the strip would keep a dead link. Not
+    // yet, though: a cancel before the adapter acts on the answer keeps the
+    // old query. Its replacement's first report says it happened
+    // (`clear_context_restarted`).
+    {
+        let mut state = state.write().await;
+        if state.remote_control.is_some() && clear_context_plan_option(state.agent_type, &option_id)
+        {
+            state.clear_context_restart_pending = true;
+        }
+    }
     if let Some(decision) = resolved.decision {
         emit_with_state(
             state,
@@ -3888,6 +3903,37 @@ async fn resolve_permission(
         )
         .await;
     }
+}
+
+/// A Claude query replaced for a plan approved with a fresh context: the
+/// adapter's `publishSessionState` (claude-agent-acp 0.113.0 `exit-plan.ts`)
+/// reports the new context's usage as 0 tokens once the replacement exists,
+/// and Remote Control ended with the old query (see
+/// `SessionState::clear_context_restart_pending`).
+async fn clear_context_restarted(state: &Arc<RwLock<SessionState>>, emitter: &EventEmitter) {
+    emit_with_state_built(state, emitter, |state| {
+        if !std::mem::take(&mut state.clear_context_restart_pending) {
+            return None;
+        }
+        state
+            .remote_control
+            .is_some()
+            .then_some(AcpEvent::RemoteControl {
+                remote_control: None,
+            })
+    })
+    .await;
+}
+
+/// Whether `option_id` approves a Claude plan with a fresh context, which
+/// replaces the session's Claude Code query: claude-agent-acp's
+/// `exit-plan-clear-{auto,bypass,accept-edits}` (`PERMISSION_OPTION_ID`).
+fn clear_context_plan_option(agent_type: AgentType, option_id: &str) -> bool {
+    agent_type == AgentType::ClaudeCode
+        && matches!(
+            option_id,
+            "exit-plan-clear-auto" | "exit-plan-clear-bypass" | "exit-plan-clear-accept-edits"
+        )
 }
 
 /// Publish the card a departing one promoted onto the screen, with `depth`
@@ -10074,6 +10120,7 @@ async fn run_connection(
                         // leave a hydrated transcript cut short for good — once
                         // it has history, the next load never hydrates it again.
                         let mut recording = hydrate_from_replay;
+                        let mut startup_remote_control: Vec<SessionNotice> = Vec::new();
                         while let Ok(Ok(dispatch)) = tokio::time::timeout(
                             std::time::Duration::from_millis(100),
                             session.read_update(),
@@ -10102,8 +10149,17 @@ async fn run_connection(
                             // repeated notices stay independent. Replaying
                             // one would raise a toast for something that
                             // already happened, so drop it on the same
-                            // terms as the task deltas above.
-                            if session_notice(&dispatch).is_some() {
+                            // terms as the task deltas above. Except Remote
+                            // Control starting with the session: claude-agent-
+                            // acp sends that one after the load's response,
+                            // live, and this drain can still be reading then
+                            // (`remote_control_notice`). Held until after
+                            // `SessionStarted` below, which would otherwise
+                            // clear it as Remote Control of a session left.
+                            if let Some(notice) = session_notice(&dispatch) {
+                                if remote_control_notice(agent_type, &notice).is_some() {
+                                    startup_remote_control.push(notice);
+                                }
                                 continue;
                             }
                             // Compaction IS history, which is why it is
@@ -10191,6 +10247,9 @@ async fn run_connection(
                             },
                         )
                         .await;
+                        for notice in startup_remote_control {
+                            emit_session_notice(&state, &emitter_clone, agent_type, notice).await;
+                        }
                         emit_session_modes(&state, &emitter_clone, session.modes()).await;
                         unless_cancelled(
                             &handshake,
@@ -15606,7 +15665,7 @@ async fn run_conversation_loop(
                         // Advisories land outside a turn as readily as inside
                         // one (a config warning at startup, a model reroute
                         // between prompts).
-                        emit_with_state(&st, &h, AcpEvent::SessionNotice { notice }).await;
+                        emit_session_notice(&st, &h, agent_type, notice).await;
                     } else if let Some(event) = session_compaction_event(&dispatch) {
                         emit_with_state(&st, &h, event).await;
                     } else if codebuddy_compact_internal(&dispatch) {
@@ -16154,12 +16213,8 @@ async fn run_conversation_loop(
                                 // the notice explains, so the probe
                                 // keeps it for the verdict.
                                 probe.note_notice(agent_type, &notice);
-                                emit_with_state(
-                                    &st,
-                                    &h,
-                                    AcpEvent::SessionNotice { notice },
-                                )
-                                .await;
+                                emit_session_notice(&st, &h, agent_type, notice)
+                                    .await;
                             } else if let Some(event) =
                                 session_compaction_event(&dispatch)
                             {
@@ -20758,6 +20813,7 @@ fn remote_control_reply(
         RemoteControlCommand::Connect if text.starts_with("Remote Control is active") => {
             Some(Some(RemoteControlInfo {
                 session_url: remote_control_session_url(text),
+                at_startup: false,
             }))
         }
         RemoteControlCommand::Connect if text.starts_with("Could not start Remote Control") => {
@@ -20765,6 +20821,85 @@ fn remote_control_reply(
         }
         RemoteControlCommand::Disconnect if text.starts_with("Remote Control is off") => Some(None),
         _ => None,
+    }
+}
+
+/// What claude-agent-acp's notice says Remote Control is, when Claude Code
+/// asked for Remote Control to start with the session (0.113.0, #1523):
+/// `Some(Some(_))` on, `Some(None)` off, and `None` for any other notice.
+///
+/// Claude Code's `initialize` reports `remote_control_auto_enable` — from
+/// `remoteControlAtStartup` in the settings, else the policy default, else a
+/// rollout — and the adapter then turns Remote Control on right after a
+/// session's setup response (new, load, resume, fork) and after a restart of
+/// its query, answering in one notice of fixed wording
+/// (`startRemoteControl`), not in a reply chunk:
+///  - info "Remote Control connected", described "Continue this session from
+///    claude.ai/code or the Claude mobile app: <session URL>\nRun
+///    /remote-control off to disconnect." (or "Claude Code did not return a
+///    session URL." in place of the first line): on.
+///  - warning "Could not start Remote Control", described by the error: off,
+///    as for the command's own failure (see [`remote_control_reply`]).
+///
+/// Marked `at_startup`, since the user did not hand the session over (see
+/// `RemoteControlInfo::at_startup`). Read from the adapter's source, not
+/// measured: Remote Control needs a claude.ai account.
+fn remote_control_notice(
+    agent_type: AgentType,
+    notice: &SessionNotice,
+) -> Option<Option<RemoteControlInfo>> {
+    if agent_type != AgentType::ClaudeCode {
+        return None;
+    }
+    match (notice.severity.as_str(), notice.title.as_str()) {
+        ("info", "Remote Control connected") => Some(Some(RemoteControlInfo {
+            session_url: notice
+                .description
+                .as_deref()
+                .and_then(remote_control_session_url),
+            at_startup: true,
+        })),
+        ("warning", "Could not start Remote Control") => Some(None),
+        _ => None,
+    }
+}
+
+/// Emits a live session notice: a toast, and Remote Control's new state when
+/// the notice reports Remote Control starting with the session
+/// ([`remote_control_notice`]). The "connected" notice raises no toast: the
+/// Remote Control strip says the same, with the link, and a toast for every
+/// session (delegations and assistants' background ones too) would only be
+/// noise. A failure keeps its warning toast.
+///
+/// A session that the user's own `/remote-control` had already handed over
+/// stays handed over when a restart of its query connects again: built under
+/// the state's lock, so the event keeps `at_startup` off then.
+async fn emit_session_notice(
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    agent_type: AgentType,
+    notice: SessionNotice,
+) {
+    let Some(remote_control) = remote_control_notice(agent_type, &notice) else {
+        emit_with_state(state, emitter, AcpEvent::SessionNotice { notice }).await;
+        return;
+    };
+    let connected = remote_control.is_some();
+    emit_with_state_built(state, emitter, |state| {
+        let handed_over = state
+            .remote_control
+            .as_ref()
+            .is_some_and(|current| !current.at_startup);
+        Some(AcpEvent::RemoteControl {
+            remote_control: remote_control.map(|info| RemoteControlInfo {
+                at_startup: info.at_startup && !handed_over,
+                ..info
+            }),
+        })
+    })
+    .await;
+    if !connected {
+        emit_with_state(state, emitter, AcpEvent::SessionNotice { notice }).await;
     }
 }
 
@@ -27842,6 +27977,9 @@ async fn emit_conversation_update(
                 },
             )
             .await;
+            if agent_type == AgentType::ClaudeCode && update.used == 0 {
+                clear_context_restarted(state, emitter).await;
+            }
         }
         SessionUpdate::SessionInfoUpdate(info) => {
             // OpenCode 2 speaks two things on this channel, both under `_meta`
@@ -29165,6 +29303,203 @@ mod tests {
             "a withdrawal decided nothing about the call"
         );
         assert!(perms.lock().await.showing.is_none());
+    }
+
+    /// One Claude `usage_update` of `used` tokens through `emit_conversation_update`.
+    async fn drive_usage(state: &Arc<RwLock<SessionState>>, used: u64) {
+        let update: SessionUpdate = serde_json::from_value(serde_json::json!({
+            "sessionUpdate": "usage_update",
+            "used": used,
+            "size": 200000,
+        }))
+        .expect("valid usage_update wire shape");
+        let mut cache = ToolCallOutputCache::default();
+        let mut cb = CodeBuddyLiveState::default();
+        emit_conversation_update(
+            state,
+            &EventEmitter::Noop,
+            AgentType::ClaudeCode,
+            update,
+            None,
+            &mut cache,
+            &mut cb,
+        )
+        .await;
+    }
+
+    /// Approving a Claude plan with a fresh context replaces the session's
+    /// query, and Remote Control ends with the old one (claude-agent-acp
+    /// 0.113.0 does not connect the new query while it carries the plan), so
+    /// the replacement's first usage report takes Remote Control down —
+    /// handed over or started with the session alike. A plain approval, or a
+    /// turn that ended before the replacement, leaves it.
+    #[tokio::test]
+    async fn a_clear_context_plan_approval_ends_remote_control() {
+        use agent_client_protocol::schema::v1::{
+            PermissionOption, ToolCallUpdate, ToolCallUpdateFields,
+        };
+        use agent_client_protocol::Channel;
+
+        for (option, at_startup, ends) in [
+            ("exit-plan-clear-auto", true, true),
+            ("exit-plan-clear-accept-edits", false, true),
+            ("exit-plan-auto", true, false),
+        ] {
+            let (client_end, agent_end) = Channel::duplex();
+            let state = Arc::new(RwLock::new(SessionState::new(
+                "conn-test".to_string(),
+                AgentType::ClaudeCode,
+                None,
+                "win".to_string(),
+                None,
+            )));
+            let on = Some(RemoteControlInfo {
+                session_url: Some("https://claude.ai/code/session_01".into()),
+                at_startup,
+            });
+            emit_with_state(
+                &state,
+                &EventEmitter::Noop,
+                AcpEvent::RemoteControl {
+                    remote_control: on.clone(),
+                },
+            )
+            .await;
+            let perms = PendingPermissions::default();
+            let offered = option.to_string();
+            let agent = tokio::spawn(Agent.builder().connect_with(
+                agent_end,
+                async move |cx: ConnectionTo<Client>| {
+                    cx.send_request_to(
+                        Client,
+                        RequestPermissionRequest::new(
+                            SessionId::new("s1"),
+                            ToolCallUpdate::new(
+                                "call-1",
+                                ToolCallUpdateFields::new().title("Ready to code?"),
+                            ),
+                            vec![
+                                PermissionOption::new(
+                                    offered.clone(),
+                                    "Yes",
+                                    PermissionOptionKind::AllowAlways,
+                                ),
+                                PermissionOption::new(
+                                    "reject",
+                                    "No",
+                                    PermissionOptionKind::RejectOnce,
+                                ),
+                            ],
+                        ),
+                    )
+                    .block_task()
+                    .await
+                },
+            ));
+            let client = tokio::spawn({
+                let state = Arc::clone(&state);
+                let perms = perms.clone();
+                Client
+                    .builder()
+                    .on_receive_request(
+                        async move |req: RequestPermissionRequest,
+                                    responder: Responder<RequestPermissionResponse>,
+                                    cx: ConnectionTo<Agent>| {
+                            handle_permission_request(
+                                &cx,
+                                &state,
+                                &EventEmitter::Noop,
+                                &perms,
+                                "/tmp",
+                                AgentType::ClaudeCode,
+                                req,
+                                responder,
+                            )
+                            .await;
+                            Ok(())
+                        },
+                        on_receive_request!(),
+                    )
+                    .connect_with(client_end, async |_cx: ConnectionTo<Agent>| {
+                        std::future::pending::<Result<(), agent_client_protocol::Error>>().await
+                    })
+            });
+            let shown = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if let Some(id) = perms.lock().await.showing.clone() {
+                        break id;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("the card is shown");
+
+            resolve_permission(
+                &perms,
+                &state,
+                &EventEmitter::Noop,
+                shown,
+                option.to_string(),
+                PermissionAnswerOrigin::User,
+            )
+            .await;
+            tokio::time::timeout(std::time::Duration::from_secs(5), agent)
+                .await
+                .expect("the agent gets its answer")
+                .expect("agent task")
+                .expect("a response, not an error");
+            client.abort();
+            // Not on the answer: the old query still runs until the adapter
+            // acts on it.
+            assert_eq!(state.read().await.remote_control, on, "{option}");
+            assert_eq!(
+                state.read().await.clear_context_restart_pending,
+                ends,
+                "{option}"
+            );
+            // The replacement's first report.
+            drive_usage(&state, 0).await;
+            assert_eq!(
+                state.read().await.remote_control,
+                if ends { None } else { on.clone() },
+                "{option}"
+            );
+            assert!(!state.read().await.clear_context_restart_pending);
+        }
+
+        // A cancel that comes before the adapter acts on the answer keeps the
+        // old query: the turn ends, and a later report of 0 tokens says
+        // nothing about Remote Control.
+        let state = Arc::new(RwLock::new(SessionState::new(
+            "conn-test".to_string(),
+            AgentType::ClaudeCode,
+            None,
+            "win".to_string(),
+            None,
+        )));
+        let on = Some(RemoteControlInfo {
+            session_url: None,
+            at_startup: false,
+        });
+        {
+            let mut s = state.write().await;
+            s.apply_event(&AcpEvent::RemoteControl {
+                remote_control: on.clone(),
+            });
+            s.clear_context_restart_pending = true;
+            s.apply_event(&AcpEvent::TurnComplete {
+                session_id: "s1".into(),
+                stop_reason: "cancelled".into(),
+                agent_type: AgentType::ClaudeCode.to_string(),
+            });
+        }
+        drive_usage(&state, 0).await;
+        assert_eq!(state.read().await.remote_control, on);
+        assert!(!clear_context_plan_option(
+            AgentType::Codex,
+            "exit-plan-clear-auto"
+        ));
     }
 
     /// The answer that takes effect is reported with its option and who gave
@@ -30853,7 +31188,8 @@ mod tests {
         assert_eq!(
             remote_control_reply(Connect, &remote_control_active_reply(url)),
             Some(Some(RemoteControlInfo {
-                session_url: Some(url.to_string())
+                session_url: Some(url.to_string()),
+                at_startup: false,
             }))
         );
         assert_eq!(
@@ -30861,7 +31197,10 @@ mod tests {
                 Connect,
                 "Remote Control is active, but Claude Code did not return a session URL."
             ),
-            Some(Some(RemoteControlInfo { session_url: None }))
+            Some(Some(RemoteControlInfo {
+                session_url: None,
+                at_startup: false,
+            }))
         );
         // Measured through a gateway (0.93.0, CLI 2.1.300).
         assert_eq!(
@@ -31007,6 +31346,7 @@ mod tests {
         drive_agent_text(&state, &mut cb, &remote_control_active_reply(url), None).await;
         let on = Some(RemoteControlInfo {
             session_url: Some(url.to_string()),
+            at_startup: false,
         });
         assert_eq!(state.read().await.remote_control, on);
         assert_eq!(
@@ -31050,6 +31390,168 @@ mod tests {
         .await;
         assert_eq!(state.read().await.remote_control, None);
         assert_eq!(remote_control_events(&*state.read().await), vec![on, None]);
+    }
+
+    /// claude-agent-acp 0.113.0's notices for Remote Control that started with
+    /// the session (`startRemoteControl`, #1523), read off the wire the way
+    /// `session_notice` reads every notice.
+    fn startup_notice(severity: &str, title: &str, description: &str) -> SessionNotice {
+        session_notice(&async_task_notif(serde_json::json!({
+            "sessionUpdate": "notice",
+            "severity": severity,
+            "title": title,
+            "description": description,
+        })))
+        .expect("notice")
+    }
+
+    fn startup_connected(url: &str) -> SessionNotice {
+        startup_notice(
+            "info",
+            "Remote Control connected",
+            &format!(
+                "Continue this session from claude.ai/code or the Claude mobile app: {url}\n\
+                 Run /remote-control off to disconnect."
+            ),
+        )
+    }
+
+    #[test]
+    fn remote_control_notice_reads_the_adapters_startup_notices() {
+        let url = "https://claude.ai/code/session_01ABCdef";
+        assert_eq!(
+            remote_control_notice(AgentType::ClaudeCode, &startup_connected(url)),
+            Some(Some(RemoteControlInfo {
+                session_url: Some(url.to_string()),
+                at_startup: true,
+            }))
+        );
+        assert_eq!(
+            remote_control_notice(
+                AgentType::ClaudeCode,
+                &startup_notice(
+                    "info",
+                    "Remote Control connected",
+                    "Claude Code did not return a session URL.\n\
+                     Run /remote-control off to disconnect.",
+                )
+            ),
+            Some(Some(RemoteControlInfo {
+                session_url: None,
+                at_startup: true,
+            }))
+        );
+        let failed = startup_notice(
+            "warning",
+            "Could not start Remote Control",
+            "Remote Control is disabled by your organization's policy.",
+        );
+        assert_eq!(
+            remote_control_notice(AgentType::ClaudeCode, &failed),
+            Some(None)
+        );
+        // Another agent's notice of the same words, and other notices, say
+        // nothing about Remote Control.
+        assert_eq!(
+            remote_control_notice(AgentType::Codex, &startup_connected(url)),
+            None
+        );
+        for notice in [
+            startup_notice("warning", "Remote Control connected", "x"),
+            startup_notice("info", "MCP server \"x\" failed to start", "y"),
+        ] {
+            assert_eq!(remote_control_notice(AgentType::ClaudeCode, &notice), None);
+        }
+    }
+
+    /// The startup notice sets Remote Control, marked `at_startup`, without a
+    /// toast; a failure clears it and keeps its toast; any other notice is a
+    /// toast alone. A session the user's own `/remote-control` handed over
+    /// stays handed over when a restarted query connects again.
+    #[tokio::test]
+    async fn a_startup_notice_sets_remote_control_without_a_toast() {
+        let state = Arc::new(RwLock::new(SessionState::new(
+            "conn-rc-startup".to_string(),
+            AgentType::ClaudeCode,
+            None,
+            "win".to_string(),
+            None,
+        )));
+        let url = "https://claude.ai/code/session_01";
+        let toasts = |state: &SessionState| -> Vec<String> {
+            state
+                .recent_events_after(0)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|e| match &e.payload {
+                    AcpEvent::SessionNotice { notice } => Some(notice.title.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let emit = |notice| {
+            let state = Arc::clone(&state);
+            async move {
+                emit_session_notice(&state, &EventEmitter::Noop, AgentType::ClaudeCode, notice)
+                    .await
+            }
+        };
+
+        emit(startup_connected(url)).await;
+        let on_at_startup = Some(RemoteControlInfo {
+            session_url: Some(url.to_string()),
+            at_startup: true,
+        });
+        assert_eq!(state.read().await.remote_control, on_at_startup);
+        assert!(toasts(&*state.read().await).is_empty());
+
+        emit(startup_notice(
+            "warning",
+            "Could not start Remote Control",
+            "boom",
+        ))
+        .await;
+        assert_eq!(state.read().await.remote_control, None);
+        assert_eq!(
+            toasts(&*state.read().await),
+            vec!["Could not start Remote Control".to_string()]
+        );
+
+        // The user's `/remote-control` handed the session over; a restart of
+        // the query that connects again keeps it handed over.
+        let handed_over = Some(RemoteControlInfo {
+            session_url: Some(url.to_string()),
+            at_startup: false,
+        });
+        emit_with_state(
+            &state,
+            &EventEmitter::Noop,
+            AcpEvent::RemoteControl {
+                remote_control: handed_over.clone(),
+            },
+        )
+        .await;
+        let next = "https://claude.ai/code/session_02";
+        emit(startup_connected(next)).await;
+        assert_eq!(
+            state.read().await.remote_control,
+            Some(RemoteControlInfo {
+                session_url: Some(next.to_string()),
+                at_startup: false,
+            })
+        );
+
+        emit(startup_notice("info", "Something else", "z")).await;
+        assert_eq!(toasts(&*state.read().await).len(), 2);
+        assert_eq!(
+            state
+                .read()
+                .await
+                .remote_control
+                .as_ref()
+                .map(|rc| rc.at_startup),
+            Some(false)
+        );
     }
 
     // --- live ACP session title (`session_info_update.title`) --------------
@@ -51564,6 +52066,7 @@ mod tests {
             .await;
         let on = Some(RemoteControlInfo {
             session_url: Some(url.to_string()),
+            at_startup: false,
         });
         assert_eq!(remote_control(&events), vec![on.clone()]);
         assert!(matches!(

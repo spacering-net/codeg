@@ -158,7 +158,10 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     usage: wire.usage,
     promptSuggestion: wire.prompt_suggestion ?? null,
     remoteControl: wire.remote_control
-      ? { session_url: wire.remote_control.session_url ?? null }
+      ? {
+          session_url: wire.remote_control.session_url ?? null,
+          ...(wire.remote_control.at_startup ? { at_startup: true } : {}),
+        }
       : null,
     liveMessage: wire.live_message
       ? denormalizeLiveMessage(wire.live_message, toolMap)

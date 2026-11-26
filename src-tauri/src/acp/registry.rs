@@ -3790,9 +3790,55 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   * #1711 ends a sub-agent MCP request's wait when Claude Code
             //     gives up on it; only `acp`-transport MCP servers go through
             //     that bridge, and codeg declares none.
+            //
+            // 0.113.0 (2026-11-26) keeps every dependency of 0.112.0 (ACP SDK
+            // 2.12.0, Claude Agent SDK 0.3.331, so Claude Code 2.1.331) and
+            // `engines.node` ">=22".
+            //   * #1523 **starts Remote Control with the session** when
+            //     Claude Code's `initialize` reports
+            //     `remote_control_auto_enable` (`remoteControlAtStartup` in the
+            //     settings, else the policy default, else a rollout the user
+            //     may never have chosen): right after the setup response of a
+            //     new, loaded, resumed or forked session, and after a restart
+            //     of its query, holding prompts back until it answers. The
+            //     answer is a `notice`, not the `/remote-control` reply chunk
+            //     codeg reads: info "Remote Control connected" (the session
+            //     URL in the description) or warning "Could not start Remote
+            //     Control". Taken as-is, codeg only toasted it: no strip, no
+            //     link or QR code, no off button, and the sweeps took the CLI
+            //     with the remote session in it once the tab closed.
+            //     `connection::remote_control_notice` now reads both into
+            //     `AcpEvent::RemoteControl` — the strip appears and the
+            //     "connected" toast is dropped; the failure keeps its toast —
+            //     at all three notice seams, the `session/load` drain
+            //     included, since the notice comes after the load's response
+            //     while that drain can still read. Marked `at_startup`: nobody
+            //     handed the session over, so unlike the user's own
+            //     `/remote-control` it does not keep the connection from the
+            //     idle sweeps or a move (`manager::teardown_blocker`,
+            //     `isConnectionBusy`) — with the setting on, every Claude
+            //     session, delegations and assistants' too, would otherwise
+            //     never be reaped. A `/remote-control` the user sends hands it
+            //     over (its reply clears the mark), and a restarted query that
+            //     connects again keeps a handed-over session handed over.
+            //     While the start runs a `/remote-control` is refused ("Try
+            //     again in a moment"), as during another one. Read from the
+            //     adapter's source: Remote Control needs a claude.ai account.
+            //   * #1716 serves `/plugin` (aliases `/plugins`, `/marketplace`)
+            //     itself: it runs `claude plugin …` / `claude plugin
+            //     marketplace …` without a shell, then `reloadPlugins`, and
+            //     answers in one reply chunk without a model turn, like
+            //     `/mcp`. It reaches codeg's `/` menu through
+            //     `available_commands_update` with nothing to change. A
+            //     plugin a codeg Harness install put in place and `/plugin`
+            //     then removes or disables is what the listing's host checks
+            //     already report, as for the same command typed in a terminal.
+            //   * #1639 (a Monitor or Workflow call whose task joins the live
+            //     background set after its result) is in the ACP v2 core;
+            //     codeg speaks v1.
             distribution: AgentDistribution::Npx {
-                version: "0.112.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.112.0",
+                version: "0.113.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.113.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -10624,8 +10670,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.112.0",
-            "@agentclientprotocol/claude-agent-acp@0.112.0",
+            "0.113.0",
+            "@agentclientprotocol/claude-agent-acp@0.113.0",
             Some("22.0.0"),
         );
         assert_npx_version(
