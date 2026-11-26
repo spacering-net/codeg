@@ -8,25 +8,32 @@ import { cn } from "@/lib/utils"
  * A slot in a line of the conversation that slides open as its content
  * arrives and shut as it goes, so what is under it moves along instead of
  * jumping: a running command's last lines under its row, the running turn's
- * figures over the composer.
+ * figures over the composer (which only slide open — see `closeAtOnce`).
  *
  * `show` says whether the content belongs there; the caller keeps passing the
  * content while it does not, so the slot has something to close over (the
- * finished command's last lines, the turn's last figures). Opening plays only
+ * finished command's last lines). Opening plays only
  * when the content comes after the slot was mounted — a slot mounted open (a
  * row the virtual list brought back, a conversation opened mid-turn) shows its
  * content as it stands. Like `reply-fold-body`, it moves on a grid track, so
  * nothing reads layout; with chat animations off or reduced motion there is no
  * animation, and the slot opens and closes at once (globals.css).
+ *
+ * `closeAtOnce` skips the slide shut: the slot goes in the same commit as
+ * `show` does. For content that must not outstay its moment — the slide is
+ * drawn and timed on the main thread, so any stall there (a long task, a page
+ * the engine throttles) holds the content on screen until it clears.
  */
 export function SlideSlot({
   show,
   children,
   className,
+  closeAtOnce = false,
 }: {
   show: boolean
   children: ReactNode
   className?: string
+  closeAtOnce?: boolean
 }) {
   const [present, setPresent] = useState(show)
   const [motion, setMotion] = useState<"enter" | "leave" | null>(null)
@@ -35,6 +42,9 @@ export function SlideSlot({
     setMotion("enter")
   } else if (show && motion === "leave") {
     setMotion("enter")
+  } else if (!show && present && closeAtOnce) {
+    setPresent(false)
+    setMotion(null)
   } else if (!show && present && motion !== "leave") {
     setMotion("leave")
   }
