@@ -143,7 +143,6 @@ export function ActivityList({
   const openEditor = usePersonalAgentUi((s) => s.openRoutineEditor)
   const ask = usePersonalAgentUi((s) => s.activityAsk)
   const clearAsk = usePersonalAgentUi((s) => s.clearActivityAsk)
-  const setOpen = usePersonalAgentUi((s) => s.setActivityOpen)
   const [all, setAll] = useState<Partial<Record<ActivityGroup, boolean>>>({})
   const [flash, setFlash] = useState<string | null>(null)
   const ref = useRef<HTMLDivElement | null>(null)
@@ -152,7 +151,7 @@ export function ActivityList({
   // A row asked for, once this page's list has been read (or could not
   // be) — another assistant's, once the page is on it: its group shown
   // whole when it is further down, the row scrolled to and — a routine —
-  // opened and marked a moment; one not there, its group's head, or the
+  // marked a moment; one not there, its group's head, or the
   // top; a routine not there was deleted. Scrolled once drawn; the ask is
   // let go then, not before, so nothing drawn in between takes it back.
   const handled = useRef<number | null>(null)
@@ -186,7 +185,6 @@ export function ActivityList({
     // once, as it is taken.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- answering an ask from outside
     if (at >= GROUP_SHOWN) setAll((a) => ({ ...a, [ask.group]: true }))
-    if (found && ask.routine) setOpen(found.thing, true)
     if (ask.routine && ask.row != null && found == null && !failed && !stale) {
       toast.message(t("routineDeleted"))
     }
@@ -206,7 +204,7 @@ export function ActivityList({
       target.scrollIntoView?.({ block: row ? "center" : "start" })
       if (found) setFlash(found.key)
     })
-  }, [ask, botId, realId, read, groups, failed, clearAsk, setOpen, t])
+  }, [ask, botId, realId, read, groups, failed, clearAsk, t])
   useEffect(() => {
     if (flash == null) return
     const id = window.setTimeout(() => setFlash(null), 1500)

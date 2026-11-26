@@ -643,6 +643,12 @@ pub fn alike(a: &str, b: &str) -> f64 {
 }
 
 /// Whether a reply says only that there was nothing to say.
+/// A run the owner started: the trial right after a routine is made, or
+/// one they ran now. Its report shows even when it found nothing new.
+pub fn owner_started(trigger: &str) -> bool {
+    matches!(trigger, "trial" | "now")
+}
+
 pub fn is_silent(text: &str) -> bool {
     let t: String = text.split_whitespace().collect();
     t == SILENT || t == format!("{SILENT}.")
@@ -1575,12 +1581,26 @@ impl PersonalAgentEngine {
         seq: i32,
         facts: &str,
     ) {
+        // A run the owner started — the trial right after it was made, or
+        // one they ran now — is watched: it says what it found, nothing new
+        // too. Only a run that comes round by itself may stay quiet.
+        let quiet = if owner_started(&run.trigger) {
+            format!(
+                "The owner started this run and is waiting to see what it finds: tell them in \
+                 a sentence or two what you checked and what you found, even when nothing is \
+                 new — do not reply with {SILENT} this time, whatever `What to do` says."
+            )
+        } else {
+            format!(
+                "If you find nothing worth telling the owner, reply with exactly {SILENT} and \
+                 nothing else: codeg then shows nothing and records \"no change\"."
+            )
+        };
         let summary = format!(
             "Routine #{} \"{}\" — run {seq}. {facts}\nWhat to do: {}\ncodeg keeps this routine's \
              schedule: this is its run {seq}, and codeg runs it again when it is due — do not \
              schedule it yourself or wait for the next time. Do it now as your settings allow. \
-             If you find nothing worth telling the owner, reply with exactly {SILENT} and \
-             nothing else: codeg then shows nothing and records \"no change\".",
+             {quiet}",
             r.id,
             r.title,
             r.what.trim()
@@ -1599,6 +1619,7 @@ impl PersonalAgentEngine {
                 "run_id": run.id,
                 "title": r.title,
                 "seq": seq,
+                "trigger": run.trigger,
             })),
             true,
         )

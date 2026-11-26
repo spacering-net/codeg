@@ -3721,13 +3721,29 @@ impl PersonalAgentEngine {
         reply.batch_id = Some(batch.id);
         // A routine's run, with nothing of the owner's: its reply is the
         // routine's report (6.9).
+        // A run the owner started first, should one ride with a run that
+        // came round by itself: its report shows even when it found
+        // nothing new.
         let routine = if owners.is_empty() && messages.is_empty() {
-            events
+            let runs: Vec<serde_json::Value> = events
                 .iter()
                 .filter(|e| e.kind == super::routines::ROUTINE_EVENT)
-                .find_map(|e| e.payload.as_deref())
-                .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
-                .map(|p| serde_json::json!({ "id": p["routine_id"], "title": p["title"], "seq": p["seq"] }))
+                .filter_map(|e| e.payload.as_deref())
+                .filter_map(|p| serde_json::from_str::<serde_json::Value>(p).ok())
+                .collect();
+            runs.iter()
+                .find(|p| super::routines::owner_started(p["trigger"].as_str().unwrap_or("")))
+                .or_else(|| runs.first())
+                .map(|p| {
+                    serde_json::json!({
+                        "id": p["routine_id"],
+                        "title": p["title"],
+                        "seq": p["seq"],
+                        // Whether the owner started it (`trial`, `now`): its
+                        // report shows even when it found nothing new.
+                        "trigger": p["trigger"],
+                    })
+                })
         } else {
             None
         };

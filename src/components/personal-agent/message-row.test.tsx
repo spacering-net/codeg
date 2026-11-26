@@ -637,7 +637,7 @@ describe("the bubbles", () => {
     )
   })
 
-  it("draws every run of its part in one bubble, only the conclusion's cards acting", () => {
+  it("draws every run of its part, each card it drew a message of its own under its words", () => {
     const card =
       '```spec\n{"root":"a","elements":{"a":{"type":"Button","props":{"label":"Go"}}}}\n```'
     const item = itemOf(
@@ -658,11 +658,25 @@ describe("the bubbles", () => {
       "reply"
     ) as Extract<MessageItem, { kind: "reply" }>
     const { container } = draw(<ReplyBubble item={item} />)
-    expect(container.querySelectorAll("[data-bubble]")).toHaveLength(1)
+    // Words in a bubble, the card under them on its own, run after run.
+    const pieces = [...container.querySelectorAll("[data-bubble]")]
+    expect(
+      pieces.map((p) => (p.hasAttribute("data-pa-bare") ? "card" : "bubble"))
+    ).toEqual(["bubble", "card", "bubble", "card"])
+    expect(pieces[0].classList.contains("pa-agent-bubble")).toBe(true)
+    expect(pieces[1].classList.contains("pa-agent-bubble")).toBe(false)
     const runs = [...container.querySelectorAll("[data-pa-run]")]
-    expect(runs.map((r) => r.getAttribute("data-pa-run"))).toEqual(["1", "3"])
-    expect(runs[0].textContent).toContain("Maybe:")
-    expect(runs[1].textContent).toContain("Done:")
+    expect(runs.map((r) => r.getAttribute("data-pa-run"))).toEqual([
+      "1",
+      "1",
+      "3",
+      "3",
+    ])
+    expect(pieces[0].textContent).toBe("Maybe:")
+    expect(pieces[2].textContent).toBe("Done:")
+    // Only the last piece closes the run round: the bubbles before a card
+    // hold together with it.
+    expect(pieces[0].className).toContain("rounded-es-[0.375rem]")
   })
 
   it("draws a reply that is one card as the card, no bubble round it", () => {
@@ -696,13 +710,63 @@ describe("the bubbles", () => {
       ).not.toBeNull()
       unmount()
     }
-    // Words with it: a bubble as ever.
+    // Words with it: the words a bubble, the card under it on its own —
+    // never a card on the bubble's grey; what it is of over the words.
     const { container } = draw(
-      <ReplyBubble item={one(31, `Here it is:\n\n${spec}`)} />
+      <ReplyBubble
+        item={one(31, `Here it is:\n\n${spec}`, { brief: { kind: "brief" } })}
+      />
     )
-    const bubble = container.querySelector("[data-bubble]")!
+    const [bubble, card] = [...container.querySelectorAll("[data-bubble]")]
     expect(bubble.hasAttribute("data-pa-bare")).toBe(false)
     expect(bubble.classList.contains("pa-agent-bubble")).toBe(true)
+    expect(bubble.className).toContain("w-fit")
+    expect(bubble.textContent).toBe("Morning briefHere it is:")
+    expect(bubble.querySelector("[data-pa-reply-brief='brief']")).not.toBeNull()
+    expect(card.hasAttribute("data-pa-bare")).toBe(true)
+    expect(card.classList.contains("pa-agent-bubble")).toBe(false)
+    expect(card.className).toContain("mt-3")
+    expect(card.querySelector("[data-pa-run]")).not.toBeNull()
+    // The frame the column's share, as a card's is.
+    expect(
+      container
+        .querySelector("[data-pa-frame]")!
+        .className.includes("has-[>[data-pa-bare]]:w-full")
+    ).toBe(true)
+  })
+
+  it("puts what a brief tidied up under it as a card of its own, the lines about it in its bubble", () => {
+    const tidied = [
+      {
+        key: "tidy:1",
+        kind: "tidy",
+        title: "Merged two notes",
+        at: "2026-11-26T01:00:00Z",
+        bot_id: null,
+        row_id: null,
+        notice_id: null,
+      },
+    ]
+    const item = itemOf(
+      [
+        row(32, "reply", {
+          batch_id: 32,
+          body: "Good morning.",
+          data: {
+            state: "done",
+            brief: { kind: "brief", tidied },
+            memories: [{ name: "memory/hours.md", title: "Your hours" }],
+          },
+        }),
+      ],
+      "reply"
+    ) as Extract<MessageItem, { kind: "reply" }>
+    const { container } = draw(<ReplyBubble item={item} />)
+    const pieces = [...container.querySelectorAll("[data-bubble]")]
+    expect(pieces).toHaveLength(2)
+    expect(pieces[0].querySelector("[data-pa-reply-memories]")).not.toBeNull()
+    expect(pieces[1].hasAttribute("data-pa-bare")).toBe(true)
+    expect(pieces[1].querySelector("[data-pa-brief-tidied]")).not.toBeNull()
   })
 
   it("draws a routine's report as a card: the routine and its run its header, all it says under it", () => {
@@ -753,6 +817,73 @@ describe("the bubbles", () => {
     expect(
       one.container.querySelector("[data-pa-reply-routine='5']")
     ).not.toBeNull()
+    one.unmount()
+    // One that holds a card with its words: drawn as any reply is — the
+    // routine a small line in its bubble, the card under it — not a card
+    // in a card.
+    const both = draw(
+      <ReplyBubble item={report(42, `All green.\n\n${spec}`)} />
+    )
+    expect(
+      both.container.querySelector("[data-pa-reply-routine-card]")
+    ).toBeNull()
+    const [words, own] = [...both.container.querySelectorAll("[data-bubble]")]
+    expect(words.querySelector("[data-pa-reply-routine='5']")).not.toBeNull()
+    expect(words.textContent).toContain("All green.")
+    expect(own.hasAttribute("data-pa-bare")).toBe(true)
+  })
+
+  it("says a run the owner started found nothing new, without the quiet mark", async () => {
+    const item = itemOf(
+      [
+        row(45, "reply", {
+          batch_id: 45,
+          body: "[[silent]]",
+          data: {
+            state: "silent",
+            last_text_n: 6,
+            routine: { id: 5, title: "Night CI", seq: 1, trigger: "trial" },
+            texts: [
+              { n: 1, text: "I'll check the routine's history first." },
+              { n: 6, text: "[[silent]]" },
+            ],
+          },
+        }),
+      ],
+      "reply"
+    ) as Extract<MessageItem, { kind: "reply" }>
+    const { container } = draw(<ReplyBubble item={item} />)
+    const card = container.querySelector<HTMLElement>(
+      "[data-pa-reply-routine-card='5']"
+    )!
+    expect(card.textContent).toContain(
+      "I'll check the routine's history first."
+    )
+    expect(card.textContent).not.toContain("[[silent]]")
+    expect(
+      card.querySelector("[data-pa-reply-nothing-new]")!.textContent
+    ).toContain("Nothing new this time.")
+    // No message to answer: no quote of it.
+    fireEvent.contextMenu(card)
+    const items = await screen.findAllByRole("menuitem")
+    expect(items.map((i) => i.textContent)).not.toContain("Quote")
+  })
+
+  it("shows the quiet mark when a reply that is no routine's says it", () => {
+    const item = itemOf(
+      [
+        row(46, "reply", {
+          batch_id: 46,
+          body: "[[silent]]",
+          data: { state: "done", last_text_n: 1 },
+        }),
+      ],
+      "reply"
+    ) as Extract<MessageItem, { kind: "reply" }>
+    const { container } = draw(<ReplyBubble item={item} />)
+    expect(container.querySelector("[data-bubble]")!.textContent).toBe(
+      "[[silent]]"
+    )
   })
 
   it("keeps a reply of short paragraphs in one bubble", async () => {

@@ -11324,6 +11324,7 @@
       "errorMidway": "La respuesta tuvo un error: {error}",
       "interrupted": "Esta respuesta no terminó: {reason}",
       "truncated": "La respuesta llegó a su límite de longitud y quedó cortada",
+      "nothingNew": "Nada nuevo esta vez. Cuando se ejecute a su hora y no encuentre nada, no te avisará.",
       "preempted": "Se detuvo para dar paso a tu mensaje",
       "resend": "{count, plural, one {Enviar el mensaje de nuevo} other {Enviar los # mensajes de nuevo}}",
       "why": {
@@ -12050,7 +12051,7 @@
       "groups": {
         "needs": "Esperándote",
         "watching": "En curso",
-        "next": "Próximamente",
+        "next": "Rutinas y recordatorios",
         "done": "Hecho hoy"
       },
       "empty": "No hay nada que hacer ni nada en marcha.",

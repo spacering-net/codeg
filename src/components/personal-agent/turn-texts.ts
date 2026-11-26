@@ -183,3 +183,11 @@ export function silentSoFar(text: string): boolean {
   const t = text.trim()
   return t.length > 0 && "[[silent]]".startsWith(t)
 }
+
+/** A run that is the "nothing to say" mark alone (as the server reads it:
+ *  its words without spaces, a full stop after it allowed) — never words
+ *  to show. */
+export function isSilentMark(text: string): boolean {
+  const t = text.replace(/\s+/g, "")
+  return t === "[[silent]]" || t === "[[silent]]."
+}

@@ -14940,23 +14940,28 @@ async fn a_routine_made_in_words_runs_at_once_then_on_its_schedule_and_says_noth
     assert!(events[0].wake);
     assert_eq!(runs[0].event_id, Some(events[0].id));
 
-    // Its turn says which run it is and that codeg keeps the rhythm; with
-    // nothing to say, nothing is shown.
+    // Its turn says which run it is and that codeg keeps the rhythm; the
+    // owner started it, so it says what it found even when nothing is new.
     let (mut rx, state) = live_connection(&engine, seg, "pa-ro1").await;
     engine.pump().await;
     let (prompt, token) = take_prompt(&mut rx);
     assert!(prompt.contains(&format!("Routine #{id} \"Night CI\" — run 1")), "{prompt}");
     assert!(prompt.contains("do not schedule it yourself"), "{prompt}");
     assert!(prompt.contains("a routine of yours came round"), "{prompt}");
+    assert!(prompt.contains("even when nothing is new"), "{prompt}");
+    assert!(!prompt.contains("codeg then shows nothing"), "{prompt}");
     let batch = rsvc::get_run(&engine.db.conn, runs[0].id).await.unwrap().unwrap().batch_id.expect("on its way");
     let b = svc::get_batch(&engine.db.conn, batch).await.unwrap().unwrap();
     assert_eq!(b.trigger, Some(crate::db::entities::personal_agent_batch::BatchTrigger::Routine));
     start_prompt(&state, Some(&token)).await;
     emit(&engine, &state, "pa-ro1", text("[[silent]]"), true).await;
     emit(&engine, &state, "pa-ro1", turn_complete("end_turn"), true).await;
+    // Quiet all the same: "no change", the reply tagged as the owner's run
+    // (the page shows it, saying nothing was new).
     let reply = svc::reply_row_of_batch(&engine.db.conn, batch).await.unwrap().unwrap();
-    assert!(svc::is_discarded(&reply), "not shown: {:?}", reply.data);
+    assert!(svc::is_discarded(&reply), "not counted: {:?}", reply.data);
     assert_eq!(data_of(&reply)["routine"]["id"], id);
+    assert_eq!(data_of(&reply)["routine"]["trigger"], "trial");
     let run = rsvc::get_run(&engine.db.conn, runs[0].id).await.unwrap().unwrap();
     assert_eq!(run.outcome, RunOutcome::Silent);
     let unseen = svc::count_unseen(&engine.db.conn, engine.bot().await).await.unwrap();
@@ -14977,6 +14982,9 @@ async fn a_routine_made_in_words_runs_at_once_then_on_its_schedule_and_says_noth
     engine.pump().await;
     let (prompt, token) = take_prompt(&mut rx);
     assert!(prompt.contains("run 2"), "{prompt}");
+    // Come round by itself: it may stay quiet.
+    assert!(prompt.contains("codeg then shows nothing"), "{prompt}");
+    assert!(!prompt.contains("even when nothing is new"), "{prompt}");
     start_prompt(&state, Some(&token)).await;
     emit(&engine, &state, "pa-ro1", text("Two jobs are red on main."), true).await;
     emit(&engine, &state, "pa-ro1", turn_complete("end_turn"), true).await;
@@ -14985,6 +14993,7 @@ async fn a_routine_made_in_words_runs_at_once_then_on_its_schedule_and_says_noth
     let reply = svc::reply_row_of_batch(&engine.db.conn, run.batch_id.unwrap()).await.unwrap().unwrap();
     assert!(!svc::is_discarded(&reply));
     assert_eq!(data_of(&reply)["routine"]["seq"], 2);
+    assert_eq!(data_of(&reply)["routine"]["trigger"], "schedule");
     // The page reads it with its latest runs.
     let views = super::routines::routines_of(&engine.db, Some(engine.bot().await)).await.unwrap();
     assert_eq!(views[0].last[0].outcome, RunOutcome::Reported);

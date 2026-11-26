@@ -336,6 +336,22 @@ describe("a reply with nothing to say", () => {
       false
     )
   })
+
+  it("is drawn on a run the owner started: the trial, or one run now", () => {
+    for (const trigger of ["trial", "now"]) {
+      const reply = row(
+        {
+          state: "silent",
+          routine: { id: 5, title: "Night CI", seq: 1, trigger },
+        },
+        { kind: "reply", body: "[[silent]]", ref_id: null }
+      )
+      expect(isDiscarded(reply)).toBe(false)
+      expect(buildMessageItems([reply]).some((i) => i.kind === "reply")).toBe(
+        true
+      )
+    }
+  })
 })
 
 function routine(patch: Partial<Routine> = {}): Routine {
@@ -380,24 +396,17 @@ function routine(patch: Partial<Routine> = {}): Routine {
   }
 }
 
-/** A routine's row in the activity's "coming up" (C4), its unfolding kept
- *  by the test as the list keeps it. */
+/** A routine's row in the activity's "routines and reminders" (C4). */
 function RowUnder({ r, readOnly = false }: { r: Routine; readOnly?: boolean }) {
-  const [open, setOpen] = React.useState(false)
   return (
     <div role="list">
-      <RoutineRow
-        r={r}
-        readOnly={readOnly}
-        open={open}
-        onOpenChange={setOpen}
-      />
+      <RoutineRow r={r} readOnly={readOnly} />
     </div>
   )
 }
 
-describe("a routine in coming up (C4)", () => {
-  it("is one row: its name, when it runs and its next run; its facts unfolded", async () => {
+describe("a routine in routines and reminders (C4)", () => {
+  it("is one row, nothing folded: its name, when it runs and its next run, how its last run went", async () => {
     const user = userEvent.setup()
     wrap(<RowUnder r={routine()} />)
     const row = document.querySelector<HTMLElement>("[data-pa-routine]")!
@@ -405,29 +414,24 @@ describe("a routine in coming up (C4)", () => {
     expect(within(row).getByText("Night CI").className).toContain(
       "font-semibold"
     )
-    // When it runs, then its next run; nothing wrong, no second line.
+    // When it runs — what it looks at first too — then its next run;
+    // nothing wrong, no warning.
     const line = row.querySelector<HTMLElement>("[data-pa-routine-line]")!
     expect(line.querySelector('[data-pa-routine-status="next"]')).toBeTruthy()
-    expect(row.querySelector("[data-pa-routine-wrong]")).toBeNull()
-    // Its facts only unfolded: when, how, next, last.
-    expect(row.querySelector("[data-pa-routine-facts]")).toBeNull()
-    const unfold = within(row).getByRole("button", { name: "Show details" })
-    expect(unfold.getAttribute("aria-expanded")).toBe("false")
-    await user.click(unfold)
-    expect(unfold.getAttribute("aria-expanded")).toBe("true")
-    const facts = [
-      ...row.querySelectorAll<HTMLElement>("[data-pa-routine-fact]"),
-    ]
-    expect(facts.map((f) => f.getAttribute("data-pa-routine-fact"))).toEqual([
-      "when",
-      "how",
-      "next",
-      "last",
-    ])
-    expect(screen.getByText(/only with matters waiting over 4 h/)).toBeTruthy()
     expect(
-      row.querySelector('[data-pa-routine-fact="last"]')!.textContent
-    ).toContain("3 runs in all")
+      line.querySelector("[data-pa-routine-precheck]")!.textContent
+    ).toMatch(/only with matters waiting over 4 h/)
+    expect(row.querySelector("[data-pa-routine-wrong]")).toBeNull()
+    // Its last run on a line of its own, in quiet words: nothing to unfold.
+    expect(
+      within(row).queryByRole("button", { name: "Show details" })
+    ).toBeNull()
+    const last = row.querySelector<HTMLElement>("[data-pa-routine-last]")!
+    expect(last.getAttribute("data-pa-routine-last")).toBe("silent")
+    expect(last.textContent).toMatch(
+      /^Last run: .+ · No change · 3 runs in all · no change$/
+    )
+    expect(last.className).toContain("text-muted-foreground")
     // Run now, paused, edited, deleted: from its menu.
     await user.click(screen.getByRole("button", { name: "More actions" }))
     await user.click(await screen.findByRole("menuitem", { name: "Run now" }))
@@ -470,14 +474,26 @@ describe("a routine in coming up (C4)", () => {
     expect(
       document.querySelector('[data-pa-routine-status="running"]')
     ).toBeNull()
-    const wrong = document.querySelector<HTMLElement>(
-      "[data-pa-routine-wrong]"
-    )!
-    expect(wrong.textContent).toBe("Last run: Waiting for you")
-    expect(wrong.className).toContain("text-amber-700")
+    const last = document.querySelector<HTMLElement>("[data-pa-routine-last]")!
+    expect(last.textContent).toContain("Waiting for you")
+    expect(last.className).toContain("text-amber-700")
+    cleanup()
+    // Running again: the run before it is its last.
+    wrap(
+      <RowUnder
+        r={routine({
+          last: [{ ...run, id: 10, ended_at: null, outcome: "running" }, run],
+        })}
+      />
+    )
+    expect(
+      document
+        .querySelector("[data-pa-routine-last]")!
+        .getAttribute("data-pa-routine-last")
+    ).toBe("silent")
   })
 
-  it("a second line only when something is wrong: paused by codeg, or a failed run", async () => {
+  it("says why codeg paused it, and a failed last run in the caution's colour", async () => {
     wrap(
       <RowUnder r={routine({ enabled: false, paused_reason: "failures" })} />,
       { zh: true }
@@ -505,9 +521,12 @@ describe("a routine in coming up (C4)", () => {
     cleanup()
     const run = routine().last[0]
     wrap(<RowUnder r={routine({ last: [{ ...run, outcome: "failed" }] })} />)
-    expect(document.querySelector("[data-pa-routine-wrong]")!.textContent).toBe(
-      "Last run: Failed"
-    )
+    const last = document.querySelector<HTMLElement>("[data-pa-routine-last]")!
+    expect(last.textContent).toContain("Failed")
+    expect(last.className).toContain("text-amber-700")
+    // One colour, the line's: no red word in it.
+    expect(last.querySelector(".text-red-700")).toBeNull()
+    expect(document.querySelector("[data-pa-routine-wrong]")).toBeNull()
   })
 
   it("one paused by its owner: a quiet pill, no reason", () => {
@@ -526,6 +545,7 @@ describe("a routine in coming up (C4)", () => {
           cron: null,
           next_run_at: null,
           event: { kind: "pr_merged" },
+          precheck: null,
         })}
       />
     )
@@ -534,10 +554,9 @@ describe("a routine in coming up (C4)", () => {
     )
   })
 
-  it("read-only: no menu, its facts still there to unfold", () => {
+  it("read-only: no menu, its last run still there", () => {
     wrap(<RowUnder r={routine()} readOnly />)
     expect(document.querySelector("[data-pa-routine-menu]")).toBeNull()
-    fireEvent.click(screen.getByRole("button", { name: "Show details" }))
     expect(
       document.querySelector('[data-pa-routine-outcome="silent"]')
     ).toBeTruthy()

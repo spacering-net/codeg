@@ -11324,6 +11324,7 @@
       "errorMidway": "回覆中途出錯：{error}",
       "interrupted": "這次回覆沒有完成：{reason}",
       "truncated": "回覆達到長度上限，被截斷了",
+      "nothingNew": "這次沒有新情況。按時執行時沒有新情況，就不打擾你。",
       "preempted": "讓位給你的訊息",
       "resend": "{count, plural, one {重新傳送這則訊息} other {重新傳送這 # 則訊息}}",
       "why": {
@@ -12050,7 +12051,7 @@
       "groups": {
         "needs": "等你",
         "watching": "進行中",
-        "next": "接下來",
+        "next": "例程與提醒",
         "done": "今天完成"
       },
       "empty": "沒有要你做的，也沒有在跑的。",

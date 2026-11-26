@@ -1429,8 +1429,11 @@ describe("the activity's list", () => {
       </NextIntlClientProvider>
     )
     await waitFor(() => expect(scroll).toHaveBeenCalled())
-    expect(usePersonalAgentUi.getState().activityOpen["routine:5"]).toBe(true)
-    expect(document.querySelector("[data-pa-routine-facts]")).toBeTruthy()
+    // Nothing to unfold: its row says it all.
+    expect(document.querySelector('[data-pa-routine="5"]')).toBeTruthy()
+    expect(usePersonalAgentUi.getState().activityOpen["routine:5"]).toBe(
+      undefined
+    )
     expect(toasts.message).not.toHaveBeenCalled()
     // One not in a list read since: deleted, its group's head shown.
     act(() => usePersonalAgentUi.getState().showRoutines(99))

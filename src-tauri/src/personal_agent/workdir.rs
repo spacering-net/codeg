@@ -4186,6 +4186,8 @@ pauses, resumes, deletes or runs it now.
   Each run says which run it is.
 - When a run finds nothing worth telling the owner, reply with exactly
   `[[silent]]` and nothing else: codeg shows nothing and records "no change".
+  Not on a run the owner started — the trial right after it is made, or one
+  they ran now: say briefly what you checked and found, nothing new too.
 - A `precheck` lets codeg look first without waking you: new commits on a
   branch, a new issue or pull request, matters waiting more than so many
   hours, a project's working tree that changed. Nothing new: the run is

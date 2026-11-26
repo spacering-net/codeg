@@ -190,12 +190,26 @@ export function replyState(row: TimelineRow): string | null {
   return typeof s === "string" ? s : null
 }
 
+/** A routine's run the owner started — the trial right after it was made,
+ *  or one they ran now (`data.routine.trigger`): they wait to see what it
+ *  finds, nothing new too. */
+export function ownerStartedRun(row: TimelineRow): boolean {
+  const routine = row.data?.routine
+  const trigger =
+    routine && typeof routine === "object"
+      ? (routine as { trigger?: unknown }).trigger
+      : null
+  return trigger === "trial" || trigger === "now"
+}
+
 /** A reply whose prompt never reached the agent — or a routine's that had
- *  nothing to say (`[[silent]]`, 6.9): as if it never was. */
+ *  nothing to say (`[[silent]]`, 6.9), on a run that came round by itself:
+ *  as if it never was. One the owner started shows, saying nothing was
+ *  new. */
 export function isDiscarded(row: TimelineRow): boolean {
   if (row.kind !== "reply") return false
   const state = replyState(row)
-  return state === "discarded" || state === "silent"
+  return state === "discarded" || (state === "silent" && !ownerStartedRun(row))
 }
 
 /** New to the owner, as the server counts it: a result card, a native card,

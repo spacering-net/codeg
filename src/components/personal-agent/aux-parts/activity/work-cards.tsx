@@ -287,13 +287,7 @@ export function ActivityRowView({
   const onOpenChange = (o: boolean) => setOpen(row.thing, o)
   if (row.routine) {
     return (
-      <RoutineRow
-        r={row.routine}
-        readOnly={scope.readOnly}
-        open={open}
-        onOpenChange={onOpenChange}
-        flash={flash}
-      />
+      <RoutineRow r={row.routine} readOnly={scope.readOnly} flash={flash} />
     )
   }
   return (

@@ -11324,6 +11324,7 @@
       "errorMidway": "The reply ran into an error: {error}",
       "interrupted": "This reply did not finish: {reason}",
       "truncated": "The reply hit its length limit and was cut off",
+      "nothingNew": "Nothing new this time. When it runs on schedule and finds nothing, it stays quiet.",
       "preempted": "Stopped to make way for your message",
       "resend": "{count, plural, one {Send the message again} other {Send the # messages again}}",
       "why": {
@@ -12050,7 +12051,7 @@
       "groups": {
         "needs": "Waiting for you",
         "watching": "In progress",
-        "next": "Coming up",
+        "next": "Routines & reminders",
         "done": "Done today"
       },
       "empty": "Nothing for you to do, and nothing running.",

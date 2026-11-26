@@ -286,21 +286,50 @@ function acts(
  * repeat's scope and so every button's id (`elementIdOf`) and container
  * (`__paParent`, read before this) stay as they were. An item that only
  * reads, or only acts (a row of choices), stays as written; so does one
- * whose children have not all arrived yet. An item whose words are one
- * Text has it marked (`PA_LINE`): its line, split into subject and what.
+ * whose children have not all arrived yet. An item written as a row of
+ * its own — one Stack holding its line and its button — is that row: the
+ * Stack's children are the item's (laid out by it, a row was as wide as
+ * its words). An item whose words are one Text has it marked (`PA_LINE`):
+ * its line, split into subject and what. The list takes the width it is
+ * in, and its rows with it.
  */
+/** What a Stack says of how it lays its children out, and nothing else. */
+const STACK_LAYOUT = new Set(["direction", "gap", "align", "justify"])
+
 export function itemizeRepeats(spec: Spec): Spec {
   const source = spec.elements ?? {}
   let elements: Record<string, UIElement> | null = null
   for (const [key, el] of Object.entries(source)) {
     if (!el || typeof el !== "object" || !el.repeat) continue
-    const kids = Array.isArray(el.children) ? el.children : []
+    let kids = Array.isArray(el.children) ? el.children : []
+    const seen = new Set([key])
+    const row =
+      kids.length === 1 && typeof kids[0] === "string"
+        ? source[kids[0]]
+        : undefined
+    const through =
+      row != null &&
+      typeof row === "object" &&
+      row.type === "Stack" &&
+      !row.repeat &&
+      row.visible == null &&
+      row.on == null &&
+      row.watch == null &&
+      // Laid out only, and as written: one styled, set apart, or laid out
+      // by state is the spec's own.
+      Object.entries(row.props ?? {}).every(
+        ([k, v]) => STACK_LAYOUT.has(k) && (v == null || typeof v !== "object")
+      )
+    if (through) {
+      seen.add(kids[0] as string)
+      kids = Array.isArray(row.children) ? row.children : []
+    }
     if (kids.length < 2) continue
     const actions: string[] = []
     let known = true
     for (const kid of kids) {
       const a =
-        typeof kid === "string" ? acts(source, kid, new Set([key])) : null
+        typeof kid === "string" ? acts(source, kid, new Set(seen)) : null
       if (a == null) {
         known = false
         break
@@ -308,6 +337,15 @@ export function itemizeRepeats(spec: Spec): Spec {
       if (a) actions.push(kid)
     }
     if (!known || actions.length === 0 || actions.length === kids.length) {
+      continue
+    }
+    // Looked through, it is one row only as its words and then what to do
+    // about them: one with a line and its button, and another after, is
+    // lines with their buttons (`itemizeOpeners`).
+    if (
+      through &&
+      actions.some((a, i) => a !== kids[kids.length - actions.length + i])
+    ) {
       continue
     }
     elements ??= { ...source }
@@ -336,19 +374,25 @@ export function itemizeRepeats(spec: Spec): Spec {
         props: { ...(only.props ?? {}), [PA_LINE]: true },
       }
     }
+    // The rows space themselves: the list's own gap goes (a Card's is its
+    // content's).
     const own = (el.props ?? {}) as Record<string, unknown>
+    // A list is as wide as what it is in unless the spec says how wide
+    // (classes merge, the later winning: its own width over ours, our gap
+    // over its own).
+    const authored = typeof own.className === "string" ? own.className : ""
+    const className =
+      el.type === "Stack"
+        ? `w-full ${authored} gap-0`.replace(/\s+/g, " ").trim()
+        : el.type === "Card"
+          ? `${authored} [&>[data-slot=card-content]]:gap-0`.trim()
+          : null
     elements[key] = {
       ...el,
-      ...(el.type === "Stack"
-        ? {
-            props: {
-              ...own,
-              className:
-                typeof own.className === "string"
-                  ? `${own.className} gap-0`
-                  : "gap-0",
-            },
-          }
+      // A class bound to state is the spec's to keep.
+      ...(className &&
+      (own.className == null || typeof own.className === "string")
+        ? { props: { ...own, className } }
         : {}),
       children: [wrap],
     }
@@ -441,9 +485,12 @@ export function itemizeOpeners(spec: Spec): Spec {
       if (!list) {
         const wrap = fresh(`${kid}~rows`)
         list = []
+        // As wide as what it is in, whatever lays that out: in a row of
+        // its own (a horizontal Stack), or a Stack that keeps its children
+        // to their width, it was as wide as its words.
         elements[wrap] = {
           type: "Stack",
-          props: { gap: "none" },
+          props: { gap: "none", className: "w-full" },
           children: list,
         }
         out.push(wrap)
