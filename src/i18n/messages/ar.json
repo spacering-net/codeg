@@ -2443,6 +2443,10 @@
     "sessionDetails": {
       "menuLabel": "تفاصيل الجلسة",
       "noActiveSession": "لا توجد جلسة نشطة",
+      "noActiveSessionHint": "افتح جلسة أو ابدأ جلسة جديدة لرؤية تفاصيلها وخطتها ورسائلها هنا.",
+      "draftTitle": "جلسة جديدة",
+      "draftWaiting": "في انتظار الرسالة الأولى",
+      "draftHint": "بعد إرسال الرسالة الأولى، سيظهر هنا معرّف الجلسة وخطة الوكيل وتنقل الرسائل.",
       "title": "تفاصيل الجلسة",
       "subtitle": "بيانات الجلسة الوصفية واستخدام الرموز",
       "fieldTitle": "العنوان",
@@ -4266,6 +4270,7 @@
         "hideDiff": "إخفاء تغييرات {filePath}",
         "openFile": "فتح {filePath}",
         "collapse": "طي",
+        "expand": "توسيع",
         "currentMessage": "الرسالة الحالية",
         "scrollToCurrent": "التمرير إلى الرسالة الحالية (#{ordinal})",
         "running": "قيد التشغيل",

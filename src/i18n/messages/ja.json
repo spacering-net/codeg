@@ -2443,6 +2443,10 @@
     "sessionDetails": {
       "menuLabel": "セッション詳細",
       "noActiveSession": "アクティブなセッションがありません",
+      "noActiveSessionHint": "セッションを開くか新しく作成すると、その詳細・プラン・メッセージがここに表示されます。",
+      "draftTitle": "新しいセッション",
+      "draftWaiting": "最初のメッセージを待っています",
+      "draftHint": "最初のメッセージを送信すると、セッション ID、エージェントのプラン、メッセージナビがここに表示されます。",
       "title": "セッション詳細",
       "subtitle": "セッションのメタデータとトークン使用量",
       "fieldTitle": "タイトル",
@@ -4266,6 +4270,7 @@
         "hideDiff": "{filePath} の変更を隠す",
         "openFile": "{filePath} を開く",
         "collapse": "折りたたむ",
+        "expand": "展開",
         "currentMessage": "現在のメッセージ",
         "scrollToCurrent": "現在のメッセージ（#{ordinal}）へスクロール",
         "running": "実行中",

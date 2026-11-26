@@ -2443,6 +2443,10 @@
     "sessionDetails": {
       "menuLabel": "会话详情",
       "noActiveSession": "暂无活动会话",
+      "noActiveSessionHint": "打开或新建一个会话后，这里会显示它的详情、计划和消息导航。",
+      "draftTitle": "新会话",
+      "draftWaiting": "等待第一条消息",
+      "draftHint": "发送第一条消息后，会话 ID、智能体的计划和消息导航会显示在这里。",
       "title": "会话详情",
       "subtitle": "会话元信息与 Token 用量",
       "fieldTitle": "标题",
@@ -4266,6 +4270,7 @@
         "hideDiff": "收起 {filePath} 的改动",
         "openFile": "打开 {filePath}",
         "collapse": "收起",
+        "expand": "展开",
         "currentMessage": "当前消息",
         "scrollToCurrent": "滚动到当前消息（#{ordinal}）",
         "running": "进行中",

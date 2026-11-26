@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -19,8 +20,6 @@ import {
   ArrowUpRightIcon,
   BotIcon,
   ChevronDown,
-  ChevronRight,
-  ChevronUp,
   FileMinus2,
   FilePen,
   FilePlus2,
@@ -56,6 +55,7 @@ import { useOpenFileTarget } from "@/hooks/use-open-file-target"
 import type { DiffViewMode } from "@/lib/diff-view-mode-prefs"
 import { formatElapsedLabel } from "@/lib/format-elapsed"
 import { formatTimeAgo } from "@/lib/relative-time"
+import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import {
   fileNameOf,
   isAddedFileDiff,
@@ -135,7 +135,8 @@ function hasDetails(entry: MessageNavEntry): boolean {
  * changed, a line each, whose diff unfolds under the line in a panel
  * (inline or side by side) and whose name opens the file in the workspace's
  * file tabs. One message is open at a time: the latest, until another is
- * clicked. While the agent is answering a message, that message heads the
+ * clicked or its chevron opens or closes one — which neither jumps the
+ * transcript nor leaves another open. While the agent is answering a message, that message heads the
  * list, its clock running, so what is under way is the first thing in view.
  *
  * Its fills are tints, never the opaque page colour, so a workspace
@@ -190,6 +191,10 @@ export const MessageNavList = memo(function MessageNavList({
     [entries, runningEntry]
   )
   const openTurnId = chosen ? chosen.turnId : lastTurnId
+  const runningOpen =
+    runningEntry != null &&
+    runningEntry.turnId === openTurnId &&
+    hasDetails(runningEntry)
   // The running message's place above the rows, for the button that brings
   // the current message back when that is the one.
   const pinnedRef = useRef<HTMLDivElement>(null)
@@ -206,7 +211,10 @@ export const MessageNavList = memo(function MessageNavList({
     },
     [onSelect]
   )
-  const collapse = useCallback(() => setChosen({ turnId: null }), [])
+  // The row's chevron: opens or closes its message without jumping to it.
+  const toggleOpen = useCallback((entry: MessageNavEntry, open: boolean) => {
+    setChosen(open ? { turnId: null } : { turnId: entry.turnId })
+  }, [])
   const toggleDiff = useCallback((fileId: string) => {
     setOpenDiffs((prev) => ({ ...prev, [fileId]: !prev[fileId] }))
   }, [])
@@ -246,7 +254,7 @@ export const MessageNavList = memo(function MessageNavList({
         openDiffs={open ? openDiffs : NO_OPEN_DIFFS}
         view={view}
         onSelect={select}
-        onCollapse={collapse}
+        onToggleOpen={toggleOpen}
         onToggleDiff={toggleDiff}
         onOpenFile={openFile}
         onOpenDiffInTab={openDiffInTab}
@@ -259,7 +267,7 @@ export const MessageNavList = memo(function MessageNavList({
     <div className="ws-msg-scope min-w-0">
       {earlier === "loading" && (
         <div className="flex h-8 min-w-0 items-center gap-2 text-2xs text-muted-foreground">
-          <span className="flex w-7 shrink-0 justify-center">
+          <span className="flex w-5 shrink-0 justify-center">
             <Loader2 aria-hidden="true" className="size-3 animate-spin" />
           </span>
           <span className="min-w-0 truncate">{t("loadingEarlier")}</span>
@@ -269,21 +277,25 @@ export const MessageNavList = memo(function MessageNavList({
         <button
           type="button"
           onClick={onRetryEarlier}
-          className="-mx-1.5 flex h-8 w-[calc(100%+0.75rem)] min-w-0 items-center gap-2 rounded-lg px-1.5 text-start text-2xs text-muted-foreground outline-none transition-colors hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="flex h-8 w-full min-w-0 items-center gap-2 rounded-lg text-start text-2xs text-muted-foreground outline-none transition-colors hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
-          <span className="flex w-7 shrink-0 justify-center">
+          <span className="flex w-5 shrink-0 justify-center">
             <RotateCw aria-hidden="true" className="size-3" />
           </span>
           <span className="min-w-0 truncate">{t("loadEarlier")}</span>
         </button>
       )}
       {runningEntry && (
-        // Set apart from the messages before it by a hairline.
+        // Set apart from the messages before it by a hairline — its own
+        // when it is open, whose round already ends in one: two would
+        // stack.
         <div
           ref={pinnedRef}
           data-testid="nav-running"
           className={cn(
-            listed.length > 0 && "mb-1 border-b border-border/60 pb-1"
+            listed.length > 0 &&
+              !runningOpen &&
+              "mb-1 border-b border-border/60 pb-1"
           )}
         >
           {renderRow(runningEntry)}
@@ -296,6 +308,7 @@ export const MessageNavList = memo(function MessageNavList({
           pinnedEntry={runningEntry}
           pinnedRef={pinnedRef}
           currentTurnId={currentTurnId}
+          openTurnId={openTurnId}
           renderRow={renderRow}
         />
       ) : (
@@ -356,6 +369,7 @@ function VirtualRows({
   pinnedEntry,
   pinnedRef,
   currentTurnId,
+  openTurnId,
   renderRow,
 }: {
   scrollElement: HTMLElement
@@ -363,6 +377,9 @@ function VirtualRows({
   pinnedEntry: MessageNavEntry | null
   pinnedRef: RefObject<HTMLElement | null>
   currentTurnId: string | null
+  /** The open message: opening one and closing another can move the
+   *  current message without changing how tall the list is. */
+  openTurnId: string | null
   renderRow: (entry: MessageNavEntry) => ReactElement
 }) {
   const t = useTranslations("Folder.chat.messageNav")
@@ -428,7 +445,9 @@ function VirtualRows({
     schedule()
     scrollElement.addEventListener("scroll", check, { passive: true })
     // What is in view also changes without a scroll: the panel resizing, a
-    // row growing or shrinking (a message opening, a diff folding).
+    // row growing or shrinking (a message opening, a diff folding) — and the
+    // open message changing (`openTurnId`), which can move the current one
+    // while the list keeps its height, so nothing is resized.
     const observer = new ResizeObserver(schedule)
     observer.observe(scrollElement)
     if (listRef.current) observer.observe(listRef.current)
@@ -438,7 +457,7 @@ function VirtualRows({
       observer.disconnect()
       scrollElement.removeEventListener("scroll", check)
     }
-  }, [scrollElement, locate, currentPinned, pinnedRef, entries])
+  }, [scrollElement, locate, currentPinned, pinnedRef, entries, openTurnId])
 
   // Centre the current message in the scroll area. The scroll element is
   // scrolled directly rather than through the virtualizer's `scrollToIndex`,
@@ -510,10 +529,11 @@ function VirtualRows({
 }
 
 /**
- * A message's number, in a disc of the left column — a capsule as wide as the
- * column for two or three digits — so the titles beside them line up with
- * each other and with the section header's above them. Its side padding
- * stays narrow for that: with more, three digits outgrow the column. A faint
+ * A message's number, in a disc as wide as the left column — a capsule for
+ * more digits — so the titles beside them line up with each other and with
+ * the section header's above them, the disc's edge on the panel's hairlines'
+ * start. Its side padding stays narrow for that: two digits still fit the
+ * column; three widen it, and only that row's title moves over. A faint
  * tint of the ink, solid for the message the transcript is showing, blue for
  * the one being answered. A row's hover turns it the colour its text turns;
  * the row takes no fill.
@@ -530,7 +550,7 @@ function NumberPill({
   running?: boolean
 }) {
   return (
-    <span className="flex min-w-7 shrink-0 justify-center">
+    <span className="flex min-w-5 shrink-0 justify-center">
       <span
         className={cn(
           "flex size-5 min-w-fit items-center justify-center rounded-full px-1 text-2xs tabular-nums transition-colors",
@@ -583,72 +603,40 @@ function RunningClock({ since }: { since: number | null }) {
 }
 
 /**
- * A closed message's row end. At rest, what its round did: how many
- * sub-agents it started and files it changed. Pointed at (or focused), and on
- * the message the transcript shows, when it was sent and a chevron: where a
- * click takes you. The counts are read out either way.
+ * A message's row end: what its round did — how many sub-agents it started
+ * and files it changed — the same whether the message is open or not, and
+ * whether it is pointed at or not, so nothing at the row's end shifts. The
+ * counts are read out in words.
  */
 function RowEnd({
   agentCount,
   fileCount,
-  sentAt,
-  current,
 }: {
   agentCount: number
   fileCount: number
-  sentAt: number | null
-  current: boolean
 }) {
   const t = useTranslations("Folder.chat.messageNav")
+  if (agentCount === 0 && fileCount === 0) return null
   return (
-    <span className="flex shrink-0 items-center text-2xs text-muted-foreground tabular-nums">
-      {(agentCount > 0 || fileCount > 0) && (
-        <span
-          aria-hidden="true"
-          className={cn(
-            "items-center gap-2",
-            current
-              ? "hidden"
-              : "flex group-hover/navrow:hidden group-focus-visible/navrow:hidden"
-          )}
-        >
-          {agentCount > 0 && (
-            <span className="flex items-center gap-0.5">
-              <BotIcon className="size-3" />
-              {agentCount}
-            </span>
-          )}
-          {fileCount > 0 && (
-            <span className="flex items-center gap-0.5">
-              <FileTextIcon className="size-3" />
-              {fileCount}
-            </span>
-          )}
-        </span>
-      )}
+    <span className="flex h-5 shrink-0 items-center gap-2 text-2xs text-muted-foreground tabular-nums">
       {agentCount > 0 && (
-        <span className="sr-only">
-          {t("subAgentCount", { count: agentCount })}
+        <span className="flex items-center gap-0.5">
+          <BotIcon aria-hidden="true" className="size-3" />
+          <span aria-hidden="true">{agentCount}</span>
+          <span className="sr-only">
+            {t("subAgentCount", { count: agentCount })}
+          </span>
         </span>
       )}
       {fileCount > 0 && (
-        <span className="sr-only">{t("fileCount", { count: fileCount })}</span>
+        <span className="flex items-center gap-0.5">
+          <FileTextIcon aria-hidden="true" className="size-3" />
+          <span aria-hidden="true">{fileCount}</span>
+          <span className="sr-only">
+            {t("fileCount", { count: fileCount })}
+          </span>
+        </span>
       )}
-      <span
-        data-testid="nav-row-time"
-        className={cn(
-          "items-center gap-0.5",
-          current
-            ? "flex"
-            : "hidden text-primary group-hover/navrow:flex group-focus-visible/navrow:flex"
-        )}
-      >
-        {sentAt != null && <SentAgo at={sentAt} />}
-        <ChevronRight
-          aria-hidden="true"
-          className="size-3.5 opacity-70 rtl:-scale-x-100"
-        />
-      </span>
     </span>
   )
 }
@@ -664,6 +652,19 @@ function SentAgo({ at }: { at: number }) {
       title={new Date(at).toLocaleString(locale)}
     >
       {formatTimeAgo(at, now, locale)}
+    </time>
+  )
+}
+
+/** When a message was sent, short — "5m", "2h", "3d" — as the conversation
+ *  list's rows say it; the date and time in its tooltip. */
+function SentShort({ at }: { at: number }) {
+  const locale = useLocale()
+  const now = useMinuteNow()
+  const iso = new Date(at).toISOString()
+  return (
+    <time dateTime={iso} title={new Date(at).toLocaleString(locale)}>
+      {formatRelative(iso, now)}
     </time>
   )
 }
@@ -713,8 +714,8 @@ function NavGroup({
 }) {
   return (
     <div className="mt-1 border-t border-border/50 pt-1">
-      <div className="flex h-6 min-w-0 items-center gap-2 pe-1 text-2xs text-muted-foreground">
-        <span aria-hidden="true" className="flex w-7 shrink-0 justify-center">
+      <div className="flex h-6 min-w-0 items-center gap-2 text-2xs text-muted-foreground">
+        <span aria-hidden="true" className="flex w-5 shrink-0 justify-center">
           {icon}
         </span>
         <span className="min-w-0 truncate font-medium">{label}</span>
@@ -738,7 +739,7 @@ const MessageNavRow = memo(function MessageNavRow({
   openDiffs,
   view,
   onSelect,
-  onCollapse,
+  onToggleOpen,
   onToggleDiff,
   onOpenFile,
   onOpenDiffInTab,
@@ -755,7 +756,7 @@ const MessageNavRow = memo(function MessageNavRow({
   openDiffs: Readonly<Record<string, boolean>>
   view: DiffViewMode
   onSelect: (entry: MessageNavEntry) => void
-  onCollapse: () => void
+  onToggleOpen: (entry: MessageNavEntry, open: boolean) => void
   onToggleDiff: (fileId: string) => void
   onOpenFile: (path: string) => void
   onOpenDiffInTab: (file: FileChangeStat, groupLabel: string) => void
@@ -766,54 +767,111 @@ const MessageNavRow = memo(function MessageNavRow({
   const fileCount = entry.files.length
   const expandable = agentCount > 0 || fileCount > 0
 
-  if (!open) {
-    return (
-      // The gap under a row is padding, not margin: the virtualizer measures
-      // the row's box. `text-start`, as on an open row: see there.
-      <div className="pb-px text-start">
-        <button
-          type="button"
-          data-testid="nav-message"
-          onClick={() => onSelect(entry)}
-          aria-current={current ? "location" : undefined}
-          aria-busy={revealing || undefined}
-          aria-expanded={expandable ? false : undefined}
-          title={entry.label}
-          className={cn(
-            "group/navrow -mx-1.5 flex h-8 w-[calc(100%+0.75rem)] min-w-0 items-center gap-2 rounded-lg px-1.5 text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-            // The message the transcript shows keeps a tint; hovering one
-            // only turns its number, text and icons the accent colour.
-            current && "bg-primary/[0.07]"
-          )}
-        >
-          <NumberPill
-            ordinal={entry.ordinal}
-            current={current}
-            revealing={revealing}
-            running={running}
-          />
+  const locale = useLocale()
+  // The message's text, which tells one row's chevron from another's.
+  const labelId = useId()
+  const sentAt = entry.sentAt ?? null
+  // The whole message on hover, and when it was sent.
+  const tooltip =
+    sentAt != null
+      ? `${entry.label}\n${new Date(sentAt).toLocaleString(locale)}`
+      : entry.label
+
+  // The row's head is the same open or closed — the number, the title's first
+  // line and the row's end stay where they are, the chevron only turns — so
+  // opening a message only adds to it: the rest of its title, when it was
+  // sent, and its round under it.
+  const head = (
+    <div className="flex min-w-0 items-start gap-1">
+      <button
+        type="button"
+        data-testid="nav-message"
+        onClick={() => onSelect(entry)}
+        aria-current={current ? "location" : undefined}
+        aria-busy={revealing || undefined}
+        title={tooltip}
+        // No fill, for the message the transcript shows either: its
+        // number's solid disc and its heavier text mark it, and hovering
+        // one only turns its number and text the accent colour.
+        className="group/navrow flex min-w-0 flex-1 items-start gap-2 rounded-lg py-1.5 text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      >
+        <NumberPill
+          ordinal={entry.ordinal}
+          current={current}
+          revealing={revealing}
+          running={running}
+        />
+        <span className="min-w-0 flex-1">
           <span
+            id={labelId}
             className={cn(
-              "min-w-0 flex-1 truncate text-[0.8125rem] transition-colors group-hover/navrow:text-primary",
+              "block text-[0.8125rem] leading-5 transition-colors group-hover/navrow:text-primary",
+              open ? "line-clamp-3 [overflow-wrap:anywhere]" : "truncate",
               current || running
                 ? "font-medium text-foreground"
-                : "text-foreground/85"
+                : open
+                  ? "text-foreground"
+                  : "text-foreground/85"
             )}
           >
             {entry.label}
           </span>
-          {running ? (
-            <RunningClock since={runningSince} />
-          ) : (
-            <RowEnd
-              agentCount={agentCount}
-              fileCount={fileCount}
-              sentAt={entry.sentAt ?? null}
-              current={current}
-            />
+          {open && sentAt != null && (
+            <span
+              data-testid="nav-row-time"
+              className="mt-0.5 block text-2xs leading-4 text-muted-foreground"
+            >
+              <SentAgo at={sentAt} />
+            </span>
           )}
+        </span>
+        {running ? (
+          <span className="flex h-5 shrink-0 items-center">
+            <RunningClock since={runningSince} />
+          </span>
+        ) : expandable ? (
+          <RowEnd agentCount={agentCount} fileCount={fileCount} />
+        ) : sentAt != null ? (
+          // Nothing to sum up or open: when it was sent, at the row's end,
+          // where the chevrons end.
+          <span
+            data-testid="nav-row-sent"
+            className="flex h-5 shrink-0 items-center text-2xs text-muted-foreground tabular-nums"
+          >
+            <SentShort at={sentAt} />
+          </span>
+        ) : null}
+      </button>
+      {expandable && (
+        <button
+          type="button"
+          data-testid="nav-message-toggle"
+          onClick={() => onToggleOpen(entry, open)}
+          aria-expanded={open}
+          aria-label={open ? t("collapse") : t("expand")}
+          aria-describedby={labelId}
+          title={open ? t("collapse") : t("expand")}
+          className={cn(DISCLOSURE, "mt-1.5")}
+        >
+          {/* Points along the line while closed, at the end it sits at;
+              open, down at what it shows — as a section header's does. */}
+          <ChevronDown
+            aria-hidden="true"
+            className={cn(
+              "size-3.5 motion-safe:transition-transform",
+              !open && "-rotate-90 rtl:rotate-90"
+            )}
+          />
         </button>
-      </div>
+      )}
+    </div>
+  )
+
+  if (!open) {
+    return (
+      // The gap under a row is padding, not margin: the virtualizer measures
+      // the row's box. `text-start`, as on an open row: see there.
+      <div className="pb-px text-start">{head}</div>
     )
   }
 
@@ -821,52 +879,15 @@ const MessageNavRow = memo(function MessageNavRow({
     // `text-start`: a list item's own `text-align` (`-webkit-match-parent`)
     // turns the list's logical start into a physical right under RTL, which
     // would carry through a diff's `dir="ltr"` and push its code against the
-    // panel's right edge.
-    <div className="py-1 text-start">
-      {/* The message and its round on one raised panel: the message, then
-          a group per kind of thing its round did, every icon in the number
-          column and every text on the message's. Translucent with a
-          hairline over a background image, like the transcript's panels
-          (`ws-msg-card` + `ws-msg-panel`). */}
-      <div
-        className={cn(
-          "ws-msg-card ws-msg-panel -mx-1.5 rounded-xl border bg-background/80 px-1.5 pb-1",
-          running ? "border-blue-500/30" : "border-border/60"
-        )}
-      >
-        <div className="flex min-w-0 items-start gap-1">
-          <button
-            type="button"
-            data-testid="nav-message"
-            onClick={() => onSelect(entry)}
-            aria-current={current ? "location" : undefined}
-            aria-busy={revealing || undefined}
-            aria-expanded={true}
-            className="group/navrow -ms-1.5 flex min-w-0 flex-1 items-start gap-2 rounded-lg py-1.5 ps-1.5 text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-          >
-            <NumberPill
-              ordinal={entry.ordinal}
-              current={current}
-              revealing={revealing}
-              running={running}
-            />
-            <span className="line-clamp-3 min-w-0 flex-1 text-[0.8125rem] leading-5 font-medium text-foreground [overflow-wrap:anywhere] transition-colors group-hover/navrow:text-primary">
-              {entry.label}
-            </span>
-          </button>
-          <span className="mt-1.5 flex shrink-0 items-center gap-1.5">
-            {running && <RunningClock since={runningSince} />}
-            <button
-              type="button"
-              onClick={onCollapse}
-              aria-label={t("collapse")}
-              title={t("collapse")}
-              className={tool}
-            >
-              <ChevronUp aria-hidden="true" className="size-3.5" />
-            </button>
-          </span>
-        </div>
+    // panel's right edge. No padding over the head that a closed row lacks,
+    // so the head doesn't move as the row opens.
+    <div className="pb-px text-start">
+      {head}
+      {/* Its round, straight on the panel like the rest of it: a group per
+          kind of thing it did, every icon in the number column and every
+          text on the message's; a hairline closes the round off from the
+          messages after it. Fading in, so what opens reads as unfolding. */}
+      <div className="mb-1 border-b border-border/50 pb-1.5 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200">
         {agentCount > 0 && (
           <NavGroup
             icon={<BotIcon className="size-3.5" />}
@@ -909,6 +930,16 @@ const MessageNavRow = memo(function MessageNavRow({
   )
 })
 
+/**
+ * The chevron that opens or closes what is under a row — a message's round, a
+ * file's diff — at the row's end. Its icon sits at the box's end, so it lines
+ * up with the section header's chevron above it, which takes no box: the
+ * panel's chevrons end in one column, on the hairlines' end. Its hover turns
+ * the icon only.
+ */
+const DISCLOSURE =
+  "flex size-5 shrink-0 items-center justify-end rounded-md text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+
 /** A small icon button: its hover turns the icon, with a faint tint of the
  *  surface's ink, never the page colour a background image would not show
  *  through. */
@@ -945,7 +976,7 @@ const NavSubAgent = memo(function NavSubAgent({
       {/* What the ring says, the words beside it say too. */}
       <span
         aria-hidden="true"
-        className="flex h-5 w-7 shrink-0 items-center justify-center"
+        className="flex h-5 w-5 shrink-0 items-center justify-center"
       >
         <RailIcon
           glyph={<DelegationIdentityGlyph identity={identity} />}
@@ -994,7 +1025,7 @@ const NavSubAgent = memo(function NavSubAgent({
     </>
   )
 
-  const line = "flex w-full min-w-0 items-start gap-2 rounded-lg py-1 pe-1"
+  const line = "flex w-full min-w-0 items-start gap-2 rounded-lg py-1"
   if (openable) {
     return (
       <button
@@ -1102,11 +1133,11 @@ const NavFile = memo(function NavFile({
       <div
         data-testid="nav-file"
         onClick={toggle}
-        className="group/file flex h-7 min-w-0 cursor-pointer items-center gap-2 rounded-lg pe-1"
+        className="group/file flex h-7 min-w-0 cursor-pointer items-center gap-2 rounded-lg"
       >
         <span
           title={tDiff(`mode.${mode}`)}
-          className="flex w-7 shrink-0 justify-center"
+          className="flex w-5 shrink-0 justify-center"
         >
           <ModeIcon
             aria-hidden="true"
@@ -1161,13 +1192,15 @@ const NavFile = memo(function NavFile({
             stop(event)
             toggle()
           }}
-          className={tool}
+          className={DISCLOSURE}
         >
+          {/* As a message's: along the line while folded, down at the diff
+              once it shows. */}
           <ChevronDown
             aria-hidden="true"
             className={cn(
-              "size-3.5 transition-transform",
-              diffOpen && "rotate-180"
+              "size-3.5 motion-safe:transition-transform",
+              !diffOpen && "-rotate-90 rtl:rotate-90"
             )}
           />
         </button>
@@ -1179,7 +1212,7 @@ const NavFile = memo(function NavFile({
         // the round.
         <div
           data-testid="nav-file-diff"
-          className="ws-msg-card ws-msg-panel ms-9 mt-0.5 mb-1.5 overflow-hidden rounded-lg border border-border bg-background"
+          className="ws-msg-card ws-msg-panel ms-7 mt-0.5 mb-1.5 overflow-hidden rounded-lg border border-border bg-background"
         >
           <div className="flex h-7 min-w-0 items-center gap-2 border-b border-border/60 bg-foreground/[0.03] ps-2.5 pe-1 text-2xs">
             <span title={displayPath} className="flex min-w-0 flex-1">

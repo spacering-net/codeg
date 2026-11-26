@@ -2443,6 +2443,10 @@
     "sessionDetails": {
       "menuLabel": "對話詳情",
       "noActiveSession": "暫無使用中的對話",
+      "noActiveSessionHint": "開啟或新建一個對話後，這裡會顯示它的詳細資訊、計畫和訊息導覽。",
+      "draftTitle": "新對話",
+      "draftWaiting": "等待第一則訊息",
+      "draftHint": "傳送第一則訊息後，對話 ID、智慧體的計畫和訊息導覽會顯示在這裡。",
       "title": "對話詳情",
       "subtitle": "對話中繼資料與 Token 用量",
       "fieldTitle": "標題",
@@ -4266,6 +4270,7 @@
         "hideDiff": "收合 {filePath} 的變更",
         "openFile": "開啟 {filePath}",
         "collapse": "收合",
+        "expand": "展開",
         "currentMessage": "目前訊息",
         "scrollToCurrent": "捲動到目前訊息（#{ordinal}）",
         "running": "進行中",

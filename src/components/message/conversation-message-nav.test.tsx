@@ -217,6 +217,14 @@ function messageButton(label: string): HTMLElement {
   return screen.getByText(label).closest("button") as HTMLElement
 }
 
+/** The chevron at the end of `label`'s row that opens or closes it, if it
+ *  has one. */
+function toggleOf(label: string): HTMLElement | null {
+  return messageButton(label).parentElement!.querySelector(
+    "[data-testid='nav-message-toggle']"
+  )
+}
+
 /** The file box of `name`. */
 function fileBox(name: string): HTMLElement {
   // The file's line names it; an open diff's title bar does too.
@@ -259,6 +267,24 @@ describe("MessageNavList", () => {
       ])
     })
 
+    // Open (it is the latest), its round ends in a hairline of its own:
+    // the place it is pinned to adds one only while it is closed.
+    it("sets it apart from the rest by one hairline", () => {
+      renderList({ running })
+      const pinned = screen.getByTestId("nav-running")
+      expect(toggleOf("delete a file")).toHaveAttribute("aria-expanded", "true")
+      expect(pinned).not.toHaveClass("border-b")
+      // The one there is: the round's, under the head.
+      const round = pinned.querySelector(".pb-px")!.lastElementChild
+      expect(round).toHaveClass("border-b")
+      expect(pinned.querySelectorAll(".border-b")).toHaveLength(1)
+      fireEvent.click(toggleOf("delete a file")!)
+      // Closed, the place's own hairline is the only one.
+      const closed = screen.getByTestId("nav-running")
+      expect(closed).toHaveClass("border-b")
+      expect(closed.querySelectorAll(".border-b")).toHaveLength(0)
+    })
+
     it("says it is running in words for a screen reader", () => {
       renderList({ running })
       expect(
@@ -292,18 +318,35 @@ describe("MessageNavList", () => {
     })
   })
 
-  it("says when the message the transcript shows was sent", () => {
+  it("says when an open message was sent", () => {
     vi.useFakeTimers({ toFake: ["Date"] })
     vi.setSystemTime(new Date("2026-06-12T12:06:30.000Z"))
     try {
+      const sentAt = Date.parse("2026-06-12T12:00:00.000Z")
       renderList({
-        currentTurnId: "u1",
         entries: [
-          { ...entries[0], sentAt: Date.parse("2026-06-12T12:00:00.000Z") },
+          { ...entries[0], sentAt },
+          { ...entries[1], sentAt },
+          { ...entries[2], sentAt },
         ],
       })
+      // Under the open (latest) message's title…
       expect(screen.getByTestId("nav-row-time")).toHaveTextContent(
         "6 minutes ago"
+      )
+      expect(
+        within(messageButton("delete a file")).getByTestId("nav-row-time")
+      ).toBeInTheDocument()
+      // …at the end of a row with nothing to open, where a chevron would
+      // be, short as the conversation list says it — not on one that has
+      // one, whose end sums up its round…
+      expect(
+        within(messageButton("first message")).getByTestId("nav-row-sent")
+      ).toHaveTextContent(/^6m$/)
+      expect(screen.getAllByTestId("nav-row-sent")).toHaveLength(1)
+      // …and, for any message, in its tooltip.
+      expect(messageButton("first message").getAttribute("title")).toMatch(
+        /^first message\n.+/
       )
     } finally {
       vi.useRealTimers()
@@ -397,21 +440,89 @@ describe("MessageNavList", () => {
   it("sums up a closed message's sub-agents and files", () => {
     renderList()
     const edits = messageButton("edit something")
-    expect(edits).toHaveAttribute("aria-expanded", "false")
+    expect(toggleOf("edit something")).toHaveAttribute("aria-expanded", "false")
     expect(edits).toHaveTextContent("1 sub-agent")
     expect(edits).toHaveTextContent("2 files")
     // Nothing to sum up, nothing to open.
-    expect(messageButton("first message")).not.toHaveAttribute("aria-expanded")
+    expect(toggleOf("first message")).toBeNull()
     expect(messageButton("first message")).not.toHaveTextContent("file")
+  })
+
+  it("keeps a row's head as it was when the row opens", () => {
+    renderList()
+    const button = () => messageButton("edit something")
+    // The row's own box (the list item's child), the head's, and the
+    // title's line box: what places the number and the title's first line.
+    const row = () => button().closest("li")!.firstElementChild!
+    const title = () => screen.getByText("edit something")
+    const shown = () =>
+      [...button().querySelectorAll("[aria-hidden='true']")]
+        .filter((el) => /^\d+$/.test(el.textContent ?? ""))
+        .map((el) => el.textContent)
+    const before = {
+      row: row().className,
+      head: button().className,
+      line: title().classList.contains("leading-5"),
+      counts: shown(),
+    }
+    expect(before.line).toBe(true)
+    expect(before.counts).toEqual(["1", "2"])
+    fireEvent.click(toggleOf("edit something")!)
+    expect(toggleOf("edit something")).toHaveAttribute("aria-expanded", "true")
+    // No padding over the head an open row lacks, the same head, the same
+    // line height, the same counts at its end, none of them hidden: only what
+    // is under the head grows.
+    expect(row().className).toBe(before.row)
+    expect(button().className).toBe(before.head)
+    expect(title()).toHaveClass("leading-5")
+    expect(shown()).toEqual(before.counts)
+    for (const el of button().querySelectorAll("[aria-hidden='true']")) {
+      expect(el).not.toHaveClass("hidden")
+    }
+  })
+
+  // The section header's chevron takes no box and ends on the hairlines'
+  // end; a row's sits at its box's end so the two line up, and points the
+  // same ways: along the line folded, down open.
+  it("ends a row's chevrons where the section header's ends", () => {
+    renderList()
+    fireEvent.click(messageButton("edit something"))
+    const message = toggleOf("edit something")!
+    const file = screen.getByRole("button", {
+      name: "Show the changes to src/b.ts",
+    })
+    // Nothing from a chevron up to its list item, the item included, pads,
+    // pushes or offsets its end, which would move it off the header's. A
+    // zero is no inset.
+    // (`inset-*` all round or `inset-x-*`; `inset-y-*` moves nothing sideways.)
+    const INSET =
+      /^-?(?:p|px|pe|pr|m|mx|me|mr|end|right|inset-x|inset(?!-[xy]-))-(?!0$)/
+    for (const toggle of [message, file]) {
+      expect(toggle).toHaveClass("justify-end")
+      expect(toggle).not.toHaveClass("justify-center")
+      const item = toggle.closest("li")
+      expect(item).not.toBeNull()
+      for (let el: Element = toggle; ; el = el.parentElement!) {
+        const inset = [...el.classList].filter((c) => INSET.test(c))
+        expect(inset).toEqual([])
+        if (el === item) break
+      }
+    }
+    expect(message.querySelector("svg")).not.toHaveClass("-rotate-90")
+    expect(file.querySelector("svg")).toHaveClass("-rotate-90")
+    fireEvent.click(file)
+    const shown = screen
+      .getByRole("button", { name: "Hide the changes to src/b.ts" })
+      .querySelector("svg")
+    // Down, not turned over.
+    expect(shown).not.toHaveClass("-rotate-90")
+    expect(shown).not.toHaveClass("rotate-180")
   })
 
   describe("opening a message", () => {
     it("starts with the latest message open and the rest closed", () => {
       renderList()
-      expect(messageButton("delete a file")).toHaveAttribute(
-        "aria-expanded",
-        "true"
-      )
+      expect(toggleOf("delete a file")).toHaveAttribute("aria-expanded", "true")
       expect(screen.getByText("old.ts")).toBeInTheDocument()
       expect(screen.queryByText("a.ts")).not.toBeInTheDocument()
       expect(screen.queryByTestId("nav-sub-agent")).not.toBeInTheDocument()
@@ -422,7 +533,7 @@ describe("MessageNavList", () => {
       renderList({ onSelect })
       fireEvent.click(messageButton("edit something"))
       expect(onSelect).toHaveBeenCalledWith(entries[1])
-      expect(messageButton("edit something")).toHaveAttribute(
+      expect(toggleOf("edit something")).toHaveAttribute(
         "aria-expanded",
         "true"
       )
@@ -455,10 +566,27 @@ describe("MessageNavList", () => {
       expect(screen.queryByText("old.ts")).not.toBeInTheDocument()
       expect(onSelect).not.toHaveBeenCalled()
       // Closed by hand, the latest stays closed.
-      expect(messageButton("delete a file")).toHaveAttribute(
+      expect(toggleOf("delete a file")).toHaveAttribute(
         "aria-expanded",
         "false"
       )
+    })
+
+    it("opens a message from its chevron, without jumping", () => {
+      const onSelect = vi.fn()
+      renderList({ onSelect })
+      const toggle = toggleOf("edit something")!
+      expect(toggle).toHaveAccessibleName("Expand")
+      fireEvent.click(toggle)
+      expect(onSelect).not.toHaveBeenCalled()
+      expect(toggleOf("edit something")).toHaveAttribute(
+        "aria-expanded",
+        "true"
+      )
+      expect(toggleOf("edit something")).toHaveAccessibleName("Collapse")
+      expect(screen.getByText("a.ts")).toBeInTheDocument()
+      // One open at a time.
+      expect(screen.queryByText("old.ts")).not.toBeInTheDocument()
     })
   })
 
@@ -466,7 +594,11 @@ describe("MessageNavList", () => {
     it("lists a message's files with their line counts, a zero left out", () => {
       renderList()
       fireEvent.click(messageButton("edit something"))
-      const card = screen.getByText("2 files").parentElement as HTMLElement
+      // The group's heading, not the row's counts read out at its end.
+      const heading = screen
+        .getAllByText("2 files")
+        .find((el) => !el.classList.contains("sr-only"))!
+      const card = heading.parentElement as HTMLElement
       expect(card).toHaveTextContent("+5")
       expect(card).not.toHaveTextContent("−")
       expect(fileBox("a.ts")).toHaveTextContent("+2")
@@ -859,8 +991,8 @@ describe("MessageNavList", () => {
       )
       // Over a workspace background image `ws-msg-card` / `ws-msg-chip` turn
       // a fill translucent (globals.css): every page-coloured or muted fill
-      // here — the band, the diff's panel, the button back to the current
-      // message — has one.
+      // here — the diff's panel, the button back to the current message —
+      // has one.
       // Their tints too (`bg-background/80`): page-coloured all the same.
       const OPAQUE = /^bg-(background|card|muted|secondary|popover)(\/\d+)?$/
       const classes = (el: Element) =>
@@ -868,7 +1000,7 @@ describe("MessageNavList", () => {
       const filled = [...document.body.querySelectorAll("*")].filter((el) =>
         classes(el).some((c) => OPAQUE.test(c))
       )
-      expect(filled.length).toBeGreaterThanOrEqual(3)
+      expect(filled.length).toBeGreaterThanOrEqual(2)
       for (const el of filled) {
         expect(classes(el).join(" ")).toMatch(/\bws-msg-(card|chip)\b/)
       }

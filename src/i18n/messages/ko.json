@@ -2443,6 +2443,10 @@
     "sessionDetails": {
       "menuLabel": "세션 세부 정보",
       "noActiveSession": "활성 세션이 없습니다",
+      "noActiveSessionHint": "세션을 열거나 새로 시작하면 여기에서 세부 정보, 계획, 메시지를 볼 수 있습니다.",
+      "draftTitle": "새 세션",
+      "draftWaiting": "첫 메시지를 기다리는 중",
+      "draftHint": "첫 메시지를 보내면 세션 ID, 에이전트의 계획, 메시지 탐색이 여기에 표시됩니다.",
       "title": "세션 세부 정보",
       "subtitle": "세션 메타데이터 및 토큰 사용량",
       "fieldTitle": "제목",
@@ -4266,6 +4270,7 @@
         "hideDiff": "{filePath}의 변경 사항 숨기기",
         "openFile": "{filePath} 열기",
         "collapse": "접기",
+        "expand": "펼치기",
         "currentMessage": "현재 메시지",
         "scrollToCurrent": "현재 메시지(#{ordinal})로 스크롤",
         "running": "진행 중",

@@ -2443,6 +2443,10 @@
     "sessionDetails": {
       "menuLabel": "Detalles de la sesión",
       "noActiveSession": "No hay ninguna sesión activa",
+      "noActiveSessionHint": "Abre una sesión o inicia una nueva para ver aquí sus detalles, su plan y sus mensajes.",
+      "draftTitle": "Nueva sesión",
+      "draftWaiting": "Esperando el primer mensaje",
+      "draftHint": "Cuando envíes el primer mensaje, aquí aparecerán el ID de la sesión, el plan del agente y la navegación de mensajes.",
       "title": "Detalles de la sesión",
       "subtitle": "Metadatos de la sesión y uso de tokens",
       "fieldTitle": "Título",
@@ -4266,6 +4270,7 @@
         "hideDiff": "Ocultar los cambios de {filePath}",
         "openFile": "Abrir {filePath}",
         "collapse": "Contraer",
+        "expand": "Expandir",
         "currentMessage": "Mensaje actual",
         "scrollToCurrent": "Desplazarse al mensaje actual (#{ordinal})",
         "running": "En curso",

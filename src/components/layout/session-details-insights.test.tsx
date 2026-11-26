@@ -269,7 +269,7 @@ describe("SessionDetailsInsights", () => {
       const row = screen.getByText("What does this do?").closest("li")!
       const icon = within(row).getByTestId("agent-icon")
       // The icon's column is the first thing in the row, as the header's is.
-      const column = icon.closest("span.w-7")!
+      const column = icon.closest("span.w-5")!
       expect(column).toHaveAttribute("aria-hidden", "true")
       expect(column.nextElementSibling).toHaveTextContent("What does this do?")
       // The status rides the icon's corner.
@@ -487,7 +487,12 @@ describe("SessionDetailsInsights", () => {
         hasChanges: true,
       })
       const entries = [withFiles("u1", 1), withFiles("u2", 2)]
-      const latest = () => screen.getByText("message 2").closest("button")!
+      // The chevron that opens and closes the latest message's row.
+      const latest = () =>
+        screen
+          .getByText("message 2")
+          .closest("button")!
+          .parentElement!.querySelector("[data-testid='nav-message-toggle']")!
       publish(insights({ nav: { count: 2, entries } }))
       const view = render(panel(true, CONVERSATION))
       expect(latest()).toHaveAttribute("aria-expanded", "true")
