@@ -304,6 +304,17 @@ pub(crate) fn kiro_trust_all_tools_enabled(value: Option<&str>) -> bool {
     cursor_force_enabled(value)
 }
 
+/// Antigravity 设置面板的权限模式旋钮（见 `AgentDistribution::System` 启动分支）。
+/// `"1"` / `"true"` 时为 `agy acp` 附加 `--dangerously-skip-permissions`（Turbo 模式）；
+/// 未设置、`"0"` 或其他值则保持默认，由会话 `mode` 与权限规则决定。
+pub(crate) const ANTIGRAVITY_SKIP_PERMISSIONS_ENV: &str = "AGY_DANGEROUSLY_SKIP_PERMISSIONS";
+
+/// 解析 Antigravity 是否启用 `--dangerously-skip-permissions`（Turbo 模式）。
+/// 解析规则与 [`cursor_force_enabled`] / [`kiro_trust_all_tools_enabled`] 一致。
+pub(crate) fn antigravity_skip_permissions_enabled(value: Option<&str>) -> bool {
+    cursor_force_enabled(value)
+}
+
 /// Cursor subscription-mode launch policy. When the user picked the official
 /// subscription (browser login), guarantee the launched CLI sees NONE of the
 /// custom-endpoint credentials — not even a stale `CURSOR_API_KEY` /
@@ -394,8 +405,42 @@ fn antigravity_env_vars_for_method(method: &str) -> &'static [&'static str] {
             "GOOGLE_CLOUD_PROJECT",
             "GOOGLE_CLOUD_LOCATION",
         ],
-        // Both OAuth paths use the credential `agy acp --login` stored.
+        // Gemini Enterprise (`oauth-business`) 需要项目与区域；原方案通过写入
+        // `antigravity-acp/settings.json` 传递，切到 `agy acp` 后不再写该文件，
+        // 必须保留这两个环境变量，不能将其 scrub 掉。
+        "oauth-business" => &["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"],
+        // `oauth-personal` 使用 `agy acp --login` 缓存的凭据，不需要任何 API key / GCP 变量。
         _ => &[],
+    }
+}
+
+/// 当用户在设置面板为 Antigravity 显式选择了非交互式认证方式且已提供凭据时，
+/// 返回应在握手阶段发送给 `agy acp` 的 `authenticate` methodId。
+///
+/// 实测 `agy acp` 1.5.15 不会仅凭 `GEMINI_API_KEY` / `GOOGLE_CLOUD_*` 环境变量
+/// 自动切换认证方式——在 `cache/acp-auth-state.json` 未记录对应方式时，
+/// `session/new` 会直接返回 `-32000 Authentication required`。
+fn antigravity_non_interactive_auth_method_for_env(
+    runtime_env: &BTreeMap<String, String>,
+) -> Option<&'static str> {
+    let method = runtime_env
+        .get(ANTIGRAVITY_AUTH_METHOD_ENV)
+        .map(String::as_str)
+        .map(str::trim)?;
+    let has = |key: &str| {
+        runtime_env
+            .get(key)
+            .is_some_and(|value| !value.trim().is_empty())
+    };
+    match method {
+        "gemini-api-key" if has("GEMINI_API_KEY") => Some("gemini-api-key"),
+        "agent-platform"
+            if has("GOOGLE_API_KEY")
+                || (has("GOOGLE_CLOUD_PROJECT") && has("GOOGLE_CLOUD_LOCATION")) =>
+        {
+            Some("agent-platform")
+        }
+        _ => None,
     }
 }
 
@@ -443,11 +488,12 @@ fn apply_antigravity_env_policy(
     merged: &mut Vec<(String, String)>,
     runtime_env: &BTreeMap<String, String>,
 ) {
-    // `agy acp` does not read `GEMINI_HOME`, and a set value makes
-    // `session/new` fail outright ("Failed to start Antigravity
-    // conversation"). The launch converts it to `--gemini-dir`
-    // (`antigravity_gemini_dir_arg`), so the child must not see the variable.
+    // `agy acp` 不读取 `GEMINI_HOME`，且该变量存在会导致 `session/new` 失败。
+    // 按 `acp::agent_process` 约定，空字符串会触发 `cmd.env_remove("GEMINI_HOME")`，
+    // 从而连父进程或容器环境中继承的 `GEMINI_HOME` 也一并清除；目录位置改由
+    // `--gemini-dir`（`antigravity_gemini_dir_arg`）传递。
     merged.retain(|(key, _)| key != "GEMINI_HOME");
+    merged.push(("GEMINI_HOME".to_string(), String::new()));
 
     let Some(method) = runtime_env
         .get(ANTIGRAVITY_AUTH_METHOD_ENV)
@@ -479,26 +525,56 @@ fn apply_antigravity_env_policy(
 /// `Failed to start Antigravity conversation`). Translating the variable keeps
 /// a relocated tree working and keeps the parser (`resolve_gemini_home`) and
 /// the CLI pointed at the same directory.
-pub(crate) fn antigravity_gemini_dir_arg(
+pub(crate) fn antigravity_gemini_dir_arg(runtime_env: &BTreeMap<String, String>) -> Option<String> {
+    antigravity_gemini_dir_arg_with_inherited(runtime_env, std::env::var_os("GEMINI_HOME"))
+}
+
+/// 支持注入父进程 `GEMINI_HOME` 的三态解析：
+/// - `runtime_env` 显式设为空串：表示清除，不传 `--gemini-dir`；
+/// - `runtime_env` 设为非空值：优先使用该值；
+/// - `runtime_env` 未设置：回退到父进程继承的 `GEMINI_HOME`（与历史解析器保持一致）。
+///
+/// 展开 `~` 时复用 `child_home_dir`，正确处理 `HOME=""` 和 Windows `USERPROFILE`。
+fn antigravity_gemini_dir_arg_with_inherited(
     runtime_env: &BTreeMap<String, String>,
-    merged_env: &[(String, String)],
+    inherited: Option<std::ffi::OsString>,
 ) -> Option<String> {
-    let value = runtime_env
-        .get("GEMINI_HOME")
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let home = merged_env
-        .iter()
-        .rev()
-        .find(|(key, _)| key == "HOME")
-        .map(|(_, value)| PathBuf::from(value))
-        .or_else(dirs::home_dir);
+    let configured = match runtime_env.get("GEMINI_HOME") {
+        Some(value) if value.trim().is_empty() => return None,
+        Some(value) => std::ffi::OsString::from(value.trim()),
+        None => inherited.filter(|value| !value.to_string_lossy().trim().is_empty())?,
+    };
+    let home = crate::acp::file_system_runtime::child_home_dir(runtime_env).or_else(dirs::home_dir);
     let resolved = crate::parsers::antigravity::resolve_gemini_home_from_value(
-        Some(value.into()),
+        Some(configured),
         home,
     );
     Some(resolved.to_string_lossy().into_owned())
+}
+
+/// 解析本次启动 `agy acp` 实际使用的 Gemini 根目录（与 `--gemini-dir` 规则完全一致）。
+///
+/// 当 `antigravity_gemini_dir_arg` 传入了显式目录时直接使用该目录；
+/// 否则 `agy acp` 默认使用子进程家目录下的 `.gemini`。
+fn resolve_antigravity_launch_gemini_home(
+    runtime_env: &BTreeMap<String, String>,
+) -> Option<PathBuf> {
+    resolve_antigravity_launch_gemini_home_with_inherited(
+        runtime_env,
+        std::env::var_os("GEMINI_HOME"),
+    )
+}
+
+fn resolve_antigravity_launch_gemini_home_with_inherited(
+    runtime_env: &BTreeMap<String, String>,
+    inherited: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    if let Some(dir) = antigravity_gemini_dir_arg_with_inherited(runtime_env, inherited) {
+        return Some(PathBuf::from(dir));
+    }
+    crate::acp::file_system_runtime::child_home_dir(runtime_env)
+        .or_else(dirs::home_dir)
+        .map(|home| home.join(".gemini"))
 }
 
 /// Project the panel's Antigravity auth choice into
@@ -651,6 +727,7 @@ fn sync_antigravity_settings_file(runtime_env: &BTreeMap<String, String>) -> Ant
 /// launch removes `HOME`, or sets it to a relative path). Writing anyway would
 /// mean guessing, and a guess here creates a stray tree AND leaves the real
 /// `auth.type` unwritten, so the sync reports the skip instead.
+#[cfg(test)]
 fn antigravity_acp_dir_for_env(runtime_env: &BTreeMap<String, String>) -> Result<PathBuf, String> {
     antigravity_acp_dir_with_inherited(runtime_env, std::env::var_os("GEMINI_HOME"))
 }
@@ -662,6 +739,7 @@ fn antigravity_acp_dir_for_env(runtime_env: &BTreeMap<String, String>) -> Result
 /// reads `GEMINI_HOME` — `resolve_antigravity_acp_dir` does, one assertion away
 /// in this same module — and that race is silent: the writer's value simply
 /// leaks into the reader's expectation.
+#[cfg(test)]
 fn antigravity_acp_dir_with_inherited(
     runtime_env: &BTreeMap<String, String>,
     inherited: Option<std::ffi::OsString>,
@@ -717,6 +795,7 @@ fn antigravity_acp_dir_with_inherited(
 }
 
 /// `<GEMINI_HOME>/antigravity-acp`, the ACP server's private subtree.
+#[cfg(test)]
 const ANTIGRAVITY_ACP_SUBDIR: &str = "antigravity-acp";
 
 /// What the panel is saying about one `gcp` field.
@@ -873,6 +952,7 @@ pub fn is_antigravity_auth_method(method_id: &str) -> bool {
 /// treat "I have no idea" as "there is nothing there", which for the sign-out
 /// means aiming `logout` at a flavor with nothing to clear and reporting the
 /// `{}` it answers as a success.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AntigravityAuthType {
     /// The file names this method, in its canonical spelling.
@@ -891,6 +971,7 @@ pub enum AntigravityAuthType {
 /// every launch runs [`sync_antigravity_settings_file`] — but the file is the
 /// only thing the server consults (`_infer_auth_state`), so it is also what
 /// decides which flavor of credential a sign-out actually clears.
+#[cfg(test)]
 pub fn antigravity_effective_auth_type(
     runtime_env: &BTreeMap<String, String>,
 ) -> AntigravityAuthType {
@@ -920,6 +1001,7 @@ pub fn antigravity_effective_auth_type(
 }
 
 /// The pre-rebrand `vertex-ai` spelling resolved to the id codeg uses.
+#[cfg(test)]
 fn canonical_antigravity_auth_method(method: &str) -> &str {
     match method {
         "vertex-ai" => "agent-platform",
@@ -933,6 +1015,7 @@ fn canonical_antigravity_auth_method(method: &str) -> &str {
 ///
 /// Same resolution, same `Err` contract as the private original: see
 /// [`antigravity_acp_dir_for_env`].
+#[cfg(test)]
 pub fn antigravity_acp_dir_for_runtime_env(
     runtime_env: &BTreeMap<String, String>,
 ) -> Result<PathBuf, String> {
@@ -943,6 +1026,7 @@ pub fn antigravity_acp_dir_for_runtime_env(
 ///
 /// `Ok(None)` means "no file, safe to create". `Err` means "do not touch it" —
 /// unreadable, not JSON codeg can parse, or not a JSON object.
+#[cfg(test)]
 fn read_antigravity_settings(path: &Path) -> Result<Option<serde_json::Value>, String> {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
@@ -2671,8 +2755,6 @@ async fn build_agent(
                 apply_cursor_env_policy(&mut merged_env, runtime_env);
             } else if agent_type == AgentType::Grok {
                 apply_grok_env_policy(&mut merged_env, runtime_env);
-            } else if agent_type == AgentType::Antigravity {
-                apply_antigravity_env_policy(&mut merged_env, runtime_env);
             }
             let env_key_list: Vec<&str> = merged_env.iter().map(|(k, _)| k.as_str()).collect();
             if !merged_env.is_empty() {
@@ -2829,7 +2911,17 @@ async fn build_agent(
             // rides on `--gemini-dir` below.
             if agent_type == AgentType::Antigravity {
                 apply_antigravity_env_policy(&mut merged_env, runtime_env);
-                if let Some(dir) = antigravity_gemini_dir_arg(runtime_env, &merged_env) {
+                // Antigravity 权限模式：`--dangerously-skip-permissions` 对应 Turbo 模式，
+                // 自动批准所有工具权限请求（显式 deny 规则与系统黑名单仍生效）。
+                // 由设置面板写入 codeg 侧环境变量 `AGY_DANGEROUSLY_SKIP_PERMISSIONS` 控制。
+                if antigravity_skip_permissions_enabled(
+                    runtime_env
+                        .get(ANTIGRAVITY_SKIP_PERMISSIONS_ENV)
+                        .map(String::as_str),
+                ) {
+                    cmd_args.push("--dangerously-skip-permissions".to_string());
+                }
+                if let Some(dir) = antigravity_gemini_dir_arg(runtime_env) {
                     cmd_args.push("--gemini-dir".to_string());
                     cmd_args.push(dir);
                 }
@@ -2954,6 +3046,11 @@ pub async fn spawn_agent_connection(
         env_pinned_config_option_ids(agent_type, &runtime_env);
     initial_state.trae_pat_sign_in =
         agent_type == AgentType::Trae && crate::acp::trae::pat_sign_in_requested(&runtime_env);
+    initial_state.antigravity_auth_method = if agent_type == AgentType::Antigravity {
+        antigravity_non_interactive_auth_method_for_env(&runtime_env)
+    } else {
+        None
+    };
     // The `/model` picker rows codeg adds for this Claude, named by every
     // session request of the connection.
     if agent_type == AgentType::ClaudeCode {
@@ -2995,6 +3092,42 @@ pub async fn spawn_agent_connection(
     // second install) checks it first, offline, waiting a few seconds at most.
     if agent_type == AgentType::Codex {
         crate::acp::codex_catalog_refresh::before_launch().await;
+    }
+    // 旧版独立 `agy_acp_server` 将会话写在 `<GEMINI_HOME>/antigravity-acp/conversations/`，
+    // 原生 `agy acp` 仅读写 `<GEMINI_HOME>/antigravity-cli/conversations/`。
+    // 打开已有会话前按需迁移目标轨迹库，避免 `session/resume` 与 `session/load` 返回 -32002。
+    if agent_type == AgentType::Antigravity {
+        if let (Some(sid), Some(gemini_home)) = (
+            session_id.as_deref(),
+            resolve_antigravity_launch_gemini_home(&runtime_env),
+        ) {
+            let sid_owned = sid.to_string();
+            match tokio::task::spawn_blocking(move || {
+                crate::parsers::antigravity::migrate_legacy_session_to_cli(
+                    &gemini_home,
+                    &sid_owned,
+                )
+            })
+            .await
+            {
+                Ok(Ok(true)) => {
+                    tracing::info!(
+                        "[ACP][Antigravity] 已将旧版会话 {sid} 从 antigravity-acp 迁移至 antigravity-cli"
+                    );
+                }
+                Ok(Ok(false)) => {}
+                Ok(Err(err)) => {
+                    tracing::warn!(
+                        "[ACP][Antigravity] 迁移旧版会话 {sid} 失败: {err}"
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "[ACP][Antigravity] 迁移旧版会话 {sid} 任务异常: {err}"
+                    );
+                }
+            }
+        }
     }
 
     // Shared cell that receives the agent process's OS pid the instant it
@@ -8044,6 +8177,63 @@ async fn sign_in_trae_with_pat(
     Ok(())
 }
 
+/// 握手阶段等待 Antigravity 执行非交互式 `authenticate` 的超时时间。
+const ANTIGRAVITY_HANDSHAKE_AUTH_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(30);
+
+/// 判断是否在握手阶段为 Antigravity 发起非交互式 `authenticate`。
+fn antigravity_handshake_auth_method(
+    agent_type: AgentType,
+    requested: Option<&'static str>,
+    auth_methods: &[AuthMethod],
+) -> Option<&'static str> {
+    if agent_type != AgentType::Antigravity {
+        return None;
+    }
+    let method = requested?;
+    auth_methods
+        .iter()
+        .any(|advertised| advertised.id().0.as_ref() == method)
+        .then_some(method)
+}
+
+/// 在 `initialize` 之后为 Antigravity 执行非交互式 `authenticate`
+/// （`gemini-api-key` 或 `agent-platform`），让 `agy acp` 刷新其活动认证状态。
+async fn sign_in_antigravity_non_interactive(
+    cx: &ConnectionTo<Agent>,
+    handshake: &CancellationToken,
+    method_id: &'static str,
+) -> Result<(), agent_client_protocol::Error> {
+    let started = std::time::Instant::now();
+    let outcome = unless_cancelled(
+        handshake,
+        tokio::time::timeout(
+            ANTIGRAVITY_HANDSHAKE_AUTH_TIMEOUT,
+            cx.send_request_to(Agent, AuthenticateRequest::new(method_id))
+                .block_task(),
+        ),
+    )
+    .await?;
+    match outcome {
+        Ok(Ok(_)) => tracing::info!(
+            "[ACP][{}] authenticated with {method_id} in {:?}",
+            AgentType::Antigravity,
+            started.elapsed()
+        ),
+        Ok(Err(e)) => tracing::warn!(
+            "[ACP][{}] {method_id} authenticate failed after {:?}: {e}; continuing to session/new",
+            AgentType::Antigravity,
+            started.elapsed()
+        ),
+        Err(_) => tracing::warn!(
+            "[ACP][{}] {method_id} authenticate timed out after {:?}; continuing to session/new",
+            AgentType::Antigravity,
+            ANTIGRAVITY_HANDSHAKE_AUTH_TIMEOUT
+        ),
+    }
+    Ok(())
+}
+
 /// [`load_mcp_servers_for_agent_with_env`] with codeg's own environment.
 #[cfg(test)]
 fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
@@ -9403,6 +9593,17 @@ async fn run_connection(
                 trae_pat_sign_in_method(agent_type, trae_pat_requested, &init_resp.auth_methods)
             {
                 sign_in_trae_with_pat(&cx, &handshake, method_id).await?;
+            }
+
+            // Antigravity CLI (`agy acp`) 仅设置 API key / GCP 环境变量并不会自动激活
+            // 非 OAuth 认证方式，需要在 `session/new` 之前发送一次非交互 `authenticate`。
+            let antigravity_auth_requested = state.read().await.antigravity_auth_method;
+            if let Some(method_id) = antigravity_handshake_auth_method(
+                agent_type,
+                antigravity_auth_requested,
+                &init_resp.auth_methods,
+            ) {
+                sign_in_antigravity_non_interactive(&cx, &handshake, method_id).await?;
             }
 
             let supports_fork = agent_type != AgentType::ZCode && init_resp
@@ -20440,19 +20641,21 @@ fn steering_policy_agent(
     }
 }
 
-/// The `agentInfo.name` antigravity-acp reports at `initialize` (verified
-/// against 1.4.1).
+/// 旧版独立 `agy_acp_server` 在 `initialize` 中上报的 `agentInfo.name`。
 const ANTIGRAVITY_ACP_AGENT_NAME: &str = "antigravity-acp";
+/// 原生 CLI `agy acp`（实测 1.5.15）在 `initialize` 中上报的 `agentInfo.name`。
+const ANTIGRAVITY_CLI_ACP_AGENT_NAME: &str = "Antigravity ACP Server";
 
 /// Whether this connection's `interaction_<hex>` questions are antigravity-acp's
 /// own, to be bridged into the question card (pinned into
 /// `SessionState::antigravity_interactions`). The built-in Antigravity always
 /// is. A custom agent is only when the running adapter names itself
-/// antigravity-acp (a second Antigravity account registered as a custom agent,
-/// say), by the same exact-name rule as [`steering_policy_agent`]: the id
-/// prefix is antigravity-acp's convention, not a reserved namespace, and the
-/// bridge answers the permission request itself and later drops a frame under
-/// that id. No other built-in type is ever let in.
+/// antigravity-acp or Antigravity ACP Server (a second Antigravity account
+/// registered as a custom agent, say), by the same exact-name rule as
+/// [`steering_policy_agent`]: the id prefix is antigravity-acp's convention,
+/// not a reserved namespace, and the bridge answers the permission request
+/// itself and later drops a frame under that id. No other built-in type is
+/// ever let in.
 ///
 /// Live only, like the custom-agent steering policy: a custom agent's history
 /// is still codeg's transcript, which records the raw frames and not the
@@ -20463,9 +20666,12 @@ fn speaks_antigravity_interactions(
 ) -> bool {
     match agent_type {
         AgentType::Antigravity => true,
-        AgentType::Custom(_) => {
-            agent_info.is_some_and(|info| info.name == ANTIGRAVITY_ACP_AGENT_NAME)
-        }
+        AgentType::Custom(_) => agent_info.is_some_and(|info| {
+            matches!(
+                info.name.as_str(),
+                ANTIGRAVITY_ACP_AGENT_NAME | ANTIGRAVITY_CLI_ACP_AGENT_NAME
+            )
+        }),
         _ => false,
     }
 }
@@ -23143,6 +23349,16 @@ mod kiro_ext_tests {
         assert!(kiro_trust_all_tools_enabled(Some(" true ")));
         for value in [None, Some("0"), Some(""), Some("yes please")] {
             assert!(!kiro_trust_all_tools_enabled(value), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn antigravity_skips_permissions_only_when_asked() {
+        assert!(antigravity_skip_permissions_enabled(Some("1")));
+        assert!(antigravity_skip_permissions_enabled(Some(" true ")));
+        assert!(antigravity_skip_permissions_enabled(Some("TRUE")));
+        for value in [None, Some("0"), Some(""), Some("yes"), Some("turbo")] {
+            assert!(!antigravity_skip_permissions_enabled(value), "{value:?}");
         }
     }
 
@@ -32283,34 +32499,142 @@ mod tests {
             .iter()
             .any(|(k, v)| k == "GOOGLE_CLOUD_LOCATION" && v == "global"));
         assert!(env.iter().any(|(k, v)| k == "GEMINI_API_KEY" && v.is_empty()));
+
+        // Gemini Enterprise (`oauth-business`) 保留 GCP 项目与区域，清除无关 API Key。
+        let mut env = vec![
+            ("GOOGLE_CLOUD_PROJECT".to_string(), "corp-proj".to_string()),
+            ("GOOGLE_CLOUD_LOCATION".to_string(), "us-central1".to_string()),
+            ("GEMINI_API_KEY".to_string(), "leaked".to_string()),
+            ("GOOGLE_API_KEY".to_string(), "leaked-google".to_string()),
+        ];
+        apply_antigravity_env_policy(&mut env, &antigravity_runtime("oauth-business"));
+        assert!(env
+            .iter()
+            .any(|(k, v)| k == "GOOGLE_CLOUD_PROJECT" && v == "corp-proj"));
+        assert!(env
+            .iter()
+            .any(|(k, v)| k == "GOOGLE_CLOUD_LOCATION" && v == "us-central1"));
+        assert!(env.iter().any(|(k, v)| k == "GEMINI_API_KEY" && v.is_empty()));
+        assert!(env.iter().any(|(k, v)| k == "GOOGLE_API_KEY" && v.is_empty()));
     }
 
     #[test]
     fn antigravity_translates_gemini_home_to_the_cli_flag() {
         let runtime = BTreeMap::from([("GEMINI_HOME".to_string(), "/srv/agy".to_string())]);
-        let merged = vec![("HOME".to_string(), "/srv".to_string())];
         assert_eq!(
-            antigravity_gemini_dir_arg(&runtime, &merged).as_deref(),
+            antigravity_gemini_dir_arg_with_inherited(&runtime, None).as_deref(),
             Some("/srv/agy")
         );
 
-        // A tilde is expanded against the CHILD's home, matching the parser.
-        let tilde = BTreeMap::from([("GEMINI_HOME".to_string(), "~/agy".to_string())]);
+        // `~` 按子进程的 HOME 展开，与历史解析器一致。
+        let tilde = BTreeMap::from([
+            ("HOME".to_string(), "/srv".to_string()),
+            ("GEMINI_HOME".to_string(), "~/agy".to_string()),
+        ]);
         assert_eq!(
-            antigravity_gemini_dir_arg(&tilde, &merged).as_deref(),
+            antigravity_gemini_dir_arg_with_inherited(&tilde, None).as_deref(),
             Some("/srv/agy")
         );
 
-        assert_eq!(antigravity_gemini_dir_arg(&BTreeMap::new(), &merged), None);
+        // 父进程继承的 GEMINI_HOME 也会转换为 `--gemini-dir`，防止目录分裂。
+        assert_eq!(
+            antigravity_gemini_dir_arg_with_inherited(
+                &BTreeMap::new(),
+                Some(std::ffi::OsString::from("/inherited/agy")),
+            )
+            .as_deref(),
+            Some("/inherited/agy")
+        );
 
-        // The CLI rejects a set GEMINI_HOME, so the child must never see it.
+        // runtime_env 显式设为空串表示清除，不再继承父进程 GEMINI_HOME。
+        let cleared = BTreeMap::from([("GEMINI_HOME".to_string(), String::new())]);
+        assert_eq!(
+            antigravity_gemini_dir_arg_with_inherited(
+                &cleared,
+                Some(std::ffi::OsString::from("/inherited/agy")),
+            ),
+            None
+        );
+
+        assert_eq!(
+            antigravity_gemini_dir_arg_with_inherited(&BTreeMap::new(), None),
+            None
+        );
+
+        // 必须用空字符串占位以触发 `env_remove("GEMINI_HOME")`，连父进程继承值也一并屏蔽。
         let mut env = vec![
             ("HOME".to_string(), "/srv".to_string()),
             ("GEMINI_HOME".to_string(), "/srv/agy".to_string()),
         ];
         apply_antigravity_env_policy(&mut env, &runtime);
-        assert!(!env.iter().any(|(key, _)| key == "GEMINI_HOME"));
+        let gemini_home_entries: Vec<_> = env.iter().filter(|(k, _)| k == "GEMINI_HOME").collect();
+        assert_eq!(gemini_home_entries.len(), 1);
+        assert!(gemini_home_entries[0].1.is_empty());
         assert!(env.iter().any(|(key, _)| key == "HOME"));
+
+        // 迁移目标目录解析需与 `--gemini-dir` 规则保持完全一致。
+        assert_eq!(
+            resolve_antigravity_launch_gemini_home_with_inherited(&runtime, None),
+            Some(PathBuf::from("/srv/agy"))
+        );
+        assert_eq!(
+            resolve_antigravity_launch_gemini_home_with_inherited(&tilde, None),
+            Some(PathBuf::from("/srv/agy"))
+        );
+        assert_eq!(
+            resolve_antigravity_launch_gemini_home_with_inherited(
+                &BTreeMap::new(),
+                Some(std::ffi::OsString::from("/inherited/agy")),
+            ),
+            Some(PathBuf::from("/inherited/agy"))
+        );
+        let cleared_with_home = BTreeMap::from([
+            ("HOME".to_string(), "/srv/user".to_string()),
+            ("GEMINI_HOME".to_string(), String::new()),
+        ]);
+        assert_eq!(
+            resolve_antigravity_launch_gemini_home_with_inherited(
+                &cleared_with_home,
+                Some(std::ffi::OsString::from("/inherited/agy")),
+            ),
+            Some(PathBuf::from("/srv/user/.gemini"))
+        );
+    }
+
+    #[test]
+    fn antigravity_non_interactive_auth_method_matches_configured_credentials() {
+        let key_env = BTreeMap::from([
+            (
+                ANTIGRAVITY_AUTH_METHOD_ENV.to_string(),
+                "gemini-api-key".to_string(),
+            ),
+            ("GEMINI_API_KEY".to_string(), "AIza-test".to_string()),
+        ]);
+        assert_eq!(
+            antigravity_non_interactive_auth_method_for_env(&key_env),
+            Some("gemini-api-key")
+        );
+
+        let missing_key = antigravity_runtime("gemini-api-key");
+        assert_eq!(antigravity_non_interactive_auth_method_for_env(&missing_key), None);
+
+        let ap_env = BTreeMap::from([
+            (
+                ANTIGRAVITY_AUTH_METHOD_ENV.to_string(),
+                "agent-platform".to_string(),
+            ),
+            ("GOOGLE_CLOUD_PROJECT".to_string(), "proj".to_string()),
+            ("GOOGLE_CLOUD_LOCATION".to_string(), "global".to_string()),
+        ]);
+        assert_eq!(
+            antigravity_non_interactive_auth_method_for_env(&ap_env),
+            Some("agent-platform")
+        );
+
+        assert_eq!(
+            antigravity_non_interactive_auth_method_for_env(&antigravity_runtime("oauth-personal")),
+            None
+        );
     }
 
     /// A var the method READS but the panel did not store must still be cleared.
@@ -32360,12 +32684,18 @@ mod tests {
     #[test]
     fn antigravity_env_policy_leaves_unrecorded_and_unknown_methods_alone() {
         // Legacy rows (no recorded method) and a garbage value must not have
-        // an operator-provided container env scrubbed out from under them.
+        // an operator-provided container env scrubbed out from under them;
+        // 仅附加 `GEMINI_HOME=""` 以触发 `env_remove`，避免父进程该变量导致 `agy acp` 失败。
         for runtime in [BTreeMap::new(), antigravity_runtime("not-a-method")] {
             let mut env = vec![("GEMINI_API_KEY".to_string(), "operator".to_string())];
             apply_antigravity_env_policy(&mut env, &runtime);
-            assert_eq!(env.len(), 1);
-            assert_eq!(env[0].1, "operator");
+            assert_eq!(
+                env,
+                vec![
+                    ("GEMINI_API_KEY".to_string(), "operator".to_string()),
+                    ("GEMINI_HOME".to_string(), String::new()),
+                ]
+            );
         }
     }
 
@@ -52069,10 +52399,17 @@ mod tests {
         for (agent_type, adapter, enabled, decline, bridged) in [
             (AgentType::Antigravity, None, true, false, true),
             (AgentType::Antigravity, None, true, true, true),
-            // A custom agent running antigravity-acp (a second account, say).
+            // A custom agent running antigravity-acp or native `agy acp` (a second account, say).
             (
                 AgentType::Custom("antigravity-b"),
                 Some(ANTIGRAVITY_ACP_AGENT_NAME),
+                true,
+                false,
+                true,
+            ),
+            (
+                AgentType::Custom("antigravity-cli-b"),
+                Some(ANTIGRAVITY_CLI_ACP_AGENT_NAME),
                 true,
                 false,
                 true,

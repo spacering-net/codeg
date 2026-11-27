@@ -1077,7 +1077,7 @@
       "saveRawConfig": "儲存檔案"
     },
     "antigravity": {
-      "configDescription": "Antigravity 必须先选定认证方式才能开始会话。所选方式会写入 $GEMINI_HOME/antigravity-acp/settings.json 的 auth.type —— 这是 ACP 服务端唯一读取的位置，不写就每次新建会话都会报 “Authentication required”。模型与会话模式不在这里：Antigravity 通过 ACP 上报它们，由输入框的选择器按会话管理。",
+      "configDescription": "Antigravity 的登入由 Antigravity CLI 自行管理。codeg 會直接啟動 `agy acp`，這裡只決定它使用哪種方式認證：Google 帳號沿用 CLI 已快取的登入（本機沒有瀏覽器時請使用下方的免瀏覽器登入），API Key 方式則讀取下方填寫的憑證。模型與工作階段模式不在這裡：Antigravity 會透過 ACP 回報它們，由輸入框的選擇器按工作階段管理。",
       "methodLabel": "认证方式",
       "methods": {
         "oauth-personal": "使用 Google 账号登录",
@@ -1086,8 +1086,8 @@
         "agent-platform": "Gemini Enterprise Agent Platform"
       },
       "methodHints": {
-        "oauth-personal": "你的 Google 账号，任意 Antigravity 套餐（含免费版）均可。首次新建会话会自动打开浏览器完成登录，之后令牌会被缓存复用。本機沒有瀏覽器？用下面的免瀏覽器登入。",
-        "oauth-business": "你的 Gemini Enterprise 账号。需要填 GCP 项目与区域，首次新建会话会打开浏览器。本機沒有瀏覽器？用下面的免瀏覽器登入。",
+        "oauth-personal": "你的 Google 帳號，任意 Antigravity 方案（含免費版）皆適用。登入由 Antigravity CLI 快取並重複使用；本機沒有瀏覽器時請使用下方的免瀏覽器登入。",
+        "oauth-business": "你的 Gemini Enterprise 帳號。需要填寫 GCP 專案與區域；本機沒有瀏覽器時請使用下方的免瀏覽器登入。",
         "gemini-api-key": "Gemini Developer API 的密钥，以 GEMINI_API_KEY 传给智能体。",
         "agent-platform": "即原 Vertex AI。可用 API Key，或用项目 + 区域配合应用默认凭据（gcloud auth application-default login）。"
       },
@@ -1099,16 +1099,22 @@
       "missingGeminiApiKey": "请填写 Gemini API Key，或改用其他认证方式 —— 否则会话无法启动。",
       "missingAgentPlatformConfig": "请填写 API Key，或同时填写项目与区域 —— 二者缺一不可，否则会话无法启动。",
       "missingEnterpriseConfig": "Gemini Enterprise 需要同时填写项目与区域。",
-      "settingsFileHint": "auth.type 会保存到该文件；你自己写在里面的其他键会原样保留。",
+      "settingsFileHint": "Antigravity CLI 自己的設定檔（僅供參考，codeg 不會改寫此檔案）。",
       "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "保存",
+      "permissionsTitle": "權限",
+      "permissionModeLabel": "權限模式",
+      "permissionModeDefault": "遵循工作階段模式（預設）",
+      "permissionModeTurbo": "Turbo（--dangerously-skip-permissions）",
+      "permissionModeDefaultHint": "以預設參數啟動 `agy acp`，由輸入框的工作階段模式（default / accept-edits / auto / plan）與權限規則控制工具審核。",
+      "permissionModeTurboHint": "以 `agy acp --dangerously-skip-permissions` 啟動工作階段：自動核准所有工具權限請求、不再彈出確認（明確的 deny 規則與系統封鎖清單仍然有效）。對新工作階段生效。",
       "headless": {
         "title": "在沒有瀏覽器的機器上登入",
-        "description": "Antigravity 的 Google 登入由智慧代理自己發起，瀏覽器必須開在執行代理的那台機器上。部署在無桌面伺服器上的 codeg 沒有瀏覽器，首次建立工作階段會等待 5 分鐘後失敗。改從這裡登入：把連結拿到任意裝置上開啟，再把跳轉後的網址貼回來。",
+        "description": "Antigravity CLI 會列印一個 Google 登入連結並等待授權碼。此流程不需本機安裝瀏覽器：將連結拿到任意裝置上開啟並授權，再把授權碼（或跳轉後的完整網址）貼回這裡即可。",
         "start": "取得登入連結",
         "saveFirst": "請先儲存——登入用的是已儲存的設定，而不是上面剛填的內容。",
         "step1": "1. 開啟這個連結並登入 Google 帳號。",
-        "step2": "2. 瀏覽器最後會跳到 {redirectUri} 並顯示無法連線——這是正常的。把網址列裡的完整網址複製出來貼到下面。",
+        "step2": "2. 開啟上方連結並授權。頁面會跳轉至 {redirectUri}，請把授權碼（或該完整網址）貼到下方。",
         "copyLink": "複製連結",
         "openLink": "在新分頁開啟",
         "complete": "完成登入",

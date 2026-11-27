@@ -8615,6 +8615,9 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // the only supported ways to change the cached Google account.
             distribution: AgentDistribution::System {
                 cmd: "agy",
+                // `--dangerously-skip-permissions`（Turbo 模式）由设置面板的权限模式开关
+                // `AGY_DANGEROUSLY_SKIP_PERMISSIONS` 控制，在 `build_agent` 中按需附加，
+                // 保持默认启动行为与 CLI 一致，不破坏原生 4 个会话 mode。
                 args: &["acp"],
                 env: &[],
                 install_url: ANTIGRAVITY_INSTALL_URL,

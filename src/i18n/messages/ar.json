@@ -1077,7 +1077,7 @@
       "saveRawConfig": "حفظ الملف"
     },
     "antigravity": {
-      "configDescription": "Antigravity needs an authentication method before it can start a session. The choice is written to auth.type in $GEMINI_HOME/antigravity-acp/settings.json, which is the only place the ACP server looks — without it every new session fails with \"Authentication required\". Model and session mode are not here: Antigravity reports them over ACP, so the composer's own selectors own them per session.",
+      "configDescription": "يدير Antigravity CLI تسجيل الدخول بنفسه. يشغّل codeg الأمر `agy acp` مباشرة؛ يحدّد هذا الخيار طريقة المصادقة فقط: تعيد طرق Google استخدام تسجيل الدخول المخزّن مؤقتًا في CLI (استخدم تسجيل الدخول دون متصفح أدناه عند عدم توفر متصفح على هذا الجهاز)، وتقرأ طرق مفتاح API بيانات الاعتماد المُدخلة هنا. النموذج ووضع الجلسة ليسا هنا: يبلّغ Antigravity عنهما عبر ACP، وتتولى محددات المحرر إدارتهما لكل جلسة.",
       "methodLabel": "Authentication method",
       "methods": {
         "oauth-personal": "Sign in with Google",
@@ -1086,8 +1086,8 @@
         "agent-platform": "Gemini Enterprise Agent Platform"
       },
       "methodHints": {
-        "oauth-personal": "Your Google account, on any Antigravity plan including the free tier. The first new session opens a browser to finish signing in; the token is then cached and reused. لا يوجد متصفح على هذا الجهاز؟ استخدم تسجيل الدخول دون متصفح أدناه.",
-        "oauth-business": "Your Gemini Enterprise account. Needs a GCP project and location, and the first new session opens a browser. لا يوجد متصفح على هذا الجهاز؟ استخدم تسجيل الدخول دون متصفح أدناه.",
+        "oauth-personal": "حسابك على Google، على أي خطة Antigravity بما في ذلك الخطة المجانية. يخزّن Antigravity CLI تسجيل الدخول مؤقتًا ويعيد استخدامه لـ agy acp. لا يوجد متصفح على هذا الجهاز؟ استخدم تسجيل الدخول دون متصفح أدناه.",
+        "oauth-business": "حسابك في Gemini Enterprise. يحتاج إلى مشروع وموقع GCP. لا يوجد متصفح على هذا الجهاز؟ استخدم تسجيل الدخول دون متصفح أدناه.",
         "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
         "agent-platform": "Formerly Vertex AI. Use an API key, or a project and location with Application Default Credentials (gcloud auth application-default login)."
       },
@@ -1099,16 +1099,22 @@
       "missingGeminiApiKey": "Enter a Gemini API key, or pick a different authentication method — sessions will fail to start without it.",
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
-      "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
+      "settingsFileHint": "ملف الإعدادات الخاص بـ Antigravity CLI (مرجع للقراءة فقط — لا يقوم codeg بالكتابة فوقه).",
       "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "Save",
+      "permissionsTitle": "الأذونات",
+      "permissionModeLabel": "وضع الأذونات",
+      "permissionModeDefault": "اتباع وضع الجلسة (افتراضي)",
+      "permissionModeTurbo": "Turbo (--dangerously-skip-permissions)",
+      "permissionModeDefaultHint": "يشغّل `agy acp` بشكل اعتيادي بحيث يتحكم محدد وضع الجلسة (default / accept-edits / auto / plan) وقواعد الأذونات لديك في الموافقات.",
+      "permissionModeTurboHint": "يشغّل `agy acp --dangerously-skip-permissions`: يوافق تلقائيًا على جميع طلبات أذونات الأدوات دون مطالبة (تبقى قواعد deny الصريحة وقائمة الحظر للنظام سارية). يسري على الجلسات الجديدة.",
       "headless": {
         "title": "تسجيل الدخول دون متصفح على هذا الجهاز",
-        "description": "ينفّذ Antigravity تسجيل دخول Google بنفسه على الجهاز الذي يعمل عليه الوكيل. وإذا لم يوجد متصفح هناك — أي codeg على خادم بلا سطح مكتب — فستنتظر أول جلسة خمس دقائق ثم تفشل. سجّل الدخول من هنا بدلاً من ذلك: افتح الرابط على أي جهاز، ثم الصق العنوان الذي وصلت إليه.",
+        "description": "يطبع Antigravity CLI رابط تسجيل دخول Google وينتظر رمز التفويض. يعمل هذا دون متصفح على هذا الجهاز: افتح الرابط على أي جهاز، وافق على الوصول، ثم الصق رمز التفويض (أو العنوان الكامل الذي وصلت إليه) هنا.",
         "start": "الحصول على رابط تسجيل الدخول",
         "saveFirst": "احفظ أولاً — يستخدم تسجيل الدخول الإعدادات المحفوظة، وليس ما كُتب أعلاه.",
         "step1": "1. افتح هذا الرابط وسجّل الدخول إلى Google.",
-        "step2": "2. سينتهي المتصفح عند {redirectUri} ويتعذّر عليه الاتصال، وهذا متوقّع. انسخ العنوان كاملاً من شريط العناوين والصقه هنا.",
+        "step2": "2. افتح الرابط أعلاه ووافق على الوصول. ستنتقل إلى {redirectUri}؛ الصق رمز التفويض (أو ذلك العنوان الكامل) هنا.",
         "copyLink": "نسخ الرابط",
         "openLink": "فتح في علامة تبويب جديدة",
         "complete": "إتمام تسجيل الدخول",

@@ -1077,7 +1077,7 @@
       "saveRawConfig": "Datei speichern"
     },
     "antigravity": {
-      "configDescription": "Antigravity needs an authentication method before it can start a session. The choice is written to auth.type in $GEMINI_HOME/antigravity-acp/settings.json, which is the only place the ACP server looks — without it every new session fails with \"Authentication required\". Model and session mode are not here: Antigravity reports them over ACP, so the composer's own selectors own them per session.",
+      "configDescription": "Die Antigravity-CLI verwaltet die Anmeldung selbst. codeg startet `agy acp` direkt; diese Auswahl bestimmt nur die Authentifizierungsmethode: Die Google-Methoden nutzen die zwischengespeicherte Anmeldung der CLI wieder (nutze die browserfreie Anmeldung unten, wenn auf diesem Rechner kein Browser vorhanden ist), und die API-Key-Methoden lesen die hier eingetragenen Zugangsdaten. Modell und Sitzungsmodus sind nicht hier: Antigravity meldet sie über ACP, sodass die eigenen Auswahlfelder des Editors sie pro Sitzung verwalten.",
       "methodLabel": "Authentication method",
       "methods": {
         "oauth-personal": "Sign in with Google",
@@ -1086,8 +1086,8 @@
         "agent-platform": "Gemini Enterprise Agent Platform"
       },
       "methodHints": {
-        "oauth-personal": "Your Google account, on any Antigravity plan including the free tier. The first new session opens a browser to finish signing in; the token is then cached and reused. Kein Browser auf diesem Rechner? Nutze die browserfreie Anmeldung unten.",
-        "oauth-business": "Your Gemini Enterprise account. Needs a GCP project and location, and the first new session opens a browser. Kein Browser auf diesem Rechner? Nutze die browserfreie Anmeldung unten.",
+        "oauth-personal": "Dein Google-Konto, in jedem Antigravity-Tarif einschließlich der kostenlosen Stufe. Die Antigravity-CLI speichert die Anmeldung zwischen und nutzt sie für agy acp wieder. Kein Browser auf diesem Rechner? Nutze die browserfreie Anmeldung unten.",
+        "oauth-business": "Dein Gemini-Enterprise-Konto. Benötigt ein GCP-Projekt und einen Standort. Kein Browser auf diesem Rechner? Nutze die browserfreie Anmeldung unten.",
         "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
         "agent-platform": "Formerly Vertex AI. Use an API key, or a project and location with Application Default Credentials (gcloud auth application-default login)."
       },
@@ -1099,16 +1099,22 @@
       "missingGeminiApiKey": "Enter a Gemini API key, or pick a different authentication method — sessions will fail to start without it.",
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
-      "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
+      "settingsFileHint": "Eigene Einstellungsdatei der Antigravity-CLI (nur zur Ansicht – codeg überschreibt sie nicht).",
       "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "Save",
+      "permissionsTitle": "Berechtigungen",
+      "permissionModeLabel": "Berechtigungsmodus",
+      "permissionModeDefault": "Sitzungsmodus folgen (Standard)",
+      "permissionModeTurbo": "Turbo (--dangerously-skip-permissions)",
+      "permissionModeDefaultHint": "Startet `agy acp` regulär, sodass der Sitzungsmodus-Auswähler (default, accept-edits, auto, plan) und deine Berechtigungsregeln Werkzeugfreigaben steuern.",
+      "permissionModeTurboHint": "Startet `agy acp --dangerously-skip-permissions`: genehmigt alle Werkzeugberechtigungsanfragen automatisch ohne Rückfrage (explizite Deny-Regeln und System-Sperrlisten gelten weiterhin). Wirkt ab neuen Sitzungen.",
       "headless": {
         "title": "Ohne Browser auf diesem Rechner anmelden",
-        "description": "Antigravity führt die Google-Anmeldung selbst aus – auf dem Rechner, auf dem der Agent läuft. Fehlt dort ein Browser (codeg auf einem Server ohne Desktop), wartet die erste Sitzung fünf Minuten und schlägt dann fehl. Melde dich stattdessen hier an: Link auf einem beliebigen Gerät öffnen und die Zieladresse zurück einfügen.",
+        "description": "Die Antigravity-CLI gibt einen Google-Anmeldelink aus und wartet auf den Autorisierungscode. Das funktioniert ohne Browser auf diesem Rechner: Öffne den Link auf einem beliebigen Gerät, bestätige den Zugriff und füge den Autorisierungscode (oder die vollständige Zieladresse) hier ein.",
         "start": "Anmeldelink holen",
         "saveFirst": "Zuerst speichern – die Anmeldung nutzt die gespeicherten Einstellungen, nicht das oben Eingetippte.",
         "step1": "1. Öffne diesen Link und melde dich bei Google an.",
-        "step2": "2. Dein Browser landet auf {redirectUri} und kann keine Verbindung herstellen – das ist so gewollt. Kopiere die vollständige Adresse aus der Adressleiste und füge sie hier ein.",
+        "step2": "2. Öffne den Link oben und bestätige den Zugriff. Du landest auf {redirectUri}; füge den Autorisierungscode (oder diese vollständige Adresse) hier ein.",
         "copyLink": "Link kopieren",
         "openLink": "In neuem Tab öffnen",
         "complete": "Anmeldung abschließen",

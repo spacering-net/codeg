@@ -1077,7 +1077,7 @@
       "saveRawConfig": "파일 저장"
     },
     "antigravity": {
-      "configDescription": "Antigravity needs an authentication method before it can start a session. The choice is written to auth.type in $GEMINI_HOME/antigravity-acp/settings.json, which is the only place the ACP server looks — without it every new session fails with \"Authentication required\". Model and session mode are not here: Antigravity reports them over ACP, so the composer's own selectors own them per session.",
+      "configDescription": "로그인은 Antigravity CLI가 직접 관리합니다. codeg는 `agy acp`를 바로 실행하며, 이 설정은 인증 방식만 결정합니다. Google 방식은 CLI에 캐시된 로그인을 재사용하고(이 컴퓨터에 브라우저가 없다면 아래의 브라우저 없는 로그인을 사용하세요), API 키 방식은 여기에 입력한 자격 증명을 읽습니다. 모델과 세션 모드는 Antigravity가 ACP로 보고하므로 입력창 선택기에서 세션별로 관리합니다.",
       "methodLabel": "Authentication method",
       "methods": {
         "oauth-personal": "Sign in with Google",
@@ -1086,8 +1086,8 @@
         "agent-platform": "Gemini Enterprise Agent Platform"
       },
       "methodHints": {
-        "oauth-personal": "Your Google account, on any Antigravity plan including the free tier. The first new session opens a browser to finish signing in; the token is then cached and reused. 이 컴퓨터에 브라우저가 없다면 아래의 브라우저 없는 로그인을 사용하세요.",
-        "oauth-business": "Your Gemini Enterprise account. Needs a GCP project and location, and the first new session opens a browser. 이 컴퓨터에 브라우저가 없다면 아래의 브라우저 없는 로그인을 사용하세요.",
+        "oauth-personal": "무료 플랜을 포함한 모든 Antigravity 플랜의 Google 계정입니다. Antigravity CLI가 로그인을 캐시해 agy acp에서 재사용합니다. 이 컴퓨터에 브라우저가 없다면 아래의 브라우저 없는 로그인을 사용하세요.",
+        "oauth-business": "Gemini Enterprise 계정입니다. GCP 프로젝트와 위치가 필요합니다. 이 컴퓨터에 브라우저가 없다면 아래의 브라우저 없는 로그인을 사용하세요.",
         "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
         "agent-platform": "Formerly Vertex AI. Use an API key, or a project and location with Application Default Credentials (gcloud auth application-default login)."
       },
@@ -1099,16 +1099,22 @@
       "missingGeminiApiKey": "Enter a Gemini API key, or pick a different authentication method — sessions will fail to start without it.",
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
-      "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
+      "settingsFileHint": "Antigravity CLI 자체 설정 파일입니다(읽기 전용 참고용 — codeg가 이 파일을 덮어쓰지 않습니다).",
       "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "Save",
+      "permissionsTitle": "권한",
+      "permissionModeLabel": "권한 모드",
+      "permissionModeDefault": "세션 모드 따르기(기본값)",
+      "permissionModeTurbo": "Turbo(--dangerously-skip-permissions)",
+      "permissionModeDefaultHint": "기본 옵션으로 `agy acp`를 실행하여 입력창의 세션 모드(default / accept-edits / auto / plan)와 권한 규칙에 따라 도구 승인을 처리합니다.",
+      "permissionModeTurboHint": "`agy acp --dangerously-skip-permissions`로 세션을 시작합니다. 확인 없이 모든 도구 권한 요청을 자동 승인합니다(명시적 deny 규칙과 시스템 차단 목록은 유지). 새 세션부터 적용됩니다.",
       "headless": {
         "title": "브라우저가 없는 컴퓨터에서 로그인",
-        "description": "Antigravity의 Google 로그인은 에이전트가 직접 실행하므로 브라우저는 에이전트가 실행되는 컴퓨터에서 열려야 합니다. 데스크톱이 없는 서버에 배포한 codeg에는 브라우저가 없어 첫 세션이 5분을 기다린 뒤 실패합니다. 대신 여기서 로그인하세요. 링크를 아무 기기에서나 열고, 이동한 주소를 다시 붙여넣습니다.",
+        "description": "Antigravity CLI가 Google 로그인 링크를 출력하고 인증 코드를 기다립니다. 이 컴퓨터에 브라우저가 없어도 사용할 수 있습니다. 아무 기기에서나 링크를 열어 액세스를 승인한 뒤 인증 코드(또는 이동한 전체 주소)를 여기에 붙여넣으세요.",
         "start": "로그인 링크 받기",
         "saveFirst": "먼저 저장하세요. 로그인은 위에 입력한 값이 아니라 저장된 설정을 사용합니다.",
         "step1": "1. 이 링크를 열고 Google에 로그인하세요.",
-        "step2": "2. 브라우저는 결국 {redirectUri}로 이동해 연결할 수 없다고 표시합니다. 정상입니다. 주소창의 전체 주소를 복사해 여기에 붙여넣으세요.",
+        "step2": "2. 위 링크를 열어 액세스를 승인하세요. {redirectUri} 페이지로 이동하면 인증 코드(또는 해당 전체 주소)를 여기에 붙여넣으세요.",
         "copyLink": "링크 복사",
         "openLink": "새 탭에서 열기",
         "complete": "로그인 완료",

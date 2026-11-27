@@ -1077,7 +1077,7 @@
       "saveRawConfig": "ファイルを保存"
     },
     "antigravity": {
-      "configDescription": "Antigravity needs an authentication method before it can start a session. The choice is written to auth.type in $GEMINI_HOME/antigravity-acp/settings.json, which is the only place the ACP server looks — without it every new session fails with \"Authentication required\". Model and session mode are not here: Antigravity reports them over ACP, so the composer's own selectors own them per session.",
+      "configDescription": "サインインは Antigravity CLI 自身が管理します。codeg は `agy acp` を直接起動し、この設定は認証方式の選択のみを行います。Google アカウント方式は CLI にキャッシュされたログインを再利用し（このマシンにブラウザがない場合は下のブラウザなしサインインを使用してください）、API キー方式はここに入力した認証情報を読み込みます。モデルとセッションモードは ACP 経由で通知されるため、入力欄のセレクターでセッションごとに管理されます。",
       "methodLabel": "Authentication method",
       "methods": {
         "oauth-personal": "Sign in with Google",
@@ -1086,8 +1086,8 @@
         "agent-platform": "Gemini Enterprise Agent Platform"
       },
       "methodHints": {
-        "oauth-personal": "Your Google account, on any Antigravity plan including the free tier. The first new session opens a browser to finish signing in; the token is then cached and reused. このマシンにブラウザがない場合は、下のブラウザ不要のサインインを使ってください。",
-        "oauth-business": "Your Gemini Enterprise account. Needs a GCP project and location, and the first new session opens a browser. このマシンにブラウザがない場合は、下のブラウザ不要のサインインを使ってください。",
+        "oauth-personal": "無料プランを含むすべての Antigravity プランで利用できる Google アカウントです。Antigravity CLI がサインインをキャッシュし、agy acp で再利用します。このマシンにブラウザがない場合は下のブラウザなしサインインを使用してください。",
+        "oauth-business": "Gemini Enterprise アカウントです。GCP プロジェクトとロケーションが必要です。このマシンにブラウザがない場合は下のブラウザなしサインインを使用してください。",
         "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
         "agent-platform": "Formerly Vertex AI. Use an API key, or a project and location with Application Default Credentials (gcloud auth application-default login)."
       },
@@ -1099,16 +1099,22 @@
       "missingGeminiApiKey": "Enter a Gemini API key, or pick a different authentication method — sessions will fail to start without it.",
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
-      "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
+      "settingsFileHint": "Antigravity CLI 自身の設定ファイル（参照用・codeg はこのファイルを上書きしません）。",
       "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "Save",
+      "permissionsTitle": "権限",
+      "permissionModeLabel": "権限モード",
+      "permissionModeDefault": "セッションモードに従う（デフォルト）",
+      "permissionModeTurbo": "Turbo（--dangerously-skip-permissions）",
+      "permissionModeDefaultHint": "通常の `agy acp` で起動し、入力欄のセッションモード（default / accept-edits / auto / plan）と権限ルールに従ってツール承認を行います。",
+      "permissionModeTurboHint": "`agy acp --dangerously-skip-permissions` で起動します。確認なしで全ツールの権限リクエストを自動承認します（明示的な deny ルールとシステム拒否リストは引き続き有効）。新しいセッションから反映されます。",
       "headless": {
         "title": "ブラウザのないマシンでサインイン",
-        "description": "Antigravity の Google サインインはエージェント自身が実行するため、ブラウザはエージェントが動くマシンで開く必要があります。デスクトップのないサーバーに置いた codeg にはブラウザがなく、最初のセッション作成は 5 分待ってから失敗します。代わりにここからサインインしてください。リンクを任意の端末で開き、移動先のアドレスを貼り戻します。",
+        "description": "Antigravity CLI は Google サインイン用リンクを表示し、認可コードの入力を待ちます。このマシンにブラウザがなくても利用できます。任意の端末でリンクを開いてアクセスを承認し、認可コード（または移動先の完全な URL）をここに貼り付けてください。",
         "start": "サインインリンクを取得",
         "saveFirst": "先に保存してください。サインインは保存済みの設定を使用し、上の入力内容は参照しません。",
         "step1": "1. このリンクを開いて Google にサインインします。",
-        "step2": "2. ブラウザは最終的に {redirectUri} へ移動し、接続できないと表示されます（想定どおりです）。アドレスバーのアドレス全体をコピーしてここに貼り付けてください。",
+        "step2": "2. 上のリンクを開いてアクセスを承認してください。{redirectUri} に移動しますので、認可コード（またはその完全な URL）をここに貼り付けてください。",
         "copyLink": "リンクをコピー",
         "openLink": "新しいタブで開く",
         "complete": "サインインを完了",

@@ -9331,15 +9331,12 @@ fn agent_local_config_path(agent_type: AgentType) -> Option<PathBuf> {
     match agent_type {
         AgentType::ClaudeCode => Some(home_dir_or_default().join(".claude").join("settings.json")),
         AgentType::Gemini => Some(home_dir_or_default().join(".gemini").join("settings.json")),
-        // Antigravity's ACP server keeps its own `settings.json` under
-        // `<GEMINI_HOME>/antigravity-acp/` — a DIFFERENT file from Gemini
-        // CLI's above, even though both trees default to `~/.gemini`. Exposing
-        // the path lights up "open config file"; the write side is owned by
-        // `acp::connection::sync_antigravity_settings_file` at launch, which
-        // merges only `auth.type` and the `gcp` block and leaves every other
-        // key the user put there alone.
+        // Antigravity CLI (`agy acp`) 的自身配置文件位于
+        // `<GEMINI_HOME>/antigravity-cli/settings.json`（与 Gemini CLI 的
+        // `~/.gemini/settings.json` 及旧版 `antigravity-acp/settings.json` 不同）。
+        // 暴露路径供设置页展示与打开，codeg 本身不再向其写入 `auth.type`。
         AgentType::Antigravity => Some(
-            crate::parsers::antigravity::resolve_antigravity_acp_dir().join("settings.json"),
+            crate::parsers::antigravity::resolve_antigravity_cli_dir().join("settings.json"),
         ),
         AgentType::OpenCode => Some(resolve_opencode_config_path()),
         // The CLI's live credential store, NOT the legacy `globalState.json`
@@ -11457,11 +11454,10 @@ pub(crate) fn build_runtime_env_from_setting(
     let Some(raw_config_json) = local_config_json else {
         return merged;
     };
-    // OpenCode's local config is its own `opencode.json(c)`, not codeg's
-    // runtime config: its top-level `model` is OpenCode's default model, which
-    // the generic projection below would export as `OPENAI_MODEL` into every
-    // command the agent runs.
-    if agent_type == AgentType::OpenCode {
+    // OpenCode 与 Antigravity 的本地配置均为各自 CLI 的原生配置文件，而非 codeg
+    // 的通用 `AgentRuntimeConfig` 结构；跳过通用映射以避免把 CLI 自身的顶层字段
+    // （如 `model`）误导出为启动环境变量。
+    if matches!(agent_type, AgentType::OpenCode | AgentType::Antigravity) {
         return merged;
     }
     let Ok(config) = serde_json::from_str::<AgentRuntimeConfig>(raw_config_json) else {

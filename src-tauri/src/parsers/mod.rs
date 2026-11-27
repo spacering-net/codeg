@@ -322,15 +322,26 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             indexes: &[],
         },
         ExternalSource {
-            // Antigravity keeps one SQLite trajectory + `.meta` sidecar per
-            // session under `<GEMINI_HOME>/antigravity-acp/conversations`
-            // (default `~/.gemini/...`). The root points at `conversations`
-            // and NOT at `antigravity-acp` itself, whose siblings are the
-            // OAuth token files (`acp_token.json`, `acp_business_token.json`)
-            // — those must never end up in a backup archive.
+            // Antigravity CLI (`agy acp`) 把会话轨迹存放在
+            // `<GEMINI_HOME>/antigravity-cli/conversations/<id>.db`。
+            // 根目录仅指向 `conversations` 子目录而非 `antigravity-cli` 本身，
+            // 避免将同级凭据、缓存或设置文件打进备份包。
             agent: "antigravity",
             root: antigravity::resolve_antigravity_sessions_dir(),
             is_file: false,
+            sqlite: true,
+            include_top: None,
+            indexes: &[],
+        },
+        ExternalSource {
+            // Antigravity CLI 不再为每个会话生成 `.meta` sidecar，而是把
+            // `workspace_uris`（会话目录）索引在父目录的 `conversation_summaries.db`。
+            // 单独注册一个 file source（而不是把上面的 root 上移到 `antigravity-cli`），
+            // 这样旧备份里的 `external/antigravity/<id>.db` 还原路径保持兼容，
+            // 同时新备份还原后也不会丢失 CLI 会话的工作区路径。
+            agent: "antigravity-summaries",
+            root: antigravity::resolve_antigravity_cli_dir().join("conversation_summaries.db"),
+            is_file: true,
             sqlite: true,
             include_top: None,
             indexes: &[],

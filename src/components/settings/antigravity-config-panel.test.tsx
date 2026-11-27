@@ -30,6 +30,7 @@ import {
   ANTIGRAVITY_ENV_KEYS,
   AntigravityConfigPanel,
   antigravityIncompleteReason,
+  antigravityPermissionModeFromEnv,
   buildAntigravityEnv,
   inferAntigravityMethod,
   type AntigravityAuthMethod,
@@ -44,6 +45,7 @@ function values(
 ): AntigravityFormValues {
   return {
     method,
+    permissionMode: "default",
     geminiApiKey: "",
     googleApiKey: "",
     gcpProject: "",
@@ -69,6 +71,34 @@ describe("inferAntigravityMethod", () => {
   })
 })
 
+describe("antigravityPermissionModeFromEnv", () => {
+  // 与后端 `antigravity_skip_permissions_enabled` 保持一致：
+  // 仅显式 "1"/"true" 启用 Turbo 模式，其余保持默认。
+  it("reads the launch knob the way the backend does", () => {
+    expect(antigravityPermissionModeFromEnv({})).toBe("default")
+    expect(
+      antigravityPermissionModeFromEnv({
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
+      })
+    ).toBe("default")
+    expect(
+      antigravityPermissionModeFromEnv({
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "turbo",
+      })
+    ).toBe("default")
+    expect(
+      antigravityPermissionModeFromEnv({
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "1",
+      })
+    ).toBe("turbo")
+    expect(
+      antigravityPermissionModeFromEnv({
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: " TRUE ",
+      })
+    ).toBe("turbo")
+  })
+})
+
 describe("buildAntigravityEnv", () => {
   it("keeps only the credential the chosen method uses and preserves the rest", () => {
     // Switching away from API-key auth must DELETE the key. Leaving it would
@@ -84,16 +114,21 @@ describe("buildAntigravityEnv", () => {
     expect(buildAntigravityEnv(stale, values("oauth-personal"))).toEqual({
       KEEP: "y",
       AGY_AUTH_METHOD: "oauth-personal",
+      AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
     })
 
     expect(
       buildAntigravityEnv(
         stale,
-        values("gemini-api-key", { geminiApiKey: "  AIza-new  " })
+        values("gemini-api-key", {
+          geminiApiKey: "  AIza-new  ",
+          permissionMode: "turbo",
+        })
       )
     ).toEqual({
       KEEP: "y",
       AGY_AUTH_METHOD: "gemini-api-key",
+      AGY_DANGEROUSLY_SKIP_PERMISSIONS: "1",
       GEMINI_API_KEY: "AIza-new",
     })
   })
@@ -108,6 +143,7 @@ describe("buildAntigravityEnv", () => {
       )
     ).toEqual({
       AGY_AUTH_METHOD: "oauth-business",
+      AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
       GOOGLE_CLOUD_PROJECT: "acme",
       GOOGLE_CLOUD_LOCATION: "eu",
     })
@@ -128,6 +164,7 @@ describe("buildAntigravityEnv", () => {
       )
     ).toEqual({
       AGY_AUTH_METHOD: "agent-platform",
+      AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
       GOOGLE_API_KEY: "AIza-vertex",
     })
 
@@ -138,6 +175,7 @@ describe("buildAntigravityEnv", () => {
       )
     ).toEqual({
       AGY_AUTH_METHOD: "agent-platform",
+      AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
       GOOGLE_CLOUD_PROJECT: "p",
       GOOGLE_CLOUD_LOCATION: "us",
     })
@@ -219,7 +257,7 @@ describe("AntigravityConfigPanel", () => {
       enabled: true,
       env: overrides?.env ?? {},
       config_json: null,
-      config_file_path: "/home/u/.gemini/antigravity-acp/settings.json",
+      config_file_path: "/home/u/.gemini/antigravity-cli/settings.json",
     } as unknown as AcpAgentInfo
   }
 
@@ -323,7 +361,7 @@ describe("AntigravityConfigPanel", () => {
       screen.getByText(m.methodHints["oauth-personal"])
     ).toBeInTheDocument()
     expect(
-      screen.getByText("/home/u/.gemini/antigravity-acp/settings.json")
+      screen.getByText("/home/u/.gemini/antigravity-cli/settings.json")
     ).toBeInTheDocument()
     // Nothing to fill in, so no warning.
     expect(screen.queryByText(m.missingGeminiApiKey)).not.toBeInTheDocument()
@@ -358,11 +396,45 @@ describe("AntigravityConfigPanel", () => {
       {
         KEEP: "y",
         AGY_AUTH_METHOD: "gemini-api-key",
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
         GEMINI_API_KEY: "AIza-new",
       },
       true
     )
     await waitFor(() => expect(onSaved).toHaveBeenCalled())
+  })
+
+  it("shows the turbo permission hint and persists AGY_DANGEROUSLY_SKIP_PERMISSIONS", async () => {
+    const onSaveEnv = vi.fn().mockResolvedValue(0)
+    const { rerender } = renderPanel({
+      env: {
+        AGY_AUTH_METHOD: "oauth-personal",
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "1",
+      },
+      onSaveEnv,
+    })
+
+    expect(screen.getByText(m.permissionModeTurboHint)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: m.save }))
+
+    await waitFor(() => expect(onSaveEnv).toHaveBeenCalledTimes(1))
+    expect(onSaveEnv).toHaveBeenCalledWith(
+      {
+        AGY_AUTH_METHOD: "oauth-personal",
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "1",
+      },
+      true
+    )
+
+    // 未处于编辑态时，持久化行变化会同步刷新权限模式显示
+    rerender({
+      env: {
+        AGY_AUTH_METHOD: "oauth-personal",
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
+      },
+      onSaveEnv,
+    })
+    expect(screen.getByText(m.permissionModeDefaultHint)).toBeInTheDocument()
   })
 
   it("keeps an in-progress edit when the persisted row changes underneath", () => {
