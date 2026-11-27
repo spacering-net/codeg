@@ -283,6 +283,7 @@ fn ensure_windows_undecorated(_window: &tauri::WebviewWindow) {}
 /// Apply platform-specific post-creation setup.
 pub(crate) fn post_window_setup(window: &tauri::WebviewWindow) {
     ensure_windows_undecorated(window);
+    crate::commands::webview_watchdog::attach_watchdog(window);
 }
 
 impl SettingsWindowState {
