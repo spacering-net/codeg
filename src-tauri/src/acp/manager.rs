@@ -823,19 +823,23 @@ impl ConnectionManager {
     /// Queues [`ConnectionCommand::StopWork`], whose handler in the connection
     /// loop cascades when it runs — reaching a child the stopped turn started
     /// while the stop waited in the queue — and cancels the children running
-    /// now right away as well.
+    /// now right away as well (a loop held up on the agent may not read the
+    /// stop for a while).
+    ///
+    /// The right-away sweep goes BEFORE the stop is queued: once queued, the
+    /// loop can handle it, finish the turn and take the next prompt while
+    /// `send_cancel` still awaits the row update — a sweep after it, keyed by
+    /// the connection alone, would then stop that next turn's children.
     pub async fn cancel_with_delegated_children(
         &self,
         db: &DatabaseConnection,
         conn_id: &str,
     ) -> Result<(), AcpError> {
-        let result = self
-            .send_cancel(db, conn_id, ConnectionCommand::StopWork)
-            .await;
         if let Some(injection) = self.delegation_injection.get() {
             injection.broker.cancel_children_of_parent(conn_id).await;
         }
-        result
+        self.send_cancel(db, conn_id, ConnectionCommand::StopWork)
+            .await
     }
 
     /// Returns the shared terminal-shell setting consumed by ACP terminal
