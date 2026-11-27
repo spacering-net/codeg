@@ -41,6 +41,12 @@ export type ParsedInput = {
   botUid: string | null
   task: string | null
   workingDir: string | null
+  /** Session mode the parent pinned for this one delegation, from the
+   *  `permission_mode` argument. `null` when omitted, which means the child
+   *  used the configured per-agent default. */
+  permissionMode: string | null
+  /** Model the parent pinned for this one delegation. `null` when omitted. */
+  model: string | null
 }
 
 /** Largest assistant id: the backend keeps them in a 32-bit integer. */
@@ -192,6 +198,8 @@ const EMPTY_PARSED_INPUT: ParsedInput = {
   botUid: null,
   task: null,
   workingDir: null,
+  permissionMode: null,
+  model: null,
 }
 
 // Wrapper keys that hosts use to nest the actual tool arguments. JSON-RPC
@@ -235,7 +243,9 @@ function findDelegationArgs(
     typeof obj.agent_type === "string" ||
     typeof obj.working_dir === "string" ||
     coerceAssistantId(obj.assistant_id) !== null ||
-    coerceBotUid(obj.bot) !== null
+    coerceBotUid(obj.bot) !== null ||
+    typeof obj.permission_mode === "string" ||
+    typeof obj.model === "string"
   ) {
     return obj
   }
@@ -1020,6 +1030,10 @@ function parseCodeModeInput(parsed: unknown): ParsedInput | null {
   const assistantAt = codeModeFindKey(code, start, close, "assistant_id")
   const botAt = codeModeFindKey(code, start, close, "bot")
   const agentAt = codeModeFindKey(code, start, close, "agent_type")
+  const pinFor = (key: string) => {
+    const at = codeModeFindKey(code, start, close, key)
+    return at === null ? null : objectStringValue(code, at)?.trim() || null
+  }
   const workingAt = codeModeFindKey(code, start, close, "working_dir")
   const taskAt = codeModeFindKey(code, start, close, "task")
   // A `bot` wins over `assistant_id` and `agent_type`, as on the backend
@@ -1038,6 +1052,8 @@ function parseCodeModeInput(parsed: unknown): ParsedInput | null {
       botAt !== null ? coerceBotUid(objectStringValue(code, botAt)) : null,
     task: taskAt !== null ? objectTaskValue(code, taskAt) : null,
     workingDir: workingAt !== null ? objectStringValue(code, workingAt) : null,
+    permissionMode: pinFor("permission_mode"),
+    model: pinFor("model"),
   }
 }
 
@@ -1162,6 +1178,14 @@ export function parseInput(raw: string | null | undefined): ParsedInput {
     botUid: coerceBotUid(obj.bot),
     task: typeof obj.task === "string" ? obj.task : null,
     workingDir: typeof obj.working_dir === "string" ? obj.working_dir : null,
+    permissionMode:
+      typeof obj.permission_mode === "string" && obj.permission_mode.trim()
+        ? obj.permission_mode.trim()
+        : null,
+    model:
+      typeof obj.model === "string" && obj.model.trim()
+        ? obj.model.trim()
+        : null,
   }
 }
 

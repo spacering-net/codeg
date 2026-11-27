@@ -42,6 +42,19 @@
         "working_dir": {
           "type": "string",
           "description": "Absolute path the sub-agent runs in. Defaults to this session's working directory."
+        },
+        "permission_mode": {
+          "type": "string",
+          "description": "For a direct agent delegation. A named assistant uses its saved settings. Session mode the sub-agent starts in, for THIS delegation only. Use it to bound what a delegated agent may do without being asked, for example keeping it on a prompting or approval mode instead of running everything unattended. The value is the target agent's own session mode id, the same one shown in that agent's mode selector and used by the per-agent delegation default in Settings. Omit to keep the configured default, so existing callers are unaffected. Agents that expose no session modes ignore it. This is a cooperative permission scope enforced by the agent, not an OS sandbox."
+        },
+        "model": {
+          "type": "string",
+          "description": "For a direct agent delegation. A named assistant uses its saved settings. Model id the sub-agent starts on for THIS delegation only. Use the same id the target agent's model selector shows. Overrides the per-agent Settings default. Omit to keep that default. Agents with no model selector ignore it."
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "For a direct agent delegation. A named assistant uses its saved settings. Other session controls for THIS delegation only, using the same option ids as that agent's Settings defaults (reasoning, context, fast, and whatever else it exposes). Each value is the option's id. Omit a key to keep the configured default. Unknown keys are ignored."
         }
       }
     }

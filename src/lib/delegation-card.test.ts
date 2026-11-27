@@ -26,6 +26,47 @@ describe("parseInput wrapper peeling", () => {
     expect(parsed.agentType).toBe("codex")
     expect(parsed.task).toBe("run the build")
     expect(parsed.workingDir).toBe("/tmp/proj")
+    expect(parsed.model).toBeNull()
+  })
+
+  it("reads a per-call model", () => {
+    const parsed = parseInput(
+      JSON.stringify({
+        agent_type: "codex",
+        task: "run the build",
+        model: "gpt-5.4",
+      })
+    )
+    expect(parsed.model).toBe("gpt-5.4")
+  })
+
+  it("treats a blank model as omitted", () => {
+    const parsed = parseInput(
+      JSON.stringify({
+        agent_type: "codex",
+        task: "run the build",
+        model: "   ",
+      })
+    )
+    expect(parsed.model).toBeNull()
+  })
+
+  it("reads the requested model from a code-mode call", () => {
+    const parsed = parseInput(
+      JSON.stringify({
+        code: 'tools["codeg-mcp"].delegate_to_agent({agent_type: "codex", model: "example-model", task: "check"})',
+      })
+    )
+    expect(parsed.model).toBe("example-model")
+  })
+
+  it("reads the requested permission_mode from a code-mode call", () => {
+    const parsed = parseInput(
+      JSON.stringify({
+        code: 'tools["codeg-mcp"].delegate_to_agent({agent_type: "codex", permission_mode: "plan", task: "check"})',
+      })
+    )
+    expect(parsed.permissionMode).toBe("plan")
   })
 
   it("peels Cursor's MCP args wrapper", () => {
@@ -212,6 +253,31 @@ describe("parseDelegationMeta task fields", () => {
         "codeg.delegation": { status: "running", agent_type: "custom:my-cli" },
       })?.agentType
     ).toBe("custom:my-cli")
+  })
+
+  it("parses permission_mode and trims it", () => {
+    const parsed = parseInput(
+      JSON.stringify({
+        agent_type: "codex",
+        task: "t",
+        permission_mode: "  plan  ",
+      })
+    )
+    expect(parsed.permissionMode).toBe("plan")
+  })
+
+  it("treats a blank permission_mode as absent", () => {
+    const parsed = parseInput(
+      JSON.stringify({ agent_type: "codex", task: "t", permission_mode: "   " })
+    )
+    expect(parsed.permissionMode).toBeNull()
+  })
+
+  it("leaves permissionMode null when the argument is omitted", () => {
+    const parsed = parseInput(
+      JSON.stringify({ agent_type: "codex", task: "t" })
+    )
+    expect(parsed.permissionMode).toBeNull()
   })
 })
 
@@ -623,6 +689,8 @@ describe("opencode code-mode execute payloads", () => {
       botUid: null,
       task: null,
       workingDir: null,
+      permissionMode: null,
+      model: null,
     })
 
     // An escape outside the minimal set bails the same way.
@@ -814,6 +882,8 @@ describe("opencode code-mode execute payloads", () => {
         botUid: null,
         task: null,
         workingDir: null,
+        permissionMode: null,
+        model: null,
       })
     }
   })
@@ -864,6 +934,8 @@ describe("opencode code-mode execute payloads", () => {
         botUid: null,
         task: null,
         workingDir: null,
+        permissionMode: null,
+        model: null,
       })
     }
   })
@@ -875,6 +947,8 @@ describe("opencode code-mode execute payloads", () => {
       botUid: null,
       task: null,
       workingDir: null,
+      permissionMode: null,
+      model: null,
     }
     // What runs is whatever these expressions evaluate to, which the first
     // literal in them does not determine. A second argument object makes

@@ -3981,7 +3981,9 @@
       },
       "delegation": {
         "unknownAgent": "하위 에이전트",
+        "delegationPinnedMode": "Started in {mode} mode, pinned by the parent for this delegation",
         "openDetail": "대화 보기",
+        "delegationPinnedModel": "이 위임에서 부모가 {model} 을(를) 지정했습니다",
         "resumed": "재개됨",
         "resumeReasonLabel": "재개 사유",
         "detailTitle": "서브에이전트 대화",

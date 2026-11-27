@@ -186,6 +186,36 @@ describe("delegation row: who and how it stands", () => {
     expect(within(row()).getByText("running")).toBeInTheDocument()
   })
 
+  it("shows both settings requested for a direct agent", () => {
+    renderRow(
+      delegation({
+        input: JSON.stringify({
+          agent_type: "codex",
+          task: "review",
+          model: "example-model",
+          permission_mode: "review-mode",
+        }),
+      })
+    )
+    expect(within(row()).getByText("example-model")).toBeInTheDocument()
+    expect(within(row()).getByText("review-mode")).toBeInTheDocument()
+  })
+
+  it("omits call-level settings when a saved assistant owns the selection", () => {
+    renderRow(
+      delegation({
+        input: JSON.stringify({
+          assistant_id: 3,
+          task: "review",
+          model: "ignored-model",
+          permission_mode: "ignored-mode",
+        }),
+      })
+    )
+    expect(screen.queryByText("ignored-model")).not.toBeInTheDocument()
+    expect(screen.queryByText("ignored-mode")).not.toBeInTheDocument()
+  })
+
   it("shows the task straight from the call's input", () => {
     renderRow(
       delegation({

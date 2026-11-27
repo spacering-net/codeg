@@ -7,7 +7,7 @@
 //! [`DelegationBroker`]. The listener is the boundary between the wire and
 //! the broker, plus the place where the per-launch token policy is enforced.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -1381,6 +1381,12 @@ impl DelegationListener {
             .clone()
             .or_else(|| Some(entry.working_dir.to_string_lossy().to_string()));
 
+        // Optional per-call session knobs. Blank/whitespace is omitted so a
+        // model emitting `""` cannot clear the configured default.
+        let model = optional_string_arg(req.input.get("model"));
+        let config_values = parse_config_overlay(req.input.get("config"));
+        let permission_mode = optional_string_arg(req.input.get("permission_mode"));
+
         let delegation_req = DelegationRequest {
             parent_connection_id: req.parent_connection_id,
             parent_conversation_id,
@@ -1389,6 +1395,9 @@ impl DelegationListener {
             task,
             working_dir,
             requested_working_dir,
+            permission_mode,
+            model,
+            config_values,
             external_handle: req.external_handle,
             assistant,
             asked: Some(asked),
@@ -1403,6 +1412,32 @@ impl DelegationListener {
             &assistant_not_found_message(asked, &roster),
         )
     }
+}
+
+fn optional_string_arg(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn parse_config_overlay(value: Option<&Value>) -> BTreeMap<String, String> {
+    let Some(obj) = value.and_then(|v| v.as_object()) else {
+        return BTreeMap::new();
+    };
+    let mut out = BTreeMap::new();
+    for (key, val) in obj {
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let Some(s) = val.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        out.insert(key.to_string(), s.to_string());
+    }
+    out
 }
 
 /// Serialize a [`DelegationTaskReport`] into a [`BrokerResponse`] for the wire.
@@ -2499,6 +2534,9 @@ mod tests {
                 task: "do x".into(),
                 working_dir: None,
                 requested_working_dir: None,
+                permission_mode: None,
+                model: None,
+                config_values: BTreeMap::new(),
                 external_handle: None,
                 assistant: None,
                 asked: None,
@@ -2655,6 +2693,9 @@ mod tests {
                         task: "do x".into(),
                         working_dir: None,
                         requested_working_dir: None,
+                        permission_mode: None,
+                        model: None,
+                        config_values: BTreeMap::new(),
                         external_handle: None,
                         assistant: None,
                         asked: None,
@@ -2760,6 +2801,9 @@ mod tests {
                 task: "do x".into(),
                 working_dir: None,
                 requested_working_dir: None,
+                permission_mode: None,
+                model: None,
+                config_values: BTreeMap::new(),
                 external_handle: None,
                 assistant: None,
                 asked: None,
@@ -2814,6 +2858,9 @@ mod tests {
                     task: "do x".into(),
                     working_dir: None,
                     requested_working_dir: None,
+                    permission_mode: None,
+                    model: None,
+                    config_values: BTreeMap::new(),
                     external_handle: Some("h-1".into()),
                     assistant: None,
                     asked: None,
@@ -4532,7 +4579,11 @@ mod tests {
         // which a caller could not pass back).
         let ack = serve(
             listener,
-            call(json!({"assistant_id": "3", "agent_type": "not-an-agent", "task": "review"})),
+            call(json!({
+                "assistant_id": "3", "agent_type": "not-an-agent", "task": "review",
+                "permission_mode": "other-mode",
+                "model": "other-model", "config": {"effort": "low"}
+            })),
         )
         .await;
         assert_eq!(ack["status"], "running");
