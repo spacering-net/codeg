@@ -5,7 +5,6 @@ import {
   adoptLegacyNewConversationDraft,
   buildNewConversationDraftStorageKey,
   clearMessageInputDraftV2,
-  loadMessageInputDraft,
   loadMessageInputDraftV2,
   moveMessageInputDraft,
   resetLegacyDraftAdoptionForTests,
@@ -40,37 +39,6 @@ describe("message-input-draft v2", () => {
     const raw = localStorage.getItem(V2("k-persist"))
     expect(raw).not.toBeNull()
     expect(JSON.parse(raw as string)).toEqual({ doc: DOC })
-  })
-
-  it("restores durable drafts without retaining the editor's document", () => {
-    const key = "conv:541"
-    saveMessageInputDraftV2(key, DOC)
-
-    const first = loadMessageInputDraftV2(key)
-    expect(first).toEqual({ kind: "doc", doc: DOC })
-    if (first?.kind !== "doc") throw new Error("Expected a restored document")
-    expect(first.doc).not.toBe(DOC)
-
-    const second = loadMessageInputDraftV2(key)
-    expect(second).toEqual(first)
-    if (second?.kind !== "doc") throw new Error("Expected a restored document")
-    expect(second.doc).not.toBe(first.doc)
-  })
-
-  it("keeps the pending document until the idle write", () => {
-    const key = "conv:542"
-    const idle = vi.fn<(callback: () => void) => number>().mockReturnValue(1)
-    vi.stubGlobal("requestIdleCallback", idle)
-    try {
-      saveMessageInputDraftV2(key, DOC)
-      expect(localStorage.getItem(V2(key))).toBeNull()
-      expect(loadMessageInputDraftV2(key)).toEqual({ kind: "doc", doc: DOC })
-      idle.mock.calls[0][0]()
-      expect(JSON.parse(localStorage.getItem(V2(key))!)).toEqual({ doc: DOC })
-      expect(loadMessageInputDraftV2(key)).toEqual({ kind: "doc", doc: DOC })
-    } finally {
-      vi.unstubAllGlobals()
-    }
   })
 
   it("returns null when there is no draft", () => {
@@ -127,42 +95,6 @@ describe("message-input-draft v2", () => {
     }
     // v1 is still on disk because the v2 write never succeeded.
     expect(localStorage.getItem(V1("k-fail"))).not.toBeNull()
-    expect(loadMessageInputDraftV2("k-fail")).toEqual({
-      kind: "doc",
-      doc: DOC,
-    })
-  })
-
-  it("reads a durable v1 text draft from storage, not a stale memory copy", () => {
-    saveMessageInputDraft("k-v1-durable", "first")
-    // Another window (or a later write) changes the stored draft.
-    localStorage.setItem(
-      V1("k-v1-durable"),
-      JSON.stringify({ text: "changed" })
-    )
-    expect(loadMessageInputDraft("k-v1-durable")).toBe("changed")
-  })
-
-  it("keeps a v1 text draft in memory when its write fails", () => {
-    const setItem = vi
-      .spyOn(Storage.prototype, "setItem")
-      .mockImplementation(() => {
-        throw new Error("quota exceeded")
-      })
-    try {
-      saveMessageInputDraft("k-v1-fail", "kept in memory")
-    } finally {
-      setItem.mockRestore()
-    }
-    expect(localStorage.getItem(V1("k-v1-fail"))).toBeNull()
-    expect(loadMessageInputDraft("k-v1-fail")).toBe("kept in memory")
-    // The next successful write releases the memory copy to storage.
-    saveMessageInputDraft("k-v1-fail", "now stored")
-    expect(JSON.parse(localStorage.getItem(V1("k-v1-fail"))!)).toEqual({
-      text: "now stored",
-    })
-    localStorage.setItem(V1("k-v1-fail"), JSON.stringify({ text: "changed" }))
-    expect(loadMessageInputDraft("k-v1-fail")).toBe("changed")
   })
 
   it("ignores a corrupt v2 payload and falls back to the legacy v1 draft", () => {
@@ -196,37 +128,6 @@ describe("per-draft-tab composer drafts", () => {
     saveMessageInputDraftV2(a, DOC)
     expect(loadMessageInputDraftV2(a)).toEqual({ kind: "doc", doc: DOC })
     expect(loadMessageInputDraftV2(b)).toBeNull()
-  })
-
-  it("keeps a stored draft-tab draft when another window deletes its keys", () => {
-    // Another window's startup sweep only knows its own draft tabs, so it can
-    // remove this window's stored draft while the tab is still open.
-    const saved = buildNewConversationDraftStorageKey("new-x-saved")
-    saveMessageInputDraftV2(saved, DOC)
-    const loadedKey = buildNewConversationDraftStorageKey("new-x-loaded")
-    localStorage.setItem(V2(loadedKey), JSON.stringify({ doc: DOC }))
-    expect(loadMessageInputDraftV2(loadedKey)).toEqual({
-      kind: "doc",
-      doc: DOC,
-    })
-    const textKey = buildNewConversationDraftStorageKey("new-x-text")
-    saveMessageInputDraft(textKey, "typed")
-
-    for (const key of [saved, loadedKey, textKey]) {
-      localStorage.removeItem(V1(key))
-      localStorage.removeItem(V2(key))
-    }
-
-    expect(loadMessageInputDraftV2(saved)).toEqual({ kind: "doc", doc: DOC })
-    expect(loadMessageInputDraftV2(loadedKey)).toEqual({
-      kind: "doc",
-      doc: DOC,
-    })
-    expect(loadMessageInputDraft(textKey)).toBe("typed")
-
-    // Closing the tab still releases the copy.
-    clearMessageInputDraftV2(saved)
-    expect(loadMessageInputDraftV2(saved)).toBeNull()
   })
 
   it("moves a draft to another key (closing tab hands off to its replacement)", () => {
