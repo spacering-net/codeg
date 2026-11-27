@@ -2627,7 +2627,8 @@
         "title": "Acciones rápidas",
         "openProject": "Abrir proyecto",
         "browserTab": "Abrir pestaña del navegador",
-        "showPet": "Mostrar mascota"
+        "showPet": "Mostrar mascota",
+        "hidePet": "Ocultar mascota"
       },
       "mcp": {
         "title": "Servicio codeg-mcp",
@@ -5286,7 +5287,8 @@
         "deleteFailed": "Error al eliminar",
         "loadFailed": "Error al cargar mascotas",
         "setActiveFailed": "Error al activar mascota",
-        "summonFailed": "Error al invocar la ventana de mascota"
+        "summonFailed": "Error al invocar la ventana de mascota",
+        "closeFailed": "Error al cerrar la ventana de mascota"
       }
     },
     "import": {

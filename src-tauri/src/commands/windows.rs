@@ -1757,10 +1757,19 @@ fn spawn_pet_hover_watcher(app: AppHandle) {
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub fn is_pet_window_open(app: AppHandle) -> bool {
+    app.get_webview_window(PET_WINDOW_LABEL).is_some()
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn close_pet_window(
     app: AppHandle,
     db: tauri::State<'_, AppDatabase>,
 ) -> Result<(), AppCommandError> {
+    if let Some(panel) = app.get_webview_window(PET_PANEL_LABEL) {
+        let _ = panel.close();
+    }
     if let Some(existing) = app.get_webview_window(PET_WINDOW_LABEL) {
         let _ = existing.close();
     }

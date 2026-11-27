@@ -2627,7 +2627,8 @@
         "title": "빠른 작업",
         "openProject": "프로젝트 열기",
         "browserTab": "브라우저 탭 열기",
-        "showPet": "펫 표시"
+        "showPet": "펫 표시",
+        "hidePet": "펫 숨기기"
       },
       "mcp": {
         "title": "codeg-mcp 서비스",
@@ -5286,7 +5287,8 @@
         "deleteFailed": "펫 삭제에 실패했습니다",
         "loadFailed": "펫 목록 로드에 실패했습니다",
         "setActiveFailed": "활성 펫 설정에 실패했습니다",
-        "summonFailed": "펫 창 호출에 실패했습니다"
+        "summonFailed": "펫 창 호출에 실패했습니다",
+        "closeFailed": "펫 창을 닫지 못했습니다"
       }
     },
     "import": {

@@ -2627,7 +2627,8 @@
         "title": "Actions rapides",
         "openProject": "Ouvrir un projet",
         "browserTab": "Nouvel onglet de navigateur",
-        "showPet": "Afficher la mascotte"
+        "showPet": "Afficher la mascotte",
+        "hidePet": "Masquer la mascotte"
       },
       "mcp": {
         "title": "Service codeg-mcp",
@@ -5286,7 +5287,8 @@
         "deleteFailed": "Suppression impossible",
         "loadFailed": "Chargement impossible",
         "setActiveFailed": "Activation impossible",
-        "summonFailed": "Ouverture de la fenêtre impossible"
+        "summonFailed": "Ouverture de la fenêtre impossible",
+        "closeFailed": "Fermeture de la fenêtre impossible"
       }
     },
     "import": {

@@ -2,7 +2,7 @@
 // All functions go through `getTransport().call(...)` so the same code runs
 // in Tauri (`invoke`) and standalone-server (`fetch`) modes.
 
-import { getTransport } from "@/lib/transport"
+import { getShellTransport, getTransport } from "@/lib/transport"
 import type { PetState } from "@/lib/pet/animation"
 import type {
   ImportablePet,
@@ -139,15 +139,19 @@ export async function listActivePetSessions(): Promise<PetSessionsPayload> {
   return getTransport().call("pet_list_active_sessions")
 }
 
-// Tauri-only — these are noops in web mode (the standalone server cannot
-// open native windows on the user's machine). Callers should branch on
-// `isDesktop()` before invoking them.
+// Tauri-only — these target the local desktop shell (never a remote
+// codeg-server, even when invoked from a remote-workspace desktop window).
+// Callers should branch on `isDesktop()` before invoking them.
 export async function openPetWindow(): Promise<void> {
-  return getTransport().call("open_pet_window")
+  return getShellTransport().call("open_pet_window")
 }
 
 export async function closePetWindow(): Promise<void> {
-  return getTransport().call("close_pet_window")
+  return getShellTransport().call("close_pet_window")
+}
+
+export async function isPetWindowOpen(): Promise<boolean> {
+  return getShellTransport().call("is_pet_window_open")
 }
 
 export async function recordPetWindowPosition(

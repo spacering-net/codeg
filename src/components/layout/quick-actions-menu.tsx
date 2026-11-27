@@ -38,7 +38,7 @@
  * with it.
  */
 
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import {
   DraftingCompass,
   FolderGit2,
@@ -77,7 +77,7 @@ import { openProjectBootWindow } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { BLANK_PAGE_URL } from "@/lib/browser/browser-url"
 import { useBrowserCapabilities } from "@/lib/browser/use-browser-capabilities"
-import { openPetWindow } from "@/lib/pet/api"
+import { closePetWindow, isPetWindowOpen, openPetWindow } from "@/lib/pet/api"
 import { isRemoteDesktopWindow } from "@/lib/platform"
 import { openLocalWorkspace } from "@/lib/remote-workspace"
 import { cn } from "@/lib/utils"
@@ -106,6 +106,8 @@ export function useQuickActions() {
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [cloneOpen, setCloneOpen] = useState(false)
   const [remoteManageOpen, setRemoteManageOpen] = useState(false)
+  const [petOpen, setPetOpen] = useState(false)
+  const petStateSeqRef = useRef(0)
 
   // Remote connections are only reachable on the desktop runtime (a web client
   // can't spawn another window bound to a different server), so their whole
@@ -144,16 +146,44 @@ export function useQuickActions() {
     openBrowserTab(BLANK_PAGE_URL)
   }, [openBrowserTab, openConversations])
 
+  const refreshPetOpen = useCallback(() => {
+    if (!desktop) return
+    const seq = ++petStateSeqRef.current
+    isPetWindowOpen()
+      .then((open) => {
+        if (seq === petStateSeqRef.current) setPetOpen(open)
+      })
+      .catch(() => {})
+  }, [desktop])
+
+  // Toggle the desktop pet window: close when already shown, summon otherwise.
   // Summoning fails when no pet has been made active yet (the backend refuses
   // rather than opening an empty window), so surface that instead of a silent
   // no-op — the fix lives in Settings › Appearance › Pets.
-  const handleShowPet = useCallback(() => {
-    openPetWindow().catch((err) => {
-      toast.error(tPet("errors.summonFailed"), {
-        description: toErrorMessage(err),
-      })
-    })
-  }, [tPet])
+  const handleTogglePet = useCallback(() => {
+    const seq = ++petStateSeqRef.current
+    if (petOpen) {
+      closePetWindow()
+        .then(() => {
+          if (seq === petStateSeqRef.current) setPetOpen(false)
+        })
+        .catch((err) => {
+          toast.error(tPet("errors.closeFailed"), {
+            description: toErrorMessage(err),
+          })
+        })
+    } else {
+      openPetWindow()
+        .then(() => {
+          if (seq === petStateSeqRef.current) setPetOpen(true)
+        })
+        .catch((err) => {
+          toast.error(tPet("errors.summonFailed"), {
+            description: toErrorMessage(err),
+          })
+        })
+    }
+  }, [petOpen, tPet])
 
   return {
     unseenFailures,
@@ -170,7 +200,9 @@ export function useQuickActions() {
     handleProjectBoot,
     handleOpenLocal,
     handleOpenBrowser,
-    handleShowPet,
+    petOpen,
+    refreshPetOpen,
+    handleTogglePet,
     folderDialogOpen,
     setFolderDialogOpen,
     cloneOpen,
@@ -204,12 +236,21 @@ export function QuickActionsItems({ actions }: { actions: QuickActions }) {
     handleProjectBoot,
     handleOpenLocal,
     handleOpenBrowser,
-    handleShowPet,
+    petOpen,
+    refreshPetOpen,
+    handleTogglePet,
     setFolderDialogOpen,
     setCloneOpen,
     setRemoteManageOpen,
   } = actions
   const browserRow = browserAvailable && openBrowserTab !== null
+
+  // This menu unmounts on close, so re-reading on mount keeps the pet row's
+  // show/hide label aligned with the live window even when the user opened or
+  // closed the pet from Settings or its own context menu.
+  useEffect(() => {
+    refreshPetOpen()
+  }, [refreshPetOpen])
 
   return (
     <>
@@ -372,8 +413,8 @@ export function QuickActionsItems({ actions }: { actions: QuickActions }) {
       {desktop && (
         <MenuRow
           icon={<PawPrint />}
-          label={t("showPet")}
-          onSelect={handleShowPet}
+          label={petOpen ? t("hidePet") : t("showPet")}
+          onSelect={handleTogglePet}
         />
       )}
     </>
