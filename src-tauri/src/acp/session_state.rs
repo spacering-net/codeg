@@ -2213,6 +2213,14 @@ impl SessionState {
                 .any(|t| t.kind == crate::acp::types::BackgroundTaskKind::Agent)
     }
 
+    /// Whether the watcher counts work it does not list — a pending
+    /// `ScheduleWakeup`, which lives only in the CLI process and never
+    /// reaches the async-task table — under the same age bound as its count.
+    pub fn has_pending_scheduled_wakeup(&self, now: DateTime<Utc>) -> bool {
+        self.watcher_counts_work(now)
+            && self.background_outstanding as usize > self.background_outstanding_tasks.len()
+    }
+
     /// Whether any AIR async task is still non-terminal AND the adapter has
     /// said something about async tasks recently enough to believe it.
     ///
