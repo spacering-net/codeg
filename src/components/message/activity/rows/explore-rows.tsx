@@ -2,7 +2,12 @@
 
 import { memo, useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
+import type { BundledLanguage, ThemedToken } from "shiki"
 
+import {
+  TokenSpan,
+  useHighlightedTokens,
+} from "@/components/ai-elements/code-block"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { parseReadOutput, searchResultText } from "@/lib/activity/explore"
 import type {
@@ -11,6 +16,7 @@ import type {
   ToolDescriptor,
 } from "@/lib/activity/types"
 import { toFolderRelativePath } from "@/lib/file-path-display"
+import { highlightLanguageFromPath } from "@/lib/language-detect"
 import { localImageMime } from "@/lib/markdown-local-image"
 import { cn } from "@/lib/utils"
 import { ReadImagePreview } from "../../read-image-preview"
@@ -395,6 +401,7 @@ function ReadDetail({ step }: { step: ToolStep }) {
   }
   if (!parsed) return null
   const visible = showAll ? lines : lines.slice(0, READ_PREVIEW_LINES)
+  const language = path ? highlightLanguageFromPath(path) : null
   return (
     <DetailBox
       tone="neutral"
@@ -424,16 +431,69 @@ function ReadDetail({ step }: { step: ToolStep }) {
         className="inline-block min-w-full py-2 font-mono text-[0.78125rem] leading-relaxed"
         dir="ltr"
       >
-        {visible.map((line, index) => (
-          <div key={index} className="flex">
-            <span className="w-12 shrink-0 select-none pe-3 text-end text-muted-foreground tabular-nums">
-              {parsed.startLine + index}
-            </span>
-            <span className="flex-1 whitespace-pre pe-4">{line}</span>
-          </div>
-        ))}
+        {language ? (
+          <HighlightedReadLines
+            lines={visible}
+            startLine={parsed.startLine}
+            language={language}
+          />
+        ) : (
+          <ReadLines lines={visible} startLine={parsed.startLine} />
+        )}
       </div>
     </DetailBox>
+  )
+}
+
+/** A read's lines, numbered from where it started; in colour once they have
+ *  tokens. */
+function ReadLines({
+  lines,
+  startLine,
+  tokens,
+}: {
+  lines: string[]
+  startLine: number
+  tokens?: ThemedToken[][]
+}) {
+  return lines.map((line, index) => {
+    const lineTokens = tokens?.[index]
+    return (
+      <div key={index} className="flex">
+        <span className="w-12 shrink-0 select-none pe-3 text-end text-muted-foreground tabular-nums">
+          {startLine + index}
+        </span>
+        <span className="flex-1 whitespace-pre pe-4">
+          {lineTokens?.length
+            ? lineTokens.map((token, at) => (
+                <TokenSpan key={at} token={token} />
+              ))
+            : line}
+        </span>
+      </div>
+    )
+  })
+}
+
+/** The lines a read shows, highlighted as its file's language (shared,
+ *  cached and bounded as every other code view is: plain until shiki has the
+ *  tokens, and plain past `HIGHLIGHT_LIMITS`). */
+function HighlightedReadLines({
+  lines,
+  startLine,
+  language,
+}: {
+  lines: string[]
+  startLine: number
+  language: BundledLanguage
+}) {
+  const { tokens } = useHighlightedTokens(lines.join("\n"), language)
+  return (
+    <ReadLines
+      lines={lines}
+      startLine={startLine}
+      tokens={tokens.length === lines.length ? tokens : undefined}
+    />
   )
 }
 
