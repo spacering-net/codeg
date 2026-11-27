@@ -43,6 +43,7 @@ import {
 import { TurnStats } from "./turn-stats"
 import { LiveTurnStats } from "./live-turn-stats"
 import { LiveRunsChip, type LiveRunsList } from "./live-runs-chip"
+import { LiveOutputFileWatcher } from "@/components/chat/live-output-file-watcher"
 import { SlideSlot } from "./slide-slot"
 import { ModelLabelProvider } from "./model-label-context"
 import { KnownInvocationsProvider } from "./known-invocations-context"
@@ -2539,6 +2540,13 @@ export function MessageListView({
   // wait on the history loading.
   const activityRow = (
     <SlideSlot className="shrink-0" show={activityShown} closeAtOnce>
+      {/* Null-rendering leaf: keeps the output tabs the run rows' buttons
+          open fresh while their task is still writing (temp-dir logs sit
+          outside the notify-watched roots, so nothing else does). Mounted
+          here rather than in the shell: this is where the live task list
+          already lives, and it is the real-session view only — the
+          activity gallery renders its chip with fixture data. */}
+      <LiveOutputFileWatcher tasks={liveRunList.tasks} />
       <LiveActivityBar
         message={turnLive ? liveMessage : null}
         runs={liveRunList}

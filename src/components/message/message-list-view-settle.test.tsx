@@ -69,6 +69,9 @@ vi.mock("@/components/ai-elements/message-thread", () => ({
 vi.mock("use-stick-to-bottom", () => ({
   useStickToBottomContext: () => ({ scrollToBottom: () => {} }),
 }))
+vi.mock("@/components/chat/live-output-file-watcher", () => ({
+  LiveOutputFileWatcher: () => null,
+}))
 vi.mock("@/components/chat/agent-plan-overlay", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/components/chat/agent-plan-overlay")
