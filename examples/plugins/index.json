@@ -1,0 +1,16 @@
+{
+  "apiVersion": 1,
+  "plugins": [
+    {
+      "id": "codeg.turn-activity",
+      "name": "Turn Activity",
+      "description": "Show completed agent turns in the active workspace.",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "source": "https://github.com/kogekiplay/codeg/tree/main/examples/plugins/turn-activity"
+        }
+      ]
+    }
+  ]
+}
