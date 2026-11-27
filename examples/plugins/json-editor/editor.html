@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JSON Editor</title>
+  <style>
+    :root { color-scheme: light dark; font: 14px system-ui; }
+    body { margin: 0; padding: 16px; }
+    main { display: grid; gap: 8px; }
+    h1, output { overflow-wrap: anywhere; }
+    h1 { font-size: 1.2rem; margin: 0; }
+    textarea {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 14rem;
+      padding: 8px;
+      font: 14px ui-monospace, monospace;
+      resize: vertical;
+    }
+    button { justify-self: start; font: inherit; }
+  </style>
+  <main>
+    <h1>JSON Editor</h1>
+    <label for="json">JSON text</label>
+    <textarea id="json" spellcheck="false" disabled></textarea>
+    <button type="button" disabled>Apply to editor</button>
+    <output role="status">Loading file…</output>
+  </main>
+  <script type="module">
+    const title = document.querySelector("h1")
+    const editor = document.querySelector("textarea")
+    const apply = document.querySelector("button")
+    const status = document.querySelector("output")
+
+    try {
+      const { fileName } = await window.codeg.ready
+      title.textContent = fileName
+      const file = window.codeg.file
+      const { text } = await file.readText()
+      editor.value = text
+      if (typeof file.writeText !== "function") {
+        status.textContent = "Editing is unavailable for this file."
+      } else {
+        editor.disabled = false
+        apply.disabled = false
+        status.textContent = ""
+        apply.addEventListener("click", async () => {
+          const value = editor.value
+          try {
+            JSON.parse(value)
+          } catch (error) {
+            status.textContent = `Invalid JSON: ${error.message}`
+            return
+          }
+
+          apply.disabled = true
+          editor.disabled = true
+          try {
+            await file.writeText(value)
+            status.textContent = "Editor buffer updated."
+          } catch (error) {
+            status.textContent = error.message
+          } finally {
+            apply.disabled = false
+            editor.disabled = false
+          }
+        })
+      }
+    } catch (error) {
+      status.textContent = error.message
+    }
+  </script>
+</html>

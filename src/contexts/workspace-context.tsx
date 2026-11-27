@@ -191,6 +191,9 @@ interface FileWorkspaceTabBase {
   lineEnding?: LineEnding
   saveState?: FileSaveState
   saveError?: string | null
+  /** Non-null when the most recent load for this tab failed via `rejectTab`
+   *  (in which case `content` holds a localized error string, not file text). */
+  loadError?: string | null
   // True iff an external change to this tab's path was observed by the
   // workspace watcher while the tab was inactive or otherwise not yet
   // resolved against disk. Cleared by any successful content reload.
@@ -604,6 +607,7 @@ function loadingTab(
     lineEnding: "none",
     saveState: "idle",
     saveError: null,
+    loadError: null,
   }
 }
 
@@ -1585,6 +1589,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
                   kind === "rich-diff" ? undefined : tab.modifiedContent,
                 saveState: "idle",
                 saveError: null,
+                loadError: null,
               }
             : tab
         )
@@ -1758,6 +1763,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
                 ...tab,
                 saveState: "error",
                 saveError: errorMessage,
+                loadError: errorMessage,
               }
             : tab
         )
@@ -1875,6 +1881,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
                   lineEnding: result.line_ending,
                   saveState: "idle",
                   saveError: null,
+                  loadError: null,
                   loading: false,
                   stale: false,
                 }
@@ -2233,6 +2240,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
                     lineEnding: result.line_ending,
                     saveState: "idle",
                     saveError: null,
+                    loadError: null,
                     loading: false,
                     stale: false,
                   }

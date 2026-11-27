@@ -3,6 +3,7 @@
 import { useMemo } from "react"
 import {
   AppWindow,
+  ChevronDown,
   Code,
   Copy,
   Download,
@@ -10,7 +11,10 @@ import {
   ExternalLink,
   Eye,
   Frame,
+  Loader2,
+  Puzzle,
   RotateCw,
+  Save,
   ShieldCheck,
   ShieldOff,
 } from "lucide-react"
@@ -31,11 +35,15 @@ import {
   useWorkspaceFileTabs,
 } from "@/contexts/workspace-context"
 import { FilePathBreadcrumb } from "@/components/files/file-path-breadcrumb"
+import { useActiveFilePluginPanels } from "@/components/files/file-plugin-panels"
 import { useHtmlPreviewControls } from "@/components/files/html-preview-controls"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
@@ -69,6 +77,9 @@ import { cn, copyTextFromMenu } from "@/lib/utils"
  * Sits above every `FileWorkspacePanel` render branch (editor / preview /
  * diff / image / PDF / office), so it wraps them all uniformly.
  */
+const BUILTIN_FILE_VIEW_SOURCE = "__builtin_source__"
+const BUILTIN_FILE_VIEW_PREVIEW = "__builtin_preview__"
+
 export function FileWorkspaceHeader() {
   const t = useTranslations("Folder.fileWorkspace")
   // Copying a path is the file tree's own menu row, word for word — same
@@ -76,10 +87,11 @@ export function FileWorkspaceHeader() {
   const tFileTree = useTranslations("Folder.fileTreeTab")
   const { activeFileTab, activeFileTabId, previewFileTabIds } =
     useWorkspaceFileTabs()
-  const { toggleFileTabPreview } = useWorkspaceActions()
+  const { saveActiveFile, toggleFileTabPreview } = useWorkspaceActions()
   // Present only while an HTML preview is on screen in this column — its
   // renderer publishes them and takes them away when it unmounts.
   const preview = useHtmlPreviewControls(activeFileTabId)
+  const filePluginPanels = useActiveFilePluginPanels(activeFileTab)
   // Where the download button's ticket is rooted (see below). Inside a
   // registered folder: that folder, with the path relative to it — the request
   // the file tree's own download row makes. In no registered folder: the
@@ -111,6 +123,10 @@ export function FileWorkspaceHeader() {
     activeFileTab.kind === "diff" || activeFileTab.kind === "rich-diff"
   const isDirty =
     activeFileTab.kind === "file" && Boolean(activeFileTab.isDirty)
+  const isFileReadonly =
+    activeFileTab.kind === "file" ? Boolean(activeFileTab.readonly) : true
+  const isFileSaving =
+    activeFileTab.kind === "file" && activeFileTab.saveState === "saving"
   // Mirror the gating the file tab strip used (file-workspace-tab-bar.tsx):
   // preview toggle for markdown/html, browser-open for html.
   const canPreview =
@@ -123,6 +139,41 @@ export function FileWorkspaceHeader() {
     canPreview && activeFileTabId
       ? previewFileTabIds.has(activeFileTabId)
       : false
+  const activePluginPanel = filePluginPanels.activePanel
+  const canSaveFromPluginPanel =
+    activeFileTab.kind === "file" &&
+    Boolean(activePluginPanel?.writable) &&
+    isDirty &&
+    !isFileReadonly
+  const isShowingBuiltInPreview = isPreviewActive && !activePluginPanel
+  const hasPluginFilePanels = filePluginPanels.panels.length > 0
+  const selectedFileViewValue = activePluginPanel
+    ? activePluginPanel.key
+    : isPreviewActive
+      ? BUILTIN_FILE_VIEW_PREVIEW
+      : BUILTIN_FILE_VIEW_SOURCE
+  const activeFileViewLabel = activePluginPanel
+    ? activePluginPanel.title
+    : isPreviewActive
+      ? t("preview")
+      : t("source")
+  const handleSelectFileView = (value: string) => {
+    if (value === BUILTIN_FILE_VIEW_SOURCE) {
+      filePluginPanels.selectPanel(null)
+      if (isPreviewActive && activeFileTabId) {
+        toggleFileTabPreview(activeFileTabId)
+      }
+      return
+    }
+    if (value === BUILTIN_FILE_VIEW_PREVIEW) {
+      filePluginPanels.selectPanel(null)
+      if (!isPreviewActive && canPreview && activeFileTabId) {
+        toggleFileTabPreview(activeFileTabId)
+      }
+      return
+    }
+    filePluginPanels.selectPanel(value)
+  }
   const path = activeFileTab.path
   // The menu is worth a button only if it has something in it: a diff tab has
   // no path to copy and nothing to open.
@@ -247,11 +298,104 @@ export function FileWorkspaceHeader() {
             <span className="truncate">{preview.scripts.label}</span>
           </button>
         )}
+        {canSaveFromPluginPanel && (
+          <button
+            type="button"
+            onClick={() => {
+              void saveActiveFile?.()
+            }}
+            disabled={isFileSaving || activeFileTab.loading}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center gap-1 rounded-full bg-primary/10 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:pointer-events-none disabled:opacity-50 sm:w-auto sm:px-2.5"
+            aria-label={isFileSaving ? t("saving") : t("save")}
+            title={isFileSaving ? t("saving") : t("save")}
+          >
+            {isFileSaving ? (
+              <Loader2
+                className="h-3.5 w-3.5 shrink-0 animate-spin"
+                aria-hidden="true"
+              />
+            ) : (
+              <Save className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            )}
+            <span className="hidden sm:inline">
+              {isFileSaving ? t("saving") : t("save")}
+            </span>
+          </button>
+        )}
+        {hasPluginFilePanels && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className={cn(
+                  "inline-flex h-7 min-w-0 max-w-36 sm:max-w-44 items-center gap-1 rounded-full px-2 text-xs transition-colors",
+                  activePluginPanel
+                    ? "bg-primary/10 text-primary hover:bg-primary/15"
+                    : "text-muted-foreground hover:bg-primary/8 hover:text-foreground"
+                )}
+                aria-label={t("fileView")}
+                title={
+                  activePluginPanel
+                    ? `${activePluginPanel.pluginName} · ${activePluginPanel.title}`
+                    : activeFileViewLabel
+                }
+              >
+                {activePluginPanel ? (
+                  <Puzzle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                ) : isPreviewActive ? (
+                  <Eye className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                ) : (
+                  <Code className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                )}
+                <span className="truncate">{activeFileViewLabel}</span>
+                <ChevronDown
+                  className="h-3 w-3 shrink-0 opacity-60"
+                  aria-hidden="true"
+                />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="w-auto min-w-48 max-w-64"
+            >
+              <DropdownMenuLabel>{t("fileView")}</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={selectedFileViewValue}
+                onValueChange={handleSelectFileView}
+              >
+                <DropdownMenuRadioItem value={BUILTIN_FILE_VIEW_SOURCE}>
+                  {t("source")}
+                </DropdownMenuRadioItem>
+                {canPreview && (
+                  <DropdownMenuRadioItem value={BUILTIN_FILE_VIEW_PREVIEW}>
+                    {t("preview")}
+                  </DropdownMenuRadioItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>{t("pluginViews")}</DropdownMenuLabel>
+                {filePluginPanels.panels.map((panel) => (
+                  <DropdownMenuRadioItem
+                    key={panel.key}
+                    value={panel.key}
+                    title={`${panel.pluginName} · ${panel.title}`}
+                  >
+                    <span className="truncate">{panel.title}</span>
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
         {canPreview && activeFileTabId && (
           <button
             type="button"
-            onClick={() => toggleFileTabPreview(activeFileTabId)}
-            className={cn(actionBtn, isPreviewActive && "text-primary")}
+            onClick={() => {
+              if (activePluginPanel) {
+                filePluginPanels.selectPanel(null)
+              }
+              toggleFileTabPreview(activeFileTabId)
+            }}
+            className={cn(actionBtn, isShowingBuiltInPreview && "text-primary")}
             aria-label={isPreviewActive ? t("editSource") : t("preview")}
             title={isPreviewActive ? t("editSource") : t("preview")}
           >
