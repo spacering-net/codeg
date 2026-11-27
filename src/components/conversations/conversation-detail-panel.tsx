@@ -1197,7 +1197,6 @@ const ConversationTabView = memo(function ConversationTabView({
   // ---- `/btw` side questions (docs/btw-side-question-design.md) ----
   const tBtwErrors = useTranslations("errors")
   const workspaceConversations = useAppWorkspaceStore((s) => s.conversations)
-  const [dismissedBtwId, setDismissedBtwId] = useState<number | null>(null)
   // This conversation's newest side-question fork. Derived from the workspace
   // store — the same `conversation://changed` upserts that fill the sidebar's
   // btw section update this strip, and a destroy on any client takes it away.
@@ -1215,8 +1214,9 @@ const ConversationTabView = memo(function ConversationTabView({
   // Three-state, from the row's status: a btw the agent cancelled (Stop on the
   // child) must not claim an answer it never gave.
   const btwInfo =
-    btwRow && btwRow.id !== dismissedBtwId && btwRow.title !== null
+    btwRow && btwRow.title !== null
       ? {
+          id: `${btwRow.id}:${btwRow.created_at}`,
           title: btwRow.title,
           state:
             btwRow.status === "in_progress"
@@ -2868,7 +2868,6 @@ const ConversationTabView = memo(function ConversationTabView({
       onBtw={handleBtw}
       btwInfo={btwInfo}
       onOpenBtw={handleOpenBtw}
-      onDismissBtw={() => setDismissedBtwId(btwRow?.id ?? null)}
       onQueueReorder={mqReorder}
       onQueueEdit={handleQueueEdit}
       onQueueDelete={mqRemove}

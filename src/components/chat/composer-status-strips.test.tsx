@@ -172,7 +172,11 @@ describe("ComposerStatusStrips", () => {
   describe("btw strip", () => {
     it("shows the question and its state, answering first", () => {
       renderStrips({
-        btw: { title: "btw: what is this fn", state: "answering" },
+        btw: {
+          id: "example",
+          title: "btw: what is this fn",
+          state: "answering",
+        },
         onOpenBtw: vi.fn(),
       })
       const strip = screen.getByRole("status")
@@ -182,7 +186,11 @@ describe("ComposerStatusStrips", () => {
 
     it("settles to the answered wording once the turn is over", () => {
       renderStrips({
-        btw: { title: "btw: what is this fn", state: "answered" },
+        btw: {
+          id: "example",
+          title: "btw: what is this fn",
+          state: "answered",
+        },
         onOpenBtw: vi.fn(),
       })
       expect(screen.getByRole("status")).toHaveTextContent("answered")
@@ -190,7 +198,7 @@ describe("ComposerStatusStrips", () => {
 
     it("a cancelled side question says stopped, not answered", () => {
       renderStrips({
-        btw: { title: "btw: what is this fn", state: "stopped" },
+        btw: { id: "example", title: "btw: what is this fn", state: "stopped" },
         onOpenBtw: vi.fn(),
       })
       const strip = screen.getByRole("status")
@@ -198,18 +206,26 @@ describe("ComposerStatusStrips", () => {
       expect(strip).not.toHaveTextContent("answered")
     })
 
-    it("the title opens the side question, the X hides the strip", () => {
+    it("remembers a dismissed question after reopening and shows a new one", () => {
+      const btw = {
+        id: "first-question",
+        title: "btw: what",
+        state: "answered",
+      } as const
       const onOpenBtw = vi.fn()
-      const onDismissBtw = vi.fn()
-      renderStrips({
-        btw: { title: "btw: what", state: "answered" },
-        onOpenBtw,
-        onDismissBtw,
-      })
+      const { unmount } = renderStrips({ btw, onOpenBtw })
       fireEvent.click(screen.getByRole("button", { name: "Open" }))
       expect(onOpenBtw).toHaveBeenCalledTimes(1)
       fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
-      expect(onDismissBtw).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole("status")).not.toBeInTheDocument()
+      unmount()
+
+      const reopened = renderStrips({ btw, onOpenBtw })
+      expect(reopened.container).toBeEmptyDOMElement()
+      reopened.unmount()
+
+      renderStrips({ btw: { ...btw, id: "next-question" }, onOpenBtw })
+      expect(screen.getByRole("status")).toHaveTextContent(btw.title)
     })
 
     it("no strip when the conversation has no side question", () => {

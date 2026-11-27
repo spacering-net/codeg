@@ -28,7 +28,7 @@
  *   next prompt, and would otherwise sit here, spinning, over a finished turn.
  */
 
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import { Loader2, MessagesSquare } from "lucide-react"
 
@@ -45,6 +45,7 @@ const NO_FAILURES: SessionFailureRecord[] = []
  *  `state` comes from the row's status: a cancelled btw says stopped, not an
  *  answer it never gave. */
 export interface BtwStripInfo {
+  id: string
   title: string
   state: "answering" | "answered" | "stopped"
 }
@@ -59,9 +60,6 @@ export interface ComposerStatusStripsProps {
   btw?: BtwStripInfo | null
   /** Click of the btw strip's title: opens the side question's tab. */
   onOpenBtw?: () => void
-  /** Close of the btw strip: hides it for this panel view. The conversation
-   *  stays where it always is — the folder's btw section. */
-  onDismissBtw?: () => void
 }
 
 export function ComposerStatusStrips({
@@ -71,9 +69,7 @@ export function ComposerStatusStrips({
   onSessionFailureDismiss,
   btw,
   onOpenBtw,
-  onDismissBtw,
 }: ComposerStatusStripsProps) {
-  const t = useTranslations("Folder.chat.btw")
   const retryLineText = useRetryLineText(claudeApiRetry)
   return (
     <>
@@ -97,30 +93,50 @@ export function ComposerStatusStrips({
       )}
 
       {btw && onOpenBtw && (
-        <ComposerDockStrip
-          // Sky: a side question of this conversation, in flight or answered
-          // — a state of the session, not a fault. Its title IS the question
-          // (the row's locked title), so the strip survives locale changes
-          // and matches the btw section's row for the same question.
-          role="status"
-          tone="info"
-          icon={btw.state === "answering" ? Loader2 : MessagesSquare}
-          iconClassName={btw.state === "answering" ? "animate-spin" : undefined}
-          title={btw.title}
-          meta={
-            <span className="shrink-0 opacity-70">
-              {btw.state === "answering"
-                ? t("stripAnswering")
-                : btw.state === "stopped"
-                  ? t("stripStopped")
-                  : t("stripAnswered")}
-            </span>
-          }
-          onTitleClick={onOpenBtw}
-          onDismiss={onDismissBtw}
-        />
+        <BtwStrip key={btw.id} btw={btw} onOpen={onOpenBtw} />
       )}
     </>
+  )
+}
+
+function BtwStrip({ btw, onOpen }: { btw: BtwStripInfo; onOpen: () => void }) {
+  const t = useTranslations("Folder.chat.btw")
+  const storageKey = `codeg.btw.dismissed:${btw.id}`
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return window.localStorage.getItem(storageKey) === "1"
+    } catch {
+      return false
+    }
+  })
+  if (dismissed) return null
+
+  return (
+    <ComposerDockStrip
+      role="status"
+      tone="info"
+      icon={btw.state === "answering" ? Loader2 : MessagesSquare}
+      iconClassName={btw.state === "answering" ? "animate-spin" : undefined}
+      title={btw.title}
+      meta={
+        <span className="shrink-0 opacity-70">
+          {btw.state === "answering"
+            ? t("stripAnswering")
+            : btw.state === "stopped"
+              ? t("stripStopped")
+              : t("stripAnswered")}
+        </span>
+      }
+      onTitleClick={onOpen}
+      onDismiss={() => {
+        setDismissed(true)
+        try {
+          window.localStorage.setItem(storageKey, "1")
+        } catch {
+          // The strip can still be closed when storage is unavailable.
+        }
+      }}
+    />
   )
 }
 

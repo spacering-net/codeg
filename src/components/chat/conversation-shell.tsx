@@ -127,7 +127,6 @@ interface ConversationShellProps {
    *  composer. `null` renders nothing (the common case). */
   btwInfo?: BtwStripInfo | null
   onOpenBtw?: () => void
-  onDismissBtw?: () => void
   onQueueReorder?: (items: QueuedMessage[]) => void
   onQueueEdit?: (id: string) => void
   onQueueDelete?: (id: string) => void
@@ -219,7 +218,6 @@ export function ConversationShell({
   onBtw,
   btwInfo,
   onOpenBtw,
-  onDismissBtw,
   onQueueReorder,
   onQueueEdit,
   onQueueDelete,
@@ -375,7 +373,6 @@ export function ConversationShell({
         sessionFailures={sessionFailures}
         btw={btwInfo ?? null}
         onOpenBtw={onOpenBtw}
-        onDismissBtw={onDismissBtw}
         onSessionFailureDismiss={onSessionFailureDismiss}
       />
     </div>
