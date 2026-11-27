@@ -1,10 +1,47 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
+import { HIGHLIGHT_LIMITS } from "@/lib/code-highlighter"
 import type { DiffViewMode } from "@/lib/diff-view-mode-prefs"
 import { CompactDiff } from "./compact-diff"
+
+// A stand-in for shiki: every line one token, in one colour, so a row shows
+// which line of which text it was given.
+const shiki = vi.hoisted(() => ({
+  codeToTokens: vi.fn((code: string) => ({
+    fg: "#24292e",
+    bg: "#fff",
+    tokens: code.split("\n").map((content) =>
+      content
+        ? [
+            {
+              content,
+              offset: 0,
+              color: "#d73a49",
+              htmlStyle: { color: "#d73a49", "--shiki-dark": "#f97583" },
+            },
+          ]
+        : []
+    ),
+  })),
+}))
+
+vi.mock("shiki", () => ({
+  bundledLanguagesInfo: [{ id: "typescript", aliases: ["ts"] }],
+  createHighlighter: async () => ({
+    codeToTokens: shiki.codeToTokens,
+    getLoadedLanguages: () => ["typescript"],
+    getLoadedThemes: () => ["github-light", "github-dark"],
+    loadLanguage: async () => {},
+    loadTheme: async () => {},
+  }),
+}))
+
+beforeEach(() => {
+  shiki.codeToTokens.mockClear()
+})
 
 function renderDiff(diffText: string, view?: DiffViewMode) {
   return render(
@@ -12,6 +49,13 @@ function renderDiff(diffText: string, view?: DiffViewMode) {
       <CompactDiff diffText={diffText} view={view} />
     </NextIntlClientProvider>
   )
+}
+
+/** The text of every span drawn in a colour of the highlighter's, in order. */
+function colouredText(): string[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("span"))
+    .filter((span) => span.style.color && span.style.color !== "inherit")
+    .map((span) => span.textContent ?? "")
 }
 
 /** Each drawn side-by-side row as `<left line>|<left text> ‖ <right ...>`;
@@ -173,5 +217,154 @@ describe("CompactDiff", () => {
   it("says so when there is no diff at all", () => {
     renderDiff("")
     expect(screen.getByText("No diff data")).toBeInTheDocument()
+  })
+})
+
+describe("CompactDiff syntax highlighting", () => {
+  it("colours the code in its file's language, the old and the new text each on its own", async () => {
+    renderDiff(
+      [
+        "--- a/src/page.ts",
+        "+++ b/src/page.ts",
+        "@@ -3,2 +3,2 @@",
+        " const limit = 10",
+        "-let page = 0",
+        "+let page = 1",
+      ].join("\n")
+    )
+    await waitFor(() =>
+      expect(colouredText()).toEqual([
+        "const limit = 10",
+        "let page = 0",
+        "let page = 1",
+      ])
+    )
+    // A removed line is read with the lines it was among, not with the one
+    // that replaced it.
+    expect(shiki.codeToTokens).toHaveBeenCalledWith(
+      "const limit = 10\nlet page = 0",
+      expect.objectContaining({ lang: "typescript" })
+    )
+    expect(shiki.codeToTokens).toHaveBeenCalledWith(
+      "const limit = 10\nlet page = 1",
+      expect.objectContaining({ lang: "typescript" })
+    )
+    expect(drawnRows()).toEqual([
+      "3||const limit = 10",
+      "4|-|let page = 0",
+      "4|+|let page = 1",
+    ])
+  })
+
+  it("keeps a removed or added row's tint and sign once it is coloured", async () => {
+    renderDiff(
+      [
+        "--- a/src/tint.ts",
+        "+++ b/src/tint.ts",
+        "@@ -1,1 +1,1 @@",
+        "-const tint = 'old'",
+        "+const tint = 'new'",
+      ].join("\n")
+    )
+    await waitFor(() => expect(colouredText()).toHaveLength(2))
+    const deleted = document.querySelector('[data-diff-row="deleted"]')!
+    const added = document.querySelector('[data-diff-row="added"]')!
+    expect(deleted).toHaveClass("bg-diff-deleted")
+    expect(deleted.children[1]).toHaveClass("text-diff-deleted-fg")
+    expect(deleted.children[1]).toHaveTextContent("-")
+    expect(added).toHaveClass("bg-diff-added")
+    expect(added.children[1]).toHaveClass("text-diff-added-fg")
+    expect(added.children[1]).toHaveTextContent("+")
+  })
+
+  it("colours each half side by side from its own text", async () => {
+    renderDiff(
+      [
+        "--- a/src/split.ts",
+        "+++ b/src/split.ts",
+        "@@ -7,3 +7,2 @@",
+        " keep()",
+        "-oldCall()",
+        "-gone()",
+        "+newCall()",
+      ].join("\n"),
+      "split"
+    )
+    await waitFor(() =>
+      expect(colouredText()).toEqual([
+        "keep()",
+        "keep()",
+        "oldCall()",
+        "newCall()",
+        "gone()",
+      ])
+    )
+    expect(drawnPairs()).toEqual([
+      "7|keep() ‖ 7|keep()",
+      "8|oldCall() ‖ 8|newCall()",
+      "9|gone() ‖ ·",
+    ])
+    expect(document.querySelector('[data-diff-cell="deleted"]')).toHaveClass(
+      "bg-diff-deleted"
+    )
+    expect(document.querySelector('[data-diff-cell="added"]')).toHaveClass(
+      "bg-diff-added"
+    )
+  })
+
+  it("leaves a file in a language it doesn't know as plain text", async () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <CompactDiff
+          diffText={[
+            "--- a/src/known.ts",
+            "+++ b/src/known.ts",
+            "@@ -1,0 +1,1 @@",
+            "+const known = true",
+          ].join("\n")}
+        />
+        <CompactDiff
+          diffText={[
+            "--- a/NOTES",
+            "+++ b/NOTES",
+            "@@ -1,1 +1,1 @@",
+            "-plain before",
+            "+plain after",
+          ].join("\n")}
+        />
+      </NextIntlClientProvider>
+    )
+    // By the time the file it knows is coloured, the other would have been.
+    await waitFor(() => expect(colouredText()).toEqual(["const known = true"]))
+    expect(shiki.codeToTokens).not.toHaveBeenCalledWith(
+      expect.stringContaining("plain"),
+      expect.anything()
+    )
+    expect(screen.getByText("plain before")).toBeInTheDocument()
+    expect(screen.getByText("plain after")).toBeInTheDocument()
+  })
+
+  it("leaves a hunk past the highlighting limits as plain text", async () => {
+    const long = "x".repeat(HIGHLIGHT_LIMITS.codeLength + 1)
+    renderDiff(
+      [
+        "--- a/src/big.ts",
+        "+++ b/src/big.ts",
+        "@@ -1,0 +1,1 @@",
+        "+const small = 1",
+        "@@ -90,0 +91,1 @@",
+        `+${long}`,
+      ].join("\n")
+    )
+    await waitFor(() => expect(colouredText()).toEqual(["const small = 1"]))
+    expect(shiki.codeToTokens).not.toHaveBeenCalledWith(
+      expect.stringContaining(long),
+      expect.anything()
+    )
+    expect(
+      Array.from(document.querySelectorAll("[data-diff-row]")).map(
+        (row) => row.lastElementChild?.textContent?.length
+      )
+    ).toEqual(["const small = 1".length, long.length])
   })
 })

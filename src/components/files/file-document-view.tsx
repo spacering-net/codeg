@@ -2,7 +2,6 @@
 
 import { useEffect, useRef } from "react"
 import { useTranslations } from "next-intl"
-import type { BundledLanguage } from "shiki"
 
 import { CodeBlockContent } from "@/components/ai-elements/code-block"
 import { HtmlPreview } from "@/components/files/html-preview"
@@ -11,7 +10,7 @@ import { MarkdownDocumentPreview } from "@/components/files/markdown-document-pr
 import { OfficePreview } from "@/components/files/office-preview"
 import { PdfPreview } from "@/components/files/pdf-preview"
 import type { FileWorkspaceTab } from "@/contexts/workspace-context"
-import { isHtmlPreviewable } from "@/lib/language-detect"
+import { isHtmlPreviewable, toShikiLanguage } from "@/lib/language-detect"
 
 /**
  * Read-only rendering of one workspace file tab — the shared body behind every
@@ -46,25 +45,6 @@ import { isHtmlPreviewable } from "@/lib/language-detect"
  */
 export const SOURCE_VIEW_MAX_BYTES = 512 * 1024
 export const SOURCE_VIEW_MAX_LINES = 5_000
-
-/**
- * Monaco language ids (what `languageFromPath` speaks, and therefore what a
- * file tab carries) that shiki does not know under that name. Anything absent
- * is passed through — shiki either knows it or falls back to unhighlighted
- * text on its own, which is the same outcome, just noisier in the console.
- */
-const SHIKI_LANGUAGE_ALIASES: Record<string, string> = {
-  plaintext: "text",
-  restructuredtext: "text",
-  "objective-c": "objc",
-  bat: "batch",
-  shell: "bash",
-  mdx: "markdown",
-}
-
-function toShikiLanguage(language: string): BundledLanguage {
-  return (SHIKI_LANGUAGE_ALIASES[language] ?? language) as BundledLanguage
-}
 
 /** Markdown links that resolve to a local file do nothing when the host
  *  surface offers no navigation. Module-level so the render below doesn't mint

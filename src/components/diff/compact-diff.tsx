@@ -2,8 +2,14 @@
 
 import { Fragment, useMemo, useState, type CSSProperties } from "react"
 import { useTranslations } from "next-intl"
+import type { BundledLanguage, ThemedToken } from "shiki"
 
+import {
+  TokenSpan,
+  useHighlightedTokens,
+} from "@/components/ai-elements/code-block"
 import type { DiffViewMode } from "@/lib/diff-view-mode-prefs"
+import { highlightLanguageFromPath } from "@/lib/language-detect"
 import { cn } from "@/lib/utils"
 import {
   parseUnifiedDiff,
@@ -40,9 +46,18 @@ const SIGN_CLASS: Record<ParsedDiffRow["sign"], string> = {
 }
 
 type DiffBlock =
-  | { kind: "hunk"; key: string; rows: ParsedDiffRow[] }
+  | {
+      kind: "hunk"
+      key: string
+      rows: ParsedDiffRow[]
+      /** The file's code language; null leaves its rows plain. */
+      language: BundledLanguage | null
+    }
   | { kind: "gap"; key: string }
   | { kind: "binary"; key: string }
+
+/** Each line of a text as shiki coloured it. */
+type LineTokens = ThemedToken[][]
 
 /** The leading whitespace every non-blank row of `rows` starts with. */
 function sharedIndent(rows: readonly ParsedDiffRow[]): string {
@@ -99,13 +114,70 @@ function toBlocks(diffText: string): DiffBlock[] {
       blocks.push({ kind: "binary", key: file.key })
       continue
     }
+    const language = highlightLanguageFromPath(file.path)
     file.hunks.forEach((hunk: ParsedDiffHunk) => {
       if (blocks.length > 0)
         blocks.push({ kind: "gap", key: `${hunk.key}:gap` })
-      blocks.push({ kind: "hunk", key: hunk.key, rows: dedent(hunk.rows) })
+      blocks.push({
+        kind: "hunk",
+        key: hunk.key,
+        rows: dedent(hunk.rows),
+        language,
+      })
     })
   }
   return blocks
+}
+
+/**
+ * One side of a hunk, coloured: the old text (its kept and removed rows) or
+ * the new one (kept and added), each highlighted on its own as its file reads,
+ * so a removed line never changes how the line added in its place is read — a
+ * string or a comment one of them opens and the other does not. The tokens
+ * come from the shared highlighter: plain until shiki has them, and plain for
+ * good past `HIGHLIGHT_LIMITS`. Null when they don't line up with the rows.
+ */
+function useSideTokens(
+  rows: readonly ParsedDiffRow[],
+  side: "old" | "new",
+  language: BundledLanguage
+): LineTokens | null {
+  const skip = side === "old" ? "added" : "deleted"
+  const { code, count } = useMemo(() => {
+    const lines = rows.filter((row) => row.type !== skip).map((row) => row.text)
+    return { code: lines.join("\n"), count: lines.length }
+  }, [rows, skip])
+  const { tokens } = useHighlightedTokens(code, language)
+  return tokens.length === count ? tokens : null
+}
+
+/** Each row's tokens: a removed row's from the old text, any other row's
+ *  from the new one. */
+function tokensByRow(
+  rows: readonly ParsedDiffRow[],
+  before: LineTokens | null,
+  after: LineTokens | null
+): (ThemedToken[] | undefined)[] {
+  let old = 0
+  let next = 0
+  return rows.map((row) => {
+    if (row.type === "deleted") return before?.[old++]
+    if (row.type !== "added") old += 1
+    return after?.[next++]
+  })
+}
+
+/** A row's code: in colour once it has tokens, else its text. A blank line
+ *  still takes its line. */
+function CodeText({
+  text,
+  tokens,
+}: {
+  text: string | null
+  tokens?: ThemedToken[]
+}) {
+  if (!tokens?.length) return text || " "
+  return tokens.map((token, index) => <TokenSpan key={index} token={token} />)
 }
 
 /** `blocks` cut to `limit` rows, ending on a clean row. */
@@ -165,10 +237,19 @@ function gutterDigits(blocks: DiffBlock[], view: DiffViewMode): number {
 function UnifiedRows({
   rows,
   gutterStyle,
+  before = null,
+  after = null,
 }: {
   rows: ParsedDiffRow[]
   gutterStyle: CSSProperties
+  /** The old and the new text's lines coloured (`useSideTokens`). */
+  before?: LineTokens | null
+  after?: LineTokens | null
 }) {
+  const tokens = useMemo(
+    () => tokensByRow(rows, before, after),
+    [rows, before, after]
+  )
   return rows.map((row, index) => (
     <div
       key={index}
@@ -190,8 +271,7 @@ function UnifiedRows({
         {row.sign === " " ? "" : row.sign}
       </span>
       <span className="min-w-0 flex-1 pe-2 whitespace-pre-wrap [overflow-wrap:anywhere]">
-        {/* A blank line still takes its line. */}
-        {row.text || " "}
+        <CodeText text={row.text} tokens={tokens[index]} />
       </span>
     </div>
   ))
@@ -201,11 +281,13 @@ function SplitCellView({
   cell,
   start,
   gutterStyle,
+  tokens,
 }: {
   cell: SplitCell
   /** The old side, which rules the two apart. */
   start: boolean
   gutterStyle: CSSProperties
+  tokens?: ThemedToken[]
 }) {
   const filler = cell.text === null
   return (
@@ -226,7 +308,7 @@ function SplitCellView({
             {cell.line ?? ""}
           </span>
           <span className="min-w-0 flex-1 ps-1 pe-1.5 whitespace-pre-wrap [overflow-wrap:anywhere]">
-            {cell.text || " "}
+            <CodeText text={cell.text} tokens={tokens} />
           </span>
         </>
       )}
@@ -240,24 +322,77 @@ function SplitCellView({
 function SplitRows({
   rows,
   gutterStyle,
+  before = null,
+  after = null,
 }: {
   rows: ParsedDiffRow[]
   gutterStyle: CSSProperties
+  /** The old and the new text's lines coloured (`useSideTokens`). */
+  before?: LineTokens | null
+  after?: LineTokens | null
 }) {
   const pairs = useMemo(() => toSplitRows(rows), [rows])
+  // The left side's lines are the old text's, in order, and the right side's
+  // the new one's: `toSplitRows` keeps each side's order.
+  const tokens = useMemo(() => {
+    let old = 0
+    let next = 0
+    return pairs.map((pair) => ({
+      left: pair.left.text === null ? undefined : before?.[old++],
+      right: pair.right.text === null ? undefined : after?.[next++],
+    }))
+  }, [pairs, before, after])
   return (
     <div className="grid grid-cols-2">
       {pairs.map((pair, index) => (
         <Fragment key={index}>
-          <SplitCellView cell={pair.left} start gutterStyle={gutterStyle} />
+          <SplitCellView
+            cell={pair.left}
+            start
+            gutterStyle={gutterStyle}
+            tokens={tokens[index]?.left}
+          />
           <SplitCellView
             cell={pair.right}
             start={false}
             gutterStyle={gutterStyle}
+            tokens={tokens[index]?.right}
           />
         </Fragment>
       ))}
     </div>
+  )
+}
+
+/** A hunk of a file in a language shiki knows: the rows as ever, their code
+ *  in colour. */
+function HighlightedRows({
+  rows,
+  language,
+  view,
+  gutterStyle,
+}: {
+  rows: ParsedDiffRow[]
+  language: BundledLanguage
+  view: DiffViewMode
+  gutterStyle: CSSProperties
+}) {
+  const before = useSideTokens(rows, "old", language)
+  const after = useSideTokens(rows, "new", language)
+  return view === "split" ? (
+    <SplitRows
+      rows={rows}
+      gutterStyle={gutterStyle}
+      before={before}
+      after={after}
+    />
+  ) : (
+    <UnifiedRows
+      rows={rows}
+      gutterStyle={gutterStyle}
+      before={before}
+      after={after}
+    />
   )
 }
 
@@ -368,6 +503,13 @@ export function CompactDiff({
               <div className="px-2 py-1 font-sans text-muted-foreground">
                 {t("binaryFile")}
               </div>
+            ) : block.language ? (
+              <HighlightedRows
+                rows={block.rows}
+                language={block.language}
+                view={view}
+                gutterStyle={gutterStyle}
+              />
             ) : view === "split" ? (
               <SplitRows rows={block.rows} gutterStyle={gutterStyle} />
             ) : (

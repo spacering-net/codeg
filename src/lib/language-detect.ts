@@ -1,3 +1,5 @@
+import type { BundledLanguage } from "shiki"
+
 // Map file extensions to Monaco editor language IDs.
 //
 // All values must be valid IDs registered by monaco-editor's basic-languages
@@ -307,4 +309,33 @@ export function languageFromPath(path: string): string {
   }
   const ext = basename.slice(dotIdx + 1)
   return EXTENSION_MAP[ext] ?? "plaintext"
+}
+
+/**
+ * Monaco language ids (what `languageFromPath` speaks, and therefore what a
+ * file tab carries) that shiki does not know under that name. Anything absent
+ * is passed through — shiki either knows it or falls back to unhighlighted
+ * text on its own, which is the same outcome, just noisier in the console.
+ */
+const SHIKI_LANGUAGE_ALIASES: Record<string, string> = {
+  plaintext: "text",
+  restructuredtext: "text",
+  "objective-c": "objc",
+  bat: "batch",
+  shell: "bash",
+  mdx: "markdown",
+}
+
+export function toShikiLanguage(language: string): BundledLanguage {
+  return (SHIKI_LANGUAGE_ALIASES[language] ?? language) as BundledLanguage
+}
+
+/** The shiki language `path`'s code is coloured in, or null for a file with
+ *  none to colour (plain text, an extension we don't know), which stays as
+ *  plain text rather than in the theme's one text colour. */
+export function highlightLanguageFromPath(
+  path: string
+): BundledLanguage | null {
+  const language: string = toShikiLanguage(languageFromPath(path))
+  return language === "text" ? null : (language as BundledLanguage)
 }
