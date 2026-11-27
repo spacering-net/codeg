@@ -1,0 +1,30 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.issue-attachments",
+  "name": "Issue Attachments",
+  "version": "1.0.0",
+  "server": { "entry": "issues.mjs", "methods": ["search-issues"] },
+  "contributes": {
+    "attachmentSources": [
+      {
+        "id": "example-issues",
+        "title": "Example Issues",
+        "titleTranslations": {
+          "es": "Incidencias de ejemplo",
+          "zh-CN": "示例工单"
+        },
+        "pickerTitle": "Attach an issue",
+        "pickerTitleTranslations": {
+          "es": "Adjuntar una incidencia",
+          "zh-CN": "附加工单"
+        },
+        "searchPlaceholder": "Search issues by ID or keyword",
+        "searchPlaceholderTranslations": {
+          "es": "Buscar por ID o palabra clave",
+          "zh-CN": "按编号或关键词搜索工单"
+        },
+        "method": "search-issues"
+      }
+    ]
+  }
+}

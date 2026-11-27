@@ -150,8 +150,20 @@ import { useReferenceSearch } from "@/components/chat/composer/use-reference-sea
 import { useComposerMentionLabels } from "@/components/chat/composer/use-composer-mention-labels"
 import { ComposerAddMenu } from "@/components/chat/composer/composer-add-menu"
 import { ComposerImageThumbnails } from "@/components/chat/composer/composer-image-thumbnails"
+import {
+  ComposerPluginAttachmentPicker,
+  ComposerPluginAttachmentPills,
+  formatAttachedPluginItemLabel,
+  useComposerPluginAttachmentSources,
+} from "@/components/chat/composer/composer-plugin-attachments"
 import { useComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
 import { useComposerShortcuts } from "@/components/chat/composer/use-composer-shortcuts"
+import { HostPluginSlot } from "@/components/host-plugin-slot"
+import {
+  hostPluginSessionScopeKey,
+  type HostPluginSessionContext,
+  type PluginComposerInsertResult,
+} from "@/lib/host-plugins"
 
 /**
  * Payload pushed into the composer from outside (e.g. a welcome-page quick
@@ -291,6 +303,11 @@ interface MessageInputProps {
    * component knows the action row that separates them.
    */
   tall?: boolean
+  /** Workspace + session isolation context for `composer` host plugin surfaces.
+   *  Omitted on standalone/non-session composers so no plugin catalog is queried. */
+  pluginContext?: HostPluginSessionContext | null
+  /** Gate host plugin catalog subscription while a keep-alive composer is hidden. */
+  pluginSlotEnabled?: boolean
 }
 
 // Non-image files attach as inline file badges in the editor (like `@`-file
@@ -363,6 +380,8 @@ export function MessageInput({
   onInjectConsumed,
   getSentHistory,
   tall = false,
+  pluginContext = null,
+  pluginSlotEnabled = true,
 }: MessageInputProps) {
   const t = useTranslations("Folder.chat.messageInput")
   const tQueue = useTranslations("Folder.chat.messageQueue")
@@ -957,8 +976,15 @@ export function MessageInput({
     folderPickerOverride
   )
   const folderBranchPickerAttached = hasFolderBranchPicker
+  const pluginAttachments = useComposerPluginAttachmentSources({
+    sessionContext: pluginContext,
+    enabled: pluginSlotEnabled,
+  })
+  const attachedPluginItems = pluginAttachments.attachedItems
+  const clearAttachedPluginItems = pluginAttachments.clearAttachedItems
+  const hasPluginAttachments = attachedPluginItems.length > 0
   const imageAttachments = attach.imageAttachments
-  const hasAttachments = attachments.length > 0
+  const hasAttachments = attachments.length > 0 || hasPluginAttachments
   const hasSendableContent = !composerEmpty || hasAttachments
   // The committed half of the report above: what the composer holds, and
   // whether an intake is still in flight (once it settles, what it brought is
@@ -1601,7 +1627,17 @@ export function MessageInput({
         return true
       })
     }
-    if (blocks.length === 0 && attachments.length === 0) return null
+    if (
+      blocks.length === 0 &&
+      attachments.length === 0 &&
+      attachedPluginItems.length === 0
+    ) {
+      return null
+    }
+
+    for (const attached of attachedPluginItems) {
+      blocks.push({ type: "text", text: attached.item.text })
+    }
 
     // `attachments` holds only images now — files live inline as badges above.
     // The wire encoding is capability-driven inside the hook (native `image`
@@ -1610,12 +1646,19 @@ export function MessageInput({
     // accepts.
     blocks.push(...imagePromptBlocks())
 
+    const totalAttachmentCount = attachments.length + attachedPluginItems.length
+    const pluginAttachmentSummary = attachedPluginItems
+      .map((attached) => formatAttachedPluginItemLabel(attached.item))
+      .join(", ")
     const displayText =
       displayProse ||
-      `Attached ${attachments.length} attachment${attachments.length > 1 ? "s" : ""}`
+      (attachedPluginItems.length > 0 && attachments.length === 0
+        ? pluginAttachmentSummary
+        : `Attached ${totalAttachmentCount} attachment${totalAttachmentCount > 1 ? "s" : ""}`)
     return { blocks, displayText }
   }, [
     attachments,
+    attachedPluginItems,
     skillPrefix,
     expertInvocation,
     imagePromptBlocks,
@@ -1627,10 +1670,11 @@ export function MessageInput({
     editorRef.current?.clear()
     setComposerEmpty(true)
     clearAttachments()
+    clearAttachedPluginItems()
     closeSlashMenu()
     historyIndexRef.current = null
     historyDraftRef.current = null
-  }, [clearAttachments, closeSlashMenu])
+  }, [clearAttachments, clearAttachedPluginItems, closeSlashMenu])
 
   // Async steering must compare against the current draft, including images
   // added or removed while delivery was awaiting confirmation.
@@ -1871,13 +1915,14 @@ export function MessageInput({
   const chromeFocus = useComposerChromeFocus(editorRef)
 
   const hasImageAttachments = imageAttachments.length > 0
+  const hasTopAttachments = hasImageAttachments || hasPluginAttachments
   const showDragActive = attach.isDragActive && !disabled
 
   // The box's floor and the editable area's are two halves of one number — see
   // composer-sizing.ts for the arithmetic and for why stating both is what
   // keeps the layout off free-space distribution (#746).
   const boxMinHeight = composerBoxMinHeight(tall)
-  const editableMinHeight = composerEditableMinHeight(tall, hasImageAttachments)
+  const editableMinHeight = composerEditableMinHeight(tall, hasTopAttachments)
 
   // The agent's settings — its config options, or the legacy mode list for an
   // agent that publishes none (the two never show together, see
@@ -1912,6 +1957,53 @@ export function MessageInput({
     ed.setText(offeredSuggestion)
     ed.focus()
   }, [offeredSuggestion])
+
+  const pluginInsertGuardRef = useRef({
+    pluginContext,
+    pluginSlotEnabled,
+    effectiveDraftStorageKey,
+    isEditingQueueItem,
+    flushDraftSave,
+  })
+  useLayoutEffect(() => {
+    pluginInsertGuardRef.current = {
+      pluginContext,
+      pluginSlotEnabled,
+      effectiveDraftStorageKey,
+      isEditingQueueItem,
+      flushDraftSave,
+    }
+  })
+
+  // Controlled plain-text insertion for `composer` plugin surfaces: writes
+  // literal inline text (with `\n` → hardBreak, never hydrating badges/HTML)
+  // at ProseMirror's live caret/selection without stealing modal focus or
+  // auto-sending, then flushes the standard debounced draft persistence.
+  const handlePluginComposerInsertText = useCallback(
+    (text: string, expectedScopeKey: string): PluginComposerInsertResult => {
+      const guard = pluginInsertGuardRef.current
+      if (
+        !guard.pluginSlotEnabled ||
+        !guard.pluginContext ||
+        hostPluginSessionScopeKey(guard.pluginContext) !== expectedScopeKey
+      ) {
+        throw new Error("Plugin composer surface is no longer active")
+      }
+      const editor = editorRef.current?.getEditor()
+      if (!editor || editor.isDestroyed) {
+        throw new Error("Composer is unavailable")
+      }
+      const applied = editor.commands.insertContent(textToInlineContent(text))
+      if (!applied) {
+        throw new Error("Failed to insert text into composer")
+      }
+      if (!guard.isEditingQueueItem && guard.effectiveDraftStorageKey) {
+        guard.flushDraftSave()
+      }
+      return { inserted: true, length: text.length }
+    },
+    []
+  )
 
   const actionButtons = isEditingQueueItem ? (
     <div className="flex items-center gap-1">
@@ -2193,13 +2285,21 @@ export function MessageInput({
               )}
             >
               <ConversationContextBar
-                hasExtraContent={hasImageAttachments}
-                scrollEndTrigger={attachments.length}
+                hasExtraContent={hasTopAttachments}
+                scrollEndTrigger={
+                  attachments.length + attachedPluginItems.length
+                }
                 extraContent={
-                  <ComposerImageThumbnails
-                    attachments={imageAttachments}
-                    onRemove={attach.removeAttachment}
-                  />
+                  <>
+                    <ComposerImageThumbnails
+                      attachments={imageAttachments}
+                      onRemove={attach.removeAttachment}
+                    />
+                    <ComposerPluginAttachmentPills
+                      items={attachedPluginItems}
+                      onRemove={pluginAttachments.removeAttachedItem}
+                    />
+                  </>
                 }
               />
               <RichComposer
@@ -2245,6 +2345,10 @@ export function MessageInput({
                     slashCommands={slashCommands}
                     onAddFeedback={onAddFeedback}
                     feedbackAddDisabled={feedbackAddDisabled}
+                    pluginAttachmentSources={pluginAttachments.sources}
+                    onSelectPluginAttachmentSource={
+                      pluginAttachments.openSource
+                    }
                   />
                   {hasAnySelector && (
                     <SessionSettingsPicker
@@ -2258,6 +2362,14 @@ export function MessageInput({
                           : null
                       }
                       onChange={handleSessionSettingChange}
+                    />
+                  )}
+                  {pluginContext && (
+                    <HostPluginSlot
+                      slot="composer"
+                      sessionContext={pluginContext}
+                      enabled={pluginSlotEnabled}
+                      onComposerInsertText={handlePluginComposerInsertText}
                     />
                   )}
                 </div>
@@ -2396,6 +2508,7 @@ export function MessageInput({
           initialPath={defaultPath ?? undefined}
         />
       )}
+      <ComposerPluginAttachmentPicker controller={pluginAttachments} />
     </div>
   )
 }

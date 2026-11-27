@@ -622,23 +622,19 @@ async fn resolve_window_titles(
 pub async fn open_folder_window(
     app: AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    plugins: tauri::State<'_, std::sync::Arc<crate::host_plugins::HostPlugins>>,
     path: String,
 ) -> Result<FolderDetail, AppCommandError> {
     // Single-window workspace: upsert the folder (is_open = true), close any
     // legacy project-boot window, and return the full detail for the frontend
     // to add to its workspace state.
-    let entry = crate::db::service::folder_service::add_folder(&db.conn, &path)
-        .await
-        .map_err(AppCommandError::from)?;
+    let emitter = crate::web::event_bridge::EventEmitter::from_app(&app);
+    let folder =
+        crate::commands::folders::open_folder_with_plugins(&plugins, &emitter, &db, path).await?;
 
     if let Some(w) = app.get_webview_window("project-boot") {
         let _ = w.close();
     }
-
-    let folder = crate::db::service::folder_service::get_folder_by_id(&db.conn, entry.id)
-        .await
-        .map_err(AppCommandError::from)?
-        .ok_or_else(|| AppCommandError::not_found("Folder not found after add"))?;
 
     // Bring the main window to focus if it exists
     if let Some(main) = app.get_webview_window("main") {
