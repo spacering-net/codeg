@@ -249,8 +249,13 @@ export function AppI18nProvider({
     }
   }, [appLocale, messagesLocale])
 
+  const [hasBooted, setHasBooted] = useState(false)
   const localeReady = appLocale === messagesLocale
-  const appReady = languageSettingsLoaded && localeReady
+  const initialReady = languageSettingsLoaded && localeReady
+  if (!hasBooted && initialReady) {
+    setHasBooted(true)
+  }
+  const appReady = hasBooted || initialReady
   const activeIntlLocale = toIntlLocale(messagesLocale)
   const dir = activeIntlLocale === "ar" ? "rtl" : "ltr"
 
