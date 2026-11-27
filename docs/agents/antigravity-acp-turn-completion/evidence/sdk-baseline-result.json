@@ -1,0 +1,5 @@
+{
+  "exit_code": 1,
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"main.py\", line 253, in <module>\n  File \"absl\\app.py\", line 410, in run\n  File \"absl\\app.py\", line 355, in _run_main\n  File \"main.py\", line 249, in main\n  File \"asyncio\\runners.py\", line 205, in run\n  File \"asyncio\\runners.py\", line 128, in run\n  File \"asyncio\\base_events.py\", line 720, in run_until_complete\n  File \"main.py\", line 173, in run_server\n  File \"main.py\", line 140, in _codeg_foreground_regressions\nAssertionError: waiting_for_tasks_does_not_finish_foreground_turn\n[PYI-7344:ERROR] Failed to execute script 'main' due to unhandled exception!\n"
+}

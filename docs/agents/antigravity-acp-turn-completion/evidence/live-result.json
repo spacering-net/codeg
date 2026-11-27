@@ -1,0 +1,12 @@
+{
+  "foreground_end_ms": 16031,
+  "background_spawn_ms": 16031,
+  "background_liveness_count": 7,
+  "background_tool_completed_ms": [
+    255515
+  ],
+  "background_terminal_ms": 258937,
+  "followup_end_ms": 267094,
+  "all_assertions_passed": true,
+  "background_terminal_state_confirmed_by_probe_stdout": "completed"
+}
