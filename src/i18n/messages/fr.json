@@ -1100,7 +1100,6 @@
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
       "settingsFileHint": "Fichier de configuration propre à Antigravity CLI (référence en lecture seule — codeg ne l’écrase pas).",
-      "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "Save",
       "permissionsTitle": "Autorisations",
       "permissionModeLabel": "Mode d'autorisation",
@@ -1120,10 +1119,8 @@
         "complete": "Terminer la connexion",
         "cancel": "Annuler",
         "signedIn": "Connecté. Les nouvelles sessions utiliseront ce compte.",
-        "alreadySignedIn": "Antigravity disposait déjà d'un jeton valide : la connexion s'est faite sans lien.",
         "failed": "La connexion n'a pas abouti.",
-        "startFailed": "Impossible de démarrer la connexion",
-        "credentialHint": "Le jeton est mis en cache ici. Copiez ce fichier sur une autre machine sans bureau pour la connecter aussi."
+        "startFailed": "Impossible de démarrer la connexion"
       },
       "signOut": {
         "title": "Connecté avec le mauvais compte ?",
@@ -1692,7 +1689,6 @@
       "qoderSaved": "Configuration Qoder enregistrée",
       "saveQoderConfigFailed": "Échec de l'enregistrement de la configuration Qoder",
       "antigravitySaved": "Antigravity config saved",
-      "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Configuration Kiro enregistrée",
       "saveKiroFailed": "Impossible d'enregistrer la configuration Kiro",

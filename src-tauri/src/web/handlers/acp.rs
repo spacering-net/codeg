@@ -1084,15 +1084,6 @@ pub async fn acp_validate_pi_command(
     )))
 }
 
-pub async fn acp_sync_antigravity_settings(
-    Extension(state): Extension<Arc<AppState>>,
-) -> Result<Json<crate::acp::connection::AntigravitySyncReport>, AppCommandError> {
-    let result = acp_commands::acp_sync_antigravity_settings_core(&state.db)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(result))
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpAntigravityLoginStartParams {
@@ -1142,11 +1133,11 @@ pub async fn acp_antigravity_login_cancel(
 
 pub async fn acp_antigravity_sign_out(
     Extension(state): Extension<Arc<AppState>>,
-) -> Result<Json<crate::acp::connection::AntigravitySyncReport>, AppCommandError> {
-    let result = acp_commands::acp_antigravity_sign_out_core(&state.db, &state.connection_manager)
+) -> Result<Json<()>, AppCommandError> {
+    acp_commands::acp_antigravity_sign_out_core(&state.db, &state.connection_manager)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(result))
+    Ok(Json(()))
 }
 
 #[derive(Deserialize)]

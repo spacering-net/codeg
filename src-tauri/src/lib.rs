@@ -2208,7 +2208,6 @@ mod tauri_app {
                 acp_commands::acp_load_pi_config,
                 acp_commands::acp_list_pi_model_capabilities,
                 acp_commands::acp_validate_pi_command,
-                acp_commands::acp_sync_antigravity_settings,
                 acp_commands::acp_antigravity_login_start,
                 acp_commands::acp_antigravity_login_finish,
                 acp_commands::acp_antigravity_login_cancel,

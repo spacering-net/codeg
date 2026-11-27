@@ -1100,7 +1100,6 @@
       "missingAgentPlatformConfig": "请填写 API Key，或同时填写项目与区域 —— 二者缺一不可，否则会话无法启动。",
       "missingEnterpriseConfig": "Gemini Enterprise 需要同时填写项目与区域。",
       "settingsFileHint": "Antigravity CLI 自己的配置文件（仅供参考，codeg 不会改写该文件）。",
-      "syncSkipped": "你的选择已经存下来了，但 codeg 没能写进 ACP 服务端的 settings.json，所以 Antigravity 仍然按那个文件里写的方式认证。请自己在里面设置 auth.type，或者把它挪走再保存一次。",
       "save": "保存",
       "permissionsTitle": "权限",
       "permissionModeLabel": "权限模式",
@@ -1120,10 +1119,8 @@
         "complete": "完成登录",
         "cancel": "取消",
         "signedIn": "已登录，新会话将使用该账号。",
-        "alreadySignedIn": "Antigravity 本来就持有有效令牌，无需链接即已登录。",
         "failed": "登录未完成。",
-        "startFailed": "无法开始登录",
-        "credentialHint": "令牌缓存在这里。把这个文件复制到其他无桌面机器，那台也就登录好了。"
+        "startFailed": "无法开始登录"
       },
       "signOut": {
         "title": "登录了错误的账号？",
@@ -1692,7 +1689,6 @@
       "qoderSaved": "Qoder 配置已保存",
       "saveQoderConfigFailed": "保存 Qoder 配置失败",
       "antigravitySaved": "已保存 Antigravity 配置",
-      "antigravitySyncSkipped": "已保存，但没有改动 Antigravity 的 settings.json",
       "saveAntigravityConfigFailed": "保存 Antigravity 配置失败",
       "kiroSaved": "Kiro 配置已保存",
       "saveKiroFailed": "保存 Kiro 配置失败",

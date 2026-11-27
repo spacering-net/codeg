@@ -1100,7 +1100,6 @@
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
       "settingsFileHint": "Antigravity CLI 자체 설정 파일입니다(읽기 전용 참고용 — codeg가 이 파일을 덮어쓰지 않습니다).",
-      "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "Save",
       "permissionsTitle": "권한",
       "permissionModeLabel": "권한 모드",
@@ -1120,10 +1119,8 @@
         "complete": "로그인 완료",
         "cancel": "취소",
         "signedIn": "로그인되었습니다. 새 세션은 이 계정을 사용합니다.",
-        "alreadySignedIn": "Antigravity에 이미 유효한 토큰이 있어 링크 없이 로그인했습니다.",
         "failed": "로그인이 완료되지 않았습니다.",
-        "startFailed": "로그인을 시작할 수 없습니다",
-        "credentialHint": "토큰이 여기에 캐시됩니다. 이 파일을 데스크톱이 없는 다른 컴퓨터로 복사하면 그쪽도 로그인됩니다."
+        "startFailed": "로그인을 시작할 수 없습니다"
       },
       "signOut": {
         "title": "잘못된 계정으로 로그인했나요?",
@@ -1692,7 +1689,6 @@
       "qoderSaved": "Qoder 설정을 저장했습니다",
       "saveQoderConfigFailed": "Qoder 설정 저장에 실패했습니다",
       "antigravitySaved": "Antigravity config saved",
-      "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Kiro 구성을 저장했습니다",
       "saveKiroFailed": "Kiro 구성을 저장하지 못했습니다",

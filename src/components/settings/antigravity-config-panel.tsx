@@ -44,10 +44,8 @@ import {
   acpAntigravitySignOut,
   acpReclaimLeakedTemp,
   acpScanLeakedTemp,
-  acpSyncAntigravitySettings,
   type AntigravityLoginOutcome,
   type AntigravityLoginStart,
-  type AntigravitySyncReport,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { copyTextToClipboard } from "@/lib/utils"
@@ -91,10 +89,9 @@ export const ANTIGRAVITY_ENV_KEYS = [
 ] as const
 
 /**
- * The four `auth.type` values Antigravity's ACP server accepts, in the order it
- * advertises them at `initialize`. The pre-rebrand `vertex-ai` spelling is
- * still accepted by the server but never written by codeg — a second name for
- * one method would render as two buttons.
+ * The four auth method ids `agy acp` advertises at `initialize`, in its order.
+ * The pre-rebrand `vertex-ai` spelling is still accepted by the CLI but never
+ * written by codeg — a second name for one method would render as two buttons.
  */
 export type AntigravityAuthMethod =
   | "oauth-personal"
@@ -151,14 +148,13 @@ export interface AntigravityFormValues {
  * other one is DELETED rather than left behind. That matters because the
  * method and the credential are not independent here — a `GEMINI_API_KEY` left
  * over from a previous choice would authenticate the user as something they
- * did not pick, and would contradict the `auth.type` the same launch writes to
- * `settings.json`. (The launch path scrubs them again for the same reason; this
- * is the half that keeps the stored row honest.)
+ * did not pick, and would contradict the method the panel shows. (The launch
+ * path scrubs them again for the same reason; this is the half that keeps the
+ * stored row honest.)
  *
  * `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` are kept for BOTH
- * `agent-platform` (which reads them from the environment) and `oauth-business`
- * (which reads project/location from `settings.json` only — the launch path
- * copies them into the `gcp` block from these same values).
+ * `agent-platform` and `oauth-business`, which both read them from the
+ * environment.
  *
  * Unrelated keys are preserved untouched.
  */
@@ -253,8 +249,8 @@ function usesBrowserSignIn(method: AntigravityAuthMethod): boolean {
   return method === "oauth-personal" || method === "oauth-business"
 }
 
-/** A sign-in that actually produced a link and is waiting to be completed. */
-type PendingLogin = Extract<AntigravityLoginStart, { alreadySignedIn: false }>
+/** A sign-in that produced a link and is waiting to be completed. */
+type PendingLogin = AntigravityLoginStart
 
 /**
  * Sign in to Antigravity from a machine that has no browser.
@@ -354,24 +350,10 @@ function HeadlessSignIn({
       if (!stillOurs(startedFor)) {
         // 面板已关闭或用户切换到其他认证方式时，立即通知后端终止刚启动的
         // `agy acp --login` 子进程，避免遗留后台进程或展示旧认证方式的链接。
-        if (!started.alreadySignedIn) {
-          void acpAntigravityLoginCancel(started.handle).catch(() => {})
-        }
+        void acpAntigravityLoginCancel(started.handle).catch(() => {})
         return
       }
-      if (started.alreadySignedIn) {
-        // The agent still had a usable token and authenticated on the spot, so
-        // this doubles as a "am I signed in?" check. Reporting it beats letting
-        // the user wait out a link that is never coming.
-        setOutcome({
-          signedIn: true,
-          message: t("antigravity.headless.alreadySignedIn"),
-          retryable: false,
-          credentialPath: null,
-        })
-      } else {
-        setPending(started)
-      }
+      setPending(started)
     } catch (e) {
       if (!stillOurs(startedFor)) return
       // NOT `e instanceof Error`: the web transport throws the backend's
@@ -403,11 +385,11 @@ function HeadlessSignIn({
         toast.success(t("antigravity.headless.signedIn"))
       }
       if (!result.retryable) {
-        // The redirect went out, and the agent's listener answers exactly one
-        // request — so the link on screen is spent whether or not the sign-in
-        // worked. Leaving the paste box would invite a second attempt that
-        // could only fail. `retryable` marks the one case where it is still
-        // live: codeg rejected the paste before sending anything.
+        // The code went out, and `agy acp --login` consumes it and exits — so
+        // the link on screen is spent whether or not the sign-in worked.
+        // Leaving the paste box would invite a second attempt that could only
+        // fail. `retryable` marks the one case where it is still live: codeg
+        // rejected the paste before sending anything.
         pendingRef.current = null
         setPending(null)
         setRedirect("")
@@ -422,7 +404,6 @@ function HeadlessSignIn({
         // works, or the backend answers "no sign-in is waiting" in plain
         // words. Clearing it would strand a still-live attempt.
         retryable: true,
-        credentialPath: null,
       })
     } finally {
       if (mountedRef.current) setBusy(false)
@@ -593,18 +574,6 @@ function HeadlessSignIn({
           {outcome.message ? (
             <p className="text-3xs text-muted-foreground">{outcome.message}</p>
           ) : null}
-          {/* The credential is a portable file, so a user with several headless
-              machines can sign in once here and copy it to the rest. */}
-          {outcome.signedIn && outcome.credentialPath ? (
-            <>
-              <p className="text-3xs text-muted-foreground">
-                {t("antigravity.headless.credentialHint")}
-              </p>
-              <code className="block overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-3xs whitespace-nowrap text-muted-foreground">
-                {outcome.credentialPath}
-              </code>
-            </>
-          ) : null}
         </div>
       ) : null}
     </div>
@@ -614,27 +583,16 @@ function HeadlessSignIn({
 /**
  * Discard the account Antigravity is signed in as.
  *
- * The other half of signing in, and not an optional one. Antigravity refreshes
- * its cached token by itself, so once a credential exists `authenticate` returns
- * without opening anything and the sign-in above can only report "already signed
- * in" — the first Google account a user picks is the last one they get. Nothing
- * they can reach from outside fixes it either: the credential is a login-keychain
- * item on macOS and a file under `GEMINI_HOME` elsewhere, so it survives
- * uninstalling the Antigravity CLI and reinstalling codeg.
+ * The other half of signing in. Antigravity refreshes its cached credential by
+ * itself, so once one exists every session silently reuses that account.
+ * Nothing the user can reach from outside codeg fixes it either: the CLI keeps
+ * it in the system keyring (or its file fallback), which survives
+ * reinstalling codeg. The backend drives the CLI's own ACP `logout`.
  *
  * Only for the two OAuth methods. The API-key methods read their credential from
- * the environment on every request, so there is nothing stored to discard — and
- * the agent's `logout` would clear the saved `auth.type` for no gain.
+ * the environment on every request, so there is nothing stored to discard.
  */
-function SignOut({
-  disabled,
-  onSignedOut,
-}: {
-  disabled: boolean
-  /** Hands back the settings.json report the sign-out produced, so the panel
-   *  can raise its standing notice when that file could not be rewritten. */
-  onSignedOut: (report: AntigravitySyncReport) => void
-}) {
+function SignOut({ disabled }: { disabled: boolean }) {
   const t = useTranslations("AcpAgentSettings")
   const [busy, setBusy] = useState(false)
   const mountedRef = useRef(true)
@@ -648,14 +606,9 @@ function SignOut({
   const signOut = useCallback(async () => {
     setBusy(true)
     try {
-      const report = await acpAntigravitySignOut()
+      await acpAntigravitySignOut()
       if (!mountedRef.current) return
-      onSignedOut(report)
-      if (report.status === "skipped") {
-        toast.warning(t("toasts.antigravitySyncSkipped"))
-      } else {
-        toast.success(t("antigravity.signOut.done"))
-      }
+      toast.success(t("antigravity.signOut.done"))
     } catch (e) {
       // NOT `String(e)`: the web transport throws the backend's `{code,
       // message}` JSON verbatim, and this is the deployment where the
@@ -664,7 +617,7 @@ function SignOut({
     } finally {
       if (mountedRef.current) setBusy(false)
     }
-  }, [onSignedOut, t])
+  }, [t])
 
   return (
     <div className="flex items-start justify-between gap-2 rounded-md border border-dashed p-2.5">
@@ -978,11 +931,6 @@ export function AntigravityConfigPanel({
   )
   const [showKey, setShowKey] = useState(false)
   const [savingForm, setSavingForm] = useState(false)
-  /** The last save whose settings.json write was REFUSED, or null. Held rather
-   *  than left to the toast: this is a standing disagreement between the form
-   *  and the file the agent reads, and it stays true until someone edits that
-   *  file — a notice that scrolls away after four seconds would not say so. */
-  const [syncSkip, setSyncSkip] = useState<AntigravitySyncReport | null>(null)
 
   const mountedRef = useRef(true)
   useEffect(() => {
@@ -1063,26 +1011,9 @@ export function AntigravityConfigPanel({
       // anything changed since is NEWER than what was stored.
       if (valuesRef.current === submitted) dirty.current = false
 
-      // Storing the row is the save. `agy acp` owns its credential and reads
-      // no codeg-managed settings.json, so the old second half (projecting
-      // `auth.type` into the standalone server's file) is now a no-op. It is
-      // still called so both panels and older clients keep a single save
-      // round trip; a transport failure is not a failed save.
-      let report: AntigravitySyncReport | null = null
-      try {
-        report = await acpSyncAntigravitySettings()
-      } catch {
-        // The sync is a report, not the save. A transport failure leaves the
-        // row stored and the launch-time sync still to come, so it must not
-        // turn a successful save into a failed one.
-      }
-      if (mountedRef.current)
-        setSyncSkip(report?.status === "skipped" ? report : null)
-      if (report?.status === "skipped") {
-        toast.warning(t("toasts.antigravitySyncSkipped"))
-      } else {
-        toast.success(t("toasts.antigravitySaved"))
-      }
+      // Storing the row is the whole save: `agy acp` owns its credential and
+      // reads no codeg-managed settings file.
+      toast.success(t("toasts.antigravitySaved"))
       onSaved()
     } catch (e) {
       toast.error(
@@ -1092,14 +1023,6 @@ export function AntigravityConfigPanel({
       if (mountedRef.current) setSavingForm(false)
     }
   }, [agent.enabled, agent.env, onSaveEnv, onSaved, t])
-
-  // The sign-out report is always `already_current` now: `agy acp` keeps no
-  // settings.json for codeg to rewrite. The standing notice stays wired for a
-  // future agent that does need one, and for the skipped branch the type
-  // already carries.
-  const onSignedOut = useCallback((report: AntigravitySyncReport) => {
-    setSyncSkip(report.status === "skipped" ? report : null)
-  }, [])
 
   const busy = saving || savingForm
   const markDirty = () => {
@@ -1298,29 +1221,7 @@ export function AntigravityConfigPanel({
             discarding a credential needs no project, no location and no key,
             and a user whose stored row is half-filled is exactly the one who
             may need to get out of the account it belongs to. */}
-        {usesBrowserSignIn(method) ? (
-          <SignOut disabled={busy} onSignedOut={onSignedOut} />
-        ) : null}
-
-        {/* The save landed in the database but not in the file the server
-            reads, so the choice above is NOT what the next session will
-            authenticate with. Names the file and the reason, because the fix
-            is to edit that file by hand — codeg will not touch it again. */}
-        {syncSkip ? (
-          <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/5 p-2">
-            <p className="text-2xs text-amber-600 dark:text-amber-400">
-              {t("antigravity.syncSkipped")}
-            </p>
-            {syncSkip.reason ? (
-              <p className="text-3xs text-muted-foreground">
-                {syncSkip.reason}
-              </p>
-            ) : null}
-            <code className="block overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-3xs whitespace-nowrap text-muted-foreground">
-              {syncSkip.path}
-            </code>
-          </div>
-        ) : null}
+        {usesBrowserSignIn(method) ? <SignOut disabled={busy} /> : null}
 
         {agent.config_file_path ? (
           <div className="space-y-1">

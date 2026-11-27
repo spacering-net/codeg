@@ -6746,20 +6746,6 @@ pub(crate) fn pi_project_trust_launch_block(
     ))
 }
 
-/// Report Antigravity's auth settings after a save.
-///
-/// `agy acp` owns its credential and reads no codeg-managed settings file, so
-/// this is a no-op that answers `already_current`. It stays as a separate RPC
-/// because the panel's save flow calls it and older clients keep working.
-pub(crate) async fn acp_sync_antigravity_settings_core(
-    db: &AppDatabase,
-) -> Result<crate::acp::connection::AntigravitySyncReport, AcpError> {
-    let runtime_env = antigravity_runtime_env(db).await?;
-    Ok(crate::acp::connection::sync_antigravity_settings_for_env(
-        &runtime_env,
-    ))
-}
-
 /// The environment a real Antigravity launch would compose from the STORED row.
 ///
 /// The read error is PROPAGATED, unlike the `.ok().flatten()` the pi trust path
@@ -6781,10 +6767,10 @@ async fn antigravity_runtime_env(db: &AppDatabase) -> Result<BTreeMap<String, St
 
 /// Start a browser-free Antigravity sign-in and hand back the link to open.
 ///
-/// For headless deployments (codeg on a Linux server, no desktop), where the
-/// agent's own loopback browser flow cannot complete: it opens a browser that
-/// does not exist and then blocks for five minutes inside `session/new`. See
-/// [`crate::acp::antigravity_login`].
+/// For headless deployments (codeg on a server with no desktop), where the
+/// CLI cannot open a browser itself: drives `agy acp --login`, which prints a
+/// consent link and waits for the pasted code. Personal Google accounts only.
+/// See [`crate::acp::antigravity_login`].
 pub(crate) async fn acp_antigravity_login_start_core(
     db: &AppDatabase,
     method_id: String,
@@ -6793,8 +6779,9 @@ pub(crate) async fn acp_antigravity_login_start_core(
     crate::acp::antigravity_login::start(&runtime_env, method_id.trim()).await
 }
 
-/// Deliver the redirect the user's browser could not reach, completing the
-/// sign-in started by [`acp_antigravity_login_start_core`].
+/// Deliver the pasted authorization code (or landing-page address) to the
+/// waiting `agy acp --login`, completing the sign-in started by
+/// [`acp_antigravity_login_start_core`].
 pub(crate) async fn acp_antigravity_login_finish_core(
     handle: String,
     redirect: String,
@@ -6810,22 +6797,17 @@ pub(crate) async fn acp_antigravity_login_cancel_core(handle: String) -> Result<
 /// Sign Antigravity out through the CLI's own ACP `logout`.
 ///
 /// `agy acp` owns the credential store (the system keyring, or its file
-/// fallback), so codeg does not delete tokens itself. Two things still need
-/// codeg's help:
-///
-/// 1. **Quiesce this agent first, and keep it quiesced.** A live Antigravity
-///    process caches OAuth credentials in memory and writes them back on a
-///    silent refresh, which would restore the account being signed out of.
-///    The lockout is taken BEFORE the connections are enumerated and held
-///    across the `logout`, so a session cannot be spawned into the window and
-///    inherit the credential being erased.
-/// 2. **Report through the panel's existing type.** `agy acp` keeps no
-///    settings.json for codeg to rewrite, so the settings-sync half is a
-///    no-op; the report tells the panel the sign-out itself succeeded.
+/// fallback), so codeg does not delete tokens itself. What it does need from
+/// codeg is quiescing this agent first, and keeping it quiesced: a live
+/// Antigravity process caches OAuth credentials in memory and writes them back
+/// on a silent refresh, which would restore the account being signed out of.
+/// The lockout is taken BEFORE the connections are enumerated and held across
+/// the `logout`, so a session cannot be spawned into the window and inherit
+/// the credential being erased.
 pub(crate) async fn acp_antigravity_sign_out_core(
     db: &AppDatabase,
     connection_manager: &crate::acp::manager::ConnectionManager,
-) -> Result<crate::acp::connection::AntigravitySyncReport, AcpError> {
+) -> Result<(), AcpError> {
     let runtime_env = antigravity_runtime_env(db).await?;
 
     // Before the enumeration, and held across the `logout`: a connection
@@ -6841,11 +6823,7 @@ pub(crate) async fn acp_antigravity_sign_out_core(
 
     let signed_out = crate::acp::antigravity_login::sign_out(&runtime_env).await;
     drop(_lockout);
-    signed_out?;
-
-    Ok(crate::acp::connection::sync_antigravity_settings_for_env(
-        &runtime_env,
-    ))
+    signed_out
 }
 
 pub(crate) async fn acp_pi_project_trust_state_core(
@@ -13811,16 +13789,6 @@ pub async fn acp_pi_project_trust_state(
     acp_pi_project_trust_state_core(&db, workspace).await
 }
 
-/// Project the saved Antigravity auth choice into the server's settings file,
-/// and say whether it landed. Called by the settings panel after a save.
-#[cfg(feature = "tauri-runtime")]
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn acp_sync_antigravity_settings(
-    db: tauri::State<'_, AppDatabase>,
-) -> Result<crate::acp::connection::AntigravitySyncReport, AcpError> {
-    acp_sync_antigravity_settings_core(&db).await
-}
-
 /// Start a browser-free Antigravity sign-in for a machine with no desktop.
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
@@ -13855,7 +13823,7 @@ pub async fn acp_antigravity_login_cancel(handle: String) -> Result<(), AcpError
 pub async fn acp_antigravity_sign_out(
     db: tauri::State<'_, AppDatabase>,
     manager: tauri::State<'_, crate::acp::manager::ConnectionManager>,
-) -> Result<crate::acp::connection::AntigravitySyncReport, AcpError> {
+) -> Result<(), AcpError> {
     acp_antigravity_sign_out_core(&db, &manager).await
 }
 

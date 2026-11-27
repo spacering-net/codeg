@@ -1100,7 +1100,6 @@
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
       "settingsFileHint": "ملف الإعدادات الخاص بـ Antigravity CLI (مرجع للقراءة فقط — لا يقوم codeg بالكتابة فوقه).",
-      "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "Save",
       "permissionsTitle": "الأذونات",
       "permissionModeLabel": "وضع الأذونات",
@@ -1120,10 +1119,8 @@
         "complete": "إتمام تسجيل الدخول",
         "cancel": "إلغاء",
         "signedIn": "تم تسجيل الدخول. ستستخدم الجلسات الجديدة هذا الحساب.",
-        "alreadySignedIn": "كان لدى Antigravity رمز صالح بالفعل، فتم تسجيل الدخول دون الحاجة إلى رابط.",
         "failed": "لم يكتمل تسجيل الدخول.",
-        "startFailed": "تعذّر بدء تسجيل الدخول",
-        "credentialHint": "يُخزَّن الرمز هنا. انسخ هذا الملف إلى جهاز آخر بلا سطح مكتب لتسجيل دخوله أيضاً."
+        "startFailed": "تعذّر بدء تسجيل الدخول"
       },
       "signOut": {
         "title": "هل سجّلت الدخول بحساب خاطئ؟",
@@ -1692,7 +1689,6 @@
       "qoderSaved": "تم حفظ إعدادات Qoder",
       "saveQoderConfigFailed": "تعذّر حفظ إعدادات Qoder",
       "antigravitySaved": "Antigravity config saved",
-      "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "تم حفظ إعدادات Kiro",
       "saveKiroFailed": "تعذّر حفظ إعدادات Kiro",

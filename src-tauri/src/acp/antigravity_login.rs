@@ -75,19 +75,15 @@ pub const LOGIN_EXPIRES_SECS: u64 = 300;
 const ID_INITIALIZE: i64 = 1;
 const ID_LOGOUT: i64 = 2;
 
-/// What the panel needs to render step one of the sign-in.
-///
-/// The link fields are `None` exactly when `already_signed_in` is true. The
-/// frontend type is a discriminated union on that flag; `agy acp --login`
-/// always asks for consent, so this flow always reports `false`.
+/// What the panel needs to render step one of the sign-in. `agy acp --login`
+/// always asks for consent, so there is always a link.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AntigravityLoginStart {
-    pub already_signed_in: bool,
     /// Opaque id for the pending sign-in; passed back to [`finish`]/[`cancel`].
-    pub handle: Option<String>,
+    pub handle: String,
     /// The Google consent URL to open in any browser, anywhere.
-    pub auth_url: Option<String>,
+    pub auth_url: String,
     /// Where the browser lands after consent. The CLI asks the user to paste
     /// that address (or the code) back, so the panel shows it as the expected
     /// next step.
@@ -108,9 +104,6 @@ pub struct AntigravityLoginOutcome {
     /// Whether the same link can still be used. `agy acp --login` is one-shot:
     /// it consumes the code and exits, so a rejected paste needs a new link.
     pub retryable: bool,
-    /// Where the credential landed, when codeg can name it. The CLI owns that
-    /// decision (keyring or file), so this is normally `None`.
-    pub credential_path: Option<String>,
 }
 
 /// A sign-in waiting for the user's authorization code.
@@ -198,9 +191,8 @@ pub async fn start(
     let handle = new_handle();
     let redirect_uri = redirect_uri_of(&auth_url);
     let started = AntigravityLoginStart {
-        already_signed_in: false,
-        handle: Some(handle.clone()),
-        auth_url: Some(auth_url),
+        handle: handle.clone(),
+        auth_url,
         redirect_uri,
         method_id: method_id.to_string(),
         expires_in_secs: LOGIN_EXPIRES_SECS,
@@ -240,7 +232,6 @@ pub async fn finish(handle: &str, pasted: &str) -> Result<AntigravityLoginOutcom
                 "Enter the authorization code or the full address the browser landed on.".into(),
             ),
             retryable: true,
-            credential_path: None,
         });
     }
     if pasted.contains(['\r', '\n']) {
@@ -251,7 +242,6 @@ pub async fn finish(handle: &str, pasted: &str) -> Result<AntigravityLoginOutcom
                     .into(),
             ),
             retryable: true,
-            credential_path: None,
         });
     }
 
@@ -313,7 +303,6 @@ async fn exchange(
                 signed_in: false,
                 message: Some("the sign-in was abandoned by a sign-out".into()),
                 retryable: false,
-                credential_path: None,
             });
         }
     };
@@ -325,7 +314,6 @@ async fn exchange(
                 signed_in: true,
                 message: None,
                 retryable: false,
-                credential_path: None,
             })
         }
         Ok(Ok(status)) => {
@@ -337,7 +325,6 @@ async fn exchange(
                         .unwrap_or_else(|| format!("agy acp --login exited with {status}")),
                 ),
                 retryable: false,
-                credential_path: None,
             })
         }
         Ok(Err(error)) => {
@@ -350,7 +337,6 @@ async fn exchange(
                 signed_in: false,
                 message: Some("agy acp --login did not finish in time".into()),
                 retryable: false,
-                credential_path: None,
             })
         }
     }
@@ -464,7 +450,7 @@ fn configure_agy_command(
     command: &mut tokio::process::Command,
     runtime_env: &BTreeMap<String, String>,
 ) {
-    let env = crate::acp::connection::antigravity_launch_env(runtime_env, None);
+    let env = crate::acp::connection::antigravity_launch_env(runtime_env);
     for (key, value) in &env {
         if value.is_empty() {
             command.env_remove(key);

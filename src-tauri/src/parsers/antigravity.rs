@@ -105,12 +105,11 @@ pub(crate) fn resolve_gemini_home_for_env(env: &AgentEnv) -> PathBuf {
 /// The same resolution for an EXPLICIT `GEMINI_HOME`, so a caller holding a
 /// launch environment does not have to rebuild the rules by hand.
 ///
-/// It exists because rebuilding them by hand is exactly what went wrong:
-/// `acp::connection`'s settings-file writer used a bare `PathBuf::from`, which
-/// dropped the `~` expansion above and sent every `GEMINI_HOME=~/...` user's
-/// `auth.type` into a literal `~` directory beside codeg's working directory
-/// while the server read `$HOME/...` and kept failing `Authentication
-/// required`.
+/// It exists because rebuilding them by hand once went wrong: a bare
+/// `PathBuf::from` drops the `~` expansion above and points a
+/// `GEMINI_HOME=~/...` launch at a literal `~` directory beside codeg's
+/// working directory. `--gemini-dir` and the migration target both go through
+/// here (`acp::connection::antigravity_gemini_dir_arg`).
 /// `home_dir` is the home the value's `~` is expanded against, and that the
 /// `~/.gemini` default hangs off. A caller holding a launch environment must
 /// pass the CHILD's home (`acp::file_system_runtime::child_home_dir`), not
@@ -135,14 +134,6 @@ fn resolve_gemini_home_from(
         Some(value) => expand_home_prefix(&value, home_dir.as_ref()),
         None => home_dir.unwrap_or_default().join(".gemini"),
     }
-}
-
-/// `<home>/antigravity-acp` — the STANDALONE ACP server's private directory.
-/// codeg no longer launches that server (see `AgentType::Antigravity`), but
-/// the tree is still read for sessions written before the switch.
-#[cfg(test)]
-pub(crate) fn resolve_antigravity_acp_dir() -> PathBuf {
-    resolve_gemini_home().join(ACP_SUBDIR)
 }
 
 /// `<home>/antigravity-cli/conversations` — the Antigravity CLI's session

@@ -1100,7 +1100,6 @@
       "missingAgentPlatformConfig": "请填写 API Key，或同时填写项目与区域 —— 二者缺一不可，否则会话无法启动。",
       "missingEnterpriseConfig": "Gemini Enterprise 需要同时填写项目与区域。",
       "settingsFileHint": "Antigravity CLI 自己的設定檔（僅供參考，codeg 不會改寫此檔案）。",
-      "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "保存",
       "permissionsTitle": "權限",
       "permissionModeLabel": "權限模式",
@@ -1120,10 +1119,8 @@
         "complete": "完成登入",
         "cancel": "取消",
         "signedIn": "已登入，新的工作階段將使用此帳號。",
-        "alreadySignedIn": "Antigravity 本來就持有有效權杖，無需連結即已登入。",
         "failed": "登入未完成。",
-        "startFailed": "無法開始登入",
-        "credentialHint": "權杖快取在這裡。把這個檔案複製到其他無桌面機器，那台也就登入好了。"
+        "startFailed": "無法開始登入"
       },
       "signOut": {
         "title": "登入了錯誤的帳號？",
@@ -1692,7 +1689,6 @@
       "qoderSaved": "Qoder 設定已儲存",
       "saveQoderConfigFailed": "儲存 Qoder 設定失敗",
       "antigravitySaved": "已保存 Antigravity 配置",
-      "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
       "saveAntigravityConfigFailed": "保存 Antigravity 配置失败",
       "kiroSaved": "Kiro 設定已儲存",
       "saveKiroFailed": "儲存 Kiro 設定失敗",

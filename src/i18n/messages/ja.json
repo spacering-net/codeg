@@ -1100,7 +1100,6 @@
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
       "settingsFileHint": "Antigravity CLI 自身の設定ファイル（参照用・codeg はこのファイルを上書きしません）。",
-      "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "Save",
       "permissionsTitle": "権限",
       "permissionModeLabel": "権限モード",
@@ -1120,10 +1119,8 @@
         "complete": "サインインを完了",
         "cancel": "キャンセル",
         "signedIn": "サインインしました。新しいセッションはこのアカウントを使用します。",
-        "alreadySignedIn": "Antigravity は有効なトークンを既に保持していたため、リンクなしでサインインしました。",
         "failed": "サインインが完了しませんでした。",
-        "startFailed": "サインインを開始できませんでした",
-        "credentialHint": "トークンはここにキャッシュされます。このファイルを別のデスクトップなしマシンにコピーすれば、そちらもサインイン済みになります。"
+        "startFailed": "サインインを開始できませんでした"
       },
       "signOut": {
         "title": "間違ったアカウントでサインインしましたか？",
@@ -1692,7 +1689,6 @@
       "qoderSaved": "Qoder の設定を保存しました",
       "saveQoderConfigFailed": "Qoder の設定の保存に失敗しました",
       "antigravitySaved": "Antigravity config saved",
-      "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Kiro 設定を保存しました",
       "saveKiroFailed": "Kiro 設定の保存に失敗しました",

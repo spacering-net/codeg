@@ -1100,7 +1100,6 @@
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
       "settingsFileHint": "Antigravity CLI's own settings file (read-only reference — codeg does not overwrite it).",
-      "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "Save",
       "permissionsTitle": "Permissions",
       "permissionModeLabel": "Permission mode",
@@ -1120,10 +1119,8 @@
         "complete": "Complete sign-in",
         "cancel": "Cancel",
         "signedIn": "Signed in. New sessions will use this account.",
-        "alreadySignedIn": "Antigravity already had a valid token, so it signed in without a link.",
         "failed": "Sign-in did not complete.",
-        "startFailed": "Could not start the sign-in",
-        "credentialHint": "The token is cached here. Copy this file to another machine with no desktop to sign that one in too."
+        "startFailed": "Could not start the sign-in"
       },
       "signOut": {
         "title": "Signed in as the wrong account?",
@@ -1692,7 +1689,6 @@
       "qoderSaved": "Qoder config saved",
       "saveQoderConfigFailed": "Failed to save Qoder config",
       "antigravitySaved": "Antigravity config saved",
-      "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Kiro config saved",
       "saveKiroFailed": "Failed to save Kiro config",
