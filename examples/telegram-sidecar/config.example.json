@@ -1,0 +1,20 @@
+{
+  "codegUrl": "http://127.0.0.1:3080",
+  "allowedUserIds": [],
+  "telegramApiBase": "https://api.telegram.org",
+  "telegramProxy": "auto",
+  "pollTimeoutSec": 25,
+  "streamThrottleMs": 1200,
+  "maxMessageChars": 3800,
+  "proactiveWatchDesktop": true,
+  "miniApp": {
+    "enabled": false,
+    "proxyHost": "127.0.0.1",
+    "proxyPort": 3081,
+    "tunnelMode": "quick",
+    "publicUrl": "",
+    "cloudflaredPath": "",
+    "sessionTtlHours": 12,
+    "autoUpdateMenuButton": true
+  }
+}
