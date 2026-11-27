@@ -865,7 +865,7 @@ function PushCommitFilesTree({
             <CommitFileStatus status={mapFileStatus(file.status)}>
               {file.status}
             </CommitFileStatus>
-            <CommitFileIcon />
+            <CommitFileIcon filename={file.path} />
             <CommitFilePath title={file.path}>{node.name}</CommitFilePath>
           </CommitFileInfo>
           <CommitFileChanges>

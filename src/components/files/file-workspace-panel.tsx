@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import dynamic from "next/dynamic"
-import { ChevronDown, ChevronRight, FileCode2, FileIcon } from "lucide-react"
+import { ChevronDown, ChevronRight, FileCode2 } from "lucide-react"
 import type {
   editor as MonacoEditorNs,
   IDisposable,
@@ -33,7 +33,9 @@ import {
   isOfficeFileTab,
 } from "@/components/files/kept-office-previews"
 import { PdfPreview } from "@/components/files/pdf-preview"
+import { OpenFileViewerPreview } from "@/components/files/open-file-viewer-preview"
 import { isHtmlPreviewable } from "@/lib/language-detect"
+import { FileTypeIcon } from "@/components/files/file-type-icon"
 import { DiffViewer } from "@/components/diff/diff-viewer"
 import { ImageDiffView } from "@/components/diff/image-diff-view"
 import { UnifiedDiffPreview } from "@/components/diff/unified-diff-preview"
@@ -720,7 +722,10 @@ function DiffFileList({
                   }}
                   title={file.path}
                 >
-                  <FileIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <FileTypeIcon
+                    filename={file.path}
+                    className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                  />
                   <span className="text-xs truncate flex-1 min-w-0 font-mono">
                     {file.path}
                   </span>
@@ -1899,6 +1904,14 @@ function FileWorkspacePanelBody() {
   // keeps it mounted while other tabs are in front.
   if (isOfficeFileTab(activeFileTab)) {
     return null
+  }
+
+  // open-file-viewer preview (PDF, legacy .doc/.ppt, archives, email, …).
+  // Preview-only like the office branch: these are binary formats with no text
+  // editor view, so it renders unconditionally rather than falling through to
+  // Monaco with binary garbage.
+  if (isFileTab && activeFileTab && activeFileTab.language === "ofv") {
+    return <OpenFileViewerPreview key={activeFileTab.id} tab={activeFileTab} />
   }
 
   // HTML preview (sandboxed iframe)

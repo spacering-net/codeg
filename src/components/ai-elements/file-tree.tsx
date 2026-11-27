@@ -8,7 +8,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
-import { ChevronRightIcon, FileIcon } from "lucide-react"
+import { ChevronRightIcon } from "lucide-react"
+import { FileTypeIcon } from "@/components/files/file-type-icon"
 import {
   createContext,
   useCallback,
@@ -487,7 +488,12 @@ export const FileTreeFile = ({
                 chevron (no extra spacer in front of it), so a file and its
                 sibling directory line their names up at every depth. */}
             <FileTreeIcon>
-              {icon ?? <FileIcon className="size-4 text-muted-foreground" />}
+              {icon ?? (
+                <FileTypeIcon
+                  filename={name}
+                  className="size-4 text-muted-foreground"
+                />
+              )}
             </FileTreeIcon>
             <FileTreeName>{name}</FileTreeName>
           </>
