@@ -21,6 +21,7 @@ import { useActivityLive } from "./activity/activity-live-context"
 import { openDisclosures } from "./activity/disclosure-store"
 import { useFoldBack } from "./activity/fold-back"
 import { WorkingMark } from "./activity/rail-icon"
+import { useTransformedAssistantParts } from "./plugin-timeline-transform"
 import { ReplyMotion } from "./reply-motion"
 
 export interface SplitAssistantTurnParts {
@@ -103,7 +104,11 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   pending?: boolean
 }) {
   const tElapsed = useTranslations("Folder.chat.liveTurnStats")
-  const split = useMemo(() => splitAssistantTurnParts(parts), [parts])
+  const transformedParts = useTransformedAssistantParts(parts, !completed)
+  const split = useMemo(
+    () => splitAssistantTurnParts(transformedParts),
+    [transformedParts]
+  )
 
   const [localOpen, setLocalOpen] = useState(() => {
     const entry = manualFold.get(parts)
@@ -218,8 +223,9 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   // the failure link asks it to draw the one it is after.
   const revealRef = useRef<((stepKey: string) => boolean) | null>(null)
   const activity = useMemo(
-    () => buildActivity(parts, { isStreaming, keepAnswer: proseOnRail }),
-    [parts, isStreaming, proseOnRail]
+    () =>
+      buildActivity(transformedParts, { isStreaming, keepAnswer: proseOnRail }),
+    [transformedParts, isStreaming, proseOnRail]
   )
   // The header's red "N failed": open the turn at the first failure nothing
   // redid — the row, and the group it is folded into.
@@ -320,9 +326,10 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   if (blank) {
     return (
       <ContentPartsRenderer
-        parts={parts}
+        parts={transformedParts}
         role="assistant"
         isStreaming={isStreaming}
+        skipPluginTransform
       />
     )
   }
@@ -411,6 +418,7 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
               parts={split.answer}
               role="assistant"
               isStreaming={isStreaming}
+              skipPluginTransform
             />
           </div>
         ) : null}

@@ -3,6 +3,7 @@ import type {
   AdaptedGeneratedImagePart,
   AdaptedGoalRunPart,
   AdaptedPlanPart,
+  AdaptedPluginTimelineReplacementPart,
   AdaptedToolCallPart,
 } from "@/lib/adapters/ai-elements-adapter"
 import type { ToolApproval } from "./approval"
@@ -209,6 +210,11 @@ export type ActivityStep =
       model: ActivityModel
     }
   | { type: "tool-result"; key: string; part: ToolResultPart }
+  | {
+      type: "plugin-replacement"
+      key: string
+      part: AdaptedPluginTimelineReplacementPart
+    }
 
 /** A command that moved its process to the background, as the task's row
  *  names it ("Regenerate audit report"). */

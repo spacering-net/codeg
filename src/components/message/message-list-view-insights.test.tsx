@@ -40,7 +40,10 @@ const { stableT, scrollToIndex, viewport } = vi.hoisted(() => ({
   },
 }))
 
-vi.mock("next-intl", () => ({ useTranslations: () => stableT }))
+vi.mock("next-intl", () => ({
+  useTranslations: () => stableT,
+  useLocale: () => "en",
+}))
 // No assistants' roster read here: whether a reply can be checked (10.3)
 // is not what this file is about.
 vi.mock("@/stores/personal-agent-roster-store", async (importOriginal) => ({

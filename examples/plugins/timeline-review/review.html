@@ -1,0 +1,25 @@
+<style>
+  :root {
+    color-scheme: light dark;
+    font: 14px system-ui;
+  }
+  p {
+    white-space: pre-wrap;
+  }
+</style>
+<article>
+  <strong id="status"></strong>
+  <p id="summary"></p>
+</article>
+<script>
+  window.codeg.ready.then(({ type, kind, version, data, locale }) => {
+    if (type !== "timelineItem" || kind !== "review-result" || version !== 1) {
+      return
+    }
+
+    document.documentElement.lang = locale
+    document.getElementById("status").textContent =
+      data.status === "passed" ? "Review passed" : "Changes requested"
+    document.getElementById("summary").textContent = data.summary
+  })
+</script>

@@ -1,0 +1,59 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.tool-output-card",
+  "name": "Tool Output Card",
+  "nameTranslations": {
+    "es": "Tarjeta de resultados de herramientas",
+    "zh-CN": "工具输出卡片"
+  },
+  "version": "1.0.0",
+  "server": {
+    "entry": "transform.mjs",
+    "methods": ["transform-tests"]
+  },
+  "client": { "entry": "card.html" },
+  "settings": {
+    "version": 1,
+    "defaults": { "showEmptySuites": false },
+    "schema": {
+      "type": "object",
+      "properties": { "showEmptySuites": { "type": "boolean" } },
+      "required": ["showEmptySuites"],
+      "additionalProperties": false
+    }
+  },
+  "contributes": {
+    "timelineTransformers": [
+      {
+        "id": "test-output",
+        "itemType": "tool_call",
+        "toolNames": ["test-runner", "bash", "Bash", "exec_command"],
+        "rendererKind": "test-result",
+        "rendererVersion": 1,
+        "method": "transform-tests"
+      }
+    ],
+    "timelineRenderers": [
+      {
+        "kind": "test-result",
+        "version": 1,
+        "title": "Test result",
+        "titleTranslations": {
+          "es": "Resultado de las pruebas",
+          "zh-CN": "测试结果"
+        },
+        "dataSchema": {
+          "type": "object",
+          "properties": {
+            "phase": { "enum": ["streaming", "complete"] },
+            "status": { "enum": ["running", "passed", "failed"] },
+            "passed": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 }
+          },
+          "required": ["phase", "status", "passed", "failed"],
+          "additionalProperties": false
+        }
+      }
+    ]
+  }
+}

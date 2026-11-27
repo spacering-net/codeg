@@ -1,0 +1,30 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.timeline-review",
+  "name": "Timeline Review",
+  "version": "1.0.0",
+  "server": { "entry": "review.mjs", "methods": ["record-review"] },
+  "client": { "entry": "review.html" },
+  "contributes": {
+    "timelineRenderers": [
+      {
+        "kind": "review-result",
+        "version": 1,
+        "title": "Review result",
+        "titleTranslations": {
+          "es": "Resultado de la revisión",
+          "zh-CN": "审查结果"
+        },
+        "dataSchema": {
+          "type": "object",
+          "properties": {
+            "summary": { "type": "string", "minLength": 1, "maxLength": 1024 },
+            "status": { "enum": ["passed", "needs-changes"] }
+          },
+          "required": ["summary", "status"],
+          "additionalProperties": false
+        }
+      }
+    ]
+  }
+}

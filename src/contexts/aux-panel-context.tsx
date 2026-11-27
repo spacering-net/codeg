@@ -56,6 +56,9 @@ interface AuxPanelContextValue {
   setWidth: (w: number) => void
   setActiveTab: (tab: AuxPanelTab) => void
   openTab: (tab: AuxPanelTab) => void
+  selectedPluginPanel: string | null
+  setSelectedPluginPanel: (panel: string) => void
+  openPluginPanel: (panel: string) => void
   pendingRevealPath: string | null
   revealInFileTree: (path: string) => void
   consumePendingRevealPath: () => void
@@ -63,8 +66,12 @@ interface AuxPanelContextValue {
 
 const AuxPanelContext = createContext<AuxPanelContextValue | null>(null)
 
+export function useOptionalAuxPanelContext() {
+  return useContext(AuxPanelContext)
+}
+
 export function useAuxPanelContext() {
-  const ctx = useContext(AuxPanelContext)
+  const ctx = useOptionalAuxPanelContext()
   if (!ctx) {
     throw new Error("useAuxPanelContext must be used within AuxPanelProvider")
   }
@@ -86,6 +93,9 @@ export function AuxPanelProvider({ children }: AuxPanelProviderProps) {
   const [width, setWidthState] = useState(DEFAULT_WIDTH)
   const [restored, setRestored] = useState(false)
   const [activeTab, setActiveTab] = useState<AuxPanelTab>("session_details")
+  const [selectedPluginPanel, setSelectedPluginPanel] = useState<string | null>(
+    null
+  )
   const [pendingRevealPath, setPendingRevealPath] = useState<string | null>(
     null
   )
@@ -107,6 +117,14 @@ export function AuxPanelProvider({ children }: AuxPanelProviderProps) {
     setActiveTab(tab)
     setIsOpen(true)
   }, [])
+
+  const openPluginPanel = useCallback(
+    (panel: string) => {
+      setSelectedPluginPanel(panel)
+      openTab("plugins")
+    },
+    [openTab]
+  )
 
   const revealInFileTree = useCallback((path: string) => {
     setPendingRevealPath(path)
@@ -155,6 +173,9 @@ export function AuxPanelProvider({ children }: AuxPanelProviderProps) {
       setWidth,
       setActiveTab,
       openTab,
+      selectedPluginPanel,
+      setSelectedPluginPanel,
+      openPluginPanel,
       pendingRevealPath,
       revealInFileTree,
       consumePendingRevealPath,
@@ -169,6 +190,8 @@ export function AuxPanelProvider({ children }: AuxPanelProviderProps) {
       setOpen,
       setWidth,
       openTab,
+      selectedPluginPanel,
+      openPluginPanel,
       pendingRevealPath,
       revealInFileTree,
       consumePendingRevealPath,

@@ -1,0 +1,516 @@
+# Codeg host plugins
+
+Codeg installs plugins on the host that owns the workspace. A local desktop,
+its embedded Web Service, and a standalone server each expose a plugin catalog
+through the same API. A remote desktop window reads the catalog from the
+server it is connected to.
+
+## Version 1 extension points
+
+| Contribution | Placement | Contract |
+| --- | --- | --- |
+| `workspacePanels` | Plugins tab in the right workspace panel | Codeg renders a named view for the active workspace. Version 1 supports `text` with a plain `text` field and `turnActivity` with the turn hook. |
+| `commands` | Workspace quick actions | A user-selected command opens a panel owned by the same plugin. |
+| `hooks` | Codeg-managed ACP sessions | `session.turnCompleted` can record completion metadata for a workspace panel. |
+| `themes` | Settings → Appearance | The user selects an installed color palette for light mode, dark mode, or both. |
+
+The manifest is declarative. The host validates identifiers and panel
+references before installation. Plugins can use the views, actions and events
+declared for the current API version. Disabling or removing a plugin withdraws
+its contributions and discards its in-memory data. Other connected clients
+receive a catalog change notification.
+
+The turn activity view collects completion time, agent type and stop reason
+for active workspace sessions while the plugin is enabled. It retains the most
+recent 128 records per plugin and starts empty after a host restart. Events come
+from the live ACP event bus, so records are for display and carry no delivery
+guarantee. Rendered text and command labels are plain text. The command runs
+only when selected by the user.
+
+See the [turn activity manifest](../examples/plugins/turn-activity/codeg-plugin.json)
+for a complete example. Import it in **Settings → Plugins**, then enable it.
+Open a workspace in Codeg to use the panel and command.
+
+## Localized names and labels
+
+Add optional `nameTranslations` beside the manifest `name`, `titleTranslations`
+beside a contribution `title`, or `textTranslations` beside `text` for a
+workspace panel with `view: "text"`. Keep the original string as the fallback.
+
+```json
+{
+  "name": "Workspace Notes",
+  "nameTranslations": { "es": "Notas del espacio de trabajo", "zh-CN": "工作区备注" }
+}
+```
+
+Codeg resolves these strings in each client using the current app language. It
+tries the exact locale, the base language, then the original string. Use locale keys
+such as `en`, `es`, `zh-CN`, or `zh-Hant-TW`, with a lowercase language, an
+optional title-case script, and an optional uppercase or numeric region. Use
+nonempty names and titles of up to 100 characters, and panel text of up to
+4,096 UTF-8 bytes per translation. Keep contribution IDs and references stable
+across languages. Custom HTML surfaces receive the app locale from
+`window.codeg.ready` and can present their own translated content.
+
+Import the [Workspace Notes example](../examples/plugins/localized-notes/codeg-plugin.json)
+and enable it. Open **Show Workspace Notes** in an active workspace, then
+change the app language to Spanish or Chinese to see the translated labels and
+panel text.
+
+## Plugin themes
+
+Declare `contributes.themes` to offer up to 16 themes in **Settings →
+Appearance**. Each theme has a unique `id`, a `title`, optional
+`titleTranslations`, and at least one nonempty `light` or `dark` palette.
+Palettes map Codeg's semantic color tokens to six-digit `#RRGGBB` colors.
+Use token names such as `background`, `foreground`, `primary`,
+`primary-foreground`, `card`, `sidebar`, `accent`, and `ring`.
+
+Codeg applies a selected palette for the active light or dark mode. Missing
+tokens use the current appearance. The user's custom token overrides take
+precedence. Switching hosts uses the selection for the connected host, and
+disabling or removing the plugin returns the client to its usual appearance.
+
+Import the [Juniper example](../examples/plugins/juniper-theme/codeg-plugin.json),
+enable it in Plugins, and select Juniper under the plugin themes in Appearance.
+A manifest with just a theme can use `apiVersion: 1`.
+
+## Version 2 server modules
+
+Install the [Workspace Summary example](../examples/plugins/workspace-summary)
+using its directory on the connected host. Enable it, then run **Show Workspace
+Summary** from workspace quick actions. Its panel displays text returned by the
+plugin's JavaScript module.
+
+Set `apiVersion` to `2` and declare `server.entry` and `server.methods` in
+`codeg-plugin.json`. Bundle dependencies into one UTF-8 `.mjs` file of up to
+256 KiB next to the manifest. The entry name uses lowercase letters, digits,
+dashes and dots, starting with a letter. Export `handle(method, input)` and
+return a JSON value or a promise that resolves to a JSON value. Codeg calls
+only declared methods of enabled plugins. A `serverText` workspace panel
+passes `{ folderId }` to its registered method and displays the returned
+string as plain text.
+
+Declare `server.rpc` to give public methods an input and output contract. Its
+keys name methods from `server.methods`. Each value has `input` and `output`
+JSON Schemas. Codeg validates the request before running the handler and
+validates the handler result before returning it. References to definitions in
+the same schema are supported. Methods without a schema continue to accept and
+return JSON. The Workspace Summary example requires an integer `folderId` and
+returns a string.
+
+Each call runs in a fresh QuickJS context on the connected host. The context
+provides ECMAScript built-ins. Files, processes, network requests, external
+imports and Codeg credentials are unavailable. Calls have a 500 ms execution
+budget, a 16 MiB engine memory limit and a 64 KiB limit per JSON message.
+The host serves up to four concurrent module calls. Choose trusted sources
+when installing modules.
+
+Source review captures the module alongside its validated manifest. Confirming
+installs that same snapshot, and editing the source directory afterwards has
+no effect until an update. An update that changes the server entry, declared
+methods or module contents disables a running plugin. Review the new version
+before enabling it again.
+
+## Client modules
+
+Include [the browser bridge types](host-plugin-client.d.ts) in your plugin's
+TypeScript project to type-check calls to `window.codeg`. Codeg provides this
+object when it opens the reviewed HTML.
+
+The [Workspace Inspector example](../examples/plugins/workspace-inspector)
+provides its own workspace and plugin settings panels. Install the example
+directory on the connected host and enable it. Use **Show Workspace Inspector**
+in workspace quick actions or open **About Workspace Inspector** on its row in
+**Settings → Plugins**.
+
+For a version 2 client contribution, set `client.entry` to a self-contained
+HTML file next to `codeg-plugin.json`. Use a lowercase `.html` filename and keep
+the file under 256 KiB. Set a workspace panel's `view` to `client`, or declare
+`contributes.settingsPanel` with an ID and title. Both surfaces can use the
+same client entry. The installation preview identifies the client file and
+captures it in the reviewed snapshot. Changing the client file or its entry
+on update requires re-enabling the plugin.
+
+The client runs in a sandboxed frame with an opaque origin. Inline scripts,
+inline styles, and data or blob images are available. The frame's content policy
+blocks external resource loads. `window.codeg.ready` resolves with `type`, the
+contribution `id`, the app `locale` and, for a workspace panel, `folderId`.
+`window.codeg.call(method, input)` calls a declared server method on the same
+plugin and connected host. `input` and the result use JSON. Codeg disconnects
+the message port when the contribution closes or is disabled.
+
+Declare `contributes.clientSurfaces` to add entries to the session header or
+composer. Each entry has a unique `id`, a `title`, and `slot` set to
+`sessionHeader` or `composer`. When a user opens the contribution,
+`window.codeg.ready` resolves with `type: "clientSurface"`, the selected `slot`,
+`folderId` if the session belongs to a workspace, and `conversationId` once
+the conversation has been saved. The Workspace Inspector example declares one
+entry in each slot.
+
+### Plugin details and setup
+
+A client bundle can contribute `contributes.pluginDetail` for its enabled
+plugin details and `contributes.activationPanel` for setup after enablement.
+Each contribution has an `id` and a `title`, and uses the reviewed
+`client.entry`.
+
+```json
+{
+  "pluginDetail": { "id": "details", "title": "About this plugin" },
+  "activationPanel": { "id": "setup", "title": "Set up this plugin" }
+}
+```
+
+Both contributions open on demand from Settings. The frame receives
+`type: "pluginDetail"` or `type: "activationPanel"` from `window.codeg.ready`
+and can use the same settings, server call, and event APIs as `settingsPanel`.
+
+### Plugin screens and sidebar navigation
+
+Declare `contributes.screens` for full-page client surfaces and
+`contributes.sidebarItems` for entries at the top or bottom of Codeg's sidebar.
+Each item opens a screen declared by the same plugin.
+
+```json
+{
+  "screens": [{ "id": "overview", "title": "Overview" }],
+  "sidebarItems": [
+    {
+      "id": "overview",
+      "title": "Open Overview",
+      "placement": "header",
+      "screenId": "overview"
+    }
+  ]
+}
+```
+
+Each array accepts up to 16 entries with unique IDs within that array.
+`placement` accepts `header` or `footer`. Use `titleTranslations` to translate
+either title. The screen body uses the reviewed `client.entry`, and
+`window.codeg.ready` resolves with `type: "screen"`, its `id`, and the
+app `locale`. Settings, declared server methods, and events use the connected
+host.
+
+Install and enable the [Plugin Navigation example](../examples/plugins/plugin-navigation)
+to open its overview from the sidebar header and its help screen from the footer.
+
+### Insert text into the composer
+
+An open `composer` contribution can call
+`await window.codeg.composer.insertText(text)` to insert plain text at the
+caret or replace the current selection. Codeg updates the draft through its
+usual editor path and leaves sending to the user. The API accepts up to 16 KiB
+of UTF-8 text after normalizing line endings to `\n`. Empty text and NUL
+characters are rejected. On success it returns `{ inserted: true, length }`,
+where `length` is the normalized JavaScript string length.
+
+```js
+await window.codeg.ready
+await window.codeg.composer.insertText("Summarize the changes in this workspace.")
+```
+
+The method is available only to the active composer contribution. Closing
+the surface, hiding the session or changing the session, workspace, or connected
+host revokes its access. It works for a conversation's composer and the
+composer within its canvas card.
+
+## Plugin timeline items
+
+Declare `contributes.timelineRenderers` with up to 16 entries. Each entry
+has a `kind` of 1 to 32 lowercase ASCII letters, digits, or hyphens, starting
+with a letter. Provide a positive `version`, a `title`, and optional
+`titleTranslations`. The `(kind, version)` pair must be unique within the
+plugin. The optional `dataSchema` uses the same JSON Schema rules as server
+RPC contracts. Every renderer uses the plugin's reviewed `client.entry`.
+
+Call a declared plugin method through `host_plugins_call` with `pluginId`,
+`method`, `input`, and a top-level `conversationId` for the active saved
+conversation. Codeg verifies that this conversation exists on the connected
+host. The method receives a fourth argument with `conversationId` and
+`timeline.append({ id, kind, version, data })` when its plugin declares a
+renderer. Session lifecycle methods receive this capability when the host
+has a saved conversation for the event. Methods called without a conversation
+use the usual three arguments.
+
+An appended item must match a renderer declared by the calling plugin. It
+uses an `id` of up to 64 lowercase ASCII letters, digits, hyphens, or dots,
+starting with a letter. `data` may be any JSON value up to 64 KiB when
+serialized as UTF-8. Codeg rejects oversized data and enforces the matching
+renderer schema when present. The host assigns `pluginId`, `conversationId`,
+and `updatedAt`. A plugin can keep up to 64 items per conversation and submit
+up to 64 appends in one call. An existing `(conversationId, pluginId, id)`
+is replaced. Codeg commits the appends atomically after a successful method
+return and RPC output validation.
+
+`host_plugins_timeline_list` takes `{ conversationId }` and returns items
+from enabled plugins on that host, ordered by `updatedAt`, `pluginId`, and
+`id`. The `host-plugins://timeline` event carries
+`{ conversationId, pluginId, item }` after each committed upsert. Catalog
+changes that hide or restore a plugin's timeline emit
+`{ conversationId: null, pluginId, item: null }` so clients can refresh.
+Disabling a plugin hides its rows. Removing a plugin deletes its stored rows.
+
+The reviewed client receives `{ type: "timelineItem", kind, version, itemId,
+conversationId, data, locale }` from `window.codeg.ready` when Codeg renders
+an item owned by that plugin. Use a new renderer version when changing the
+shape of its stored data. See the [timeline author types](host-plugin-timeline.d.ts)
+for the manifest and method contracts.
+
+Install and enable the [Timeline Review example](../examples/plugins/timeline-review)
+on the connected host. Call `record-review` on `codeg.timeline-review` with a
+saved `conversationId` and input such as
+`{ "summary": "The review is ready.", "status": "passed" }`. The example
+upserts a `review-result` timeline item for that conversation.
+
+### Transform native timeline items
+
+Declare `contributes.timelineTransformers` with up to 16 entries and unique
+slug IDs. An API version 2 plugin needs both `server.entry` and `client.entry`.
+Each entry has an `id`, an `itemType` of `tool_call` or `assistant_message`,
+a `method` declared in the same plugin's `server.methods`, and
+`rendererKind` and `rendererVersion` matching a renderer in that plugin.
+A `tool_call` transformer can specify `toolNames` to select 1–16 distinct
+names, each nonblank, control-free and at most 128 UTF-8 bytes. Matching is
+case-sensitive. Leave the filter out to consider all tools.
+
+Invoke `host_plugins_timeline_transform` through the current host transport
+using the same flat request body on desktop and at
+`POST /api/host_plugins_timeline_transform`.
+
+```ts
+{
+  pluginId, transformerId, itemType, phase, conversationId?, locale?,
+  item: { id, toolName?, status?, rawInput?, rawOutput?, text? }
+}
+```
+
+Pass `phase: "streaming"` for an evolving source row and `"complete"` for
+finished output or fetched history. `item.id` is the native source row ID
+and must be nonblank and control-free. The serialized JSON `item` limit is
+64 KiB. A supplied conversation ID must identify an existing, non-deleted
+conversation on this host. Omit it or set it to `null` for an unsaved
+session. The locale defaults to `en` and accepts nonblank, control-free
+text up to 128 UTF-8 bytes.
+
+The host verifies plugin availability and registration. An item type or
+tool name that fails the selector returns `{ action: "keep" }` without
+running the method. The method receives `{ transformerId, itemType, phase,
+conversationId, locale, item }` and the plugin's saved settings through the
+usual `handle(method, input, settings)` contract. Fields missing from the
+source snapshot remain absent. The transform call has no append capability.
+Declared `server.rpc` schemas are enforced. JavaScript `undefined` is
+converted to JSON `null` before RPC output validation.
+
+| Method result | Host result and rendering |
+| --- | --- |
+| `null`, `undefined` or `{ action: "keep" }` | `{ action: "keep" }` keeps the native source row. |
+| `{ action: "omit" }` | Hide the source row in the current view. |
+| `{ action: "replace", items: [...] }` | Render 1–4 replacements with the selected plugin's timeline renderer. |
+
+A replacement is `{ id?, kind, version, data }`. `kind` and `version` must
+match the transformer target exactly. Each `data` must fit within 64 KiB
+of JSON and satisfy the renderer's `dataSchema`, when present. Explicit
+IDs must be unique within the response and follow the timeline item slug
+rules. When an ID is omitted, the index identifies that replacement.
+
+The host returns a controlled error on timeout, exception, or invalid output.
+Keep the native row for that snapshot when conversion fails. Transform
+results are ephemeral. The renderer receives the `timelineItem` client
+context, with a nullable `conversationId` for an unsaved session.
+
+Run matching transforms against native rows before splitting text or
+grouping tools. Use stable plugin and registration order and stop at the
+first `omit` or `replace`. Coalesce streaming snapshots to avoid dispatching
+every incremental update. Derive stable replacement keys from the host,
+session, source row, plugin, and transformer, plus the replacement ID or
+index. Keep results and errors local to that host, session and source row.
+Discard superseded replies and withdraw cached replacements on catalog
+changes that disable, replace, or remove the owning plugin. Discard pending
+replies when the session or transport changes. Updates that change the
+transformer declarations require re-enabling the plugin.
+
+Install and enable [Tool Output Card](../examples/plugins/tool-output-card)
+to render live `test-runner` tool calls and shell calls that report Cargo
+test totals or a structured `{ kind: "test-summary", passed, failed }`
+result. The card shows test counts, status and phase in English, Spanish,
+and Simplified Chinese.
+
+## Persist plugin settings
+
+Declare `settings` with a positive integer `version`, a JSON Schema whose root
+has `type: "object"`, and a `defaults` object that satisfies that schema. Codeg
+keeps one value per installed plugin on the connected host. Values may contain
+up to 16 KiB of JSON. Schema references resolve within the supplied schema.
+
+`await window.codeg.settings.read()` gives `{ version, revision, value }`.
+Save an edited copy with `await window.codeg.settings.save(revision, value)`.
+If another client saved first, read the latest revision and apply the edit to
+that value. Server methods get the active settings as the third argument to
+`handle(method, input, settings)`.
+
+Increase `settings.version` when changing the shape. When the stored value
+satisfies the new schema, Codeg can keep it directly. To transform an older
+value, declare `settings.migrate: true` and handle `settings.migrate` in the
+server entry. The method receives `{ fromVersion, toVersion, value }`. Return
+the replacement settings object. Codeg calls the migration when the user
+enables the update, then validates and stores the result together with
+enablement. If it fails, the original value stays available for a later retry.
+
+## Workspace lifecycle hooks
+
+Declare `contributes.lifecycleHooks` as a list of `{ event, method }` entries.
+The server entry receives these private methods through `handle`. Keep hook
+methods out of `server.methods`.
+
+| Event | Input | Effect |
+| --- | --- | --- |
+| `workspace.open.before` | `{ path }` | Runs when a user opens by path. Return `null` to keep the path, or `{ path }` with an absolute replacement. |
+| `workspace.open.after` | `{ folderId, path }` | Observes a completed open by path or reopening a saved folder by ID. |
+| `workspace.close.after` | `{ folderId }` | Observes removing an open folder from the workspace. |
+| `workspace.create.before` | `{ path }` | For a path first registered through the workspace UI, after `workspace.open.before`. Return `null` or an absolute replacement `{ path }`. |
+| `workspace.create.after` | `{ folderId, path, name, parentId }` | Observes first registration of a workspace or an opened worktree workspace. |
+| `workspace.archive.after` | `{ folderId, path, name, parentId }` | Observes removing the saved workspace record from history or archiving it through worktree cleanup. |
+
+The host applies before hooks in plugin ID order and uses each replacement as
+the next hook's input. An error, invalid response or timeout stops the open.
+The create transformation runs when the path returned by the open hooks has
+no saved workspace ID. A worktree is registered at the checkout's actual path.
+Reopening a saved or previously archived folder reuses its workspace ID.
+Closing a workspace keeps the record available in history.
+After hooks run asynchronously. Return a JSON value to publish it to that
+plugin's open client surfaces, or `null` to skip publishing. Subscribe with
+`window.codeg.events.subscribe(({ event, folderId, data }) => { … })`. The call
+returns an unsubscribe function. A workspace client surface receives events for
+its own folder. The stream delivers live events without replay.
+
+Install the [Workspace Lifecycle example](../examples/plugins/workspace-lifecycle)
+and open its **Workspace Events** settings panel. Open or close a folder in a
+second Codeg window connected to the same host to see the events. Opening
+`workspace-alias` by path opens the sibling `workspace-real` directory.
+For a first registration, the same example maps `workspace-create-alias` to
+`workspace-real` in `workspace.create.before`.
+
+## Worktree lifecycle hooks
+
+Declare `worktree.create.after` to observe new checkouts made through the
+desktop or Web workspace, per-run automations, work tasks, or `codeg-cli run
+--worktree`. Recreating a task checkout from its saved branch also emits this
+event. Declare `worktree.archive.after` to observe removals from the workspace
+or task cleanup and the checkout removed after a failed CLI launch.
+
+Both hooks receive `{ folderId, repositoryPath, path, branch, origin }`.
+`folderId` identifies the owning project when known. `path` is the checkout
+path, `branch` may be `null`, and `origin` is `workspace`, `automation`, `task`,
+or `cli`. The archive event refers to the checkout. A branch can survive
+archive. These are live observer hooks and use the same client event stream
+as workspace hooks. Changes made directly in an external Git process are
+outside this stream.
+
+With the Workspace Lifecycle example enabled, create and remove a worktree
+from a test repository. The example's settings panel shows the checkout path
+for both events.
+
+## Live session hooks
+
+Plugins can observe Codeg-managed ACP sessions associated with a workspace.
+These hooks receive `folderId`, `connectionId`, `conversationId` when linked,
+`agentType` and the event-specific `detail` below. Results use the same live
+client event stream as workspace hooks.
+
+| Event | `detail` |
+| --- | --- |
+| `session.started` | `{ sessionId }` from the agent when starting or loading a session. |
+| `session.turn.started` | `null` when the connection enters its prompting state. |
+| `session.turn.completed` | `{ stopReason }` from the completed turn. |
+| `session.permission.requested` | `{ requestId, queued }` when a request becomes visible. |
+| `session.permission.resolved` | `{ requestId, optionId, origin }` when the request is answered or withdrawn. |
+
+The permission hooks report state transitions. The user's permission decision
+continues through the standard Codeg approval flow.
+
+## Install from a source
+
+**Settings → Plugins → Add Plugin** accepts these public sources:
+
+- An npm name such as `@scope/package`, with an optional exact version or tag.
+  Publish `codeg-plugin.json` at the package root. Codeg reads the manifest
+  from the SHA-512-verified tarball. The npm registry selector also offers the
+  China mirror.
+- A GitHub repository such as `owner/repo` or `https://github.com/owner/repo`.
+  Append `#ref` to select a branch, tag, or commit. Codeg resolves the reference
+  to a commit and reads `codeg-plugin.json` at that commit's repository root.
+  For a manifest in a subdirectory, use a GitHub `/tree/<commit>/<directory>` URL.
+- An absolute directory path containing `codeg-plugin.json`. The path is on the
+  connected Codeg host, including when you use a remote workspace.
+
+For a file on the browser's machine, use **Import Manifest**. The catalog stores
+the manifest and its resolved source. Codeg starts each installed plugin
+disabled. Contributions run through the host APIs described above.
+
+## Review the installation
+
+Select **Review installation** to load and validate the manifest on the
+connected host. Check the plugin name, ID, version, and resolved source. For
+GitHub the review shows the full commit, and for npm it shows the exact package
+version and registry. When you select **Install**, the host commits the reviewed
+manifest from memory. A preview is valid for up to five minutes and can be used
+once. Codeg runs the manifest's declared contributions when you enable the plugin.
+
+## Update an installed plugin
+
+Use the update button next to a source-installed plugin in **Settings → Plugins**.
+Codeg reads the manifest from the same host directory, GitHub reference, or npm
+registry and version selector used at installation. An unqualified npm package
+follows `latest`. A GitHub repository without a reference follows its default
+branch. An exact npm version or GitHub commit stays pinned. Older catalog entries
+with only a resolved version or commit stay pinned to it. For older npm entries
+with no saved registry, Codeg uses the official npm registry.
+
+Codeg verifies the same plugin ID and rejects older manifest or npm package
+versions. A GitHub reference advancing to a new commit updates the stored source
+even if the manifest is identical. A successful update keeps the enabled state
+when the server module and its declaration are unchanged.
+An update that changes the turn hook clears the plugin's in-memory turn activity.
+Other connected clients receive a catalog change notification after the update.
+For plugins imported as standalone files, remove the plugin and import the new
+manifest to replace it.
+
+## Discover plugins from an index
+
+Select **Discover Plugins** in **Settings → Plugins** and enter an HTTPS URL to
+a trusted index. Codeg validates the index before showing its entries. An index
+uses this shape:
+
+```json
+{
+  "apiVersion": 1,
+  "plugins": [
+    {
+      "id": "codeg.turn-activity",
+      "name": "Turn Activity",
+      "description": "Show completed agent turns.",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "source": "https://github.com/owner/repository#v1.0.0",
+          "registry": "npm"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Index metadata is third-party content. Codeg resolves the selected source,
+validates the `codeg-plugin.json` manifest, and checks its ID and version against
+the index entry before showing the installation review. Index entries may
+use exact npm versions or GitHub references, while absolute host directories
+and floating npm selectors are rejected by the index validator.
+
+See the [example index](../examples/plugins/index.json) for a complete file.
+Codeg keeps up to eight successfully loaded index URLs in the browser profile so
+they can be selected again from **Saved indexes**. The index content is fetched
+again each time it is loaded.

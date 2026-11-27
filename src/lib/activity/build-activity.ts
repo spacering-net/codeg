@@ -379,6 +379,16 @@ function collectSteps(
         )
         return
       }
+      case "plugin-timeline-replacement": {
+        const key = `plugin-replace:${part.pluginId}:${part.transformerId}:${part.sourceItemId}`
+        const prev = prior(key)
+        steps.push(
+          prev?.type === "plugin-replacement" && sameFields(prev.part, part)
+            ? prev
+            : { type: "plugin-replacement", key, part }
+        )
+        return
+      }
     }
   })
   return steps
