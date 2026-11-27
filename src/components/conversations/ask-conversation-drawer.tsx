@@ -167,19 +167,21 @@ function AskDrawerBody({ target }: { target: AskConversationDrawerTarget }) {
   const [mountConversationId] = useState(conversationId)
   const [initialSend] = useState(target.initialSend)
 
-  const asks = useLinkedConversations(parentConversationId, kind)
+  const asks = useLinkedConversations(
+    kind === "btw" ? null : parentConversationId,
+    kind === "check" ? "check" : "ask"
+  )
   const listed =
     conversationId != null
       ? asks?.find((row) => row.id === conversationId)
       : undefined
-  // Unlinked while on show, the conversation is a root of the workspace list
-  // instead.
-  const unlinked = useAppWorkspaceStore((s) =>
+  // Side questions and unlinked conversations are in the workspace list.
+  const workspaceRow = useAppWorkspaceStore((s) =>
     conversationId != null
       ? (s.conversations.find((row) => row.id === conversationId) ?? null)
       : null
   )
-  const summary = listed ?? unlinked ?? null
+  const summary = listed ?? workspaceRow
   const status = summary?.status as ConversationStatus | undefined
   const title = summary?.title ? formatConversationTitle(summary.title) : ""
   const detach = useDetachAskConversation()

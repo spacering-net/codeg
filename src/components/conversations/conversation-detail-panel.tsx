@@ -1194,14 +1194,7 @@ const ConversationTabView = memo(function ConversationTabView({
     }
   }, [effectiveConversationId, groupId, setPendingCleanup, tabId])
 
-  // ---- `/btw` side questions (docs/btw-side-question-design.md) ----
   const tBtwErrors = useTranslations("errors")
-  // `/btw <question>` from the composer (message-input.tsx intercept): the
-  // copy fork rides THIS conversation's connection, the answer streams on the
-  // child's own, and the tab opens on the answer. There is no busy special
-  // case — a question DURING an answer is the situation `/btw` exists for and
-  // the backend forks mid-turn by design. False (kept in the composer) for a
-  // conversation with no row yet: with no history there is nothing to fork.
   const handleBtw = useCallback(
     async (question: string): Promise<boolean> => {
       if (conn.connectionId === null || dbConversationId === null) {
@@ -1222,7 +1215,17 @@ const ConversationTabView = memo(function ConversationTabView({
           dbConversationId,
           question
         )
-        openTab(targetFolderId, created.conversationId, selectedAgent)
+        const opened = useAskConversationDrawerStore.getState().openExisting({
+          kind: "btw",
+          parentConversationId: dbConversationId,
+          conversationId: created.conversationId,
+          agentType: selectedAgent,
+          folderId: targetFolderId,
+          workingDir: workingDirForConnection ?? null,
+        })
+        if (!opened) {
+          openTab(targetFolderId, created.conversationId, selectedAgent)
+        }
         return true
       } catch (e) {
         toast.error(
@@ -1241,6 +1244,7 @@ const ConversationTabView = memo(function ConversationTabView({
       openTab,
       selectedAgent,
       tBtwErrors,
+      workingDirForConnection,
     ]
   )
   const handleSend = useCallback(

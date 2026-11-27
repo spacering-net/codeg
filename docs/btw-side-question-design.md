@@ -70,8 +70,8 @@ compensation.
 
 ### The panel
 
-Sending a side question opens the fork in an ordinary conversation tab. To
-view it beside the parent, use the tab's Split Right or Split Down action.
+Sending a side question opens the fork in the existing Ask drawer. If the
+drawer is holding an unsent question, the fork opens in a conversation tab.
 
 ### The sidebar `btw` group
 

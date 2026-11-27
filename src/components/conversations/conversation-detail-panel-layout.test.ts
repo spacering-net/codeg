@@ -709,3 +709,14 @@ it("gates the no-tab draft creation effect on folder-tabs mode", () => {
   )
   expect(effect).toContain("openNewConversationTab(")
 })
+
+describe("/btw side questions", () => {
+  it("opens the existing fork in the ask drawer after sending the question", () => {
+    const start = source.indexOf("const handleBtw =")
+    const end = source.indexOf("const handleSend =", start)
+    const handler = source.slice(start, end)
+    expect(handler).toMatch(
+      /await acpBtwCreate\([\s\S]*question\s*\)[\s\S]*\.openExisting\(\{[\s\S]*kind: "btw",[\s\S]*conversationId: created\.conversationId/
+    )
+  })
+})
