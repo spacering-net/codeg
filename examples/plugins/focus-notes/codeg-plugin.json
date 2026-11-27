@@ -1,0 +1,28 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.focus-notes",
+  "name": "Focus Notes",
+  "version": "1.0.0",
+  "client": { "entry": "notes.html" },
+  "settings": {
+    "version": 1,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "note": { "type": "string", "maxLength": 1000 }
+      },
+      "required": ["note"],
+      "additionalProperties": false
+    },
+    "defaults": { "note": "" }
+  },
+  "contributes": {
+    "sidebarViews": [
+      {
+        "id": "focus-notes",
+        "title": "Focus Notes",
+        "titleTranslations": { "zh-CN": "专注笔记", "es": "Notas de enfoque" }
+      }
+    ]
+  }
+}

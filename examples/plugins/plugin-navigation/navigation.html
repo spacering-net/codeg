@@ -1,0 +1,16 @@
+<style>
+  :root {
+    color-scheme: light dark;
+    font: 14px system-ui;
+  }
+</style>
+<p id="content" role="status">Opening plugin…</p>
+<script>
+  window.codeg.ready.then(({ id, locale }) => {
+    document.documentElement.lang = locale
+    document.getElementById("content").textContent =
+      id === "overview"
+        ? "This plugin screen was opened from the top of the sidebar."
+        : "Open Plugin Overview from the top of the sidebar. This help page opens from the bottom."
+  })
+</script>
