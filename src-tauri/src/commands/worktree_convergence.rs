@@ -16,6 +16,7 @@
 
 use crate::db::service::{conversation_service, folder_service, tab_service};
 use crate::db::AppDatabase;
+use crate::host_plugins::lifecycle::Event as PluginEvent;
 use crate::web::event_bridge::EventEmitter;
 use crate::web::event_bridge::{
     emit_event, ConversationsBulkChanged, TabsChanged, CONVERSATIONS_BULK_CHANGED_EVENT,
@@ -80,8 +81,13 @@ pub(crate) async fn converge_db(
 
     // An id that is already soft-deleted (a retried cleanup) or never existed
     // succeeds untouched, so the retry still re-announces the drop.
-    let folder_gone = match folder_service::soft_delete_folder(&db.conn, wt_id).await {
-        Ok(()) => true,
+    let folder_gone = match folder_service::archive_folder_by_id(&db.conn, wt_id).await {
+        Ok(archived) => {
+            if let (Some(folder), Some(plugins)) = (archived, emitter.host_plugins()) {
+                plugins.observe_workspace(emitter, PluginEvent::WorkspaceArchived, &folder);
+            }
+            true
+        }
         Err(e) => {
             tracing::warn!("[worktree] worktree folder {wt_id} soft-delete failed: {e}");
             false

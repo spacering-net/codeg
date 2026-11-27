@@ -13,6 +13,7 @@ use crate::db::service::{
 };
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
+use crate::host_plugins::lifecycle::{observe_agent_created, prepare_agent_title};
 use crate::models::*;
 // Concrete parser type only for `load_thread_name_index`, which is codex's own
 // index reader and not part of the `AgentParser` trait. Every history read goes
@@ -2484,6 +2485,25 @@ pub async fn create_conversation_core(
     agent_type: AgentType,
     title: Option<String>,
 ) -> Result<i32, AppCommandError> {
+    create_conversation_with_plugins(&EventEmitter::Noop, conn, folder_id, agent_type, title).await
+}
+
+pub(crate) async fn create_conversation_with_plugins(
+    emitter: &EventEmitter,
+    conn: &sea_orm::DatabaseConnection,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+) -> Result<i32, AppCommandError> {
+    let title = prepare_agent_title(
+        emitter,
+        agent_type,
+        Some(folder_id),
+        conversation::ConversationKind::Regular,
+        None,
+        title,
+    )
+    .await?;
     let git_branch = if let Some(folder) = folder_service::get_folder_by_id(conn, folder_id)
         .await
         .map_err(AppCommandError::from)?
@@ -2496,6 +2516,7 @@ pub async fn create_conversation_core(
     let model = conversation_service::create(conn, folder_id, agent_type, title, git_branch)
         .await
         .map_err(AppCommandError::from)?;
+    observe_agent_created(emitter, &model);
     Ok(model.id)
 }
 
@@ -2537,8 +2558,10 @@ pub async fn create_conversation(
     agent_type: AgentType,
     title: Option<String>,
 ) -> Result<i32, AppCommandError> {
-    let id = create_conversation_core(&db.conn, folder_id, agent_type, title).await?;
-    emit_conversation_upsert(&EventEmitter::from_app(&app), &db.conn, id).await;
+    let emitter = EventEmitter::from_app(&app);
+    let id =
+        create_conversation_with_plugins(&emitter, &db.conn, folder_id, agent_type, title).await?;
+    emit_conversation_upsert(&emitter, &db.conn, id).await;
     Ok(id)
 }
 
@@ -2903,7 +2926,15 @@ pub async fn create_chat_conversation_core(
     title: Option<String>,
     existing_dir: Option<&str>,
 ) -> Result<CreateChatConversationResult, AppCommandError> {
-    create_chat_conversation_inner(conn, data_dir, agent_type, title, existing_dir, None).await
+    create_chat_conversation_with_plugins(
+        &EventEmitter::Noop,
+        conn,
+        data_dir,
+        agent_type,
+        title,
+        existing_dir,
+    )
+    .await
 }
 
 /// [`create_chat_conversation_core`] for the conversation a check of a
@@ -2918,6 +2949,7 @@ pub async fn create_chat_check_conversation_core(
     title: Option<String>,
 ) -> Result<CreateChatConversationResult, AppCommandError> {
     create_chat_conversation_inner(
+        &EventEmitter::Noop,
         conn,
         data_dir,
         agent_type,
@@ -2928,7 +2960,29 @@ pub async fn create_chat_check_conversation_core(
     .await
 }
 
+pub(crate) async fn create_chat_conversation_with_plugins(
+    emitter: &EventEmitter,
+    conn: &sea_orm::DatabaseConnection,
+    data_dir: &std::path::Path,
+    agent_type: AgentType,
+    title: Option<String>,
+    existing_dir: Option<&str>,
+) -> Result<CreateChatConversationResult, AppCommandError> {
+    let title = prepare_agent_title(
+        emitter,
+        agent_type,
+        None,
+        conversation::ConversationKind::Chat,
+        None,
+        title,
+    )
+    .await?;
+    create_chat_conversation_inner(emitter, conn, data_dir, agent_type, title, existing_dir, None)
+        .await
+}
+
 async fn create_chat_conversation_inner(
+    emitter: &EventEmitter,
     conn: &sea_orm::DatabaseConnection,
     data_dir: &std::path::Path,
     agent_type: AgentType,
@@ -2976,6 +3030,7 @@ async fn create_chat_conversation_inner(
             }
         };
 
+    observe_agent_created(emitter, &model);
     Ok(CreateChatConversationResult {
         conversation_id: model.id,
         folder_id: folder.id,
@@ -2998,7 +3053,9 @@ pub async fn create_chat_conversation(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let result = create_chat_conversation_core(
+    let emitter = EventEmitter::from_app(&app);
+    let result = create_chat_conversation_with_plugins(
+        &emitter,
         &db.conn,
         &data_dir,
         agent_type,
@@ -3006,7 +3063,7 @@ pub async fn create_chat_conversation(
         existing_dir.as_deref(),
     )
     .await?;
-    emit_conversation_upsert(&EventEmitter::from_app(&app), &db.conn, result.conversation_id).await;
+    emit_conversation_upsert(&emitter, &db.conn, result.conversation_id).await;
     Ok(result)
 }
 
@@ -3192,16 +3249,7 @@ pub async fn delete_conversation_with_cleanup_core(
     manager: &crate::acp::manager::ConnectionManager,
     conversation_id: i32,
 ) -> Result<(), AppCommandError> {
-    // Capture the backing folder AND parent before the soft-delete: a hidden
-    // chat folder is retired afterward, and a deleted delegation child must
-    // re-broadcast its parent so the parent's child_count (hence its chevron)
-    // converges from the DB aggregate.
-    let pre = conversation_service::get_by_id(conn, conversation_id)
-        .await
-        .ok();
-    let folder_id = pre.as_ref().map(|c| c.folder_id);
-    let parent_id = pre.as_ref().and_then(|c| c.parent_id);
-    delete_conversation_core(conn, conversation_id).await?;
+    let archived = conversation_service::archive_live_conversation(conn, conversation_id).await?;
     // Deleting is the explicit stop. Closing the conversation's tabs (the
     // cleanups below, and every client's own close) does not stop anything
     // that still has work in flight, so without this a background task or a
@@ -3211,7 +3259,7 @@ pub async fn delete_conversation_with_cleanup_core(
     // A removed delegation child drops its parent's child_count (→ 0 hides the
     // chevron). Re-emit the parent from the authoritative aggregate so every
     // client converges — symmetric with the create-time parent re-emit.
-    if let Some(parent_id) = parent_id {
+    if let Some(parent_id) = archived.parent_id {
         emit_conversation_upsert(emitter, conn, parent_id).await;
     }
     cleanup_tabs_for_deleted_conversation(emitter, conn, conversation_id).await;
@@ -3224,8 +3272,18 @@ pub async fn delete_conversation_with_cleanup_core(
         conversation_id,
     )
     .await;
-    if let Some(folder_id) = folder_id {
-        retire_chat_folder_if_unused(conn, folder_id).await;
+    retire_chat_folder_if_unused(conn, archived.folder_id).await;
+    if let Some(plugins) = emitter.host_plugins() {
+        plugins.observe(
+            emitter,
+            crate::host_plugins::lifecycle::Event::AgentArchived,
+            serde_json::json!({
+                "folderId": archived.folder_id,
+                "conversationId": archived.id,
+                "agentType": archived.agent_type,
+                "sessionId": archived.external_id,
+            }),
+        );
     }
     Ok(())
 }
