@@ -256,6 +256,9 @@ pub(crate) async fn send(
     timeout: Duration,
     request: Outgoing<'_>,
 ) -> Result<Incoming, HarnessError> {
+    let _permission = crate::srn::privacy::request()
+        .await
+        .ok_or(HarnessError::Disabled)?;
     if !origin.holds(request.url) {
         // Every address is made by `Origin::join`; this is the backstop for a
         // caller that built one some other way.

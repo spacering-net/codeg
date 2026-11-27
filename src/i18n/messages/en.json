@@ -13250,6 +13250,12 @@
     "expand": "Show all",
     "collapse": "Show less"
   },
+  "SpaceRingPrivacy": {
+    "title": "SpaceRing online services",
+    "description": "Allow SRN sign-in, catalog browsing, and background checks for updates and withdrawn items.",
+    "managed": "SpaceRing is disabled by CODEG_SRN.",
+    "retry": "Retry"
+  },
   "SrnAccount": {
     "name": "SRN",
     "trigger": {
@@ -13307,6 +13313,7 @@
       "webSignedOutLocally": "Signed out in this browser, but SRN did not confirm."
     },
     "errors": {
+      "onlineDisabled": "SRN online services are disabled.",
       "network": "SRN could not be reached.",
       "rateLimited": "SRN asked Codeg to wait {seconds} s before trying again.",
       "server": "SRN answered with an error (HTTP {status}).",

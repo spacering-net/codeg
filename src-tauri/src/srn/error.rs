@@ -27,6 +27,8 @@ pub const I18N_NAMESPACE: &str = "SrnAccount.errors";
 /// was asked for.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SrnError {
+    #[error("SRN online services are disabled")]
+    OnlineDisabled,
     /// No answer: offline, DNS, TLS, refused, timed out, cut off. The text is
     /// the transport's own account (no request ever carries a secret in its
     /// address, so neither does this).
@@ -55,7 +57,7 @@ impl SrnError {
     /// counts: a check that reached SpaceRing waits its hour; one that did
     /// not may try again sooner.
     pub fn is_answer(&self) -> bool {
-        !matches!(self, Self::Network(_))
+        !matches!(self, Self::Network(_) | Self::OnlineDisabled)
     }
 
     fn error_code(&self) -> Option<&str> {
@@ -70,6 +72,7 @@ impl SrnError {
 /// table in `/tmp/codeg-briefs/b1-api.md` says when each occurs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Problem {
+    OnlineDisabled,
     /// SpaceRing could not be reached.
     Network { detail: String },
     /// SpaceRing asked for a pause. Params: `seconds`.
@@ -127,6 +130,7 @@ impl Problem {
     /// The stable code: `i18n_params.code`.
     pub fn code(&self) -> &'static str {
         match self {
+            Self::OnlineDisabled => "online_disabled",
             Self::Network { .. } => "network",
             Self::RateLimited { .. } => "rate_limited",
             Self::Server { .. } => "server",
@@ -154,6 +158,7 @@ impl Problem {
     /// The last segment of the i18n key.
     fn key_name(&self) -> &'static str {
         match self {
+            Self::OnlineDisabled => "onlineDisabled",
             Self::Network { .. } => "network",
             Self::RateLimited { .. } => "rateLimited",
             Self::Server { .. } => "server",
@@ -186,6 +191,7 @@ impl Problem {
     /// The English text, for a frontend without the key.
     fn message(&self) -> String {
         match self {
+            Self::OnlineDisabled => "SRN online services are disabled".into(),
             Self::Network { .. } => "SRN could not be reached".into(),
             Self::RateLimited { seconds } => {
                 format!("SRN asked Codeg to wait {seconds} s before trying again")
@@ -234,7 +240,9 @@ impl Problem {
             | Self::Server { .. }
             | Self::InvalidResponse { .. }
             | Self::SignedOutLocally { .. } => AppErrorCode::NetworkError,
-            Self::ClientRejected | Self::CredentialInvalid => AppErrorCode::ConfigurationInvalid,
+            Self::OnlineDisabled | Self::ClientRejected | Self::CredentialInvalid => {
+                AppErrorCode::ConfigurationInvalid
+            }
             Self::ExchangeFailed | Self::AccessDenied | Self::Revoked => {
                 AppErrorCode::PermissionDenied
             }
@@ -329,6 +337,7 @@ impl Problem {
 
     fn from_transport(error: SrnError) -> Self {
         match error {
+            SrnError::OnlineDisabled => Self::OnlineDisabled,
             SrnError::Network(detail) => Self::Network { detail },
             SrnError::RateLimited { seconds } => Self::RateLimited { seconds },
             SrnError::Unauthorized => Self::Revoked,
@@ -357,6 +366,7 @@ mod tests {
 
     fn every_problem() -> Vec<Problem> {
         vec![
+            Problem::OnlineDisabled,
             Problem::Network {
                 detail: "dns".into(),
             },

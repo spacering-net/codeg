@@ -58,6 +58,7 @@ export interface SrnAccountSource {
 export const SRN_ACCOUNT_CHANGED_EVENT = "srn://account-changed"
 
 const DESKTOP_STATUSES: ReadonlySet<SrnAccountStatus> = new Set([
+  "disabled",
   "loading",
   "signedOut",
   "pending",

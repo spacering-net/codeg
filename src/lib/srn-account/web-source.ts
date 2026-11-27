@@ -38,6 +38,7 @@ export const SRN_LOGIN_PATH = "/api/account/srn/login"
 export const SRN_LOGOUT_PATH = "/api/account/srn/logout"
 
 const WEB_STATUSES: ReadonlySet<SrnAccountStatus> = new Set([
+  "disabled",
   "notEnabled",
   "signedOut",
   "pending",

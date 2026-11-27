@@ -2536,6 +2536,8 @@ mod tauri_app {
                 crate::commands::harness_plugins::harness_plugin_hook_trust,
                 crate::commands::harness_updates::harness_updates,
                 crate::commands::harness_updates::harness_check_updates,
+                crate::commands::srn::srn_online_settings,
+                crate::commands::srn::srn_set_online_settings,
                 crate::commands::srn::srn_account,
                 crate::commands::srn::srn_sign_in,
                 crate::commands::srn::srn_reopen_sign_in,

@@ -79,7 +79,7 @@ vi.mock("@/lib/pet/sprite-url", () => ({
 // The quick actions under the account are `quick-actions-menu.test.tsx`'s.
 vi.mock("@/components/layout/quick-actions-menu", () => ({
   useQuickActions: () => ({}),
-  QuickActionsItems: () => null,
+  QuickActionsItems: () => <span data-quick-actions="" />,
   QuickActionsDialogs: () => null,
 }))
 
@@ -229,6 +229,17 @@ afterEach(() => {
 })
 
 describe("Codeg Web — reading the account", () => {
+  it("keeps Quick Actions available when the installation turns SpaceRing off", async () => {
+    account({ status: "disabled" })
+    mount()
+    const button = await screen.findByRole("button", { name: /quick actions/i })
+    expect(button.hasAttribute("data-srn-status")).toBe(false)
+    await userEvent.click(button)
+    expect(document.querySelector("[data-quick-actions]")).toBeTruthy()
+    expect(document.querySelector("[data-srn-head]")).toBeNull()
+    expect(screen.queryByRole("menuitem", { name: /sign in/i })).toBeNull()
+  })
+
   it("reads it same-origin, with the instance's credential and the interface's language", async () => {
     runtime.locale = "zh_cn"
     mount()

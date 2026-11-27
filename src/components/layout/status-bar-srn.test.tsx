@@ -222,6 +222,17 @@ afterEach(() => {
 })
 
 describe("StatusBarSrn — what each state shows", () => {
+  it("keeps Quick Actions available when the installation turns SpaceRing off", async () => {
+    account({ status: "disabled" })
+    mount()
+    const button = await screen.findByRole("button", { name: /quick actions/i })
+    expect(button.hasAttribute("data-srn-status")).toBe(false)
+    await userEvent.click(button)
+    expect(document.querySelector("[data-quick-actions]")).toBeTruthy()
+    expect(document.querySelector("[data-srn-head]")).toBeNull()
+    expect(screen.queryByRole("menuitem", { name: /sign in/i })).toBeNull()
+  })
+
   it("is a quiet ring while the keychain is being read, with no row of its own", async () => {
     account({ status: "loading" })
     mount()

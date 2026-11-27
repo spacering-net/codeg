@@ -224,7 +224,7 @@ impl SrnWeb {
     }
 
     pub fn is_enabled(&self) -> bool {
-        self.config.is_some()
+        self.config.is_some() && super::super::privacy::enabled()
     }
 
     /// The public origin browsers must send as `Origin`, when on.
@@ -253,7 +253,11 @@ impl SrnWeb {
         presented: &Presented,
         locale: Option<AppLocale>,
     ) -> Result<(SrnWebLoginStarted, CookieChanges), WebProblem> {
-        let config = self.config.as_ref().ok_or(WebProblem::NotEnabled)?;
+        let config = self
+            .config
+            .as_ref()
+            .filter(|_| self.is_enabled())
+            .ok_or(WebProblem::NotEnabled)?;
         let key = self.key().await?;
         let internal = |error: rand::Error| {
             WebProblem::from(Problem::Internal {
@@ -364,7 +368,7 @@ impl SrnWeb {
         presented: &Presented,
     ) -> (&'static str, Option<String>) {
         let fail = |problem: WebProblem| (problem.code(), None);
-        let Some(config) = self.config.as_ref() else {
+        let Some(config) = self.config.as_ref().filter(|_| self.is_enabled()) else {
             return fail(WebProblem::NotEnabled);
         };
         let Ok(callback) = callback else {
@@ -543,6 +547,9 @@ impl SrnWeb {
         locale: Option<AppLocale>,
     ) -> (SrnWebAccountState, CookieChanges) {
         let mut cookies = CookieChanges::default();
+        if !super::super::privacy::enabled() {
+            return (SrnWebAccountState::Disabled, cookies);
+        }
         if !self.is_enabled() {
             return (SrnWebAccountState::NotEnabled, cookies);
         }

@@ -13250,6 +13250,12 @@
     "expand": "Ver tudo",
     "collapse": "Ver menos"
   },
+  "SpaceRingPrivacy": {
+    "title": "Serviços online da SpaceRing",
+    "description": "Permitir o login no SRN, a consulta ao catálogo e a verificação em segundo plano de atualizações e itens retirados.",
+    "managed": "A SpaceRing foi desativada por CODEG_SRN.",
+    "retry": "Tentar novamente"
+  },
   "SrnAccount": {
     "name": "SRN",
     "trigger": {
@@ -13307,6 +13313,7 @@
       "webSignedOutLocally": "Você saiu neste navegador, mas o SRN não confirmou."
     },
     "errors": {
+      "onlineDisabled": "Os serviços online da SRN estão desativados.",
       "network": "Não foi possível conectar ao SRN.",
       "rateLimited": "O SRN pediu ao Codeg que espere {seconds} s para tentar de novo.",
       "server": "O SRN respondeu com um erro (HTTP {status}).",

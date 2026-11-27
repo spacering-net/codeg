@@ -359,6 +359,9 @@ impl SrnApi {
         bearer: Option<&AccessToken>,
         body: Option<&serde_json::Value>,
     ) -> Result<Answer, SrnError> {
+        let _permission = super::privacy::request()
+            .await
+            .ok_or(SrnError::OnlineDisabled)?;
         // Every path is a constant of this file, so this cannot fail; it is
         // checked all the same, as `harness::client::send` checks its own.
         let url = self

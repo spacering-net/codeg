@@ -45,6 +45,7 @@
 pub mod client;
 pub mod error;
 pub mod pkce;
+pub(crate) mod privacy;
 pub mod web;
 
 #[cfg(feature = "tauri-runtime")]

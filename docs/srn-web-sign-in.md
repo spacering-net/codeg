@@ -109,3 +109,15 @@ on its behalf. Whoever operates the instance, or can run code on it — includin
 agents — can reach those tokens. SpaceRing's authorization page tells the
 person which instance they are connecting. This is not a guarantee of secrecy
 from the instance's administrators and not a multi-tenant separation.
+
+## Turning off SpaceRing services
+
+In the desktop app, open **Settings → General → SpaceRing online services**.
+Turning the switch off immediately disables SRN sign-in, profile and avatar
+requests, catalog access, and background update and withdrawal checks for
+installed catalog items. The status bar still offers Quick Actions. Existing
+local sessions and installed items are kept. Turn the switch on to resume checks.
+
+To enforce this choice on a desktop or server, set `CODEG_SRN=off` before
+starting Codeg. A web client cannot change the host's setting.
+`CODEG_HARNESS=off` remains available for disabling the catalog independently.

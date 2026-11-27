@@ -8,6 +8,7 @@ import { extractAppCommandError, toErrorMessage } from "@/lib/app-error"
  */
 export const SRN_PROBLEMS = [
   "network",
+  "onlineDisabled",
   "rateLimited",
   "server",
   "invalidResponse",
@@ -48,6 +49,7 @@ const NAMES: ReadonlySet<string> = new Set(SRN_PROBLEMS)
  *  `signedOutLocally`'s `reason` is told. */
 const NAME_OF_CODE: Readonly<Record<string, SrnProblemName>> = {
   network: "network",
+  online_disabled: "onlineDisabled",
   rate_limited: "rateLimited",
   server: "server",
   invalid_response: "invalidResponse",
