@@ -21,8 +21,9 @@ use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 
 use crate::acp::session_info::{
-    SessionInfo, SessionInfoAccess, SessionInfoConfig, SessionInfoRuntimeConfig, SessionMessageItem,
-    SessionMessages, MAX_SESSION_MESSAGES,
+    SessionHistory, SessionHistoryItem, SessionHistoryOptions, SessionHistoryTool,
+    SessionInfo, SessionInfoAccess, SessionInfoConfig, SessionInfoRuntimeConfig,
+    SessionMessageItem, SessionMessages, MAX_HISTORY_CHARS, MAX_SESSION_MESSAGES,
 };
 use crate::app_error::AppCommandError;
 use crate::commands::conversations::get_folder_conversation_core;
@@ -138,8 +139,7 @@ impl SessionInfoAccess for DbSessionInfoLookup {
         // degrade to metadata-only with an explanatory note rather than failing the
         // whole tool call.
         let conn_owned = self.db.conn.clone();
-        let parse =
-            async move { get_folder_conversation_core(&conn_owned, session_id).await };
+        let parse = async move { get_folder_conversation_core(&conn_owned, session_id).await };
         match bounded_parse(self.parse_limit.clone(), PARSE_TIMEOUT, parse).await {
             ParseSlot::Ready(Ok((detail, parsed_title))) => {
                 if info.title.is_none() {
@@ -173,6 +173,41 @@ impl SessionInfoAccess for DbSessionInfoLookup {
             }
         }
         info
+    }
+
+    async fn read_history(
+        &self,
+        session_id: i32,
+        options: SessionHistoryOptions,
+    ) -> SessionHistory {
+        if conversation_service::get_by_id(&self.db.conn, session_id)
+            .await
+            .is_err()
+        {
+            return SessionHistory::not_found(session_id);
+        }
+        let conn = self.db.conn.clone();
+        let parse = async move { get_folder_conversation_core(&conn, session_id).await };
+        let note = match bounded_parse(self.parse_limit.clone(), PARSE_TIMEOUT, parse).await {
+            ParseSlot::Ready(Ok((detail, _))) => {
+                return history_page(session_id, &detail.turns, &options)
+            }
+            ParseSlot::Ready(Err(_)) => {
+                "History is unavailable: the session transcript could not be parsed."
+            }
+            ParseSlot::Busy => {
+                "History is unavailable: too many session reads are in progress. Retry later."
+            }
+            ParseSlot::TimedOut => {
+                "History is unavailable: reading the session transcript timed out. Retry later."
+            }
+        };
+        SessionHistory {
+            found: true,
+            session_id,
+            note: Some(note.into()),
+            ..Default::default()
+        }
     }
 }
 
@@ -251,12 +286,8 @@ fn compact_turns(turns: &[MessageTurn], max: u32) -> SessionMessages {
         let item = compact_turn(turn);
         // Charge BOTH the text and the (bounded) tool names against the budget so
         // a turn can't smuggle an oversized payload through `tools`.
-        let cost = item.text.chars().count()
-            + item
-                .tools
-                .iter()
-                .map(|t| t.chars().count())
-                .sum::<usize>();
+        let cost =
+            item.text.chars().count() + item.tools.iter().map(|t| t.chars().count()).sum::<usize>();
         // Always keep the newest turn; stop once the budget can't fit the next.
         if !items.is_empty() && cost > budget {
             break;
@@ -278,12 +309,7 @@ fn compact_turns(turns: &[MessageTurn], max: u32) -> SessionMessages {
 /// One turn → role + truncated text (Text/Thinking blocks, and a failed
 /// turn's account of the failure) + tool names.
 fn compact_turn(turn: &MessageTurn) -> SessionMessageItem {
-    let role = match turn.role {
-        TurnRole::User => "user",
-        TurnRole::Assistant => "assistant",
-        TurnRole::System => "system",
-    }
-    .to_string();
+    let role = compact_turn_role(&turn.role).to_string();
 
     let mut parts: Vec<&str> = Vec::new();
     let mut tools: Vec<String> = Vec::new();
@@ -326,6 +352,217 @@ fn truncate_chars(s: &str, cap: usize) -> String {
     let mut out: String = s.chars().take(cap).collect();
     out.push('…');
     out
+}
+
+/// Read-only projection. Searches untruncated content, then selects newest
+/// matches before the exclusive cursor; restores transcript order on output.
+fn history_page(
+    session_id: i32,
+    turns: &[MessageTurn],
+    options: &SessionHistoryOptions,
+) -> SessionHistory {
+    let mut out = SessionHistory {
+        found: true,
+        session_id,
+        ..Default::default()
+    };
+    let end = match options.before.as_deref() {
+        None => turns.len(),
+        Some(id) => match turns.iter().position(|t| t.id == id) {
+            Some(index) => index,
+            None => {
+                out.note = Some("The before turn ID is absent from this transcript. It may have been rewritten or compacted; omit before to restart.".into());
+                return out;
+            }
+        },
+    };
+    let budget = options.max_chars.min(MAX_HISTORY_CHARS) as usize;
+    let limit = options.limit.clamp(1, MAX_SESSION_MESSAGES) as usize;
+    let query = options
+        .query
+        .as_deref()
+        .map(str::to_lowercase)
+        .filter(|s| !s.is_empty());
+    let size = |value: &SessionHistory| {
+        serde_json::to_string(value)
+            .map(|s| s.chars().count())
+            .unwrap_or(usize::MAX)
+    };
+    // Reserve the longer boolean spellings throughout budget calculation.
+    if size(&out) > budget {
+        out.has_more = turns[..end]
+            .iter()
+            .any(|turn| history_matches(turn, query.as_deref(), options.include_tools));
+        out.truncated = true;
+        out.note = Some("max_chars is smaller than the response metadata; no turns returned. Metadata is not omitted.".into());
+        return out;
+    }
+    for turn in turns[..end].iter().rev() {
+        if !history_matches(turn, query.as_deref(), options.include_tools) {
+            continue;
+        }
+        if out.items.len() >= limit {
+            out.has_more = true;
+            out.truncated = true;
+            break;
+        }
+        let (item, clipped) = history_item(turn, options.include_tools, budget);
+        let previous_oldest = out.oldest_id.clone();
+        out.oldest_id = Some(item.id.clone());
+        out.items.push(item);
+        if size(&out) > budget {
+            if out.items.len() > 1 {
+                out.items.pop();
+                out.oldest_id = previous_oldest;
+                out.has_more = true;
+                out.truncated = true;
+                break;
+            }
+            // Fit even a single long turn. Remove optional previews first, then
+            // binary-search a Unicode-safe text prefix against serialized size
+            // (JSON escaping consumes budget too).
+            out.truncated = true;
+            out.items[0].tools.clear();
+            let text: Vec<char> = out.items[0].text.chars().collect();
+            let (mut lo, mut hi) = (0, text.len());
+            while lo < hi {
+                let mid = lo + (hi - lo).div_ceil(2);
+                out.items[0].text = text[..mid].iter().collect();
+                if size(&out) <= budget {
+                    lo = mid;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            out.items[0].text = text[..lo].iter().collect();
+            if size(&out) > budget {
+                out.items.clear();
+                out.oldest_id = None;
+                out.has_more = true;
+                out.note = Some(
+                    "max_chars cannot fit this turn's ID and metadata; increase it to continue."
+                        .into(),
+                );
+                break;
+            }
+        }
+        out.truncated |= clipped;
+    }
+    out.items.reverse();
+    out
+}
+
+fn history_matches(turn: &MessageTurn, query: Option<&str>, include_tools: bool) -> bool {
+    let Some(query) = query else {
+        return true;
+    };
+    let contains = |s: &str| s.to_lowercase().contains(query);
+    turn.blocks.iter().any(|block| match block {
+        ContentBlock::Text { text }
+        | ContentBlock::Thinking { text }
+        | ContentBlock::TurnError { message: text } => contains(text),
+        ContentBlock::ToolUse {
+            tool_name,
+            input_preview,
+            ..
+        } if include_tools => contains(tool_name) || input_preview.as_deref().is_some_and(contains),
+        ContentBlock::ToolResult { output_preview, .. } if include_tools => {
+            output_preview.as_deref().is_some_and(contains)
+        }
+        _ => false,
+    })
+}
+
+fn history_item(
+    turn: &MessageTurn,
+    include_tools: bool,
+    budget: usize,
+) -> (SessionHistoryItem, bool) {
+    let mut item = SessionHistoryItem {
+        id: turn.id.clone(),
+        role: compact_turn_role(&turn.role).into(),
+        text: String::new(),
+        tools: Vec::new(),
+    };
+    let mut remaining = budget;
+    let mut clipped = false;
+    for block in &turn.blocks {
+        match block {
+            ContentBlock::Text { text }
+            | ContentBlock::Thinking { text }
+            | ContentBlock::TurnError { message: text } => {
+                if !item.text.is_empty() && remaining > 0 {
+                    item.text.push('\n');
+                    remaining -= 1;
+                }
+                let part: String = text.chars().take(remaining).collect();
+                let count = part.chars().count();
+                clipped |= text.chars().count() > count;
+                remaining -= count;
+                item.text.push_str(&part);
+            }
+            ContentBlock::ToolUse {
+                tool_name,
+                input_preview,
+                ..
+            } if include_tools => {
+                if remaining < 80 {
+                    clipped = true;
+                    continue;
+                }
+                remaining -= 80;
+                let name: String = tool_name.chars().take(remaining).collect();
+                remaining -= name.chars().count();
+                let input = input_preview
+                    .as_ref()
+                    .map(|s| s.chars().take(remaining).collect::<String>());
+                remaining -= input.as_ref().map_or(0, |s| s.chars().count());
+                clipped |= name != *tool_name || input != *input_preview;
+                if !name.is_empty() {
+                    item.tools.push(SessionHistoryTool {
+                        name: Some(name),
+                        input,
+                        output: None,
+                        is_error: None,
+                    });
+                } else {
+                    clipped = true;
+                }
+            }
+            ContentBlock::ToolResult {
+                output_preview,
+                is_error,
+                ..
+            } if include_tools => {
+                if remaining < 80 {
+                    clipped = true;
+                    continue;
+                }
+                remaining -= 80;
+                let output = output_preview
+                    .as_ref()
+                    .map(|s| s.chars().take(remaining).collect::<String>());
+                remaining -= output.as_ref().map_or(0, |s| s.chars().count());
+                clipped |= output != *output_preview;
+                item.tools.push(SessionHistoryTool {
+                    name: None,
+                    input: None,
+                    output,
+                    is_error: Some(*is_error),
+                });
+            }
+            _ => {}
+        }
+    }
+    (item, clipped)
+}
+
+fn compact_turn_role(role: &TurnRole) -> &'static str {
+    match role {
+        TurnRole::User => "user",
+        TurnRole::Assistant => "assistant",
+        TurnRole::System => "system",
+    }
 }
 
 // ===========================================================================
@@ -438,8 +675,8 @@ pub async fn set_session_info_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use crate::models::message::ContentBlock;
+    use chrono::Utc;
 
     fn turn(role: TurnRole, blocks: Vec<ContentBlock>) -> MessageTurn {
         MessageTurn {
@@ -451,7 +688,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-        agent_message_id: None,
+            agent_message_id: None,
         }
     }
 
@@ -460,7 +697,9 @@ mod tests {
         let item = compact_turn(&turn(
             TurnRole::Assistant,
             vec![
-                ContentBlock::Text { text: "hello".into() },
+                ContentBlock::Text {
+                    text: "hello".into(),
+                },
                 ContentBlock::ToolUse {
                     tool_use_id: None,
                     tool_name: "Read".into(),
@@ -562,8 +801,7 @@ mod tests {
             .items
             .iter()
             .map(|i| {
-                i.text.chars().count()
-                    + i.tools.iter().map(|t| t.chars().count()).sum::<usize>()
+                i.text.chars().count() + i.tools.iter().map(|t| t.chars().count()).sum::<usize>()
             })
             .sum();
         assert!(total_chars <= OVERALL_CHARS + PER_TURN_CHARS);
@@ -575,12 +813,209 @@ mod tests {
     fn compact_turns_not_truncated_when_all_fit() {
         let turns = vec![turn(
             TurnRole::User,
-            vec![ContentBlock::Text { text: "only".into() }],
+            vec![ContentBlock::Text {
+                text: "only".into(),
+            }],
         )];
         let out = compact_turns(&turns, 20);
         assert_eq!(out.total, 1);
         assert_eq!(out.included, 1);
         assert!(!out.truncated);
+    }
+
+    #[test]
+    fn history_pages_with_original_ids_and_exclusive_cursor() {
+        let mut turns: Vec<_> = ["z", "a", "m", "b"]
+            .into_iter()
+            .map(|id| {
+                let mut t = turn(TurnRole::User, vec![ContentBlock::Text { text: id.into() }]);
+                t.id = id.into();
+                t
+            })
+            .collect();
+        let options = SessionHistoryOptions {
+            limit: 2,
+            ..Default::default()
+        };
+        let page = history_page(42, &turns, &options);
+        assert_eq!(
+            page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["m", "b"]
+        );
+        assert_eq!(page.oldest_id.as_deref(), Some("m"));
+        assert!(page.has_more);
+        turns.push(turn(TurnRole::Assistant, vec![]));
+        let older = history_page(
+            42,
+            &turns,
+            &SessionHistoryOptions {
+                before: page.oldest_id,
+                ..options
+            },
+        );
+        assert_eq!(
+            older
+                .items
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            ["z", "a"]
+        );
+        assert!(!older.has_more);
+    }
+
+    #[test]
+    fn history_search_pages_across_unmatched_turns() {
+        let turns: Vec<_> = (0..5)
+            .map(|i| {
+                let mut t = turn(
+                    TurnRole::User,
+                    vec![ContentBlock::Text {
+                        text: if i % 2 == 0 {
+                            "match".into()
+                        } else {
+                            "other".into()
+                        },
+                    }],
+                );
+                t.id = format!("id-{i}");
+                t
+            })
+            .collect();
+        let options = SessionHistoryOptions {
+            limit: 2,
+            query: Some("match".into()),
+            ..Default::default()
+        };
+        let page = history_page(42, &turns, &options);
+        assert_eq!(
+            page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["id-2", "id-4"]
+        );
+        let page = history_page(
+            42,
+            &turns,
+            &SessionHistoryOptions {
+                before: page.oldest_id,
+                ..options
+            },
+        );
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, "id-0");
+        assert!(!page.has_more);
+    }
+
+    #[test]
+    fn history_defaults_to_twenty_and_caps_large_limits() {
+        let turns: Vec<_> = (0..250)
+            .map(|i| {
+                let mut t = turn(TurnRole::User, vec![]);
+                t.id = format!("id-{i}");
+                t
+            })
+            .collect();
+        assert_eq!(
+            history_page(42, &turns, &SessionHistoryOptions::default())
+                .items
+                .len(),
+            20
+        );
+        let page = history_page(
+            42,
+            &turns,
+            &SessionHistoryOptions {
+                limit: 1000,
+                ..Default::default()
+            },
+        );
+        assert_eq!(page.items.len(), 200);
+        assert_eq!(page.oldest_id.as_deref(), Some("id-50"));
+        assert!(page.has_more);
+    }
+
+    #[test]
+    fn history_missing_cursor_does_not_restart_at_latest() {
+        let turns = vec![turn(TurnRole::User, vec![])];
+        let out = history_page(
+            42,
+            &turns,
+            &SessionHistoryOptions {
+                before: Some("missing".into()),
+                ..Default::default()
+            },
+        );
+        assert!(out.items.is_empty());
+        assert!(out.note.unwrap().contains("before"));
+    }
+
+    #[test]
+    fn history_searches_full_text_and_opt_in_tool_previews() {
+        let mut t = turn(
+            TurnRole::Assistant,
+            vec![
+                ContentBlock::Text {
+                    text: format!("{}Needle", "x".repeat(3000)),
+                },
+                ContentBlock::ToolUse {
+                    tool_use_id: None,
+                    tool_name: "Read".into(),
+                    input_preview: Some("secret-path".into()),
+                    status: None,
+                    meta: None,
+                },
+            ],
+        );
+        t.id = "original".into();
+        let options = SessionHistoryOptions {
+            query: Some("NEEDLE".into()),
+            ..Default::default()
+        };
+        let out = history_page(42, &[t.clone()], &options);
+        assert_eq!(out.items.len(), 1);
+        assert!(out.items[0].tools.is_empty());
+        assert!(out.items[0].text.ends_with("Needle"));
+        let options = SessionHistoryOptions {
+            query: Some("secret-path".into()),
+            ..options
+        };
+        assert!(history_page(42, &[t.clone()], &options).items.is_empty());
+        let out = history_page(
+            42,
+            &[t],
+            &SessionHistoryOptions {
+                include_tools: true,
+                ..options
+            },
+        );
+        assert_eq!(out.items.len(), 1);
+        assert_eq!(out.items[0].tools[0].input.as_deref(), Some("secret-path"));
+    }
+
+    #[test]
+    fn history_bounds_entire_serialized_response_and_unicode() {
+        let turns: Vec<_> = (0..10)
+            .map(|i| {
+                let mut t = turn(
+                    TurnRole::User,
+                    vec![ContentBlock::Text {
+                        text: "\\\"汉字\n".repeat(3000),
+                    }],
+                );
+                t.id = format!("turn-{i}");
+                t
+            })
+            .collect();
+        let options = SessionHistoryOptions {
+            max_chars: 1024,
+            limit: 200,
+            ..Default::default()
+        };
+        let out = history_page(42, &turns, &options);
+        assert!(out.truncated);
+        assert_eq!(out.oldest_id.as_deref(), Some("turn-9"));
+        assert!(out.has_more);
+        assert!(serde_json::to_string(&out).unwrap().chars().count() <= 1024);
+        assert!(!out.items[0].text.is_empty());
     }
 
     #[test]
@@ -608,8 +1043,7 @@ mod tests {
     async fn bounded_parse_reports_busy_when_no_slot_free() {
         // A semaphore with zero permits → no slot → Busy, work never starts.
         let sem = Arc::new(tokio::sync::Semaphore::new(0));
-        let out: ParseSlot<i32> =
-            bounded_parse(sem, Duration::from_secs(5), async { 1 }).await;
+        let out: ParseSlot<i32> = bounded_parse(sem, Duration::from_secs(5), async { 1 }).await;
         assert!(matches!(out, ParseSlot::Busy));
     }
 
@@ -658,6 +1092,48 @@ mod tests {
         .unwrap();
         assert!(!load_session_info_settings(&db.conn).await.enabled);
         assert!(!config.is_enabled().await);
+    }
+
+    #[tokio::test]
+    async fn history_uses_the_same_parse_semaphore_as_session_info() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let folder = crate::db::test_helpers::seed_folder(&db, "/history-busy-test").await;
+        let session = conversation_service::create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .unwrap();
+        let lookup = DbSessionInfoLookup::new(Arc::new(AppDatabase {
+            conn: db.conn.clone(),
+        }));
+        let _permits = lookup
+            .parse_limit
+            .clone()
+            .acquire_many_owned(MAX_CONCURRENT_PARSES as u32)
+            .await
+            .unwrap();
+        let out = lookup
+            .read_history(session.id, SessionHistoryOptions::default())
+            .await;
+        assert!(out.found);
+        assert!(out.items.is_empty());
+        assert!(out.note.unwrap().contains("too many session reads"));
+        let info = lookup.resolve(session.id, 20).await;
+        assert!(info.messages.is_none());
+        assert!(info.note.unwrap().contains("too many session reads"));
+    }
+
+    #[test]
+    fn history_zero_budget_is_explicit_empty_result() {
+        let out = history_page(
+            42,
+            &[turn(TurnRole::User, vec![])],
+            &SessionHistoryOptions {
+                max_chars: 0,
+                ..Default::default()
+            },
+        );
+        assert!(out.items.is_empty());
+        assert!(out.truncated);
+        assert!(out.note.unwrap().contains("metadata"));
     }
 
     #[tokio::test]

@@ -124,6 +124,75 @@ impl SessionInfo {
     }
 }
 
+/// History is bounded independently from the compact session preview.
+pub const MAX_HISTORY_CHARS: u32 = 16_000;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionHistoryOptions {
+    pub limit: u32,
+    /// Exclusive original transcript turn ID, never a numeric offset.
+    pub before: Option<String>,
+    pub query: Option<String>,
+    pub include_tools: bool,
+    pub max_chars: u32,
+}
+
+impl Default for SessionHistoryOptions {
+    fn default() -> Self {
+        Self {
+            limit: 20,
+            before: None,
+            query: None,
+            include_tools: false,
+            max_chars: MAX_HISTORY_CHARS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionHistoryTool {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionHistoryItem {
+    pub id: String,
+    pub role: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<SessionHistoryTool>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionHistory {
+    pub found: bool,
+    pub session_id: i32,
+    pub items: Vec<SessionHistoryItem>,
+    pub oldest_id: Option<String>,
+    pub has_more: bool,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl SessionHistory {
+    pub fn not_found(session_id: i32) -> Self {
+        Self {
+            session_id,
+            note: SessionInfo::not_found(session_id).note,
+            ..Default::default()
+        }
+    }
+}
+
 /// Listener-facing access to resolve a session by its codeg conversation id. The
 /// production impl (`crate::commands::session_info::DbSessionInfoLookup`) reads
 /// the DB + parses the on-disk transcript; tests use an in-memory stub. Mirrors
@@ -136,6 +205,14 @@ pub trait SessionInfoAccess: Send + Sync {
     /// most recent compacted turns (capped at [`MAX_SESSION_MESSAGES`]). A
     /// missing / deleted id yields [`SessionInfo::not_found`].
     async fn resolve(&self, session_id: i32, max_messages: u32) -> SessionInfo;
+
+    async fn read_history(
+        &self,
+        session_id: i32,
+        _options: SessionHistoryOptions,
+    ) -> SessionHistory {
+        SessionHistory::not_found(session_id)
+    }
 }
 
 /// The hot-swappable feature config read at MCP injection time. Kept tiny and
