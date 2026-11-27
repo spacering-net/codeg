@@ -175,6 +175,7 @@ pub async fn start(
         expires_in_secs: LOGIN_EXPIRES_SECS,
     };
 
+    let expiring = handle.clone();
     let displaced = {
         let mut guard = slot().lock().await;
         guard.replace(Pending { handle, ..pending })
@@ -182,6 +183,16 @@ pub async fn start(
     if let Some(old) = displaced {
         kill(old).await;
     }
+
+    // `agy acp --login` waits on stdin for as long as it is open, so the
+    // deadline the panel shows (`expires_in_secs`) is enforced here: an
+    // abandoned attempt (the panel lost its connection before it could
+    // cancel) must not keep a child alive until the next sign-in or app exit.
+    // A no-op once `finish` has taken the attempt, or a newer one replaced it.
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(LOGIN_EXPIRES_SECS)).await;
+        let _ = cancel(&expiring).await;
+    });
 
     Ok(started)
 }

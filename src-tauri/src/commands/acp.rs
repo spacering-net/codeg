@@ -9957,35 +9957,36 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
                 ".agents/skills",
             ],
         }),
-        // Antigravity's roots are `server.py::resolve_skills_paths`, verbatim
-        // and in its order:
-        //
-        // codeg launches `agy acp` now, so the CLI's own root leads:
-        //   home       `<GEMINI_HOME>/antigravity-cli/skills` ← the CLI's
-        //   workspace  `<cwd>/.gemini/skills`
+        // Antigravity's roots, as `agy acp` (1.5.18) loads them with the
+        // default `--app-data-dir antigravity-cli`, CLI's own root first:
+        //   home       `<GEMINI_HOME>/antigravity-cli/skills`
         //   home       `<GEMINI_HOME>/config/skills`        ← cross-surface global
+        //   home       `~/.agents/skills`                   ← shared store
         //   workspace  `<cwd>/.agents/skills`
+        //   workspace  `<cwd>/.agent/skills`
         //
-        // Both home roots follow the resolved `GEMINI_HOME` on purpose: the
-        // server's own comment records that a `$HOME`-anchored entry here used
-        // to hand the real `~/.gemini` to the agent even when the home had
-        // been relocated. `config/skills` is kept for users who installed
-        // skills there for the desktop/IDE surfaces; the CLI reads it too.
+        // Verified by planting one skill in each candidate: those five reach
+        // the command list `agy acp` advertises, while `<cwd>/.gemini/skills`
+        // — the standalone `agy_acp_server`'s workspace root, where codeg used
+        // to install — is NOT read by the CLI, so installing there would write
+        // skills the agent never loads.
         //
-        // `SkillDirectoryOnly`: the discovery docstring says "SKILL.md files
-        // or skill subfolders", which does not distinguish a bundle's
-        // `<id>/SKILL.md` from a flat `<id>.md`, and the actual scan happens
-        // inside the agent. The directory bundle is the shape every agent
-        // supports, so codeg installs that rather than guessing at the wider
-        // one and writing skills the agent may never load.
+        // The two Gemini-home roots follow the resolved `GEMINI_HOME`, the
+        // same tree `--gemini-dir` hands the CLI.
+        //
+        // `SkillDirectoryOnly`: the CLI's loader is opaque here, and the
+        // directory bundle (`<id>/SKILL.md`) is the shape every agent
+        // supports, so codeg installs that rather than guessing at a flat
+        // `<id>.md` the agent may never load.
         AgentType::Antigravity => Some(SkillStorageSpec {
             kind: SkillStorageKind::SkillDirectoryOnly,
             global_dirs: vec![
                 crate::parsers::antigravity::resolve_antigravity_cli_dir().join("skills"),
                 crate::parsers::antigravity::resolve_antigravity_shared_config_dir()
                     .join("skills"),
+                home_dir_or_default().join(".agents").join("skills"),
             ],
-            project_rel_dirs: vec![".gemini/skills", ".agents/skills"],
+            project_rel_dirs: vec![".agents/skills", ".agent/skills"],
         }),
         // Kiro's default agent resources are
         // `skill://.kiro/skills/*/SKILL.md` (workspace) and
@@ -11808,9 +11809,8 @@ fn cascade_update_agent_config(
             // base URL — so it stays off the model-provider credential
             // cascade. Its credentials come from the auth method the settings
             // panel recorded, which the launch path projects into the process
-            // env and into `antigravity-acp/settings.json` (see
-            // `sync_antigravity_settings_file`); that file carries the chosen
-            // METHOD, never a credential, so there is nothing here to
+            // env (see `apply_antigravity_env_policy`) and, where needed, into
+            // a handshake `authenticate`, so there is nothing here to
             // reconcile either.
         }
         AgentType::Kiro => {

@@ -200,11 +200,14 @@ fn is_antigravity_server_cmd(cmd: &str) -> bool {
 
 /// Agents whose Windows build unpacks itself into the temp directory on every
 /// launch and cleans up only on a graceful exit: the leak this module exists
-/// for. Antigravity's server is a PyInstaller onefile (its registry entry
-/// records each version checked).
+/// for. The retired standalone Antigravity server (`agy_acp_server`) is a
+/// PyInstaller onefile. The built-in Antigravity now runs the CLI's `agy acp`,
+/// a plain Go executable on Windows too (no PyInstaller bootloader), so no
+/// built-in needs this any more — and giving one a per-launch `TMP` anyway is
+/// what #1025 is about.
 ///
-/// A custom agent that runs the same server binary (a user-registered
-/// Antigravity) leaks the same way, so it is matched by its Windows launch
+/// A custom agent that still runs the standalone server binary (a
+/// user-registered Antigravity) leaks that way, so it is matched by its Windows launch
 /// entry: a binary distribution whose entry (the nested `dir_entry` path, else
 /// `cmd` — on Windows hydration takes `cmd` from the `windows-*` spec) is
 /// named `agy_acp_server`. Any other custom agent keeps the ambient temp dir.
@@ -215,7 +218,6 @@ fn is_antigravity_server_cmd(cmd: &str) -> bool {
 /// can start its `ssh.exe`.
 fn unpacks_into_temp_on_windows(agent: AgentType) -> bool {
     match agent {
-        AgentType::Antigravity => true,
         AgentType::Custom(id) => {
             let Some(meta) = crate::acp::custom_registry::get(id) else {
                 return false;
@@ -1487,8 +1489,8 @@ mod tests {
 
     /// #1025. On Windows a per-launch `TMP` becomes Git Bash's `/tmp` for the
     /// user's whole session and dangles once the launch is reclaimed, so there
-    /// only an agent that unpacks itself into temp is given one: a single
-    /// built-in, and no custom agent.
+    /// only an agent that unpacks itself into temp is given one: no built-in
+    /// (Antigravity's `agy` is not a onefile), and no ordinary custom agent.
     #[test]
     fn on_windows_only_an_agent_that_unpacks_into_temp_is_isolated() {
         let isolated: Vec<AgentType> = crate::models::agent::BUILTIN_AGENT_TYPES
@@ -1496,7 +1498,7 @@ mod tests {
             .copied()
             .filter(|agent| isolates_on(true, *agent))
             .collect();
-        assert_eq!(isolated, [AgentType::Antigravity]);
+        assert!(isolated.is_empty(), "{isolated:?}");
         assert!(!isolates_on(true, AgentType::Custom("custom-agent")));
     }
 

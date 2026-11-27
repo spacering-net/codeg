@@ -434,6 +434,13 @@ pub fn binary_system_dirs(agent_type: AgentType) -> &'static [&'static str] {
         AgentType::MiniMaxCode => &[".minimax-code/bin"],
         #[cfg(windows)]
         AgentType::MiniMaxCode => &[".minimax-code"],
+        // `install.ps1` / `install.cmd` put `agy.exe` in
+        // `%LOCALAPPDATA%\agy\bin` and add it to the user PATH, which a codeg
+        // already running (or launched before the next sign-in) does not see.
+        // On macOS and Linux `install.sh` uses `~/.local/bin`, which the
+        // system resolver already probes.
+        #[cfg(windows)]
+        AgentType::Antigravity => &["AppData/Local/agy/bin"],
         _ => &[],
     }
 }

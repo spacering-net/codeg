@@ -444,6 +444,69 @@ fn antigravity_non_interactive_auth_method_for_env(
     }
 }
 
+/// The ACP `authenticate` methodId this launch sends `agy acp` between
+/// `initialize` and `session/new`, if any.
+///
+/// The API-key methods always need one (see
+/// [`antigravity_non_interactive_auth_method_for_env`]). The two Google
+/// methods need one only when the CLI's cached auth state names a DIFFERENT
+/// method: `agy acp` keeps using the method its last `authenticate` recorded
+/// in `<gemini home>/antigravity-cli/cache/acp-auth-state.json`, so a user who
+/// switches the panel from an API key back to Google sign-in would otherwise
+/// get `-32000 Authentication required` on every launch — the launch scrubs
+/// `GEMINI_API_KEY` for the Google method while the CLI still authenticates
+/// with it (verified against 1.5.18). With a cached Google credential that
+/// `authenticate` answers at once; without one the CLI runs its own browser
+/// sign-in (or, with no display, refuses), which is what choosing Google
+/// sign-in asks for. With no cached state the CLI infers the method itself,
+/// so nothing is sent.
+fn antigravity_handshake_auth_method_for_env(
+    runtime_env: &BTreeMap<String, String>,
+) -> Option<&'static str> {
+    if let Some(method) = antigravity_non_interactive_auth_method_for_env(runtime_env) {
+        return Some(method);
+    }
+    let cached = resolve_antigravity_launch_gemini_home(runtime_env)
+        .and_then(|home| read_antigravity_cached_auth_method(&home));
+    antigravity_oauth_switch_auth_method(runtime_env, cached.as_deref())
+}
+
+/// `methodId` from the CLI's `antigravity-cli/cache/acp-auth-state.json`
+/// (`{"methodId":"gemini-api-key"}`). Unreadable or absent reads as `None`.
+fn read_antigravity_cached_auth_method(gemini_home: &Path) -> Option<String> {
+    let path = gemini_home
+        .join("antigravity-cli")
+        .join("cache")
+        .join("acp-auth-state.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    value
+        .get("methodId")?
+        .as_str()
+        .map(|method| method.trim().to_string())
+}
+
+/// The Google method the panel recorded, when the CLI's cached method differs.
+fn antigravity_oauth_switch_auth_method(
+    runtime_env: &BTreeMap<String, String>,
+    cached: Option<&str>,
+) -> Option<&'static str> {
+    let method: &'static str = match runtime_env
+        .get(ANTIGRAVITY_AUTH_METHOD_ENV)
+        .map(|value| value.trim())?
+    {
+        "oauth-personal" => "oauth-personal",
+        "oauth-business" => "oauth-business",
+        _ => return None,
+    };
+    let cached = match cached?.trim() {
+        "" => return None,
+        "vertex-ai" => "agent-platform",
+        other => other,
+    };
+    (cached != method).then_some(method)
+}
+
 /// Antigravity's launch credential policy, in the spirit of
 /// [`apply_cursor_env_policy`] but strictly stronger.
 ///
@@ -3047,7 +3110,7 @@ pub async fn spawn_agent_connection(
     initial_state.trae_pat_sign_in =
         agent_type == AgentType::Trae && crate::acp::trae::pat_sign_in_requested(&runtime_env);
     initial_state.antigravity_auth_method = if agent_type == AgentType::Antigravity {
-        antigravity_non_interactive_auth_method_for_env(&runtime_env)
+        antigravity_handshake_auth_method_for_env(&runtime_env)
     } else {
         None
     };
@@ -8197,18 +8260,26 @@ fn antigravity_handshake_auth_method(
         .then_some(method)
 }
 
-/// 在 `initialize` 之后为 Antigravity 执行非交互式 `authenticate`
-/// （`gemini-api-key` 或 `agent-platform`），让 `agy acp` 刷新其活动认证状态。
+/// 在 `initialize` 之后为 Antigravity 执行 `authenticate`，让 `agy acp` 刷新其活动
+/// 认证状态：API-key 方式（`gemini-api-key` / `agent-platform`）每次都发；Google
+/// 方式仅在 CLI 缓存的方式与面板不一致时发（见
+/// [`antigravity_handshake_auth_method_for_env`]）。Google 方式可能由 CLI 打开浏览器
+/// 走完登录，因此给足与免浏览器登录相同的时限，握手取消时随之中止。
 async fn sign_in_antigravity_non_interactive(
     cx: &ConnectionTo<Agent>,
     handshake: &CancellationToken,
     method_id: &'static str,
 ) -> Result<(), agent_client_protocol::Error> {
     let started = std::time::Instant::now();
+    let wait = if matches!(method_id, "oauth-personal" | "oauth-business") {
+        std::time::Duration::from_secs(crate::acp::antigravity_login::LOGIN_EXPIRES_SECS)
+    } else {
+        ANTIGRAVITY_HANDSHAKE_AUTH_TIMEOUT
+    };
     let outcome = unless_cancelled(
         handshake,
         tokio::time::timeout(
-            ANTIGRAVITY_HANDSHAKE_AUTH_TIMEOUT,
+            wait,
             cx.send_request_to(Agent, AuthenticateRequest::new(method_id))
                 .block_task(),
         ),
@@ -8228,7 +8299,7 @@ async fn sign_in_antigravity_non_interactive(
         Err(_) => tracing::warn!(
             "[ACP][{}] {method_id} authenticate timed out after {:?}; continuing to session/new",
             AgentType::Antigravity,
-            ANTIGRAVITY_HANDSHAKE_AUTH_TIMEOUT
+            wait
         ),
     }
     Ok(())
@@ -9596,7 +9667,8 @@ async fn run_connection(
             }
 
             // Antigravity CLI (`agy acp`) 仅设置 API key / GCP 环境变量并不会自动激活
-            // 非 OAuth 认证方式，需要在 `session/new` 之前发送一次非交互 `authenticate`。
+            // 非 OAuth 认证方式，需要在 `session/new` 之前发送一次 `authenticate`；
+            // 缓存方式与面板所选 Google 方式不一致时同理。
             let antigravity_auth_requested = state.read().await.antigravity_auth_method;
             if let Some(method_id) = antigravity_handshake_auth_method(
                 agent_type,
@@ -32634,6 +32706,74 @@ mod tests {
         assert_eq!(
             antigravity_non_interactive_auth_method_for_env(&antigravity_runtime("oauth-personal")),
             None
+        );
+    }
+
+    /// Switching the panel back to a Google method must re-`authenticate`
+    /// when the CLI's cached state still names the API-key method, and only
+    /// then.
+    #[test]
+    fn antigravity_reauthenticates_google_only_when_the_cached_method_differs() {
+        let personal = antigravity_runtime("oauth-personal");
+        let business = antigravity_runtime("oauth-business");
+        assert_eq!(
+            antigravity_oauth_switch_auth_method(&personal, Some("gemini-api-key")),
+            Some("oauth-personal")
+        );
+        assert_eq!(
+            antigravity_oauth_switch_auth_method(&business, Some("oauth-personal")),
+            Some("oauth-business")
+        );
+        assert_eq!(
+            antigravity_oauth_switch_auth_method(&personal, Some("vertex-ai")),
+            Some("oauth-personal")
+        );
+        for cached in [None, Some(""), Some("oauth-personal"), Some(" oauth-personal ")] {
+            assert_eq!(
+                antigravity_oauth_switch_auth_method(&personal, cached),
+                None,
+                "{cached:?}"
+            );
+        }
+        // API-key methods and legacy rows are not this function's business.
+        for runtime in [
+            antigravity_runtime("gemini-api-key"),
+            antigravity_runtime("agent-platform"),
+            BTreeMap::new(),
+        ] {
+            assert_eq!(
+                antigravity_oauth_switch_auth_method(&runtime, Some("oauth-business")),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn antigravity_reads_the_cli_cached_auth_method() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(read_antigravity_cached_auth_method(root.path()), None);
+        let cache = root.path().join("antigravity-cli").join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("acp-auth-state.json"), r#"{"methodId":"gemini-api-key"}"#)
+            .unwrap();
+        assert_eq!(
+            read_antigravity_cached_auth_method(root.path()).as_deref(),
+            Some("gemini-api-key")
+        );
+        std::fs::write(cache.join("acp-auth-state.json"), "not json").unwrap();
+        assert_eq!(read_antigravity_cached_auth_method(root.path()), None);
+
+        // End to end through the launch's own Gemini-home resolution.
+        std::fs::write(cache.join("acp-auth-state.json"), r#"{"methodId":"gemini-api-key"}"#)
+            .unwrap();
+        let mut runtime = antigravity_runtime("oauth-personal");
+        runtime.insert(
+            "GEMINI_HOME".to_string(),
+            root.path().to_string_lossy().into_owned(),
+        );
+        assert_eq!(
+            antigravity_handshake_auth_method_for_env(&runtime),
+            Some("oauth-personal")
         );
     }
 
