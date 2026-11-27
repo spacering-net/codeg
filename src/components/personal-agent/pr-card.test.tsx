@@ -166,6 +166,8 @@ function facts(pr: PrFacts | null): TaskFacts {
   return {
     task_id: 45,
     status: "done",
+    run_seq: 1,
+    updated_at: "2026-11-10T09:00:00Z",
     folder_id: 2,
     branch: "pa/fix-login",
     base_branch: "main",

@@ -256,7 +256,7 @@ describe("itemizeRepeats", () => {
     // The rows space themselves: the list's own gap goes.
     expect(out.elements.list).toMatchObject({
       repeat: { statePath: "/needs", key: "key" },
-      props: { className: "gap-0" },
+      props: { className: "w-full gap-0" },
       children: ["list~item"],
     })
     expect(out.elements["list~item"]).toEqual({
@@ -389,8 +389,170 @@ describe("itemizeRepeats", () => {
     })
     expect(out.elements.list.props).toEqual({
       gap: "md",
-      className: "pt-1 gap-0",
+      className: "w-full pt-1 gap-0",
     })
+  })
+
+  it("takes an item written as one row of its own — a Stack of its line and button — as that row", () => {
+    // A brief's list as an assistant writes it: each item a horizontal
+    // Stack, one Stack shared by several lists.
+    const { spec: marked } = sanitizeAssistantSpec(
+      spec({
+        main: { type: "Card", props: {}, children: ["needs", "done"] },
+        needs: {
+          type: "Card",
+          props: { title: "Needs you" },
+          repeat: { statePath: "/needs", key: "id" },
+          children: ["row"],
+        },
+        done: {
+          type: "Stack",
+          props: {},
+          repeat: { statePath: "/done", key: "id" },
+          children: ["row"],
+        },
+        row: {
+          type: "Stack",
+          props: { direction: "horizontal", justify: "between" },
+          children: ["line", "open"],
+        },
+        line: text("task #16 · Title: waiting for review"),
+        open: {
+          type: "Button",
+          props: { label: "Open" },
+          on: {
+            press: {
+              action: "pa.open",
+              params: { target: { $item: "target" }, id: { $item: "id" } },
+            },
+          },
+          children: [],
+        },
+      })
+    )
+    const out = itemizeRepeats(marked)
+    for (const list of ["needs", "done"]) {
+      expect(out.elements[list].children).toEqual([`${list}~item`])
+      expect(out.elements[`${list}~item`]).toEqual({
+        type: PA_ITEM_CARD,
+        props: {
+          actions: ["open"],
+          lead: { target: { $item: "target" }, id: { $item: "id" } },
+          sole: true,
+        },
+        children: ["line", "open"],
+      })
+    }
+    // The rows space themselves, a Card's content as a Stack.
+    expect(out.elements.needs.props).toEqual({
+      title: "Needs you",
+      className: "[&>[data-slot=card-content]]:gap-0",
+    })
+    expect(out.elements.done.props).toEqual({ className: "w-full gap-0" })
+    // A width the spec gives a list is its own: it comes after ours.
+    const half = itemizeRepeats(
+      spec({
+        list: { ...list(["line", "go"]), props: { className: "w-1/2" } },
+        line: text("x"),
+        go: press("Go"),
+      })
+    )
+    expect(half.elements.list.props).toEqual({
+      className: "w-full w-1/2 gap-0",
+    })
+    expect(out.elements.line.props).toMatchObject({ [PA_LINE]: true })
+    // The button as written: its container the Stack it was in.
+    expect(out.elements.open.props).toMatchObject({ __paParent: "row" })
+    // A row that is shown now and then, or repeats itself, is left alone.
+    const shown = itemizeRepeats(
+      spec({
+        list: { ...list(["row"]) },
+        row: {
+          type: "Stack",
+          props: {},
+          visible: { $state: "/on" },
+          children: ["line", "go"],
+        },
+        line: text("x"),
+        go: press("Go"),
+      })
+    )
+    expect(shown.elements.list.children).toEqual(["row"])
+    // Nor one of lines each with its button: lines with their buttons.
+    const pairs = itemizeRepeats(
+      spec({
+        list: list(["row"]),
+        row: {
+          type: "Stack",
+          props: {},
+          children: ["a", "goA", "b", "goB"],
+        },
+        a: text("Build logs"),
+        goA: press("Open"),
+        b: text("Deploy logs"),
+        goB: press("Open"),
+      })
+    )
+    expect(pairs.elements.list.children).toEqual(["row"])
+    // Nor one that does something itself.
+    const watched = itemizeRepeats(
+      spec({
+        list: list(["row"]),
+        row: {
+          type: "Stack",
+          props: {},
+          watch: { "/x": SET },
+          children: ["line", "go"],
+        },
+        line: text("x"),
+        go: press("Go"),
+      })
+    )
+    expect(watched.elements.list.children).toEqual(["row"])
+    // Nor one styled: its look is the spec's own.
+    const styled = itemizeRepeats(
+      spec({
+        list: list(["row"]),
+        row: {
+          type: "Stack",
+          props: { direction: "horizontal", className: "hidden md:flex" },
+          children: ["line", "go"],
+        },
+        line: text("x"),
+        go: press("Go"),
+      })
+    )
+    expect(styled.elements.list.children).toEqual(["row"])
+    // Nor one laid out by state.
+    const toggled = itemizeRepeats(
+      spec({
+        list: list(["row"]),
+        row: {
+          type: "Stack",
+          props: { direction: { $state: "/layout" } },
+          children: ["line", "go"],
+        },
+        line: text("x"),
+        go: press("Go"),
+      })
+    )
+    expect(toggled.elements.list.children).toEqual(["row"])
+    // A list whose class is bound to state keeps it.
+    const bound = { $state: "/listClass" }
+    const kept = itemizeRepeats(
+      spec({
+        list: {
+          type: "Card",
+          props: { className: bound },
+          repeat: { statePath: "/needs", key: "key" },
+          children: ["line", "go"],
+        },
+        line: text("x"),
+        go: press("Go"),
+      })
+    )
+    expect(kept.elements.list.children).toEqual(["list~item"])
+    expect(kept.elements.list.props).toEqual({ className: bound })
   })
 })
 
@@ -438,7 +600,7 @@ describe("itemizeOpeners", () => {
     ])
     expect(out.elements["doneText~rows"]).toEqual({
       type: "Stack",
-      props: { gap: "none" },
+      props: { gap: "none", className: "w-full" },
       children: ["doneText~row"],
     })
     expect(out.elements["doneText~row"]).toEqual({

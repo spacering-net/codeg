@@ -2289,6 +2289,12 @@
       "statusRunningBadge": "実行中",
       "runningCountBadge": "{count} 件の会話が実行中",
       "statusCancelledBadge": "キャンセル済み",
+      "awaitingCountBadge": "{count, plural, other {# 件があなたの対応待ち}}",
+      "statusAwaiting": {
+        "permission": "許可待ち",
+        "question": "回答待ち",
+        "plan": "承認待ち"
+      },
       "originalWorkingDir": "元の作業ディレクトリ",
       "cliBadge": "コマンドラインから開始",
       "conversationCountUnit": "{count} 件",
@@ -10284,7 +10290,8 @@
       "ariaLabel": "パーソナルエージェントへのメッセージ",
       "send": "送信",
       "queue": "キューに追加",
-      "waitForUpload": "画像のアップロードが終わるまでお待ちください。"
+      "waitForUpload": "画像のアップロードが終わるまでお待ちください。",
+      "draftWhileSending": "送信中です。送信が終わってから入力欄に入れてください。"
     },
     "aux": {
       "rename": "クリックして名前を変更",
@@ -11289,6 +11296,7 @@
         "dispatch": "作業を依頼中",
         "dispatch_followup": "作業をフォローアップ中",
         "dispatch_wait": "任せた作業の結果を待っています",
+        "dispatch_stop": "任せた作業を止めています",
         "items": "進行中の事項を整理中",
         "timeline_read": "会話をさかのぼって確認中",
         "project_list": "プロジェクトを確認中"
@@ -11325,6 +11333,7 @@
       "errorMidway": "返信の途中でエラーが発生しました：{error}",
       "interrupted": "この返信は完了しませんでした：{reason}",
       "truncated": "返信が長さの上限に達し、途中で切れました",
+      "nothingNew": "今回は新しいことはありませんでした。定時の実行で何もなければ、お知らせしません。",
       "preempted": "あなたのメッセージに道を譲って止まりました",
       "resend": "{count, plural, other {# 件のメッセージを再送信}}",
       "why": {
@@ -11354,6 +11363,7 @@
       "source": "元のメッセージ",
       "showText": "原文を表示",
       "hideText": "原文を隠す",
+      "fold": "折りたたむ",
       "makeRoutine": "ルーティンにする…",
       "note": {
         "boot": "codeg が再起動しました",
@@ -11513,6 +11523,8 @@
     "exchange": {
       "sentTo": "<peer></peer> にメッセージを送信",
       "from": "<peer></peer> からのメッセージ",
+      "sentToName": "{name} にメッセージを送信",
+      "fromName": "{name} からのメッセージ",
       "exchanged": "{names} と {count} 件のやり取り",
       "state": {
         "stopped": "取り消し済み",
@@ -11753,6 +11765,8 @@
       "dispatchSome": "作業を依頼中",
       "followup": "#{id} をフォローアップ中",
       "followupSome": "フォローアップ中",
+      "stop": "#{id} を止めています",
+      "stopSome": "作業を止めています",
       "message": "{target} に質問中",
       "messageSome": "ほかのアシスタントに質問中",
       "awaitingReply": "{name} の返信待ち",
@@ -11787,6 +11801,8 @@
       "dispatchSome": "作業を依頼しました",
       "followup": "#{id} をフォローアップしました",
       "followupSome": "フォローアップしました",
+      "stop": "#{id} を止めました",
+      "stopSome": "作業を止めました",
       "message": "{target} にメッセージを送りました",
       "messageSome": "メッセージを送りました",
       "think": "少し考えました",
@@ -11905,6 +11921,9 @@
       "prOpened": "PR 作成済み",
       "prNotTracked": "codeg は見守っていません",
       "pastStopping": "完了済みかマージ中のため停止できません",
+      "alreadyStopped": "すでに止まっています（{who}）",
+      "changed": "直前に変わりました。最新の状態にしました",
+      "boardRefused": "ボードは今そのタスクを取り消せません（マージ中か完了済み）",
       "prChecks": "チェック {passed}/{total} 成功",
       "prChecksFailed": "{n} 件失敗",
       "prChecksRunning": "{n} 件実行中",
@@ -12007,7 +12026,14 @@
       "overdue": "期限切れ · {when} 期限",
       "reminded": "通知済み · {when} 期限",
       "late": "{duration} 遅れ",
-      "missed": "{count} 回逃しました"
+      "missed": "{count} 回逃しました",
+      "inSentence": {
+        "today": "{time}",
+        "tomorrow": "明日 {time}",
+        "yesterday": "昨日 {time}",
+        "day": "{day} {time}",
+        "date": "{date} {time}"
+      }
     },
     "reminder": {
       "title": "リマインダー",
@@ -12034,7 +12060,7 @@
       "groups": {
         "needs": "あなた待ち",
         "watching": "進行中",
-        "next": "これから",
+        "next": "ルーティンとリマインダー",
         "done": "今日完了"
       },
       "empty": "あなたのやることも、実行中のものもありません。",
@@ -13070,7 +13096,7 @@
         "skipNext": "今回はスキップ、以降はいつもどおり：{rule}",
         "snoozeNotify": "その時間にもう一度知らせます",
         "snoozeAct": "その時間に{name}が対応します",
-        "setTimeNotify": "その時間に知らせます",
+        "setTimeNotify": "選んだ時間に知らせます",
         "setTimeAct": "その時間に{name}が対応します",
         "handOver": "{name}に対応してもらいます",
         "answer": "{name}との会話で回答します",
@@ -13094,7 +13120,9 @@
         "notWithdrawn": "メッセージは取り消せませんでした。{name}は{peer}の返事を待たなくなりました",
         "stopped": "今後は知らせません：{title}",
         "handed": "{name}に任せました",
-        "undone": "元に戻しました"
+        "undone": "元に戻しました",
+        "undoneSkip": "スキップを取り消しました",
+        "notRefreshed": "更新できませんでした。しばらくしてからもう一度お試しください。"
       },
       "meta": {
         "reminds": "{name}からのお知らせ · {when} の予定",
@@ -13105,9 +13133,9 @@
         "asks": "{name}からの質問 · {wait} 待っています",
         "asked": "{name}からの質問",
         "answered": "回答済み · {name}が読むのを待っています",
-        "interrupted": "{name}のターンが終わらず、回答を読めていないかもしれません · 必要ならもう一度回答してください",
+        "interrupted": "{name}が処理を終えられず、回答を読めていないかもしれません · 必要ならもう一度回答してください",
         "needsYou": "{name}があなたの対応を待っています · {wait}",
-        "following": "{name}がフォロー中 · {wait}",
+        "following": "{name}がフォロー中 · {wait}待機中",
         "external": "{name}が外部の結果を待っています · {wait}",
         "message": "{name}が{peer}の返事を待っています · {wait}",
         "setAside": "保留中 · 時間未設定",
@@ -13117,11 +13145,14 @@
       },
       "closed": {
         "done": "あなたが完了 · {time}",
+        "stopped": "作業を止めました · {time}",
+        "skippedLast": "最後の回をスキップしました · {time}",
         "dropped": "あなたが外しました · {time}",
         "withdrawn": "{peer}へのメッセージを取り消しました · {time}",
         "stoppedWaiting": "{peer}の返事を待つのをやめました · {time}",
         "agentDone": "{name}が完了 · {time}",
         "agentDropped": "{name}が追うのをやめました · {time}",
+        "agentStopped": "{name}が作業を止めました · {time}",
         "answered": "{name}があなたの回答を読みました · {time}",
         "replied": "{peer}が返事をしました · {time}",
         "gone": "{peer}は削除されたため、返事は来ません · {time}",
@@ -13135,13 +13166,15 @@
       "gone": "これはもうありません",
       "settled": "これはもう終わっています",
       "changed": "これはさっき変わりました。もう一度確認してください",
-      "workRunning": "この作業はまだ進行中です。止めるにはタスクバーの「停止」を使ってください",
+      "workRunning": "この作業はまだ進行中です。止めるにはカードの「停止」を使ってください",
       "workNoTime": "任せた作業は時間で延期できません",
       "messageNoTime": "これは{peer}の返事待ちなので、時間で延期できません",
       "mentionNoTime": "これは言及したときに出てくるもので、時間では知らせません",
       "notEarlier": "これはもともと {when} に設定されています。延期は後ろにしかできません",
       "hasTime": "これはもう {when} に設定されています",
       "inOtherHands": "これは{bot}が対応中なので、時間で延期できません",
+      "waitsOutside": "これは外部の対応を待っているため、時間を指定して延ばせません",
+      "skipNotRepeating": "スキップできるのは繰り返しのリマインダーだけです",
       "badTime": "その時間がわかりませんでした",
       "undoNone": "この操作は元に戻せません",
       "undoExpired": "10 分以上たったので、元に戻せません",
@@ -13160,6 +13193,13 @@
       "label": "回答：{question}",
       "ended": "この質問はもう終わっています。回答は不要です",
       "alreadyAnswered": "この質問はもう{name}が読むのを待っています。回答は不要です"
+    },
+    "stopped": {
+      "owner": "あなたが止めました",
+      "inSession": "あなたがその会話で止めました",
+      "onBoard": "あなたがボードで止めました",
+      "agent": "{name}が止めました：{reason}",
+      "agentPlain": "{name}が止めました"
     }
   },
   "MessageCheck": {

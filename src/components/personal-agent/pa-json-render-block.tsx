@@ -309,6 +309,13 @@ const SoleOpener = createContext(false)
 /** Whose face leads the row (`PaItemCard`'s lead), when an assistant's. */
 const RowBot = createContext<unknown>(null)
 
+/** A card drawn only (`PaCardScope.readOnly`): its buttons and links look
+ *  as they would, off, and do nothing — a plain one (an `href`, no codeg
+ *  action) too. */
+function useReadOnlyCard(): boolean {
+  return usePaCardScope()?.readOnly === true
+}
+
 function PaButton(ctx: BaseComponentProps<ShadcnProps<"Button">>) {
   const { props, emit } = ctx
   const t = useTranslations("PersonalAgent.card")
@@ -318,6 +325,27 @@ function PaButton(ctx: BaseComponentProps<ShadcnProps<"Button">>) {
   const rowBot = useContext(RowBot)
   const roster = usePersonalAgentRoster((s) => s.entries)
   const botName = useBotName()
+  const readOnly = useReadOnlyCard()
+  if (readOnly) {
+    return (
+      <Button
+        type="button"
+        variant={
+          props.variant === "danger"
+            ? "destructive"
+            : props.variant === "secondary"
+              ? "secondary"
+              : "default"
+        }
+        size={inItem ? "sm" : "default"}
+        className="self-start"
+        disabled
+        data-pa-card-button="read-only"
+      >
+        {props.label}
+      </Button>
+    )
+  }
   if (!marked) return <PlainButton {...ctx} />
   // On a list's row led by an assistant's face, a button to its
   // conversation that names it ("Reply to Dev") says it the same on every
@@ -372,6 +400,18 @@ function PaButton(ctx: BaseComponentProps<ShadcnProps<"Button">>) {
 function PaLink(ctx: BaseComponentProps<ShadcnProps<"Link">>) {
   const { props, emit } = ctx
   const marked = useMarked(props as Record<string, unknown>)
+  const readOnly = useReadOnlyCard()
+  if (readOnly) {
+    return (
+      <span
+        aria-disabled
+        data-pa-card-button="read-only"
+        className="inline-flex items-center gap-1 text-sm font-medium text-primary/60"
+      >
+        {props.label}
+      </span>
+    )
+  }
   if (!marked) return <PlainLink {...ctx} />
   return (
     <button
@@ -697,6 +737,9 @@ function PaCard({
   const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set())
   const [pending, setPending] = useState<Pending | null>(null)
   const [exchange, setExchange] = useState<TimelineRow | null>(null)
+  // The exchange a link opens stands over the card: the link's press
+  // reaches here as an action, without the element.
+  const cardRef = useRef<HTMLDivElement | null>(null)
   const [linkUrl, setLinkUrl] = useState<string | null>(null)
 
   const waiting = scope.running || streaming || page.readOnly
@@ -1031,6 +1074,7 @@ function PaCard({
 
   return (
     <div
+      ref={cardRef}
       className="relative my-3 w-full min-w-0"
       data-json-render=""
       data-pa-card
@@ -1083,8 +1127,11 @@ function PaCard({
                   <Button
                     variant="outline"
                     onClick={() => {
-                      page.onDraft?.(scope.rowId, pending.text)
-                      setPending(null)
+                      // Kept open, its text with it, while the box is
+                      // sending: the owner may press it again after.
+                      if (page.onDraft?.(scope.rowId, pending.text)) {
+                        setPending(null)
+                      }
                     }}
                     data-pa-card-to-composer
                   >
@@ -1132,7 +1179,11 @@ function PaCard({
           ) : null}
         </AlertDialogContent>
       </AlertDialog>
-      <ExchangeSheet row={exchange} onClose={() => setExchange(null)} />
+      <ExchangeSheet
+        row={exchange}
+        onClose={() => setExchange(null)}
+        anchor={cardRef}
+      />
       {linkModal && linkSafety.renderModal
         ? linkSafety.renderModal(linkModal)
         : null}

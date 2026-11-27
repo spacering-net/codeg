@@ -100,8 +100,10 @@ import {
 } from "./message-items"
 import { MessageEnterContext, useEnterClass } from "./message-row"
 import { OwnerBubble } from "./owner-bubble"
+import { PaReplyScope } from "./pa-card-scope"
 import { useQuoteAuthor, useQuotedRow } from "./quote-bar"
 import { ReplyBubble, SaidBubble } from "./reply-bubble"
+import { conclusionOf, turnTexts } from "./turn-texts"
 import {
   afterScroll,
   farFromBottom,
@@ -599,20 +601,61 @@ function PreviewBody({ rowId }: { rowId: number }) {
         <p className="text-sm text-muted-foreground">{t("unavailable")}</p>
       ) : (
         <ScrollArea className="max-h-[60vh] text-sm">
-          <JsonRenderScope>
-            <MessageResponse
-              className={cn(MARKDOWN_LIST_ROOM, BUBBLE_MARKDOWN)}
-            >
-              {row.kind === "result"
-                ? [str(row.data, "title"), str(row.data, "excerpt") ?? row.body]
-                    .filter(Boolean)
-                    .join("\n\n")
-                : row.body || t("noText")}
-            </MessageResponse>
-          </JsonRenderScope>
+          {row.kind === "reply" ? (
+            <PreviewTurn row={row} />
+          ) : (
+            <JsonRenderScope>
+              <MessageResponse
+                className={cn(MARKDOWN_LIST_ROOM, BUBBLE_MARKDOWN)}
+              >
+                {row.kind === "result"
+                  ? [
+                      str(row.data, "title"),
+                      str(row.data, "excerpt") ?? row.body,
+                    ]
+                      .filter(Boolean)
+                      .join("\n\n")
+                  : row.body || t("noText")}
+              </MessageResponse>
+            </JsonRenderScope>
+          )}
         </ScrollArea>
       )}
     </>
+  )
+}
+
+/** A reply far back, whole: every run its turn said (as the list draws
+ *  them, `turnTexts` — a row from before runs were kept, its body alone:
+ *  its lines are not read here), what it said on the way drawn only. */
+function PreviewTurn({ row }: { row: TimelineRow }) {
+  const t = useTranslations("PersonalAgent.quote")
+  const texts = turnTexts(row, undefined, [])
+  const conclusion = conclusionOf(row)
+  if (texts.length === 0) {
+    return <p className="text-muted-foreground">{t("noText")}</p>
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      {texts.map((run) => {
+        const text = (
+          <MessageResponse className={cn(MARKDOWN_LIST_ROOM, BUBBLE_MARKDOWN)}>
+            {run.text}
+          </MessageResponse>
+        )
+        return (
+          <div key={run.n} data-pa-run={run.n}>
+            {run.n === conclusion ? (
+              <JsonRenderScope>{text}</JsonRenderScope>
+            ) : (
+              <PaReplyScope row={row} running={false} readOnly>
+                {text}
+              </PaReplyScope>
+            )}
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -700,12 +743,37 @@ export function MessageList({
   const t = useTranslations("PersonalAgent.timeline")
   const tp = useTranslations("PersonalAgent.pills")
   const scope = usePageScope()
-  const { botId, rows, hasOlder, loadOlder, loadSince, snapshot } =
-    usePersonalAgent()
+  const {
+    botId,
+    rows,
+    hasOlder,
+    loadOlder,
+    loadSince,
+    snapshot,
+    dispatchById,
+  } = usePersonalAgent()
   const reduced = useReducedMotion()
   // A glide down when the chat view moves (as a conversation's does).
   const motion = useChatMotion()
-  const items = useMemo(() => buildMessageItems(rows), [rows])
+  // The work queued or running now: its newest pill stays (P6.3 5) — the
+  // items built again only when that set changes, not on every read.
+  const liveKey = useMemo(
+    () =>
+      [...dispatchById.values()]
+        .filter((d) => d.state === "queued" || d.state === "running")
+        .map((d) => d.id)
+        .sort((a, b) => a - b)
+        .join(","),
+    [dispatchById]
+  )
+  const liveWork = useMemo(
+    () => new Set(liveKey ? liveKey.split(",").map(Number) : []),
+    [liveKey]
+  )
+  const items = useMemo(
+    () => buildMessageItems(rows, liveWork),
+    [rows, liveWork]
+  )
   const rowsById = scope.rowsById
 
   // The OverlayScrollbars viewport: it initializes a few frames after
@@ -1038,6 +1106,9 @@ export function MessageList({
   const enters = (item: MessageItem) => {
     const id = rowIdOf(item)
     return (
+      // A part of a turn was there already, in its reply's bubble, when
+      // the line that cut it off came: it does not rise.
+      item.kind !== "said" &&
       enterFrom != null &&
       enterFrom.bot === botId &&
       !enterFrom.keys.has(item.key) &&

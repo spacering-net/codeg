@@ -100,6 +100,10 @@ export function doingText(
       return step.dispatch_id != null
         ? t("activity.followup", { id: step.dispatch_id })
         : t("activity.followupSome")
+    case "stop":
+      return step.dispatch_id != null
+        ? t("activity.stop", { id: step.dispatch_id })
+        : t("activity.stopSome")
     case "message":
       return target
         ? t("activity.message", { target })
@@ -164,6 +168,10 @@ export function doneText(t: Translate, step: StepLine): string {
       return step.dispatch_id != null
         ? t("did.followup", { id: step.dispatch_id })
         : t("did.followupSome")
+    case "stop":
+      return step.dispatch_id != null
+        ? t("did.stop", { id: step.dispatch_id })
+        : t("did.stopSome")
     case "message":
       return target ? t("did.message", { target }) : t("did.messageSome")
     case "think":

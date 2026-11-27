@@ -2289,6 +2289,12 @@
       "statusRunningBadge": "قيد التشغيل",
       "runningCountBadge": "{count} جلسة قيد التشغيل",
       "statusCancelledBadge": "ملغى",
+      "awaitingCountBadge": "{count, plural, other {# جلسات تنتظرك}}",
+      "statusAwaiting": {
+        "permission": "بانتظار إذنك",
+        "question": "بانتظار إجابتك",
+        "plan": "بانتظار موافقتك"
+      },
       "originalWorkingDir": "دليل العمل الأصلي",
       "cliBadge": "بدأت من سطر الأوامر",
       "conversationCountUnit": "{count} محادثة",
@@ -10284,7 +10290,8 @@
       "ariaLabel": "رسالة إلى وكيلك الشخصي",
       "send": "إرسال",
       "queue": "إضافة إلى قائمة الانتظار",
-      "waitForUpload": "انتظر حتى يكتمل رفع الصورة."
+      "waitForUpload": "انتظر حتى يكتمل رفع الصورة.",
+      "draftWhileSending": "جارٍ الإرسال — ضعه في مربع الكتابة بعد انتهائه."
     },
     "aux": {
       "rename": "انقر لإعادة التسمية",
@@ -10358,7 +10365,7 @@
       "waitingAnswer": "بانتظار رد {name}: {text}",
       "wroteToYou": "كتب {name}: {text}",
       "kind": {
-        "dispatch": "إسناد",
+        "dispatch": "عمل مُسند",
         "reminder": "تذكير",
         "followup": "متابعة",
         "question": "سؤال",
@@ -11289,6 +11296,7 @@
         "dispatch": "يُسند عملًا",
         "dispatch_followup": "يتابع عملًا",
         "dispatch_wait": "ينتظر نتيجة العمل",
+        "dispatch_stop": "يوقف عملًا",
         "items": "يحدّث الأمور المفتوحة",
         "timeline_read": "يراجع المحادثة",
         "project_list": "يراجع المشاريع"
@@ -11325,6 +11333,7 @@
       "errorMidway": "واجه الرد خطأً: {error}",
       "interrupted": "لم يكتمل هذا الرد: {reason}",
       "truncated": "بلغ الرد حدّه الأقصى للطول فقُطع",
+      "nothingNew": "لا جديد هذه المرة. عندما يعمل في موعده ولا يجد شيئًا، لن يزعجك.",
       "preempted": "توقّف لإفساح المجال لرسالتك",
       "resend": "{count, plural, zero {لا شيء لإعادة إرساله} one {إعادة إرسال الرسالة} two {إعادة إرسال الرسالتين} few {إعادة إرسال # رسائل} many {إعادة إرسال # رسالة} other {إعادة إرسال # رسالة}}",
       "why": {
@@ -11354,6 +11363,7 @@
       "source": "المصدر",
       "showText": "عرض النص الأصلي",
       "hideText": "إخفاء النص الأصلي",
+      "fold": "طيّ",
       "makeRoutine": "اجعله روتينًا…",
       "note": {
         "boot": "أُعيد تشغيل codeg",
@@ -11513,6 +11523,8 @@
     "exchange": {
       "sentTo": "أُرسلت رسالة إلى <peer></peer>",
       "from": "رسالة من <peer></peer>",
+      "sentToName": "أُرسلت رسالة إلى {name}",
+      "fromName": "رسالة من {name}",
       "exchanged": "{count, plural, zero {لا رسائل} one {رسالة واحدة} two {رسالتان} few {# رسائل} many {# رسالة} other {# رسالة}} مع {names}",
       "state": {
         "stopped": "سُحبت",
@@ -11753,6 +11765,8 @@
       "dispatchSome": "يُسند عملًا",
       "followup": "يتابع ⁦#{id}⁩",
       "followupSome": "يتابع",
+      "stop": "يوقف #{id}",
+      "stopSome": "يوقف عملًا",
       "message": "يسأل {target}",
       "messageSome": "يسأل مساعدًا آخر",
       "awaitingReply": "ينتظر ردّ {name}",
@@ -11787,6 +11801,8 @@
       "dispatchSome": "أسند عملًا",
       "followup": "تابع ⁦#{id}⁩",
       "followupSome": "تابع",
+      "stop": "أوقف #{id}",
+      "stopSome": "أوقف عملًا",
       "message": "أرسل رسالة إلى {target}",
       "messageSome": "أرسل رسالة",
       "think": "فكّر في الأمر",
@@ -11905,6 +11921,9 @@
       "prOpened": "تم فتح PR",
       "prNotTracked": "لا يراقبه codeg",
       "pastStopping": "فات أوان الإيقاف: انتهت أو قيد الدمج",
+      "alreadyStopped": "متوقف بالفعل — {who}",
+      "changed": "تغيّر للتو — حدّثناه لك",
+      "boardRefused": "لا يمكن للوحة إلغاء مهمته الآن (قيد الدمج أو انتهت)",
       "prChecks": "نجح {passed} من {total} فحوصات",
       "prChecksFailed": "فشل {n}",
       "prChecksRunning": "{n} قيد التشغيل",
@@ -12007,7 +12026,14 @@
       "overdue": "متأخر · كان يستحق {when}",
       "reminded": "تم التذكير · يستحق {when}",
       "late": "متأخر {duration}",
-      "missed": "{count, plural, one {فات مرة واحدة} two {فات مرتين} few {فات # مرات} many {فات # مرة} other {فات # مرة}}"
+      "missed": "{count, plural, one {فات مرة واحدة} two {فات مرتين} few {فات # مرات} many {فات # مرة} other {فات # مرة}}",
+      "inSentence": {
+        "today": "في الساعة {time}",
+        "tomorrow": "غدًا في الساعة {time}",
+        "yesterday": "أمس في الساعة {time}",
+        "day": "{day} في الساعة {time}",
+        "date": "في {date} في الساعة {time}"
+      }
     },
     "reminder": {
       "title": "تذكير",
@@ -12034,7 +12060,7 @@
       "groups": {
         "needs": "بانتظارك",
         "watching": "قيد التنفيذ",
-        "next": "القادم",
+        "next": "الروتينات والتذكيرات",
         "done": "أُنجز اليوم"
       },
       "empty": "لا شيء عليك فعله، ولا شيء قيد التشغيل.",
@@ -13070,7 +13096,7 @@
         "skipNext": "تُتخطّى هذه المرة، ويستمر بعدها كالمعتاد: {rule}",
         "snoozeNotify": "ستُذكَّر مجددًا في ذلك الوقت",
         "snoozeAct": "سيتولاه {name} في ذلك الوقت",
-        "setTimeNotify": "ستُذكَّر في ذلك الوقت",
+        "setTimeNotify": "ستُذكَّر في الوقت الذي تختاره",
         "setTimeAct": "سيتولاه {name} في ذلك الوقت",
         "handOver": "يتولى {name} الأمر",
         "answer": "أجب في المحادثة مع {name}",
@@ -13094,7 +13120,9 @@
         "notWithdrawn": "لم تُسحب الرسالة؛ لم يعد {name} ينتظر ردّ {peer}",
         "stopped": "لا مزيد من التذكيرات: {title}",
         "handed": "سُلِّم إلى {name}",
-        "undone": "تم التراجع"
+        "undone": "تم التراجع",
+        "undoneSkip": "تراجعت عن التخطي",
+        "notRefreshed": "تعذّر التحديث — حاول مرة أخرى بعد قليل."
       },
       "meta": {
         "reminds": "{name} يذكّرك · موعده {when}",
@@ -13105,9 +13133,9 @@
         "asks": "{name} يسألك · ينتظر منذ {wait}",
         "asked": "{name} يسألك",
         "answered": "أجبت · بانتظار أن يقرأها {name}",
-        "interrupted": "لم تكتمل جولة {name} وربما لم يقرأ إجابتك · أجب مرة أخرى إن لزم",
+        "interrupted": "لم يُكمل {name} وربما لم يقرأ إجابتك · أجب مرة أخرى إن لزم",
         "needsYou": "{name} يحتاجك · ينتظر منذ {wait}",
-        "following": "{name} يتابع · {wait}",
+        "following": "{name} يتابع · ينتظر منذ {wait}",
         "external": "{name} ينتظر نتيجة خارجية · {wait}",
         "message": "{name} ينتظر ردّ {peer} · {wait}",
         "setAside": "مؤجَّل · بلا وقت",
@@ -13117,11 +13145,14 @@
       },
       "closed": {
         "done": "أنجزته · {time}",
+        "stopped": "أوقفت العمل · {time}",
+        "skippedLast": "تخطيت المرة الأخيرة · {time}",
         "dropped": "أزلته · {time}",
         "withdrawn": "سحبت الرسالة المرسلة إلى {peer} · {time}",
         "stoppedWaiting": "توقفت عن انتظار ردّ {peer} · {time}",
         "agentDone": "أنجزه {name} · {time}",
         "agentDropped": "توقف {name} عن متابعته · {time}",
+        "agentStopped": "أوقف {name} العمل · {time}",
         "answered": "قرأ {name} إجابتك · {time}",
         "replied": "ردّ {peer} · {time}",
         "gone": "حُذف {peer}؛ لن يصل ردّ · {time}",
@@ -13135,13 +13166,15 @@
       "gone": "هذا لم يعد موجودًا",
       "settled": "هذا انتهى بالفعل",
       "changed": "تغيّر هذا للتو — ألقِ نظرة أخرى",
-      "workRunning": "هذا العمل ما زال جاريًا؛ لإيقافه استخدم «إيقاف» في شريط المهمة",
+      "workRunning": "هذا العمل ما زال جاريًا؛ لإيقافه استخدم «إيقاف» في بطاقته",
       "workNoTime": "لا يمكن تأجيل العمل المُسلَّم إلى وقت",
       "messageNoTime": "هذا ينتظر ردّ {peer} ولا يمكن تأجيله إلى وقت",
       "mentionNoTime": "هذا يظهر عندما تذكره، لا في وقت محدد",
       "notEarlier": "هذا محدد بالفعل لـ {when}؛ التأجيل يؤخره فقط",
       "hasTime": "هذا محدد بالفعل لـ {when}",
       "inOtherHands": "هذا بيد {bot} ولا يمكن تأجيله إلى وقت",
+      "waitsOutside": "هذا ينتظر شيئًا من الخارج ولا يمكن تأجيله إلى وقت",
+      "skipNotRepeating": "التذكير المتكرر وحده يمكنه تخطي مرة",
       "badTime": "لم يُفهم هذا الوقت",
       "undoNone": "لا يمكن التراجع عن هذا",
       "undoExpired": "مرّت أكثر من 10 دقائق؛ لم يعد التراجع ممكنًا",
@@ -13160,6 +13193,13 @@
       "label": "إجابة: {question}",
       "ended": "انتهى هذا السؤال؛ لا حاجة للإجابة",
       "alreadyAnswered": "هذا السؤال ينتظر بالفعل أن يقرأ {name} إجابتك"
+    },
+    "stopped": {
+      "owner": "أوقفته أنت",
+      "inSession": "أوقفته أنت في جلسته",
+      "onBoard": "أوقفته أنت من اللوحة",
+      "agent": "أوقفه {name}: {reason}",
+      "agentPlain": "أوقفه {name}"
     }
   },
   "MessageCheck": {

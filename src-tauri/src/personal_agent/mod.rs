@@ -32,6 +32,7 @@ pub mod ladder;
 pub mod overview;
 pub mod retry;
 pub mod spec_text;
+pub mod stop;
 pub mod bots;
 pub mod card_acts;
 pub mod cards;

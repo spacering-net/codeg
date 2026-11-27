@@ -165,6 +165,8 @@ pub fn task_facts_with(
     TaskFacts {
         task_id: t.id,
         status: t.status,
+        run_seq: t.run_seq,
+        updated_at: t.updated_at,
         folder_id: t.folder_id,
         branch: t.work_branch.clone(),
         base_branch: t.base_branch.clone(),

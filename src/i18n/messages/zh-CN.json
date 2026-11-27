@@ -2289,6 +2289,12 @@
       "statusRunningBadge": "运行中",
       "runningCountBadge": "{count} 个会话进行中",
       "statusCancelledBadge": "已取消",
+      "awaitingCountBadge": "{count, plural, other {# 个会话在等你}}",
+      "statusAwaiting": {
+        "permission": "待你授权",
+        "question": "待你回答",
+        "plan": "待你确认"
+      },
       "originalWorkingDir": "最初运行目录",
       "cliBadge": "从命令行启动",
       "conversationCountUnit": "{count} 条",
@@ -10284,7 +10290,8 @@
       "ariaLabel": "发给个人助手的消息",
       "send": "发送",
       "queue": "加入队列",
-      "waitForUpload": "请等图片上传完成。"
+      "waitForUpload": "请等图片上传完成。",
+      "draftWhileSending": "正在发送，发完再放进输入框。"
     },
     "aux": {
       "rename": "点击修改名称",
@@ -10358,7 +10365,7 @@
       "waitingAnswer": "等 {name} 回复：{text}",
       "wroteToYou": "{name} 发来消息：{text}",
       "kind": {
-        "dispatch": "派活",
+        "dispatch": "派出的工作",
         "reminder": "提醒",
         "followup": "跟进",
         "question": "提问",
@@ -11289,6 +11296,7 @@
         "dispatch": "派出一件活",
         "dispatch_followup": "继续一件活",
         "dispatch_wait": "等派出的活回来",
+        "dispatch_stop": "停掉派出的工作",
         "items": "整理在途事项",
         "timeline_read": "翻看对话记录",
         "project_list": "查看项目"
@@ -11325,6 +11333,7 @@
       "errorMidway": "回复中途出错：{error}",
       "interrupted": "这次回复没有完成：{reason}",
       "truncated": "回复达到长度上限，被截断了",
+      "nothingNew": "这次没有新情况。按时运行时没有新情况，就不打扰你。",
       "preempted": "让位给你的消息",
       "resend": "{count, plural, one {重新发送这条消息} other {重新发送这 # 条消息}}",
       "why": {
@@ -11354,6 +11363,7 @@
       "source": "来源",
       "showText": "展开原文",
       "hideText": "收起原文",
+      "fold": "收起",
       "makeRoutine": "设成例程…",
       "note": {
         "boot": "codeg 重启了",
@@ -11513,6 +11523,8 @@
     "exchange": {
       "sentTo": "已发消息给 <peer></peer>",
       "from": "消息来自 <peer></peer>",
+      "sentToName": "已发消息给 {name}",
+      "fromName": "消息来自 {name}",
       "exchanged": "与 {names} 往来 {count} 条消息",
       "state": {
         "stopped": "已收回",
@@ -11753,6 +11765,8 @@
       "dispatchSome": "正在派活",
       "followup": "正在跟进 #{id}",
       "followupSome": "正在跟进",
+      "stop": "停掉 #{id}",
+      "stopSome": "停掉工作",
       "message": "正在问 {target}",
       "messageSome": "正在问别的助手",
       "awaitingReply": "等 {name} 回复",
@@ -11787,6 +11801,8 @@
       "dispatchSome": "派出了活",
       "followup": "跟进了 #{id}",
       "followupSome": "跟进了",
+      "stop": "停掉了 #{id}",
+      "stopSome": "停掉了工作",
       "message": "已发消息给 {target}",
       "messageSome": "发了消息",
       "think": "想了想",
@@ -11905,6 +11921,9 @@
       "prOpened": "已提 PR",
       "prNotTracked": "codeg 没在看护它",
       "pastStopping": "已经做完或正在合并，停不了了",
+      "alreadyStopped": "已经停了——{who}",
+      "changed": "这一项刚有变化，已为你刷新",
+      "boardRefused": "看板现在不能取消它的任务（正在合并或已完成）",
       "prChecks": "检查 {passed}/{total} 通过",
       "prChecksFailed": "{n} 个没过",
       "prChecksRunning": "{n} 个在跑",
@@ -12007,7 +12026,14 @@
       "overdue": "已过期 · {when} 到期",
       "reminded": "已提醒 · {when} 到期",
       "late": "晚了 {duration}",
-      "missed": "错过了 {count} 次"
+      "missed": "错过了 {count} 次",
+      "inSentence": {
+        "today": "{time}",
+        "tomorrow": "明天 {time}",
+        "yesterday": "昨天 {time}",
+        "day": "{day} {time}",
+        "date": "{date} {time}"
+      }
     },
     "reminder": {
       "title": "提醒",
@@ -12034,7 +12060,7 @@
       "groups": {
         "needs": "等你",
         "watching": "进行中",
-        "next": "接下来",
+        "next": "例程与提醒",
         "done": "今天完成"
       },
       "empty": "没有要你做的，也没有在跑的。",
@@ -13070,7 +13096,7 @@
         "skipNext": "这次跳过，之后照常：{rule}",
         "snoozeNotify": "到点再提醒你",
         "snoozeAct": "到点{name}再去做",
-        "setTimeNotify": "到点提醒你",
+        "setTimeNotify": "到你选的时间提醒你",
         "setTimeAct": "到点{name}去做",
         "handOver": "让{name}去处理这件事",
         "answer": "到{name}的对话里回答",
@@ -13094,7 +13120,9 @@
         "notWithdrawn": "消息没有撤回，{name}不再等{peer}回复",
         "stopped": "以后不再提醒：{title}",
         "handed": "已交给{name}",
-        "undone": "已撤销"
+        "undone": "已撤销",
+        "undoneSkip": "你撤回了跳过",
+        "notRefreshed": "刷新失败，稍后再试。"
       },
       "meta": {
         "reminds": "{name}提醒你 · {when} 到点",
@@ -13105,9 +13133,9 @@
         "asks": "{name}想问你 · 已等 {wait}",
         "asked": "{name}想问你",
         "answered": "你已回答 · 等{name}看",
-        "interrupted": "{name}那一轮没有完成，可能没处理你的回答 · 需要的话再答一次",
+        "interrupted": "{name}没有处理完，可能没读到你的回答 · 需要的话再答一次",
         "needsYou": "{name}需要你处理 · 已等 {wait}",
-        "following": "{name}在跟进 · {wait}",
+        "following": "{name}在跟进 · 已等 {wait}",
         "external": "{name}在等外部结果 · 已等 {wait}",
         "message": "{name}在等{peer}回复 · 已等 {wait}",
         "setAside": "已搁置 · 没定时间",
@@ -13117,11 +13145,14 @@
       },
       "closed": {
         "done": "你完成了 · {time}",
+        "stopped": "你停了这项工作 · {time}",
+        "skippedLast": "你跳过了最后一次 · {time}",
         "dropped": "你移除了 · {time}",
         "withdrawn": "你撤回了发给{peer}的消息 · {time}",
         "stoppedWaiting": "你不再等{peer}回复 · {time}",
         "agentDone": "{name}完成了 · {time}",
         "agentDropped": "{name}不再跟进了 · {time}",
+        "agentStopped": "{name} 停了这项工作 · {time}",
         "answered": "{name}看到了你的回答 · {time}",
         "replied": "{peer}回复了 · {time}",
         "gone": "{peer}已被删除，不再等回复 · {time}",
@@ -13135,13 +13166,15 @@
       "gone": "这件事已经不在了",
       "settled": "这件事已经结束了",
       "changed": "这件事刚有了新变化，请再看一眼",
-      "workRunning": "这件活还在做，要停下请用任务条上的「停止」",
+      "workRunning": "这项工作还在进行，要停下请在它的卡片上点「停止」",
       "workNoTime": "派出去的活不能按时间推迟",
       "messageNoTime": "这条在等{peer}回复，不能按时间推迟",
       "mentionNoTime": "这条会在你提到时出现，不按时间提醒",
       "notEarlier": "这件事本来就定在 {when}，推迟只能往后",
       "hasTime": "这件事已经定在 {when} 了",
       "inOtherHands": "这件事在{bot}手里，不能按时间推迟",
+      "waitsOutside": "这件事在等外部的回应，不能推到某个时间",
+      "skipNotRepeating": "只有重复的提醒才能跳过一次",
       "badTime": "没看懂这个时间",
       "undoNone": "这次操作撤销不了",
       "undoExpired": "超过 10 分钟了，撤销不了",
@@ -13160,6 +13193,13 @@
       "label": "回答：{question}",
       "ended": "这个问题已经结束了，不用再回答",
       "alreadyAnswered": "这个问题已经在等{name}看了，不用再回答"
+    },
+    "stopped": {
+      "owner": "你停了它",
+      "inSession": "你在它的会话里停了它",
+      "onBoard": "你在看板上停了它",
+      "agent": "{name} 停了它：{reason}",
+      "agentPlain": "{name} 停了它"
     }
   },
   "MessageCheck": {

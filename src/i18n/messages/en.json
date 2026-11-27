@@ -2289,6 +2289,12 @@
       "statusRunningBadge": "Running",
       "runningCountBadge": "{count, plural, one {# session running} other {# sessions running}}",
       "statusCancelledBadge": "Cancelled",
+      "awaitingCountBadge": "{count, plural, one {# session waiting on you} other {# sessions waiting on you}}",
+      "statusAwaiting": {
+        "permission": "Needs your permission",
+        "question": "Needs your answer",
+        "plan": "Needs your approval"
+      },
       "originalWorkingDir": "Original working directory",
       "cliBadge": "Started from the command line",
       "conversationCountUnit": "{count, plural, one {# conversation} other {# conversations}}",
@@ -10284,7 +10290,8 @@
       "ariaLabel": "Message to your personal agent",
       "send": "Send",
       "queue": "Queue",
-      "waitForUpload": "Wait for the image to finish uploading."
+      "waitForUpload": "Wait for the image to finish uploading.",
+      "draftWhileSending": "Sending — put it in the box once that's done."
     },
     "aux": {
       "rename": "Click to rename",
@@ -10358,7 +10365,7 @@
       "waitingAnswer": "Waiting for {name}'s answer: {text}",
       "wroteToYou": "{name} wrote: {text}",
       "kind": {
-        "dispatch": "dispatch",
+        "dispatch": "work handed out",
         "reminder": "reminder",
         "followup": "follow-up",
         "question": "question",
@@ -11289,6 +11296,7 @@
         "dispatch": "Handing out work",
         "dispatch_followup": "Following up on work",
         "dispatch_wait": "Waiting for the work to come back",
+        "dispatch_stop": "Stopping a piece of work",
         "items": "Updating open matters",
         "timeline_read": "Reading back the conversation",
         "project_list": "Checking the projects"
@@ -11325,6 +11333,7 @@
       "errorMidway": "The reply ran into an error: {error}",
       "interrupted": "This reply did not finish: {reason}",
       "truncated": "The reply hit its length limit and was cut off",
+      "nothingNew": "Nothing new this time. When it runs on schedule and finds nothing, it stays quiet.",
       "preempted": "Stopped to make way for your message",
       "resend": "{count, plural, one {Send the message again} other {Send the # messages again}}",
       "why": {
@@ -11354,6 +11363,7 @@
       "source": "Source",
       "showText": "Show original",
       "hideText": "Hide original",
+      "fold": "Collapse",
       "makeRoutine": "Make it a routine…",
       "note": {
         "boot": "codeg restarted",
@@ -11513,6 +11523,8 @@
     "exchange": {
       "sentTo": "Sent a message to <peer></peer>",
       "from": "Message from <peer></peer>",
+      "sentToName": "Sent a message to {name}",
+      "fromName": "Message from {name}",
       "exchanged": "Exchanged {count, plural, one {# message} other {# messages}} with {names}",
       "state": {
         "stopped": "taken back",
@@ -11753,6 +11765,8 @@
       "dispatchSome": "Handing it out",
       "followup": "Following up #{id}",
       "followupSome": "Following up",
+      "stop": "Stopping #{id}",
+      "stopSome": "Stopping work",
       "message": "Asking {target}",
       "messageSome": "Asking another assistant",
       "awaitingReply": "Waiting for {name} to reply",
@@ -11787,6 +11801,8 @@
       "dispatchSome": "Handed it out",
       "followup": "Followed up #{id}",
       "followupSome": "Followed up",
+      "stop": "Stopped #{id}",
+      "stopSome": "Stopped work",
       "message": "Sent a message to {target}",
       "messageSome": "Sent a message",
       "think": "Thought it over",
@@ -11905,6 +11921,9 @@
       "prOpened": "PR opened",
       "prNotTracked": "codeg is not watching it",
       "pastStopping": "Too late to stop: it has finished or is merging",
+      "alreadyStopped": "Already stopped — {who}",
+      "changed": "This just changed — refreshed for you",
+      "boardRefused": "The board won't cancel its task now (it is merging or done)",
       "prChecks": "Checks {passed}/{total} passed",
       "prChecksFailed": "{n} failed",
       "prChecksRunning": "{n} running",
@@ -12007,7 +12026,14 @@
       "overdue": "Overdue · due {when}",
       "reminded": "Reminded · due {when}",
       "late": "{duration} late",
-      "missed": "{count, plural, one {Missed # time} other {Missed # times}}"
+      "missed": "{count, plural, one {Missed # time} other {Missed # times}}",
+      "inSentence": {
+        "today": "at {time}",
+        "tomorrow": "tomorrow at {time}",
+        "yesterday": "yesterday at {time}",
+        "day": "on {day} at {time}",
+        "date": "on {date} at {time}"
+      }
     },
     "reminder": {
       "title": "Reminder",
@@ -12034,7 +12060,7 @@
       "groups": {
         "needs": "Waiting for you",
         "watching": "In progress",
-        "next": "Coming up",
+        "next": "Routines & reminders",
         "done": "Done today"
       },
       "empty": "Nothing for you to do, and nothing running.",
@@ -13049,7 +13075,7 @@
     "matter": {
       "act": {
         "done": "Done",
-        "doneThis": "Done for now",
+        "doneThis": "Done this time",
         "doneEarly": "Done early",
         "skipThis": "Skip this time",
         "merged": "Merged",
@@ -13070,7 +13096,7 @@
         "skipNext": "Skips this time; it goes on: {rule}",
         "snoozeNotify": "You are reminded again then",
         "snoozeAct": "{name} does it then",
-        "setTimeNotify": "You are reminded then",
+        "setTimeNotify": "You'll be reminded at the time you pick",
         "setTimeAct": "{name} does it then",
         "handOver": "{name} sees to it",
         "answer": "Answer in {name}'s conversation",
@@ -13094,7 +13120,9 @@
         "notWithdrawn": "The message was not taken back; {name} no longer waits for {peer}'s reply",
         "stopped": "No more reminders: {title}",
         "handed": "Handed to {name}",
-        "undone": "Undone"
+        "undone": "Undone",
+        "undoneSkip": "You took back the skip",
+        "notRefreshed": "Couldn't refresh it — try again in a moment."
       },
       "meta": {
         "reminds": "{name} reminds you · due {when}",
@@ -13105,9 +13133,9 @@
         "asks": "{name} asks you · waiting {wait}",
         "asked": "{name} asks you",
         "answered": "You answered · waiting for {name} to read it",
-        "interrupted": "{name}'s turn did not finish and may not have read your answer · answer again if you need to",
+        "interrupted": "{name} did not finish and may not have read your answer · answer again if you need to",
         "needsYou": "{name} needs you · waiting {wait}",
-        "following": "{name} is following up · {wait}",
+        "following": "{name} is following up · waiting {wait}",
         "external": "{name} waits on something outside · {wait}",
         "message": "{name} waits for {peer}'s reply · {wait}",
         "setAside": "Set aside · no time set",
@@ -13117,16 +13145,19 @@
       },
       "closed": {
         "done": "You did it · {time}",
+        "stopped": "You stopped its work · {time}",
+        "skippedLast": "You skipped the last time · {time}",
         "dropped": "You removed it · {time}",
         "withdrawn": "You took back the message to {peer} · {time}",
         "stoppedWaiting": "You stopped waiting for {peer}'s reply · {time}",
         "agentDone": "{name} finished it · {time}",
         "agentDropped": "{name} stopped following it · {time}",
+        "agentStopped": "{name} stopped its work · {time}",
         "answered": "{name} read your answer · {time}",
         "replied": "{peer} replied · {time}",
         "gone": "{peer} was deleted; no reply is coming · {time}",
         "planCanceled": "The plan was canceled; {name} no longer waits for {peer}'s reply · {time}",
-        "usedUp": "The reminder on a mention is used up · {time}",
+        "usedUp": "No reminders left for this mention · {time}",
         "expired": "The reminder on a mention ran out · {time}",
         "ended": "Ended · {time}"
       }
@@ -13135,13 +13166,15 @@
       "gone": "This is no longer there",
       "settled": "This has already ended",
       "changed": "This just changed — take another look",
-      "workRunning": "This work is still running; stop it with Stop on its task strip",
+      "workRunning": "This work is still running; stop it from its card",
       "workNoTime": "Handed-out work cannot be put off to a time",
       "messageNoTime": "This waits for {peer}'s reply and cannot be put off to a time",
       "mentionNoTime": "This comes up when you mention it, not at a time",
       "notEarlier": "This is set for {when} already; putting it off only moves it later",
       "hasTime": "This is set for {when} already",
       "inOtherHands": "This is in {bot}'s hands and cannot be put off to a time",
+      "waitsOutside": "This waits on something outside codeg and cannot be put off to a time",
+      "skipNotRepeating": "Only a repeating reminder can skip a time",
       "badTime": "That time was not understood",
       "undoNone": "This cannot be undone",
       "undoExpired": "More than 10 minutes went by; it can no longer be undone",
@@ -13160,6 +13193,13 @@
       "label": "Answer: {question}",
       "ended": "This question has ended; no need to answer",
       "alreadyAnswered": "This question is already waiting for {name} to read your answer"
+    },
+    "stopped": {
+      "owner": "You stopped it",
+      "inSession": "You stopped it in its session",
+      "onBoard": "You stopped it on the board",
+      "agent": "{name} stopped it: {reason}",
+      "agentPlain": "{name} stopped it"
     }
   },
   "MessageCheck": {

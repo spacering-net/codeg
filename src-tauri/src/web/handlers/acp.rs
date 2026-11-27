@@ -559,6 +559,18 @@ pub async fn acp_cancel(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpConnectionIdParams>,
 ) -> Result<Json<()>, AppCommandError> {
+    // A personal agent's handed-out work: the owner stopping it (D2),
+    // through to its end even if this request is dropped.
+    let conn = params.connection_id.clone();
+    let stopped = crate::commands::personal_agent::on_own_task(async move {
+        crate::personal_agent::stop::note_owner_cancel(&conn)
+            .await
+            .map_err(AppCommandError::task_execution_failed)
+    })
+    .await?;
+    if stopped {
+        return Ok(Json(()));
+    }
     let manager = &state.connection_manager;
     manager
         .cancel(&state.db.conn, &params.connection_id)

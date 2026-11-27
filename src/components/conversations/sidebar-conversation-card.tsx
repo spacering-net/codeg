@@ -23,6 +23,7 @@ import {
   ChevronRight,
   SquareTerminal,
   ListChecks,
+  Hand,
   MessageCircleQuestionMark,
   ShieldCheck,
   Unlink,
@@ -89,6 +90,7 @@ import { AgentIcon } from "@/components/agent-icon"
 import { useIdentityAssistant } from "@/components/message/delegation-identity"
 import { BotAvatar } from "@/components/personal-agent/bot-avatar"
 import { useBranchChip, useResolvedTags } from "@/hooks/use-conversation-tags"
+import type { BlockingPromptKind } from "@/lib/blocking-prompts"
 import { useDetachAskConversation } from "./use-detach-ask-conversation"
 
 /**
@@ -255,6 +257,14 @@ interface SidebarConversationCardProps {
   expanded?: boolean
   /** Toggle this conversation's sub-session subtree (lazily loads on expand). */
   onToggleExpand?: (id: number) => void
+  /**
+   * The agent is parked on a decision and will not move until the user acts:
+   * which one, or `null`. Derived from the live connection rather than from
+   * `conversation.status` — see `conversation-attention` — and passed DOWN by
+   * the list, which holds the one subscription. A card subscribing on its own
+   * would put a store listener on every visible row.
+   */
+  awaiting?: BlockingPromptKind | null
 }
 
 export const SidebarConversationCard = memo(function SidebarConversationCard({
@@ -277,6 +287,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   hasChildren = false,
   expanded = false,
   onToggleExpand,
+  awaiting = null,
 }: SidebarConversationCardProps) {
   const t = useTranslations("Folder.conversationCard")
   const ime = useImeGuard()
@@ -397,8 +408,12 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   ])
 
   const status = conversation.status as ConversationStatus
-  const isRunning = status === "in_progress"
-  const isCancelled = status === "cancelled"
+  // A blocked session is ALSO `in_progress`, so the answer wins the right slot:
+  // "running" is true but useless there, while "waiting for you" is the one
+  // thing the user has to act on. Everything else keeps its old precedence.
+  const isAwaiting = awaiting != null
+  const isRunning = status === "in_progress" && !isAwaiting
+  const isCancelled = status === "cancelled" && !isAwaiting
   const isPinned = conversation.pinned_at != null
   const isCompleted = status === "completed"
 
@@ -510,8 +525,14 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       )}
                       <ConversationStatusDot
                         status={status}
+                        attention={awaiting}
                         size="sm"
                         className="absolute -right-0.5 -bottom-0.5 ring-2 ring-sidebar"
+                        title={
+                          awaiting
+                            ? tSidebar(`statusAwaiting.${awaiting}`)
+                            : undefined
+                        }
                       />
                     </div>
 
@@ -661,7 +682,25 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                         !isSubsession && "group-hover:hidden"
                       )}
                     >
-                      {isRunning ? (
+                      {awaiting != null ? (
+                        // 最值得打断用户的一个状态，所以占用运行中转圈和时间
+                        // 争的那一格。只画一个静态紫色的 Hand 图标：等待原因
+                        // 留在 title 和 sr-only 里，行上不再有可见文案。容器与
+                        // 下面取消状态的 XCircle 完全一致，两个图标于是落在同一
+                        // 个 x 上；悬停也一视同仁地让位给快捷操作。
+                        <span
+                          className="relative inline-flex shrink-0 items-center justify-center"
+                          title={tSidebar(`statusAwaiting.${awaiting}`)}
+                        >
+                          <Hand
+                            className="h-3.5 w-3.5 text-violet-700 dark:text-violet-300"
+                            aria-hidden
+                          />
+                          <span className="sr-only">
+                            {tSidebar(`statusAwaiting.${awaiting}`)}
+                          </span>
+                        </span>
+                      ) : isRunning ? (
                         <span
                           className="relative inline-flex shrink-0 items-center justify-center"
                           title={tSidebar("statusRunningBadge")}

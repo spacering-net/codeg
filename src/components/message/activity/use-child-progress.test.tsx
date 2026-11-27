@@ -7,6 +7,7 @@ import {
   type ConnectionState,
   type ConnectionStoreApi,
 } from "@/contexts/acp-connections-context"
+import { EMPTY_ATTENTION_INDEX } from "@/lib/conversation-attention"
 import { useChildProgress } from "./use-child-progress"
 
 function call(id: string, status: string, title: string) {
@@ -30,6 +31,8 @@ function childStore() {
       return () => listeners.delete(listener)
     },
     subscribeActiveKey: () => () => {},
+    getAttention: () => EMPTY_ATTENTION_INDEX,
+    subscribeAttention: () => () => {},
   }
   const set = (next: unknown[]) => {
     content = next

@@ -13,8 +13,6 @@
 //! `pa.reply` on the same button — the owner's message is sent once.
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-
 use serde_json::{json, Map, Value};
 
 use super::engine::PersonalAgentEngine;
@@ -158,19 +156,15 @@ impl PersonalAgentEngine {
 
     /// The owner's message from a `pa.reply` button on card `row_id`:
     /// recorded with the button it came from, and the button kept on the
-    /// card — once.
+    /// card — once. The command runs it on a task of its own, so a page
+    /// that goes away midway does not cut it short.
     pub async fn send_card_reply(
-        self: &Arc<Self>,
+        &self,
         text: String,
         row_id: i32,
         click: CardClick,
     ) -> Result<TimelineRow, String> {
-        // Run to the end even when the page that asked goes away midway
-        // (a closed tab drops its request).
-        let me = self.clone();
-        tokio::spawn(async move { me.send_card_reply_now(text, row_id, click).await })
-            .await
-            .map_err(|e| e.to_string())?
+        self.send_card_reply_now(text, row_id, click).await
     }
 
     async fn send_card_reply_now(

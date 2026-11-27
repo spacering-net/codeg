@@ -2289,6 +2289,12 @@
       "statusRunningBadge": "실행 중",
       "runningCountBadge": "{count}개 세션 실행 중",
       "statusCancelledBadge": "취소됨",
+      "awaitingCountBadge": "{count, plural, other {#개 세션이 답변을 기다리는 중}}",
+      "statusAwaiting": {
+        "permission": "권한 대기",
+        "question": "답변 대기",
+        "plan": "승인 대기"
+      },
       "originalWorkingDir": "원래 작업 디렉터리",
       "cliBadge": "명령줄에서 시작됨",
       "conversationCountUnit": "{count}개",
@@ -10284,7 +10290,8 @@
       "ariaLabel": "개인 에이전트에게 보낼 메시지",
       "send": "보내기",
       "queue": "대기열에 추가",
-      "waitForUpload": "이미지 업로드가 끝날 때까지 기다려 주세요."
+      "waitForUpload": "이미지 업로드가 끝날 때까지 기다려 주세요.",
+      "draftWhileSending": "보내는 중입니다. 다 보낸 뒤에 입력창에 넣어 주세요."
     },
     "aux": {
       "rename": "클릭하여 이름 변경",
@@ -10358,7 +10365,7 @@
       "waitingAnswer": "{name}의 답변 대기: {text}",
       "wroteToYou": "{name}의 메시지: {text}",
       "kind": {
-        "dispatch": "배정",
+        "dispatch": "맡긴 작업",
         "reminder": "리마인더",
         "followup": "후속 확인",
         "question": "질문",
@@ -11289,6 +11296,7 @@
         "dispatch": "일을 맡기는 중",
         "dispatch_followup": "맡긴 일을 이어가는 중",
         "dispatch_wait": "맡긴 일의 결과를 기다리는 중",
+        "dispatch_stop": "맡긴 일을 멈추는 중",
         "items": "진행 중인 일 정리 중",
         "timeline_read": "대화 기록 확인 중",
         "project_list": "프로젝트 확인 중"
@@ -11325,6 +11333,7 @@
       "errorMidway": "답장 도중 오류가 발생했습니다: {error}",
       "interrupted": "이 답장은 완료되지 않았습니다: {reason}",
       "truncated": "답장이 길이 한도에 도달해 잘렸습니다",
+      "nothingNew": "이번에는 새로운 내용이 없어요. 정해진 시간에 실행해서 아무것도 없으면 알리지 않아요.",
       "preempted": "보낸 메시지에 자리를 내주고 멈췄습니다",
       "resend": "{count, plural, other {메시지 #개 다시 보내기}}",
       "why": {
@@ -11354,6 +11363,7 @@
       "source": "출처",
       "showText": "원문 보기",
       "hideText": "원문 접기",
+      "fold": "접기",
       "makeRoutine": "루틴으로 만들기…",
       "note": {
         "boot": "codeg가 다시 시작되었습니다",
@@ -11513,6 +11523,8 @@
     "exchange": {
       "sentTo": "<peer></peer>에게 메시지 보냄",
       "from": "<peer></peer>의 메시지",
+      "sentToName": "{name}에게 메시지 보냄",
+      "fromName": "{name}의 메시지",
       "exchanged": "{names}와(과) 메시지 {count}개 주고받음",
       "state": {
         "stopped": "회수됨",
@@ -11753,6 +11765,8 @@
       "dispatchSome": "일을 맡기는 중",
       "followup": "#{id} 후속 확인 중",
       "followupSome": "후속 확인 중",
+      "stop": "#{id} 멈추는 중",
+      "stopSome": "일을 멈추는 중",
       "message": "{target}에게 묻는 중",
       "messageSome": "다른 어시스턴트에게 묻는 중",
       "awaitingReply": "{name}의 답장 기다리는 중",
@@ -11787,6 +11801,8 @@
       "dispatchSome": "일을 맡김",
       "followup": "#{id} 후속 확인함",
       "followupSome": "후속 확인함",
+      "stop": "#{id} 멈춤",
+      "stopSome": "일을 멈춤",
       "message": "{target}에게 메시지 보냄",
       "messageSome": "메시지 보냄",
       "think": "곰곰이 생각함",
@@ -11905,6 +11921,9 @@
       "prOpened": "PR 생성됨",
       "prNotTracked": "codeg가 지켜보고 있지 않아요",
       "pastStopping": "이미 끝났거나 병합 중이라 중지할 수 없습니다",
+      "alreadyStopped": "이미 멈췄어요 — {who}",
+      "changed": "방금 바뀌어서 새로 고쳤어요",
+      "boardRefused": "보드가 지금 그 작업을 취소할 수 없어요(병합 중이거나 완료됨)",
       "prChecks": "검사 {passed}/{total} 통과",
       "prChecksFailed": "{n}개 실패",
       "prChecksRunning": "{n}개 진행 중",
@@ -12007,7 +12026,14 @@
       "overdue": "기한 지남 · {when} 마감",
       "reminded": "알림 보냄 · {when} 마감",
       "late": "{duration} 늦음",
-      "missed": "{count}번 놓침"
+      "missed": "{count}번 놓침",
+      "inSentence": {
+        "today": "{time}",
+        "tomorrow": "내일 {time}",
+        "yesterday": "어제 {time}",
+        "day": "{day} {time}",
+        "date": "{date} {time}"
+      }
     },
     "reminder": {
       "title": "리마인더",
@@ -12034,7 +12060,7 @@
       "groups": {
         "needs": "당신을 기다림",
         "watching": "진행 중",
-        "next": "다음 예정",
+        "next": "루틴과 리마인더",
         "done": "오늘 완료"
       },
       "empty": "할 일도, 실행 중인 것도 없습니다.",
@@ -13070,7 +13096,7 @@
         "skipNext": "이번은 건너뛰고, 이후는 그대로: {rule}",
         "snoozeNotify": "그때 다시 알려 드려요",
         "snoozeAct": "그때 {name}이(가) 처리해요",
-        "setTimeNotify": "그때 알려 드려요",
+        "setTimeNotify": "고른 시간에 알려 드려요",
         "setTimeAct": "그때 {name}이(가) 처리해요",
         "handOver": "{name}이(가) 처리하도록 맡겨요",
         "answer": "{name}와(과)의 대화에서 답해요",
@@ -13094,7 +13120,9 @@
         "notWithdrawn": "메시지는 회수하지 못했어요. {name}은(는) {peer}의 답을 더 기다리지 않아요",
         "stopped": "앞으로 알리지 않아요: {title}",
         "handed": "{name}에게 맡겼어요",
-        "undone": "되돌렸어요"
+        "undone": "되돌렸어요",
+        "undoneSkip": "건너뛰기를 취소했어요",
+        "notRefreshed": "새로 고치지 못했습니다. 잠시 후 다시 시도해 주세요."
       },
       "meta": {
         "reminds": "{name}의 알림 · {when} 예정",
@@ -13105,9 +13133,9 @@
         "asks": "{name}의 질문 · {wait}째 기다리는 중",
         "asked": "{name}의 질문",
         "answered": "답함 · {name}이(가) 읽기를 기다리는 중",
-        "interrupted": "{name}의 턴이 끝나지 않아 답을 못 읽었을 수 있어요 · 필요하면 다시 답해 주세요",
+        "interrupted": "{name}이(가) 처리를 끝내지 못해 답을 못 읽었을 수 있어요 · 필요하면 다시 답해 주세요",
         "needsYou": "{name}이(가) 당신을 기다려요 · {wait}",
-        "following": "{name}이(가) 챙기는 중 · {wait}",
+        "following": "{name}이(가) 챙기는 중 · {wait} 기다림",
         "external": "{name}이(가) 외부 결과를 기다리는 중 · {wait}",
         "message": "{name}이(가) {peer}의 답을 기다리는 중 · {wait}",
         "setAside": "보류 · 시간 없음",
@@ -13117,11 +13145,14 @@
       },
       "closed": {
         "done": "내가 완료 · {time}",
+        "stopped": "작업을 멈췄어요 · {time}",
+        "skippedLast": "마지막 회차를 건너뛰었어요 · {time}",
         "dropped": "내가 뺌 · {time}",
         "withdrawn": "{peer}에게 보낸 메시지를 회수함 · {time}",
         "stoppedWaiting": "{peer}의 답을 그만 기다림 · {time}",
         "agentDone": "{name}이(가) 완료 · {time}",
         "agentDropped": "{name}이(가) 더 챙기지 않음 · {time}",
+        "agentStopped": "{name}이(가) 작업을 멈췄어요 · {time}",
         "answered": "{name}이(가) 내 답을 읽음 · {time}",
         "replied": "{peer}이(가) 답함 · {time}",
         "gone": "{peer}이(가) 삭제되어 답이 오지 않음 · {time}",
@@ -13135,13 +13166,15 @@
       "gone": "이 항목은 더 이상 없어요",
       "settled": "이 항목은 이미 끝났어요",
       "changed": "방금 바뀌었어요. 다시 확인해 주세요",
-      "workRunning": "이 작업은 아직 진행 중이에요. 멈추려면 작업 막대의 「중지」를 사용하세요",
+      "workRunning": "이 작업은 아직 진행 중이에요. 멈추려면 카드의 「중지」를 사용하세요",
       "workNoTime": "맡긴 작업은 시간으로 미룰 수 없어요",
       "messageNoTime": "이 항목은 {peer}의 답을 기다리고 있어서 시간으로 미룰 수 없어요",
       "mentionNoTime": "이 항목은 언급할 때 나타나고, 시간으로 알리지 않아요",
       "notEarlier": "이 항목은 원래 {when}로 정해져 있어요. 미루기는 뒤로만 할 수 있어요",
       "hasTime": "이 항목은 이미 {when}로 정해져 있어요",
       "inOtherHands": "이 항목은 {bot}이(가) 맡고 있어서 시간으로 미룰 수 없어요",
+      "waitsOutside": "이 일은 외부 응답을 기다리고 있어 시간을 정해 미룰 수 없어요",
+      "skipNotRepeating": "반복 알림만 한 번 건너뛸 수 있어요",
       "badTime": "그 시간을 이해하지 못했어요",
       "undoNone": "이 작업은 되돌릴 수 없어요",
       "undoExpired": "10분이 지나 되돌릴 수 없어요",
@@ -13160,6 +13193,13 @@
       "label": "답: {question}",
       "ended": "이 질문은 이미 끝났어요. 답하지 않아도 돼요",
       "alreadyAnswered": "이 질문은 이미 {name}이(가) 읽기를 기다리고 있어요. 다시 답하지 않아도 돼요"
+    },
+    "stopped": {
+      "owner": "직접 멈췄어요",
+      "inSession": "그 대화에서 직접 멈췄어요",
+      "onBoard": "보드에서 직접 멈췄어요",
+      "agent": "{name}이(가) 멈췄어요: {reason}",
+      "agentPlain": "{name}이(가) 멈췄어요"
     }
   },
   "MessageCheck": {

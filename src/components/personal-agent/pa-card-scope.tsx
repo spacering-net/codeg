@@ -21,6 +21,10 @@ export interface PaCardScope {
   running: boolean
   /** What the owner did with its buttons, by element id. */
   cardActs: Readonly<Record<string, CardAct>>
+  /** Drawn only (P6): a card in what the turn said on the way, which its
+   *  conclusion may have put right — no button or link of it does
+   *  anything. */
+  readOnly?: boolean
 }
 
 const PaCardScopeContext = createContext<PaCardScope | null>(null)
@@ -59,10 +63,13 @@ export function cardActsOf(
 export function PaReplyScope({
   row,
   running,
+  readOnly = false,
   children,
 }: {
   row: TimelineRow | null
   running: boolean
+  /** Its cards drawn only (`PaCardScope.readOnly`). */
+  readOnly?: boolean
   children: ReactNode
 }) {
   const rowId = row?.id ?? null
@@ -71,8 +78,13 @@ export function PaReplyScope({
     () =>
       rowId == null
         ? null
-        : { rowId, running, cardActs: cardActsOf({ data } as TimelineRow) },
-    [rowId, running, data]
+        : {
+            rowId,
+            running,
+            cardActs: cardActsOf({ data } as TimelineRow),
+            readOnly,
+          },
+    [rowId, running, data, readOnly]
   )
   if (!scope) return <JsonRenderScope>{children}</JsonRenderScope>
   return (

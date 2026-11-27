@@ -1,13 +1,13 @@
 "use client"
 
 /**
- * A routine in the activity's "coming up" (C4, 6.9): one row — what it is
- * called (opening it to edit), whether it is paused, its menu ([Run now]
- * [Pause/Resume] [Edit] [Delete]) and the way to unfold it; under it when
- * it runs and its next run, or that it is running; a second line, in the
- * caution's colour, only when something is wrong — codeg paused it, its
- * last run failed, was missed, or waits on the owner. Unfolded: its facts,
- * one to a line, as the panel had them.
+ * A routine in the activity's "routines and reminders" (C4, 6.9): one row,
+ * nothing folded — what it is called (opening it to edit), whether it is
+ * paused, its menu ([Run now] [Pause/Resume] [Edit] [Delete]); under it
+ * when it runs and its next run, or that it is running; then how its last
+ * run went — when, how, how many runs in all — in the caution's colour
+ * when that was wrong (it failed, was missed, or waits on the owner); and
+ * why codeg paused it, when it did.
  */
 
 import { useState } from "react"
@@ -56,24 +56,22 @@ import {
   RoutineWhen,
   useWhen,
 } from "./routine-bits"
-import { SheetField, SheetFields } from "./shared"
 import { StatusPill } from "./aux-parts/kit/status-pill"
 
-/** A last run that says something is wrong, on the row's second line. */
+/** A last run that says something is wrong: its line in the caution's
+ *  colour. */
 const WRONG_OUTCOMES = new Set(["failed", "missed", "asked", "declined"])
+
+/** Where the last run's words go in "Last run: {outcome}". */
+const OUTCOME_SLOT = "\u0001"
 
 export function RoutineRow({
   r,
   readOnly,
-  open,
-  onOpenChange,
   flash = false,
 }: {
   r: Routine
   readOnly: boolean
-  /** Its facts unfolded under it. */
-  open: boolean
-  onOpenChange: (open: boolean) => void
   /** Just brought into view: marked for a moment. */
   flash?: boolean
 }) {
@@ -96,25 +94,38 @@ export function RoutineRow({
       setBusy(null)
     }
   }
-  const last = r.last[0]
-  const precheck = precheckWords(t, r.precheck)
+  // Running: not one waiting on the owner to confirm, which has not ended
+  // either and says so on its last run's line.
+  const running = r.last[0]?.outcome === "running"
+  // Its last run that ended (or waits on the owner): the one running is
+  // the line over it.
+  const last = r.last.find((x) => x.outcome !== "running")
   // Paused by codeg: why, in the caution's colour — and its pill so.
   const codegPaused =
     !r.enabled &&
     (r.paused_reason === "failures" || r.paused_reason === "work_agent")
-  // Running: not one waiting on the owner to confirm, which has not ended
-  // either and says so on its warning line.
-  const running = last?.outcome === "running"
   const edit = () =>
     openEditor({ botId, routineId: r.id, draft: null, noticeId: null })
   const titleClass =
     "line-clamp-2 max-w-full min-w-0 text-sm leading-5 font-semibold break-words text-foreground"
-  // When it runs, then where it stands: running, or its next run.
-  const whenText = r.cron ? (
-    <RoutineWhen cron={r.cron} event={null} zone={r.timezone} />
-  ) : r.event ? (
-    eventWords(t, r.event)
-  ) : null
+  // When it runs — and what it waits for first, if anything — then where
+  // it stands: running, or its next run.
+  const precheck = precheckWords(t, r.precheck)
+  const whenText =
+    r.cron || r.event ? (
+      <>
+        {r.cron ? (
+          <RoutineWhen cron={r.cron} event={null} zone={r.timezone} />
+        ) : (
+          eventWords(t, r.event!)
+        )}
+        {precheck ? (
+          <span data-pa-routine-precheck>{` · ${precheck}`}</span>
+        ) : null}
+      </>
+    ) : precheck ? (
+      <span data-pa-routine-precheck>{precheck}</span>
+    ) : null
   const status = running ? (
     <span className="text-primary" data-pa-routine-status="running">
       {ta("routineRunning")}
@@ -124,16 +135,11 @@ export function RoutineRow({
       {when(r.next_run_at)}
     </span>
   ) : null
-  // Something wrong: one line in the caution's colour.
-  const wrong = codegPaused
-    ? r.paused_reason === "work_agent"
-      ? t("card.pausedWorkAgent")
-      : t("card.pausedFailures")
-    : last && WRONG_OUTCOMES.has(last.outcome)
-      ? ta("routineLast", {
-          outcome: t(`outcome.${last.outcome}` as "outcome.failed"),
-        })
-      : null
+  // Its last run: "Last run: " and what follows it, in its words' order.
+  const [lastHead, lastTail = ""] = ta("routineLast", {
+    outcome: OUTCOME_SLOT,
+  }).split(OUTCOME_SLOT)
+  const lastWrong = last != null && WRONG_OUTCOMES.has(last.outcome)
   return (
     <>
       <div
@@ -232,7 +238,6 @@ export function RoutineRow({
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            <UnfoldButton open={open} onOpenChange={onOpenChange} />
           </span>
         </div>
         {whenText || status ? (
@@ -245,75 +250,55 @@ export function RoutineRow({
             {status}
           </p>
         ) : null}
-        {wrong ? (
+        {last ? (
+          // Each fact kept whole on the line: it wraps between them.
+          <p
+            className={cn(
+              "min-w-0 text-xs leading-5 break-words",
+              lastWrong
+                ? "text-amber-700 dark:text-amber-300"
+                : "text-muted-foreground"
+            )}
+            data-pa-routine-last={last.outcome}
+          >
+            {lastHead}
+            <span className="whitespace-nowrap tabular-nums">
+              {when(last.ended_at ?? last.started_at)}
+            </span>
+            {" · "}
+            {lastWrong ? (
+              // The line's caution colour, all of it.
+              <span
+                className="whitespace-nowrap"
+                data-pa-routine-outcome={last.outcome}
+              >
+                {t(`outcome.${last.outcome}` as "outcome.failed")}
+              </span>
+            ) : (
+              <OutcomeWord outcome={last.outcome} />
+            )}
+            {" · "}
+            <span className="whitespace-nowrap tabular-nums">
+              {t("row.runs", { n: r.runs })}
+            </span>
+            {last.note && last.outcome !== "reported" ? (
+              <span className={cn(!lastWrong && "text-muted-foreground")}>
+                {" · "}
+                {last.note}
+              </span>
+            ) : null}
+            {lastTail}
+          </p>
+        ) : null}
+        {codegPaused ? (
           <p
             className="min-w-0 text-xs leading-5 text-amber-700 dark:text-amber-300"
             data-pa-routine-wrong
           >
-            {wrong}
+            {r.paused_reason === "work_agent"
+              ? t("card.pausedWorkAgent")
+              : t("card.pausedFailures")}
           </p>
-        ) : null}
-        {/* Unfolded: its facts, one to a line — what each is quiet on the
-            left, the values lined up after them. */}
-        {open ? (
-          <SheetFields className="mt-1 gap-y-1" data-pa-routine-facts>
-            {r.cron || r.event ? (
-              <SheetField
-                label={t(r.cron ? "row.when" : "row.trigger")}
-                data-pa-routine-fact="when"
-              >
-                <span>
-                  {r.cron ? (
-                    <RoutineWhen cron={r.cron} event={null} zone={r.timezone} />
-                  ) : (
-                    eventWords(t, r.event!)
-                  )}
-                </span>
-              </SheetField>
-            ) : null}
-            <SheetField label={t("row.how")} data-pa-routine-fact="how">
-              <span>
-                {t(`kind.${r.kind}` as "kind.brain")}
-                {precheck ? ` · ${precheck}` : null}
-              </span>
-            </SheetField>
-            {r.enabled && r.trigger === "schedule" && r.next_run_at ? (
-              <SheetField label={t("row.next")} data-pa-routine-fact="next">
-                <span className="tabular-nums">{when(r.next_run_at)}</span>
-              </SheetField>
-            ) : null}
-            {last ? (
-              <SheetField label={t("row.last")} data-pa-routine-fact="last">
-                {/* Each fact kept whole on its line: it wraps between them. */}
-                <span>
-                  <span className="whitespace-nowrap tabular-nums">
-                    {when(last.ended_at ?? last.started_at)}
-                  </span>
-                  {" · "}
-                  <OutcomeWord outcome={last.outcome} />
-                  {" · "}
-                  <span className="whitespace-nowrap tabular-nums">
-                    {t("row.runs", { n: r.runs })}
-                  </span>
-                  {last.note && last.outcome !== "reported" ? (
-                    <span className="text-muted-foreground">
-                      {" · "}
-                      {last.note}
-                    </span>
-                  ) : null}
-                </span>
-              </SheetField>
-            ) : null}
-            {codegPaused ? (
-              <SheetField label={t("row.why")} data-pa-routine-fact="why">
-                <span className="text-amber-700 dark:text-amber-300">
-                  {r.paused_reason === "work_agent"
-                    ? t("card.pausedWorkAgent")
-                    : t("card.pausedFailures")}
-                </span>
-              </SheetField>
-            ) : null}
-          </SheetFields>
         ) : null}
       </div>
       <AlertDialog open={deleting} onOpenChange={setDeleting}>

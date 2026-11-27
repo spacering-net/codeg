@@ -112,6 +112,14 @@ pub struct ReplySnapshot {
     pub stop_reason: Option<String>,
     pub current: Option<ReplyStep>,
     pub last_text: Option<ReplyText>,
+    /// Every text run of the turn so far, in order — the one being written
+    /// last, growing under its `n`: all the turn said, for the page to show
+    /// (the body stays `last_text`).
+    pub texts: Vec<ReplyText>,
+    /// The envelope `seq` of the last event this copy reflects: a newer copy
+    /// of the same reply has a greater one, while the step count stands
+    /// still as one run grows.
+    pub ver: u64,
     /// Steps the turn went through.
     pub step_count: u32,
     /// The ids of every quote marker the turn wrote, in order.
@@ -207,6 +215,10 @@ struct ReplyTurn {
     run_n: Option<u32>,
     /// The last visible run before the one being written.
     last_closed: Option<(u32, String)>,
+    /// Every visible run closed so far, in order (markers in).
+    closed: Vec<(u32, String)>,
+    /// The `seq` of the last event applied to it.
+    ver: u64,
     tools: HashMap<String, ToolStep>,
     /// Calls of a sub-agent: they belong to the call that launched it.
     children: HashSet<String>,
@@ -232,6 +244,8 @@ impl ReplyTurn {
             run: String::new(),
             run_n: None,
             last_closed: None,
+            closed: Vec::new(),
+            ver: 0,
             tools: HashMap::new(),
             children: HashSet::new(),
             awaiting: Vec::new(),
@@ -276,6 +290,7 @@ impl ReplyTurn {
         self.quotes.extend(quote_ids(&self.run));
         let raw = std::mem::take(&mut self.run);
         if let Some(n) = self.run_n.take() {
+            self.closed.push((n, raw.clone()));
             self.last_closed = Some((n, raw));
         }
     }
@@ -534,6 +549,20 @@ impl ReplyTurn {
         })
     }
 
+    /// Every text run so far, the one being written last.
+    fn texts(&self) -> Vec<ReplyText> {
+        let text = |n: u32, raw: &str| ReplyText {
+            n,
+            text: display_text(raw),
+            quotes: quote_ids(raw),
+        };
+        let mut out: Vec<ReplyText> = self.closed.iter().map(|(n, raw)| text(*n, raw)).collect();
+        if let Some(n) = self.run_n {
+            out.push(text(n, &self.run));
+        }
+        out
+    }
+
     fn snapshot(&self) -> ReplySnapshot {
         let mut quotes = self.quotes.clone();
         quotes.extend(quote_ids(&self.run));
@@ -543,6 +572,8 @@ impl ReplyTurn {
             stop_reason: self.stop_reason.clone(),
             current: self.current(),
             last_text: self.last_text(),
+            texts: self.texts(),
+            ver: self.ver,
             step_count: self.steps,
             quotes,
             reads: self.reads.clone(),
@@ -734,6 +765,7 @@ impl ReplyTurns {
             self.active = None;
             return;
         };
+        turn.ver = turn.ver.max(seq);
         match event {
             AcpEvent::ContentDelta {
                 text,
@@ -1132,7 +1164,7 @@ mod tests {
     }
 
     #[test]
-    fn text_then_tool_then_text_keeps_only_the_last_text() {
+    fn text_then_tool_then_text_keeps_the_last_text_as_the_body_and_every_run() {
         let s = run(&[
             text("Let me "),
             text("look."),
@@ -1146,6 +1178,23 @@ mod tests {
         assert_eq!(last(&s), Some((3, "Found it: line 42.")));
         assert_eq!(s.step_count, 3);
         assert_eq!(s.completed_seq, Some(7));
+        // Every run stays, in order, for the page; the body is the last.
+        let runs: Vec<(u32, &str)> = s.texts.iter().map(|t| (t.n, t.text.as_str())).collect();
+        assert_eq!(runs, vec![(1, "Let me look."), (3, "Found it: line 42.")]);
+        assert_eq!(s.ver, 7, "the last event it reflects");
+    }
+
+    #[test]
+    fn the_run_being_written_grows_under_its_number() {
+        let mut turns = ReplyTurns::default();
+        turns.open("tok".into());
+        turns.apply(&text("Let me "), 1, true);
+        let a = turns.snapshot("tok").unwrap();
+        turns.apply(&text("look."), 2, true);
+        let b = turns.snapshot("tok").unwrap();
+        assert_eq!((a.texts.len(), a.texts[0].n, a.ver), (1, 1, 1));
+        assert_eq!((b.texts.len(), b.texts[0].text.as_str(), b.ver), (1, "Let me look.", 2));
+        assert_eq!(a.step_count, b.step_count, "a growing run is no new step");
     }
 
     #[test]

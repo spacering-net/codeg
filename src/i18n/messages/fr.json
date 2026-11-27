@@ -2289,6 +2289,12 @@
       "statusRunningBadge": "En cours",
       "runningCountBadge": "{count, plural, one {# session en cours} other {# sessions en cours}}",
       "statusCancelledBadge": "Annulé",
+      "awaitingCountBadge": "{count, plural, one {# session t'attend} other {# sessions t'attendent}}",
+      "statusAwaiting": {
+        "permission": "Attend ton autorisation",
+        "question": "Attend ta réponse",
+        "plan": "Attend ta validation"
+      },
       "originalWorkingDir": "Répertoire de travail d'origine",
       "cliBadge": "Lancée depuis la ligne de commande",
       "conversationCountUnit": "{count, plural, one {# conversation} other {# conversations}}",
@@ -10284,7 +10290,8 @@
       "ariaLabel": "Message à votre agent personnel",
       "send": "Envoyer",
       "queue": "Mettre en file",
-      "waitForUpload": "Attendez la fin de l'envoi de l'image."
+      "waitForUpload": "Attendez la fin de l'envoi de l'image.",
+      "draftWhileSending": "Envoi en cours : mettez-le dans la zone une fois terminé."
     },
     "aux": {
       "rename": "Cliquer pour renommer",
@@ -11289,6 +11296,7 @@
         "dispatch": "Confie du travail",
         "dispatch_followup": "Relance un travail",
         "dispatch_wait": "Attend le résultat du travail",
+        "dispatch_stop": "Arrête un travail",
         "items": "Met à jour les sujets en cours",
         "timeline_read": "Relit la conversation",
         "project_list": "Consulte les projets"
@@ -11325,6 +11333,7 @@
       "errorMidway": "La réponse a rencontré une erreur : {error}",
       "interrupted": "Cette réponse ne s'est pas terminée : {reason}",
       "truncated": "La réponse a atteint sa limite de longueur et a été coupée",
+      "nothingNew": "Rien de nouveau cette fois. Quand elle s'exécute à l'heure prévue sans rien trouver, elle ne dit rien.",
       "preempted": "Interrompue pour laisser passer votre message",
       "resend": "{count, plural, one {Renvoyer le message} other {Renvoyer les # messages}}",
       "why": {
@@ -11354,6 +11363,7 @@
       "source": "Source",
       "showText": "Afficher l’original",
       "hideText": "Masquer l’original",
+      "fold": "Réduire",
       "makeRoutine": "En faire une routine…",
       "note": {
         "boot": "codeg a redémarré",
@@ -11513,6 +11523,8 @@
     "exchange": {
       "sentTo": "Message envoyé à <peer></peer>",
       "from": "Message de <peer></peer>",
+      "sentToName": "Message envoyé à {name}",
+      "fromName": "Message de {name}",
       "exchanged": "{count, plural, one {# message échangé} other {# messages échangés}} avec {names}",
       "state": {
         "stopped": "repris",
@@ -11753,6 +11765,8 @@
       "dispatchSome": "Confie du travail",
       "followup": "Relance #{id}",
       "followupSome": "Fait une relance",
+      "stop": "Arrête #{id}",
+      "stopSome": "Arrête un travail",
       "message": "Pose une question à {target}",
       "messageSome": "Pose une question à un autre assistant",
       "awaitingReply": "Attend la réponse de {name}",
@@ -11787,6 +11801,8 @@
       "dispatchSome": "A confié du travail",
       "followup": "A relancé #{id}",
       "followupSome": "A fait une relance",
+      "stop": "A arrêté #{id}",
+      "stopSome": "A arrêté un travail",
       "message": "A envoyé un message à {target}",
       "messageSome": "A envoyé un message",
       "think": "A réfléchi",
@@ -11905,6 +11921,9 @@
       "prOpened": "PR ouverte",
       "prNotTracked": "codeg ne la surveille pas",
       "pastStopping": "Trop tard pour arrêter : terminée ou en cours de fusion",
+      "alreadyStopped": "Déjà arrêté — {who}",
+      "changed": "Cela vient de changer — actualisé",
+      "boardRefused": "Le tableau ne peut pas annuler sa tâche maintenant (fusion en cours ou terminée)",
       "prChecks": "Vérifications {passed}/{total} réussies",
       "prChecksFailed": "{n} en échec",
       "prChecksRunning": "{n} en cours",
@@ -12007,7 +12026,14 @@
       "overdue": "En retard · échéance {when}",
       "reminded": "Rappelé · échéance {when}",
       "late": "{duration} de retard",
-      "missed": "{count, plural, one {Manqué # fois} other {Manqué # fois}}"
+      "missed": "{count, plural, one {Manqué # fois} other {Manqué # fois}}",
+      "inSentence": {
+        "today": "à {time}",
+        "tomorrow": "demain à {time}",
+        "yesterday": "hier à {time}",
+        "day": "{day} à {time}",
+        "date": "le {date} à {time}"
+      }
     },
     "reminder": {
       "title": "Rappel",
@@ -12034,7 +12060,7 @@
       "groups": {
         "needs": "En attente de vous",
         "watching": "En cours",
-        "next": "À venir",
+        "next": "Routines et rappels",
         "done": "Fait aujourd’hui"
       },
       "empty": "Rien à faire pour vous, et rien en cours.",
@@ -13070,7 +13096,7 @@
         "skipNext": "Passé cette fois ; la suite comme d’habitude : {rule}",
         "snoozeNotify": "Un nouveau rappel à ce moment-là",
         "snoozeAct": "{name} s’en occupe à ce moment-là",
-        "setTimeNotify": "Un rappel à ce moment-là",
+        "setTimeNotify": "Un rappel à l’heure choisie",
         "setTimeAct": "{name} s’en occupe à ce moment-là",
         "handOver": "{name} s’en occupe",
         "answer": "Répondre dans la conversation avec {name}",
@@ -13094,7 +13120,9 @@
         "notWithdrawn": "Le message n’a pas été retiré ; {name} n’attend plus la réponse de {peer}",
         "stopped": "Plus aucun rappel : {title}",
         "handed": "Confié à {name}",
-        "undone": "Annulé"
+        "undone": "Annulé",
+        "undoneSkip": "Tu as annulé le saut",
+        "notRefreshed": "Actualisation impossible — réessayez dans un instant."
       },
       "meta": {
         "reminds": "{name} te le rappelle · prévu {when}",
@@ -13105,9 +13133,9 @@
         "asks": "{name} te pose une question · attend depuis {wait}",
         "asked": "{name} te pose une question",
         "answered": "Tu as répondu · en attente de lecture par {name}",
-        "interrupted": "Le tour de {name} ne s’est pas terminé et ta réponse n’a peut-être pas été lue · réponds encore si besoin",
+        "interrupted": "{name} n’a pas terminé et n’a peut-être pas lu ta réponse · réponds encore si besoin",
         "needsYou": "{name} a besoin de toi · attend depuis {wait}",
-        "following": "{name} suit l’affaire · {wait}",
+        "following": "{name} suit l’affaire · en attente depuis {wait}",
         "external": "{name} attend un résultat extérieur · {wait}",
         "message": "{name} attend la réponse de {peer} · {wait}",
         "setAside": "Mis de côté · pas d’heure",
@@ -13117,11 +13145,14 @@
       },
       "closed": {
         "done": "Fait par toi · {time}",
+        "stopped": "Tu as arrêté le travail · {time}",
+        "skippedLast": "Tu as sauté la dernière fois · {time}",
         "dropped": "Retiré par toi · {time}",
         "withdrawn": "Tu as retiré le message à {peer} · {time}",
         "stoppedWaiting": "Tu n’attends plus la réponse de {peer} · {time}",
         "agentDone": "{name} l’a terminé · {time}",
         "agentDropped": "{name} ne le suit plus · {time}",
+        "agentStopped": "{name} a arrêté le travail · {time}",
         "answered": "{name} a lu ta réponse · {time}",
         "replied": "{peer} a répondu · {time}",
         "gone": "{peer} a été supprimé ; aucune réponse ne viendra · {time}",
@@ -13135,13 +13166,15 @@
       "gone": "Ceci n’existe plus",
       "settled": "Ceci est déjà terminé",
       "changed": "Ceci vient de changer — jette un nouveau coup d’œil",
-      "workRunning": "Ce travail est encore en cours ; arrête-le avec Arrêter dans sa barre de tâche",
+      "workRunning": "Ce travail est encore en cours ; arrête-le avec Arrêter sur sa carte",
       "workNoTime": "Un travail confié ne peut pas être reporté à une heure",
       "messageNoTime": "Ceci attend la réponse de {peer} et ne peut pas être reporté à une heure",
       "mentionNoTime": "Ceci apparaît quand tu le mentionnes, pas à une heure",
       "notEarlier": "Ceci est déjà prévu pour {when} ; reporter ne peut que le décaler plus tard",
       "hasTime": "Ceci est déjà prévu pour {when}",
       "inOtherHands": "Ceci est entre les mains de {bot} et ne peut pas être reporté à une heure",
+      "waitsOutside": "Cela attend quelque chose d’extérieur et ne peut pas être reporté à une heure",
+      "skipNotRepeating": "Seul un rappel récurrent peut sauter une fois",
       "badTime": "Cette heure n’a pas été comprise",
       "undoNone": "Ceci ne peut pas être annulé",
       "undoExpired": "Plus de 10 minutes se sont écoulées ; impossible d’annuler",
@@ -13160,6 +13193,13 @@
       "label": "Réponse : {question}",
       "ended": "Cette question est terminée ; inutile de répondre",
       "alreadyAnswered": "Cette question attend déjà que {name} lise ta réponse"
+    },
+    "stopped": {
+      "owner": "Tu l’as arrêté",
+      "inSession": "Tu l’as arrêté dans sa session",
+      "onBoard": "Tu l’as arrêté sur le tableau",
+      "agent": "{name} l’a arrêté : {reason}",
+      "agentPlain": "{name} l’a arrêté"
     }
   },
   "MessageCheck": {
