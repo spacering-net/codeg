@@ -554,6 +554,25 @@ describe("PersonalAgentComposer", () => {
     expect(storedText(1)).toBeNull()
   })
 
+  it("keeps what was just typed when the page's layout changes", async () => {
+    const props = { onClearQuote: vi.fn(), onSent: vi.fn() }
+    // The same assistant's box, drawn in another place of the page: the old
+    // one goes and the new one comes in the same commit.
+    const { rerender } = render(
+      <div>
+        <Page id={1} {...props} />
+      </div>
+    )
+    fireEvent.change(box(), { target: { value: "just typed" } })
+    rerender(
+      <section>
+        <Page id={1} {...props} />
+      </section>
+    )
+    await waitFor(() => expect(box().value).toBe("just typed"))
+    expect(storedText(1)).toBe("just typed")
+  })
+
   it("drops the draft once it is sent, and keeps it when sending failed", async () => {
     const props = { onClearQuote: vi.fn(), onSent: vi.fn() }
     api.personalAgentSend.mockRejectedValueOnce(new Error("offline"))
@@ -589,16 +608,17 @@ describe("PersonalAgentComposer", () => {
     expect(storedText(1)).toBe("mine\n\ncard")
   })
 
-  it("puts a card's message in the box after switching assistants too", () => {
+  it("puts a card's message in the box after switching assistants too", async () => {
     const props = { onClearQuote: vi.fn(), onSent: vi.fn() }
     const { rerender } = render(<Page id={1} draft={null} {...props} />)
     rerender(<Page id={1} draft={{ text: "first card", n: 1 }} {...props} />)
-    expect(box().value).toBe("first card")
+    // In once the saved draft (none here) is back.
+    await waitFor(() => expect(box().value).toBe("first card"))
     // The page starts its count again for the next assistant.
     rerender(<Page id={2} draft={null} {...props} />)
     expect(box().value).toBe("")
     rerender(<Page id={2} draft={{ text: "second card", n: 1 }} {...props} />)
-    expect(box().value).toBe("second card")
+    await waitFor(() => expect(box().value).toBe("second card"))
   })
 
   it("does not say a message went out when sending failed", async () => {

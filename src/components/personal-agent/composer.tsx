@@ -285,15 +285,14 @@ export function PersonalAgentComposer({
 
   // The saved draft goes back in once the editor is there — before a card's
   // message, which goes after it. Deferred a frame: a restored badge is a
-  // React node view, which must not render inside this effect. Read once, as
-  // the box opens: without one there is nothing to wait for.
-  const [restoring] = useState(() => loadMessageInputDraftV2(draftKey))
-  const [hydrated, setHydrated] = useState(restoring == null)
+  // React node view, which must not render inside this effect. Read then,
+  // not as the box renders: a box this one replaces in the same commit (the
+  // page's layout changing) saves what it held only as it goes.
+  const [hydrated, setHydrated] = useState(false)
   useEffect(() => {
-    if (!editorReady || !restoring) return
+    if (!editorReady) return
     const raf = requestAnimationFrame(() => {
       const ed = editorRef.current
-      // Read again: a send settled meanwhile may have dropped it.
       const loaded = loadMessageInputDraftV2(draftKey)
       if (ed && loaded) {
         if (loaded.kind === "doc") ed.setDoc(loaded.doc)
