@@ -40,6 +40,7 @@
 
 import { useCallback, useState } from "react"
 import {
+  AppWindow,
   DraftingCompass,
   FolderGit2,
   FolderOpen,
@@ -51,6 +52,7 @@ import {
   Monitor,
   MonitorCloud,
   PawPrint,
+  Puzzle,
   Rocket,
   Settings,
   Zap,
@@ -68,11 +70,13 @@ import {
 import { BetaBadge } from "@/components/ui/beta-badge"
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { useAutomationsView } from "@/contexts/automations-view-context"
+import { useOptionalAuxPanelContext } from "@/contexts/aux-panel-context"
 import { useHarnessView } from "@/contexts/harness-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useOptionalWorkspaceActions } from "@/contexts/workspace-context"
 import { useRemoteWorkspaceConnections } from "@/hooks/use-remote-workspace-connections"
+import { useScopedPluginCommands } from "@/hooks/use-scoped-plugin-commands"
 import { openProjectBootWindow } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { BLANK_PAGE_URL } from "@/lib/browser/browser-url"
@@ -376,6 +380,64 @@ export function QuickActionsItems({ actions }: { actions: QuickActions }) {
           onSelect={handleShowPet}
         />
       )}
+      <PluginCommandRows />
+    </>
+  )
+}
+
+function PluginCommandRows() {
+  const { openConversations, openPluginScreen } = useWorkbenchRoute()
+  const openPanel = useOptionalAuxPanelContext()?.openPluginPanel
+  const { commands, executeCommand, scopeLabel } = useScopedPluginCommands({
+    enabled: true,
+    allowAfterUnmount: true,
+    openConversations,
+    openPluginScreen,
+    openPluginPanel: openPanel,
+  })
+  const visibleCommands = commands.filter(
+    (command) =>
+      command.action.type !== "openWorkspacePanel" || Boolean(openPanel)
+  )
+  if (visibleCommands.length === 0) return null
+
+  return (
+    <>
+      <DropdownMenuSeparator />
+      {visibleCommands.map((command) => {
+        const icon =
+          command.action.type === "openScreen" ? (
+            <AppWindow />
+          ) : command.action.type === "callMethod" ? (
+            <Zap />
+          ) : (
+            <Puzzle />
+          )
+        return (
+          <MenuRow
+            key={command.key}
+            icon={icon}
+            label={
+              command.description ? (
+                <>
+                  <span className="block truncate">{command.title}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {command.description}
+                  </span>
+                </>
+              ) : (
+                command.title
+              )
+            }
+            trailing={
+              <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[0.625rem] leading-none font-medium text-muted-foreground">
+                {scopeLabel(command.scope)}
+              </span>
+            }
+            onSelect={() => executeCommand(command)}
+          />
+        )
+      })}
     </>
   )
 }

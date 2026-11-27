@@ -1,0 +1,70 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.command-palette",
+  "name": "Command Palette",
+  "version": "1.0.0",
+  "client": { "entry": "guide.html" },
+  "server": { "entry": "commands.mjs", "methods": ["describe-context"] },
+  "contributes": {
+    "workspacePanels": [
+      {
+        "id": "notes",
+        "title": "Workspace Notes",
+        "view": "text",
+        "text": "This panel opened from a workspace command."
+      }
+    ],
+    "screens": [{ "id": "guide", "title": "Command Guide" }],
+    "commands": [
+      {
+        "id": "open-guide",
+        "title": "Open Command Guide",
+        "titleTranslations": {
+          "es": "Abrir guía de comandos",
+          "zh-CN": "打开命令指南"
+        },
+        "description": "See where to use the example commands.",
+        "descriptionTranslations": {
+          "es": "Consulta dónde usar los comandos de ejemplo.",
+          "zh-CN": "查看示例命令的使用位置。"
+        },
+        "keywords": ["help", "guide", "palette"],
+        "scope": "global",
+        "action": { "type": "openScreen", "screenId": "guide" }
+      },
+      {
+        "id": "show-notes",
+        "title": "Show Workspace Notes",
+        "titleTranslations": {
+          "es": "Mostrar notas del espacio de trabajo",
+          "zh-CN": "显示工作区备注"
+        },
+        "keywords": ["notes", "panel", "workspace"],
+        "scope": "workspace",
+        "action": { "type": "openWorkspacePanel", "panelId": "notes" }
+      },
+      {
+        "id": "check-workspace",
+        "title": "Check Workspace Context",
+        "titleTranslations": {
+          "es": "Comprobar contexto del espacio de trabajo",
+          "zh-CN": "检查工作区上下文"
+        },
+        "keywords": ["workspace", "folder", "context"],
+        "scope": "workspace",
+        "action": { "type": "callMethod", "method": "describe-context" }
+      },
+      {
+        "id": "check-session",
+        "title": "Check Session Context",
+        "titleTranslations": {
+          "es": "Comprobar contexto de la sesión",
+          "zh-CN": "检查会话上下文"
+        },
+        "keywords": ["session", "conversation", "context"],
+        "scope": "session",
+        "action": { "type": "callMethod", "method": "describe-context" }
+      }
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "apiVersion": 1,
+  "id": "codeg.localized-notes",
+  "name": "Workspace Notes",
+  "nameTranslations": {
+    "es": "Notas del espacio de trabajo",
+    "zh-CN": "工作区备注",
+    "zh-TW": "工作區備註"
+  },
+  "version": "1.0.0",
+  "contributes": {
+    "workspacePanels": [
+      {
+        "id": "notes",
+        "title": "Notes",
+        "titleTranslations": {
+          "es": "Notas",
+          "zh-CN": "备注",
+          "zh-TW": "備註"
+        },
+        "view": "text",
+        "text": "Check the project README before starting work.",
+        "textTranslations": {
+          "es": "Consulta el README del proyecto antes de empezar.",
+          "zh-CN": "开始工作前，请先阅读项目 README。",
+          "zh-TW": "開始工作前，請先閱讀專案 README。"
+        }
+      }
+    ],
+    "commands": [
+      {
+        "id": "show-notes",
+        "title": "Show Workspace Notes",
+        "titleTranslations": {
+          "es": "Mostrar notas del espacio de trabajo",
+          "zh-CN": "显示工作区备注",
+          "zh-TW": "顯示工作區備註"
+        },
+        "action": { "type": "openWorkspacePanel", "panelId": "notes" }
+      }
+    ]
+  }
+}

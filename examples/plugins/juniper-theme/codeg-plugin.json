@@ -1,0 +1,44 @@
+{
+  "apiVersion": 1,
+  "id": "codeg.juniper-theme",
+  "name": "Juniper",
+  "nameTranslations": { "zh-CN": "杜松", "zh-TW": "杜松" },
+  "version": "1.0.0",
+  "contributes": {
+    "themes": [
+      {
+        "id": "juniper",
+        "title": "Juniper",
+        "titleTranslations": { "zh-CN": "杜松", "zh-TW": "杜松" },
+        "light": {
+          "background": "#f5faf6",
+          "foreground": "#17271e",
+          "card": "#ffffff",
+          "card-foreground": "#17271e",
+          "primary": "#216846",
+          "primary-foreground": "#ffffff",
+          "accent": "#d8ede0",
+          "accent-foreground": "#153329",
+          "sidebar": "#eaf4ed",
+          "sidebar-foreground": "#17271e",
+          "border": "#bfd7c5",
+          "ring": "#277451"
+        },
+        "dark": {
+          "background": "#111c17",
+          "foreground": "#eaf6ee",
+          "card": "#1d3027",
+          "card-foreground": "#eaf6ee",
+          "primary": "#9adeb6",
+          "primary-foreground": "#10281c",
+          "accent": "#29493a",
+          "accent-foreground": "#eaf6ee",
+          "sidebar": "#15241c",
+          "sidebar-foreground": "#eaf6ee",
+          "border": "#344a3e",
+          "ring": "#91c9a7"
+        }
+      }
+    ]
+  }
+}

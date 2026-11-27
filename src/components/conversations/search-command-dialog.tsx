@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { formatDistanceToNow } from "date-fns"
 import { enUS, zhCN, zhTW } from "date-fns/locale"
-import { File, Folder } from "lucide-react"
+import { AppWindow, File, Folder, Puzzle, Zap } from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
 import { useAuxPanelContext } from "@/contexts/aux-panel-context"
 import { useActiveFolder } from "@/contexts/active-folder-context"
@@ -18,6 +18,11 @@ import type {
   DbConversationSummary,
 } from "@/lib/types"
 import { useFileTree, type FlatFileEntry } from "@/hooks/use-file-tree"
+import { useScopedPluginCommands } from "@/hooks/use-scoped-plugin-commands"
+import {
+  matchesPluginCommandQuery,
+  type ResolvedPluginCommand,
+} from "@/lib/host-plugins"
 import { rankFileMatches } from "@/lib/file-search-match"
 import { compareAgentType } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
@@ -34,7 +39,7 @@ import {
 import { cn } from "@/lib/utils"
 import { formatConversationTitle } from "@/lib/conversation-title"
 
-type SearchTab = "conversations" | "files"
+type SearchTab = "conversations" | "files" | "commands"
 
 interface SearchCommandDialogProps {
   open: boolean
@@ -60,9 +65,19 @@ export function SearchCommandDialog({
     [allConversations, activeFolderId]
   )
   const { openTab } = useTabActions()
-  const { openConversations } = useWorkbenchRoute()
+  const { openConversations, openPluginScreen } = useWorkbenchRoute()
   const { openFilePreview } = useWorkspaceActions()
-  const { revealInFileTree } = useAuxPanelContext()
+  const { revealInFileTree, openPluginPanel } = useAuxPanelContext()
+  const {
+    commands: pluginCommands,
+    executeCommand: executePluginCommand,
+    scopeLabel: pluginCommandScopeLabel,
+  } = useScopedPluginCommands({
+    enabled: open,
+    openConversations,
+    openPluginScreen,
+    openPluginPanel,
+  })
 
   const [activeTab, setActiveTab] = useState<SearchTab>("conversations")
   // The search box owns the keyboard: the dialog opens with the cursor in it,
@@ -104,6 +119,18 @@ export function SearchCommandDialog({
     [allFiles, query]
   )
 
+  const filteredPluginCommands = useMemo(
+    () =>
+      pluginCommands.filter((command) =>
+        matchesPluginCommandQuery(command, query)
+      ),
+    [pluginCommands, query]
+  )
+
+  const hasPluginCommands = pluginCommands.length > 0
+  const effectiveActiveTab: SearchTab =
+    activeTab === "commands" && !hasPluginCommands ? "conversations" : activeTab
+
   const doSearch = useCallback(
     async (q: string, agent: AgentType | null) => {
       if (!q.trim() && !agent) {
@@ -130,7 +157,7 @@ export function SearchCommandDialog({
 
   // Debounced search on query change (conversations tab only)
   useEffect(() => {
-    if (activeTab !== "conversations") return
+    if (effectiveActiveTab !== "conversations") return
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
       doSearch(query, agentFilter)
@@ -138,7 +165,7 @@ export function SearchCommandDialog({
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [query, agentFilter, doSearch, activeTab])
+  }, [query, agentFilter, doSearch, effectiveActiveTab])
 
   // Reset state when dialog closes. Kept in an effect because it also resets
   // the shared file-tree hook (`resetFileTree`), which is not this component's
@@ -185,8 +212,20 @@ export function SearchCommandDialog({
     [revealInFileTree, openFilePreview, onOpenChange]
   )
 
+  const handleSelectPluginCommand = useCallback(
+    (command: ResolvedPluginCommand) => {
+      executePluginCommand(command)
+      onOpenChange(false)
+    },
+    [executePluginCommand, onOpenChange]
+  )
+
   const placeholder =
-    activeTab === "conversations" ? t("placeholder") : t("filePlaceholder")
+    effectiveActiveTab === "conversations"
+      ? t("placeholder")
+      : effectiveActiveTab === "files"
+        ? t("filePlaceholder")
+        : t("commandPlaceholder")
 
   return (
     <CommandDialog
@@ -197,7 +236,7 @@ export function SearchCommandDialog({
       }
       open={open}
       onOpenChange={onOpenChange}
-      shouldFilter={activeTab === "conversations"}
+      shouldFilter={effectiveActiveTab === "conversations"}
       // Not `autoFocus`: an input focused while mounting takes focus before
       // the focus trap starts listening, so the trap never records it and has
       // nothing to pull focus back to when the chat composer behind the dialog
@@ -225,13 +264,13 @@ export function SearchCommandDialog({
           onClick={() => switchTab("conversations")}
           className={cn(
             "relative h-9 px-3 text-sm font-medium transition-colors",
-            activeTab === "conversations"
+            effectiveActiveTab === "conversations"
               ? "text-foreground"
               : "text-muted-foreground hover:text-foreground"
           )}
         >
           {t("tabConversations")}
-          {activeTab === "conversations" && (
+          {effectiveActiveTab === "conversations" && (
             <span className="absolute bottom-0 left-3 right-3 h-0.5 bg-foreground rounded-full" />
           )}
         </button>
@@ -240,16 +279,33 @@ export function SearchCommandDialog({
           onClick={() => switchTab("files")}
           className={cn(
             "relative h-9 px-3 text-sm font-medium transition-colors",
-            activeTab === "files"
+            effectiveActiveTab === "files"
               ? "text-foreground"
               : "text-muted-foreground hover:text-foreground"
           )}
         >
           {t("tabFiles")}
-          {activeTab === "files" && (
+          {effectiveActiveTab === "files" && (
             <span className="absolute bottom-0 left-3 right-3 h-0.5 bg-foreground rounded-full" />
           )}
         </button>
+        {hasPluginCommands && (
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => switchTab("commands")}
+            className={cn(
+              "relative h-9 px-3 text-sm font-medium transition-colors",
+              effectiveActiveTab === "commands"
+                ? "text-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {t("tabCommands")}
+            {effectiveActiveTab === "commands" && (
+              <span className="absolute bottom-0 left-3 right-3 h-0.5 bg-foreground rounded-full" />
+            )}
+          </button>
+        )}
       </div>
 
       <CommandInput
@@ -265,7 +321,7 @@ export function SearchCommandDialog({
           `overflow-hidden`, so the tail chips were clipped away and simply
           could not be clicked. Wrapping keeps every filter reachable and lets
           the block grow by a row instead of hiding options. */}
-      {activeTab === "conversations" && availableAgents.length > 1 && (
+      {effectiveActiveTab === "conversations" && availableAgents.length > 1 && (
         <div className="flex flex-wrap items-center gap-1 px-3 py-2 border-b">
           <button
             onMouseDown={(e) => e.preventDefault()}
@@ -300,7 +356,7 @@ export function SearchCommandDialog({
 
       <CommandList className="min-h-96">
         {/* Conversations tab */}
-        {activeTab === "conversations" && (
+        {effectiveActiveTab === "conversations" && (
           <>
             <CommandEmpty>
               {searching
@@ -337,11 +393,23 @@ export function SearchCommandDialog({
                 ))}
               </CommandGroup>
             )}
+            {query.trim().length > 0 && filteredPluginCommands.length > 0 && (
+              <CommandGroup heading={t("tabCommands")}>
+                {filteredPluginCommands.map((command) => (
+                  <PluginCommandPaletteItem
+                    key={command.key}
+                    command={command}
+                    scopeBadge={pluginCommandScopeLabel(command.scope)}
+                    onSelect={handleSelectPluginCommand}
+                  />
+                ))}
+              </CommandGroup>
+            )}
           </>
         )}
 
         {/* Files tab */}
-        {activeTab === "files" && (
+        {effectiveActiveTab === "files" && (
           <>
             <CommandEmpty>
               {filesLoading
@@ -373,7 +441,67 @@ export function SearchCommandDialog({
             )}
           </>
         )}
+
+        {/* Scoped plugin commands tab */}
+        {effectiveActiveTab === "commands" && (
+          <>
+            <CommandEmpty>{t("noResults")}</CommandEmpty>
+            {filteredPluginCommands.length > 0 && (
+              <CommandGroup>
+                {filteredPluginCommands.map((command) => (
+                  <PluginCommandPaletteItem
+                    key={command.key}
+                    command={command}
+                    scopeBadge={pluginCommandScopeLabel(command.scope)}
+                    onSelect={handleSelectPluginCommand}
+                  />
+                ))}
+              </CommandGroup>
+            )}
+          </>
+        )}
       </CommandList>
     </CommandDialog>
+  )
+}
+
+function PluginCommandPaletteItem({
+  command,
+  scopeBadge,
+  onSelect,
+}: {
+  command: ResolvedPluginCommand
+  scopeBadge: string
+  onSelect: (command: ResolvedPluginCommand) => void
+}) {
+  const Icon =
+    command.action.type === "openScreen"
+      ? AppWindow
+      : command.action.type === "callMethod"
+        ? Zap
+        : Puzzle
+  return (
+    <CommandItem
+      value={`${command.key} ${command.title} ${command.description ?? ""} ${command.pluginName}`}
+      keywords={command.keywords}
+      onSelect={() => onSelect(command)}
+      className="items-center gap-2.5"
+    >
+      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm">{command.title}</div>
+        {command.description && (
+          <div className="truncate text-xs text-muted-foreground">
+            {command.description}
+          </div>
+        )}
+      </div>
+      <span className="max-w-28 shrink-0 truncate text-xs text-muted-foreground">
+        {command.pluginName}
+      </span>
+      <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[0.6875rem] leading-none font-medium text-muted-foreground">
+        {scopeBadge}
+      </span>
+    </CommandItem>
   )
 }
