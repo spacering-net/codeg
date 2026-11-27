@@ -12798,7 +12798,14 @@
         }
       },
       "undoDetail": "Du hast {undone} der {made} auf dein Wort hin gemachten Änderungen der letzten zwei Wochen rückgängig gemacht.",
-      "idleBotDetail": "Seit zwei Wochen hat ihn niemand geweckt."
+      "idleBotDetail": "Seit zwei Wochen hat ihn niemand geweckt.",
+      "group": {
+        "count": "{count, plural, one {# Karte} other {# Karten}}",
+        "expand": "Alle anzeigen",
+        "collapse": "Weniger anzeigen",
+        "more": "{count, plural, one {# weitere nicht angezeigt} other {# weitere nicht angezeigt}}",
+        "mutedEntry": "Verworfen, und diese Art ist abgeschaltet."
+      }
     },
     "brief": {
       "title": "Morgen-Briefing",

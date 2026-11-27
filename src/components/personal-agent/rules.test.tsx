@@ -67,6 +67,7 @@ vi.mock("./settings/use-settings", () => ({
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 import { buildMessageItems, type MessageItem } from "./message-items"
+import { JumpRowContext } from "./message-row"
 import { NoticeCard } from "./notice-card"
 import { DEFAULT_PREFS } from "./settings/pref-pages"
 import { ProposalRules } from "./settings/proposal-rules"
@@ -109,14 +110,21 @@ function scope(readOnly = false): PageScope {
   }
 }
 
-function wrap(node: React.ReactNode, { zh = false, readOnly = false } = {}) {
+function wrap(
+  node: React.ReactNode,
+  {
+    zh = false,
+    readOnly = false,
+    pageScope,
+  }: { zh?: boolean; readOnly?: boolean; pageScope?: PageScope } = {}
+) {
   return render(
     <NextIntlClientProvider
       locale={zh ? "zh-CN" : "en"}
       messages={zh ? zhMessages : enMessages}
       timeZone="UTC"
     >
-      <PageScopeContext.Provider value={scope(readOnly)}>
+      <PageScopeContext.Provider value={pageScope ?? scope(readOnly)}>
         {node}
       </PageScopeContext.Provider>
     </NextIntlClientProvider>
@@ -470,5 +478,275 @@ describe("the rules in the preferences", () => {
     await waitFor(() =>
       expect(api.personalAgentRuleReset).toHaveBeenCalledWith("failed")
     )
+  })
+})
+
+describe("a run of one rule's cards raised together", () => {
+  /** `n` review cards the board's first look raised at once, `patch` on
+   *  the i-th's data. */
+  const reviews = (
+    n: number,
+    patch: (i: number) => Record<string, unknown> = () => ({})
+  ) =>
+    Array.from({ length: n }, (_, i) =>
+      row(
+        {
+          notice: "rule",
+          rule: "review",
+          state: "open",
+          object: `task:${i + 1}`,
+          since: "2026-11-10T04:00:00Z",
+          lowered: false,
+          facts: { task_id: i + 1, title: `Task ${i + 1}` },
+          ...patch(i),
+        },
+        {
+          id: 200 + i,
+          ref_id: String(500 + i),
+          body: `review: Task ${i + 1}`,
+          created_at: "2026-11-12T07:00:00Z",
+        }
+      )
+    )
+
+  function drawRun(
+    rows: TimelineRow[],
+    opts: {
+      zh?: boolean
+      readOnly?: boolean
+      pageScope?: PageScope
+      jump?: { id: number } | null
+    } = {}
+  ) {
+    const items = buildMessageItems(rows).filter((i) => i.kind === "notice")
+    const cards = (jump: { id: number } | null) => (
+      <JumpRowContext.Provider value={jump}>
+        {items.map((item) => (
+          <NoticeCard
+            key={item.key}
+            item={item as Extract<MessageItem, { kind: "notice" }>}
+          />
+        ))}
+      </JumpRowContext.Provider>
+    )
+    const drawn = wrap(cards(opts.jump ?? null), opts)
+    return {
+      items,
+      ...drawn,
+      /** The list's next jump, to `id`. */
+      jumpTo: (id: number) =>
+        drawn.rerender(
+          <NextIntlClientProvider
+            locale={opts.zh ? "zh-CN" : "en"}
+            messages={opts.zh ? zhMessages : enMessages}
+            timeZone="UTC"
+          >
+            <PageScopeContext.Provider
+              value={opts.pageScope ?? scope(opts.readOnly)}
+            >
+              {cards({ id })}
+            </PageScopeContext.Provider>
+          </NextIntlClientProvider>
+        ),
+    }
+  }
+
+  const names = (c: HTMLElement) =>
+    [...c.querySelectorAll("[data-pa-rule-name]")].map((e) => e.textContent)
+  const toggle = (c: HTMLElement) =>
+    c.querySelector("[data-pa-rule-group-toggle]") as HTMLElement | null
+
+  it("none: no card", () => {
+    const { container, items } = drawRun([])
+    expect(items).toEqual([])
+    expect(container.querySelector("[data-pa-rule-card]")).toBeNull()
+  })
+
+  it("one: the card of its own, as it always was", () => {
+    const { container } = drawRun(reviews(1))
+    expect(container.querySelectorAll("[data-pa-rule-card]")).toHaveLength(1)
+    expect(container.querySelector("[data-pa-rule-group]")).toBeNull()
+    expect(names(container)).toEqual(["Task 1"])
+    expect(toggle(container)).toBeNull()
+    expect(screen.getByText(/since/)).toBeTruthy()
+  })
+
+  it("five: one card with all of them, nothing to show more of", () => {
+    const { container } = drawRun(reviews(5))
+    const cards = container.querySelectorAll("[data-pa-rule-card]")
+    expect(cards).toHaveLength(1)
+    expect(cards[0].getAttribute("data-pa-rule-group")).toBe("5")
+    expect(
+      container.querySelector("[data-pa-rule-group-count]")?.textContent
+    ).toContain("5 cards")
+    expect(names(container)).toEqual([1, 2, 3, 4, 5].map((i) => `Task ${i}`))
+    expect(toggle(container)).toBeNull()
+    expect(container.querySelector("[data-pa-rule-group-rest]")).toBeNull()
+    // Each still says since when, and keeps its own steps.
+    expect(container.querySelectorAll("[data-pa-rule-since]")).toHaveLength(5)
+    expect(
+      container.querySelectorAll('[data-pa-rule-act="check"]')
+    ).toHaveLength(5)
+    // "Don't suggest these" is the rule's: once.
+    expect(container.querySelectorAll("[data-pa-mute-kind]")).toHaveLength(1)
+  })
+
+  it("six: the first five, and one more behind [Show all]", () => {
+    const { container } = drawRun(reviews(6))
+    expect(names(container)).toHaveLength(5)
+    expect(toggle(container)?.textContent).toBe("Show all")
+    expect(
+      container.querySelector("[data-pa-rule-group-rest]")?.textContent
+    ).toBe("1 more")
+    fireEvent.click(toggle(container)!)
+    expect(names(container)).toHaveLength(6)
+    expect(toggle(container)?.textContent).toBe("Show less")
+    expect(container.querySelector("[data-pa-rule-group-rest]")).toBeNull()
+  })
+
+  it("forty-one: five shown, thirty-six more; open and fold back", () => {
+    const { container } = drawRun(reviews(41), { zh: true })
+    expect(container.querySelectorAll("[data-pa-rule-card]")).toHaveLength(1)
+    expect(names(container)).toEqual([1, 2, 3, 4, 5].map((i) => `Task ${i}`))
+    expect(
+      container.querySelector("[data-pa-rule-group-count]")?.textContent
+    ).toContain("41 条")
+    expect(toggle(container)?.textContent).toBe("展开全部")
+    expect(
+      container.querySelector("[data-pa-rule-group-rest]")?.textContent
+    ).toBe("还有 36 条")
+    fireEvent.click(toggle(container)!)
+    expect(names(container)).toHaveLength(41)
+    expect(names(container)[40]).toBe("Task 41")
+    expect(toggle(container)?.getAttribute("aria-expanded")).toBe("true")
+    expect(toggle(container)?.textContent).toBe("收起")
+    // Each but the first keeps its own row id: a jump lands on it.
+    expect(container.querySelector('[data-row-id="240"]')).not.toBeNull()
+    fireEvent.click(toggle(container)!)
+    expect(names(container)).toHaveLength(5)
+    expect(
+      container.querySelector("[data-pa-rule-group-rest]")?.textContent
+    ).toBe("还有 36 条")
+  })
+
+  it("each one's steps act on its own card", async () => {
+    const { container } = drawRun(reviews(6))
+    const entries = container.querySelectorAll("[data-pa-rule-entry]")
+    fireEvent.click(
+      entries[2].querySelector('[data-pa-rule-act="check"]') as HTMLElement
+    )
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(
+        502,
+        "check",
+        7,
+        expect.stringContaining("Task 3")
+      )
+    )
+    fireEvent.click(
+      entries[4].querySelector('[data-pa-rule-act="dismiss"]') as HTMLElement
+    )
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(
+        504,
+        "dismiss",
+        7,
+        undefined
+      )
+    )
+    // The rule's mute goes through an open one of them.
+    fireEvent.click(
+      container.querySelector("[data-pa-mute-kind]") as HTMLElement
+    )
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(500, "mute", 7)
+    )
+  })
+
+  it("says how each stands: dismissed, done, muted", () => {
+    const { container } = drawRun(
+      reviews(7, (i) =>
+        i === 0
+          ? { state: "dismissed" }
+          : i === 1
+            ? { state: "checking" }
+            : i === 3
+              ? { state: "dismissed", muted: "review" }
+              : {}
+      )
+    )
+    const entries = [...container.querySelectorAll("[data-pa-rule-entry]")]
+    expect(entries.map((e) => e.getAttribute("data-pa-rule-entry"))).toEqual([
+      "dismissed",
+      "checking",
+      "open",
+      "dismissed",
+      "open",
+    ])
+    expect(entries[0].textContent).toContain("Dismissed. Not again for a week.")
+    expect(entries[0].querySelector("[data-pa-rule-act]")).toBeNull()
+    expect(entries[1].querySelector("[data-pa-rule-note]")).not.toBeNull()
+    expect(entries[3].textContent).toContain(
+      "Dismissed, and this kind turned off."
+    )
+    expect(
+      entries[2].querySelector('[data-pa-rule-act="check"]')
+    ).not.toBeNull()
+    // The mute from one of them: said once, with the way back. Others are
+    // still open — the rule may be on again — so it can still be muted,
+    // as each of them on its own could.
+    expect(container.querySelectorAll("[data-pa-muted]")).toHaveLength(1)
+    expect(container.querySelectorAll("[data-pa-mute-kind]")).toHaveLength(1)
+    // Still more to show.
+    expect(
+      container.querySelector("[data-pa-rule-group-rest]")?.textContent
+    ).toBe("2 more")
+  })
+
+  it("none of them open: nothing to mute", () => {
+    const { container } = drawRun(
+      reviews(3, (i) =>
+        i === 0 ? { state: "dismissed", muted: "review" } : { state: "expired" }
+      )
+    )
+    expect(container.querySelectorAll("[data-pa-muted]")).toHaveLength(1)
+    expect(container.querySelector("[data-pa-mute-kind]")).toBeNull()
+  })
+
+  it("a jump to one folded away unfolds the card; one shown leaves it", () => {
+    const { container, jumpTo } = drawRun(reviews(8))
+    jumpTo(201)
+    expect(names(container)).toHaveLength(5)
+    jumpTo(206)
+    expect(names(container)).toHaveLength(8)
+    expect(container.querySelector('[data-row-id="206"]')).not.toBeNull()
+    // Folded back by the owner, it stays so till the next such jump.
+    fireEvent.click(toggle(container)!)
+    expect(names(container)).toHaveLength(5)
+    jumpTo(207)
+    expect(names(container)).toHaveLength(8)
+  })
+
+  it("drawn after a jump to one folded away: unfolded", () => {
+    const { container } = drawRun(reviews(8), { jump: { id: 207 } })
+    expect(names(container)).toHaveLength(8)
+  })
+
+  it("a right-click on one quotes that one", async () => {
+    const pageScope = scope()
+    const { container } = drawRun(reviews(6), { pageScope })
+    const entry = container.querySelectorAll("[data-pa-rule-entry]")[2]
+    expect(entry.getAttribute("data-pa-part-row")).toBe("202")
+    fireEvent.contextMenu(entry.querySelector("[data-pa-rule-name]")!)
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Quote" }))
+    expect(pageScope.onQuote).toHaveBeenCalledWith(202)
+  })
+
+  it("read-only: it still opens, but nothing to press on them", () => {
+    const { container } = drawRun(reviews(8), { readOnly: true })
+    expect(container.querySelector("[data-pa-rule-act]")).toBeNull()
+    expect(container.querySelector("[data-pa-mute-kind]")).toBeNull()
+    fireEvent.click(toggle(container)!)
+    expect(names(container)).toHaveLength(8)
   })
 })

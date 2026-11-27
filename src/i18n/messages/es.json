@@ -12798,7 +12798,14 @@
         }
       },
       "undoDetail": "Deshiciste {undone} de los {made} cambios hechos a tu palabra en las dos últimas semanas.",
-      "idleBotDetail": "Nadie lo ha despertado en dos semanas."
+      "idleBotDetail": "Nadie lo ha despertado en dos semanas.",
+      "group": {
+        "count": "{count, plural, one {# tarjeta} other {# tarjetas}}",
+        "expand": "Ver todas",
+        "collapse": "Ver menos",
+        "more": "{count, plural, one {# más sin mostrar} other {# más sin mostrar}}",
+        "mutedEntry": "Descartada, y este tipo desactivado."
+      }
     },
     "brief": {
       "title": "Resumen de la mañana",

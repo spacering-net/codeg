@@ -12798,7 +12798,14 @@
         }
       },
       "undoDetail": "Vous avez annulé {undone} des {made} changements faits à votre demande ces deux dernières semaines.",
-      "idleBotDetail": "Personne ne l'a réveillé depuis deux semaines."
+      "idleBotDetail": "Personne ne l'a réveillé depuis deux semaines.",
+      "group": {
+        "count": "{count, plural, one {# carte} other {# cartes}}",
+        "expand": "Tout afficher",
+        "collapse": "Afficher moins",
+        "more": "{count, plural, one {# autre non affichée} other {# autres non affichées}}",
+        "mutedEntry": "Écartée, et ce type est désactivé."
+      }
     },
     "brief": {
       "title": "Point du matin",

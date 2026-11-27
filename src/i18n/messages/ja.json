@@ -12798,7 +12798,14 @@
         }
       },
       "undoDetail": "この 2 週間、言われたとおりに行った変更 {made} 件のうち {undone} 件を取り消しました。",
-      "idleBotDetail": "2 週間誰も呼んでいません。"
+      "idleBotDetail": "2 週間誰も呼んでいません。",
+      "group": {
+        "count": "{count} 件",
+        "expand": "すべて表示",
+        "collapse": "折りたたむ",
+        "more": "ほかに {count} 件",
+        "mutedEntry": "閉じました。この種類はもう提案しません。"
+      }
     },
     "brief": {
       "title": "朝のまとめ",

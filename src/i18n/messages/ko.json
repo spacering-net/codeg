@@ -12798,7 +12798,14 @@
         }
       },
       "undoDetail": "최근 2주 동안 말씀대로 바로 한 변경 {made}개 중 {undone}개를 되돌렸어요.",
-      "idleBotDetail": "2주 동안 아무도 깨우지 않았어요."
+      "idleBotDetail": "2주 동안 아무도 깨우지 않았어요.",
+      "group": {
+        "count": "{count}건",
+        "expand": "모두 보기",
+        "collapse": "접기",
+        "more": "{count}건 더 있음",
+        "mutedEntry": "닫았고, 이런 제안은 더 하지 않습니다."
+      }
     },
     "brief": {
       "title": "아침 브리핑",

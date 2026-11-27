@@ -12798,7 +12798,14 @@
         }
       },
       "undoDetail": "最近两周按你的话直接做的 {made} 处改动，你撤销了 {undone} 处。",
-      "idleBotDetail": "已经两周没被叫醒了。"
+      "idleBotDetail": "已经两周没被叫醒了。",
+      "group": {
+        "count": "{count} 条",
+        "expand": "展开全部",
+        "collapse": "收起",
+        "more": "还有 {count} 条",
+        "mutedEntry": "已关掉，这类也不再提。"
+      }
     },
     "brief": {
       "title": "晨报",

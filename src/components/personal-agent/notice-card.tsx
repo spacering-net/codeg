@@ -91,7 +91,7 @@ import { CheckCard } from "./check-card"
 import { PlanCard } from "./plan-card"
 import { PrCard } from "./pr-card"
 import { RoutineCard } from "./routine-card"
-import { RuleCard } from "./rule-card"
+import { RuleCard, RuleGroupCard } from "./rule-card"
 import { MutedNote, MuteKindButton } from "./mute-kind"
 import {
   ChangeValue,
@@ -305,7 +305,14 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   if (kind === "forge") return <ForgeCard item={item} />
   if (kind === "pr") return <PrCard item={item} />
   if (kind === "routine") return <RoutineCard item={item} />
-  if (kind === "rule") return <RuleCard item={item} />
+  if (kind === "rule") {
+    // A run of its rule's cards raised together is one card.
+    return (item.rules?.length ?? 0) > 1 ? (
+      <RuleGroupCard item={item} />
+    ) : (
+      <RuleCard item={item} />
+    )
+  }
   if (kind === "brief") return <BriefCard item={item} />
   if (kind === "memory" || kind === "tidy") return <MemoryCard item={item} />
   if (kind === "skill") return <SkillCard item={item} />

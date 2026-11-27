@@ -98,7 +98,11 @@ import {
   type ListRow as ItemRow,
   type MessageItem,
 } from "./message-items"
-import { MessageEnterContext, useEnterClass } from "./message-row"
+import {
+  JumpRowContext,
+  MessageEnterContext,
+  useEnterClass,
+} from "./message-row"
 import { OwnerBubble } from "./owner-bubble"
 import { PaReplyScope } from "./pa-card-scope"
 import { useQuoteAuthor, useQuotedRow } from "./quote-bar"
@@ -291,6 +295,10 @@ function TimeLine({ at }: { at: string }) {
 function rowIdOf(item: MessageItem): number | null {
   if (item.kind === "time") return null
   if (item.kind === "reply") return item.anchor.id
+  // A run of rule cards stands at its newest: one more that joins it came
+  // in.
+  if (item.kind === "notice" && item.rules)
+    return item.rules[item.rules.length - 1].id
   return item.row.id
 }
 
@@ -1351,6 +1359,9 @@ export function MessageList({
   // ── jumps ───────────────────────────────────────────────────────────────
   // A jump asked for before the list is drawn: made once it is.
   const queuedJump = useRef<number | null>(null)
+  // The row the latest jump went to, for a card that draws it folded away
+  // to unfold (`JumpRowContext`).
+  const [jumpRow, setJumpRow] = useState<{ id: number } | null>(null)
   const scrollToRow = useCallback(
     (id: number): boolean => {
       // Held, but not drawn while only the newest rows are: once the rest
@@ -1389,6 +1400,7 @@ export function MessageList({
         until: Infinity,
       }
       jumpHold.current = held
+      setJumpRow({ id })
       let frames = 0
       const look = () => {
         if (jumpHold.current !== held) return
@@ -1604,21 +1616,23 @@ export function MessageList({
               </div>
             ) : null}
             {scrollReady && drawn.length > 0 ? (
-              <Virtualizer
-                // Each assistant's list measured afresh.
-                key={String(botId)}
-                ref={listRef}
-                as={ListContainer}
-                scrollRef={scrollRef}
-                bufferSize={BUFFER_PX}
-                startMargin={olderHeight}
-                shift={shift}
-                keepMounted={keepMounted}
-                onScroll={updateKept}
-                data={drawn}
-              >
-                {renderRow}
-              </Virtualizer>
+              <JumpRowContext.Provider value={jumpRow}>
+                <Virtualizer
+                  // Each assistant's list measured afresh.
+                  key={String(botId)}
+                  ref={listRef}
+                  as={ListContainer}
+                  scrollRef={scrollRef}
+                  bufferSize={BUFFER_PX}
+                  startMargin={olderHeight}
+                  shift={shift}
+                  keepMounted={keepMounted}
+                  onScroll={updateKept}
+                  data={drawn}
+                >
+                  {renderRow}
+                </Virtualizer>
+              </JumpRowContext.Provider>
             ) : null}
             {items.length === 0 ? (
               <p className="py-16 text-center text-sm text-muted-foreground">

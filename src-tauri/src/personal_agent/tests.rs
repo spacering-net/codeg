@@ -15797,6 +15797,9 @@ async fn a_session_waiting_on_the_owner_gets_a_card_unless_they_are_in_it() {
     host.rules_tick_at(now + chrono::Duration::minutes(6)).await;
     let cards = rule_cards(&primary, "session").await;
     assert_eq!(cards.len(), 2);
+    // Each card says the look that raised it: another look, another.
+    assert_eq!(data_of(&cards[1])["scan"], (now + chrono::Duration::minutes(6)).to_rfc3339());
+    assert_ne!(data_of(&cards[0])["scan"], data_of(&cards[1])["scan"]);
     let row = primary.act_on_notice(notice_id_of(&cards[1]), "open").await.unwrap();
     assert_eq!(row.data.unwrap()["state"], "opened");
 }
@@ -15847,10 +15850,17 @@ async fn work_waiting_long_for_review_and_a_branch_behind_with_conflicts_go_to_i
     let behind = rule_cards(&worker, "behind").await;
     assert_eq!(behind.len(), 1, "a branch behind main with a conflict");
     assert_eq!(data_of(&behind[0])["facts"]["base"], "main");
+    // The cards one look raised say the same look (the timeline draws a
+    // run of one rule's of one look as one card).
+    for card in [&review[0], &own[0], &behind[0]] {
+        assert_eq!(data_of(card)["scan"], now.to_rfc3339());
+    }
     // [Remind me]: the owner's reminder for tomorrow morning.
     let row = primary.act_on_notice(notice_id_of(&own[0]), "remind").await.unwrap();
     let data = row.data.unwrap();
     assert_eq!(data["state"], "reminding");
+    // A step keeps the look on the card.
+    assert_eq!(data["scan"], now.to_rfc3339());
     let item = svc::get_item(&primary.db.conn, data["item_id"].as_i64().unwrap() as i32).await.unwrap().unwrap();
     assert_eq!(item.kind, ItemKind::Reminder);
     assert!(item.due_at.unwrap() > chrono::Utc::now());
@@ -15908,7 +15918,7 @@ async fn changes_left_uncommitted_and_a_quiet_matter() {
         facts: json!({ "folder_id": app }),
         text: "app".into(),
     };
-    primary.raise_rule_card(&old, &primary.prefs().await, false).await.unwrap();
+    primary.raise_rule_card(&old, &primary.prefs().await, false, t0).await.unwrap();
     let cards = rule_cards(&primary, "new_project").await;
     assert_eq!(data_of(&cards[0])["state"], "open");
     host.rules_tick_at(t0 + chrono::Duration::hours(27)).await;

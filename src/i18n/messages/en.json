@@ -12798,7 +12798,14 @@
         }
       },
       "undoDetail": "You undid {undone} of the {made} changes made at your word in the last two weeks.",
-      "idleBotDetail": "Nobody has woken it for two weeks."
+      "idleBotDetail": "Nobody has woken it for two weeks.",
+      "group": {
+        "count": "{count, plural, one {# card} other {# cards}}",
+        "expand": "Show all",
+        "collapse": "Show less",
+        "more": "{count} more",
+        "mutedEntry": "Dismissed, and this kind turned off."
+      }
     },
     "brief": {
       "title": "Morning brief",

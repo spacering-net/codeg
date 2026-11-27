@@ -12798,7 +12798,14 @@
         }
       },
       "undoDetail": "Você desfez {undone} das {made} alterações feitas a seu pedido nas últimas duas semanas.",
-      "idleBotDetail": "Ninguém o acordou em duas semanas."
+      "idleBotDetail": "Ninguém o acordou em duas semanas.",
+      "group": {
+        "count": "{count, plural, one {# cartão} other {# cartões}}",
+        "expand": "Mostrar tudo",
+        "collapse": "Mostrar menos",
+        "more": "{count, plural, one {Mais # não mostrado} other {Mais # não mostrados}}",
+        "mutedEntry": "Dispensado, e este tipo foi desativado."
+      }
     },
     "brief": {
       "title": "Resumo da manhã",
