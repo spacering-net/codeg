@@ -39,6 +39,7 @@ import {
   STORAGE_KEY_CHAT_ANIMATIONS,
   STORAGE_KEY_CHAT_CONTENT_WIDTH,
   STORAGE_KEY_WELCOME_QUICK_ACTIONS,
+  STORAGE_KEY_KEEP_OPENED_CONVERSATIONS,
   STORAGE_KEY_UI_FONT,
   STORAGE_KEY_UI_FONT_CUSTOM,
   STORAGE_KEY_UI_FONT_STACK,
@@ -146,6 +147,9 @@ type AppearanceContextValue = {
    * 宽度就结束时，手柄用它把已存的宽度放回 <html>。
    */
   getChatContentWidth: () => number | null
+  /** 打开的会话是否各占一个标签页（关闭预览标签页的「就地替换」），默认关闭 */
+  keepOpenedConversations: boolean
+  setKeepOpenedConversations: (on: boolean) => void
   /** 界面字体（普通组件，驱动 --font-sans） */
   uiFont: FontSelection
   setUiFont: (id: string, custom?: string) => void
@@ -449,6 +453,12 @@ export function AppearanceProvider({
   // 地方再把新值写回 <html>。
   const chatContentWidthRef = useRef(chatContentWidth)
   const getChatContentWidth = useCallback(() => chatContentWidthRef.current, [])
+  // 打开的会话是否保留各自的标签页：默认关闭，键缺失即回退为预览标签页的历史行为。
+  // 真正消费它的是 tab store（在 openTab 里直接读同一个键），这里只是设置面板的回显态。
+  const [keepOpenedConversations, setKeepOpenedConversationsState] =
+    useState<boolean>(() =>
+      readBool(STORAGE_KEY_KEEP_OPENED_CONVERSATIONS, false)
+    )
 
   // 字体偏好的初始值从 localStorage 读 id/custom（视觉已由 inline 脚本就位，
   // 这里只是回填选中态，不会造成闪烁）。
@@ -610,6 +620,11 @@ export function AppearanceProvider({
     commitChatContentWidth(px)
     // commitChatContentWidth 直接写 localStorage、不经 persist，这里补上镜像。
     scheduleAppearanceMirror()
+  }, [])
+
+  const setKeepOpenedConversations = useCallback((on: boolean) => {
+    setKeepOpenedConversationsState(on)
+    persist(STORAGE_KEY_KEEP_OPENED_CONVERSATIONS, on ? "1" : "0")
   }, [])
 
   const setUiFont = useCallback((id: string, custom = "") => {
@@ -1071,6 +1086,11 @@ export function AppearanceProvider({
       if (e.key === STORAGE_KEY_CHAT_ANIMATIONS) {
         setChatAnimationsState(readBool(STORAGE_KEY_CHAT_ANIMATIONS, true))
       }
+      if (e.key === STORAGE_KEY_KEEP_OPENED_CONVERSATIONS) {
+        setKeepOpenedConversationsState(
+          readBool(STORAGE_KEY_KEEP_OPENED_CONVERSATIONS, false)
+        )
+      }
       if (e.key && FONT_KEYS.has(e.key)) {
         rehydrateFonts()
       }
@@ -1181,6 +1201,8 @@ export function AppearanceProvider({
         setChatContentWidth,
         previewChatContentWidth: applyChatContentWidth,
         getChatContentWidth,
+        keepOpenedConversations,
+        setKeepOpenedConversations,
         uiFont,
         setUiFont,
         editorFont,

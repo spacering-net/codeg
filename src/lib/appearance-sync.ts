@@ -37,6 +37,7 @@ export const SYNCED_APPEARANCE_KEYS = [
   "codeg-welcome-quick-actions",
   "codeg-chat-animations",
   "codeg-chat-content-width",
+  "codeg-keep-opened-conversations",
   "codeg-ui-font",
   "codeg-ui-font-custom",
   "codeg-ui-font-stack",

@@ -49,6 +49,7 @@ pub const APPEARANCE_STORAGE_KEYS: &[&str] = &[
     "codeg-welcome-quick-actions",
     "codeg-chat-animations",
     "codeg-chat-content-width",
+    "codeg-keep-opened-conversations",
     "codeg-ui-font",
     "codeg-ui-font-custom",
     "codeg-ui-font-stack",

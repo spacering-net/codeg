@@ -5,6 +5,7 @@ import {
   Monitor,
   Moon,
   MoveHorizontal,
+  PanelsTopLeft,
   Sparkles,
   Sun,
   Type,
@@ -29,6 +30,7 @@ import {
   useWelcomeQuickActions,
   useChatAnimationsSetting,
   useChatContentWidth,
+  useKeepOpenedConversations,
 } from "@/hooks/use-appearance"
 import {
   CHAT_CONTENT_DEFAULT,
@@ -76,6 +78,8 @@ export function AppearanceSettings() {
   // 宽度以 100% 缩放下的 px 计（随缩放一起放大），所以同一块屏幕在高缩放下能放下
   // 的宽度更小。
   const chatWidthMax = chatContentWidthCeiling(screenWidth, zoomLevel / 100)
+  const { keepOpenedConversations, setKeepOpenedConversations } =
+    useKeepOpenedConversations()
 
   const resolvedThemeLabel =
     resolvedTheme === "dark"
@@ -275,6 +279,30 @@ export function AppearanceSettings() {
 
         {/* ===== Workspace background ===== */}
         <WorkspaceBackgroundSection />
+
+        {/* ===== Conversation tabs ===== */}
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <PanelsTopLeft className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">
+              {t("conversationTabs.sectionTitle")}
+            </h2>
+          </div>
+
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("conversationTabs.sectionDescription")}
+          </p>
+
+          <label className="flex items-center gap-2">
+            <Switch
+              checked={keepOpenedConversations}
+              onCheckedChange={setKeepOpenedConversations}
+            />
+            <span className="text-xs text-muted-foreground">
+              {t("conversationTabs.keepOpened")}
+            </span>
+          </label>
+        </section>
 
         {/* ===== New conversation — mode selection area ===== */}
         <section className="rounded-xl border bg-card p-4 space-y-4">
