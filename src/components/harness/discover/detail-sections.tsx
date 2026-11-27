@@ -46,7 +46,7 @@ import { MachineText } from "../machine-text"
 import { DiscoverMark, RiskMark } from "./discover-card"
 import { DiscoverFailure } from "./discover-failure"
 import { HarnessLink } from "./harness-link"
-import { ReadmeContent } from "./readme-content"
+import { TranslatedCatalogReadme } from "./catalog-translation"
 import { useDiscoverLabels } from "./use-discover-labels"
 
 /**
@@ -298,8 +298,9 @@ export function DescriptionSection({
         contentClassName=""
         bare
       >
-        <ReadmeContent
+        <TranslatedCatalogReadme
           fragment={readme.value}
+          item={item}
           // The page's heading already says what the item is called.
           omitHeading={omitHeading}
         />

@@ -7722,6 +7722,14 @@
       "discoverOff": "«اكتشاف» متوقف في هذا الـ Codeg، لذا لا يمكن فتح ⁦{ref}⁩ هنا."
     },
     "discover": {
+      "translation": {
+        "translate": "ترجمة (Google)",
+        "showOriginal": "عرض الأصل",
+        "providerHint": "يرسل عناوين الكتالوج العام وملخصاته ونصوص الوصف إلى ترجمة Google. لا يرسل الشيفرة أو وجهات الروابط.",
+        "loading": "جارٍ الترجمة…",
+        "translated": "ترجمة آلية · تُفضّل ترجمات الناشر",
+        "retry": "إعادة محاولة الترجمة"
+      },
       "search": {
         "label": "البحث في SRN Harness",
         "placeholder": "ابحث عن مهارات وخوادم MCP ومساعدين…",

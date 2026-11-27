@@ -7722,6 +7722,14 @@
       "discoverOff": "„Entdecken“ ist in diesem Codeg ausgeschaltet, daher lässt sich {ref} hier nicht öffnen."
     },
     "discover": {
+      "translation": {
+        "translate": "Übersetzen (Google)",
+        "showOriginal": "Original anzeigen",
+        "providerHint": "Sendet öffentliche Katalogtitel, Zusammenfassungen und Beschreibungstext an Google Übersetzer. Code und Linkziele werden nicht gesendet.",
+        "loading": "Wird übersetzt…",
+        "translated": "Maschinelle Übersetzung · Übersetzungen des Autors haben Vorrang",
+        "retry": "Übersetzung erneut versuchen"
+      },
       "search": {
         "label": "SRN Harness durchsuchen",
         "placeholder": "Skills, MCP-Server, Assistenten suchen …",

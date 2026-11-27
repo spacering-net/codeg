@@ -7722,6 +7722,14 @@
       "discoverOff": "這個 Codeg 已關閉「探索」，所以無法在這裡開啟 {ref}。"
     },
     "discover": {
+      "translation": {
+        "translate": "翻譯（Google）",
+        "showOriginal": "顯示原文",
+        "providerHint": "使用 Google 翻譯公開目錄的標題、簡介和介紹內文；程式碼與連結網址不會傳送。",
+        "loading": "翻譯中…",
+        "translated": "機器翻譯 · 優先使用作者提供的中文",
+        "retry": "重試翻譯"
+      },
       "search": {
         "label": "搜尋 SRN Harness",
         "placeholder": "搜尋技能、MCP 服務、助手…",

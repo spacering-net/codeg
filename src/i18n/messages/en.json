@@ -7722,6 +7722,14 @@
       "discoverOff": "Discover is switched off on this Codeg, so {ref} cannot be opened here."
     },
     "discover": {
+      "translation": {
+        "translate": "Translate (Google)",
+        "showOriginal": "Show original",
+        "providerHint": "Uses Google Translate for public catalog titles, summaries and description prose. Code and link destinations are not sent.",
+        "loading": "Translating…",
+        "translated": "Machine translation · publisher translations take priority",
+        "retry": "Retry translation"
+      },
       "search": {
         "label": "Search SRN Harness",
         "placeholder": "Search skills, MCP servers, assistants…",
