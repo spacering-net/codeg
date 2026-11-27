@@ -997,6 +997,11 @@ pub async fn handle_cancel(
     // Cancel the ACP connection (also CAS-updates the row to Cancelled and
     // emits ConversationStatusChanged when the row is still InProgress).
     let _ = conn_mgr.cancel(db, &session_ref.connection_id).await;
+    // A turn cancel leaves delegated sub-agents running; `/cancel` also
+    // unbinds the session from the channel, so stop them with it.
+    conn_mgr
+        .cancel_delegated_children(&session_ref.connection_id)
+        .await;
 
     // Remove from bridge
     bridge.lock().await.remove(&session_ref.connection_id);

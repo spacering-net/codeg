@@ -8377,6 +8377,15 @@ mod tests {
             DelegationOutcome::Err { code, .. } => assert_eq!(code, "canceled"),
             other => panic!("expected canceled, got {other:?}"),
         }
+        // The teardown is backgrounded: the canceled result can be observed
+        // before it runs, so wait for it.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while mock.disconnects.lock().await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("background child teardown");
         assert_eq!(mock.cancels.lock().await.as_slice(), &["child-1"]);
         assert_eq!(mock.disconnects.lock().await.as_slice(), &["child-1"]);
     }
