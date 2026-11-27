@@ -852,13 +852,18 @@ impl AntigravityParser {
         let steps = read_steps(db_path);
         let mut parsed = project_steps(&steps);
         // 优先读与该 `.db` 同目录的 `.meta` sidecar（旧 standalone server 格式），
-        // 找不到再查 `conversation_summaries.db`（新 CLI 格式），避免旧目录同名
-        // `.meta` 意外覆盖新 CLI 会话的工作区。
+        // 再读轨迹库自身的 `trajectory_metadata_blob`，然后查
+        // `conversation_summaries.db`（新 CLI 格式），最后才回退到旧目录同名
+        // `.meta`，避免其意外覆盖新 CLI 会话的工作区。
         let sibling_meta = db_path.with_extension(METADATA_FILE_SUFFIX);
         parsed.cwd = sibling_meta
             .is_file()
             .then(|| read_sidecar_cwd(&sibling_meta))
             .flatten()
+            // The CLI's own trajectory records its workspace, so a session
+            // restored from a backup (or copied between machines) without the
+            // shared `conversation_summaries.db` row still knows its folder.
+            .or_else(|| read_trajectory_cwd(db_path))
             .or_else(|| {
                 if let Some(map) = summary_cwds {
                     map.get(conversation_id).cloned()
@@ -1059,6 +1064,51 @@ fn read_sidecar_cwd(meta_path: &Path) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+/// `trajectory_metadata_blob.data` — the per-conversation metadata record, a
+/// protobuf in the trajectory `.db` itself. Only the workspace is read.
+///
+/// Field 7 is REPEATED: `agy acp` (1.5.18) writes the session folder once,
+/// while the standalone server wrote the session folder first and then every
+/// skill directory it scanned (`…/.gemini/skills`, `…/.agents/skills`, …), so
+/// the FIRST entry is the folder — a singular field would keep the last one
+/// and name a skills directory instead. Checked against every legacy session
+/// on a real machine that has the record: the first entry equalled the
+/// `.meta` sidecar's `cwd` in all 27. Field 1 (CLI only) is the workspace set,
+/// whose first URI is the same folder; the CLI's values also match
+/// `conversation_summaries.workspace_uris`.
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct TrajectoryMetadata {
+    #[prost(message, optional, tag = "1")]
+    workspaces: Option<TrajectoryWorkspaces>,
+    #[prost(string, repeated, tag = "7")]
+    workspace_uris: Vec<String>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct TrajectoryWorkspaces {
+    #[prost(string, tag = "1")]
+    primary_uri: String,
+}
+
+/// The workspace folder a CLI session ran in, from its own trajectory `.db`.
+fn read_trajectory_cwd(db_path: &Path) -> Option<String> {
+    let conn = open_trajectory(db_path)?;
+    let data: Vec<u8> = conn
+        .query_row(
+            "SELECT data FROM trajectory_metadata_blob ORDER BY id = 'main' DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .ok()?;
+    let meta = TrajectoryMetadata::decode(data.as_slice()).ok()?;
+    meta.workspace_uris
+        .into_iter()
+        .next()
+        .into_iter()
+        .chain(meta.workspaces.map(|w| w.primary_uri))
+        .find_map(|uri| file_uri_to_path(&uri))
 }
 
 /// 打开 CLI 的 `conversation_summaries.db`（表为 `conversation_summaries`，
@@ -2684,6 +2734,99 @@ mod tests {
             detail.summary.folder_path.as_deref(),
             Some(expected_path.as_str())
         );
+    }
+
+    /// A CLI session restored without the shared `conversation_summaries.db`
+    /// row (which backups no longer carry) still knows its folder from its own
+    /// `trajectory_metadata_blob` — and a legacy record, whose repeated field 7
+    /// lists the folder FIRST and then the skill directories, names the folder
+    /// rather than the last skills directory.
+    #[test]
+    fn reads_workspace_cwd_from_the_trajectory_metadata_blob() {
+        let root = tempfile::tempdir().unwrap();
+        let conv_dir = root.path().join("antigravity-cli").join("conversations");
+        std::fs::create_dir_all(&conv_dir).unwrap();
+        let workspace = root.path().join("my repo");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let uri = url::Url::from_directory_path(&workspace).unwrap().to_string();
+        let expected = file_uri_to_path(&uri).unwrap();
+        let skills_uri = url::Url::from_directory_path(workspace.join(".agents").join("skills"))
+            .unwrap()
+            .to_string();
+
+        let cases = [
+            (
+                "cli-blob",
+                TrajectoryMetadata {
+                    workspaces: Some(TrajectoryWorkspaces {
+                        primary_uri: uri.clone(),
+                    }),
+                    workspace_uris: vec![uri.clone()],
+                },
+            ),
+            (
+                "legacy-blob",
+                TrajectoryMetadata {
+                    workspaces: None,
+                    workspace_uris: vec![uri.clone(), skills_uri.clone()],
+                },
+            ),
+            (
+                "workspace-set-only",
+                TrajectoryMetadata {
+                    workspaces: Some(TrajectoryWorkspaces {
+                        primary_uri: uri.clone(),
+                    }),
+                    workspace_uris: Vec::new(),
+                },
+            ),
+        ];
+        for (id, meta) in &cases {
+            let conn = Connection::open(conv_dir.join(format!("{id}.db"))).unwrap();
+            conn.execute(
+                "CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_payload BLOB)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "CREATE TABLE trajectory_metadata_blob (id TEXT DEFAULT 'main', data BLOB, PRIMARY KEY (id))",
+                [],
+            )
+            .unwrap();
+            let step = Step {
+                user_input: Some(UserInput {
+                    query: format!("hello from {id}"),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            conn.execute(
+                "INSERT INTO steps (idx, step_payload) VALUES (0, ?1)",
+                [step.encode_to_vec()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO trajectory_metadata_blob (id, data) VALUES ('main', ?1)",
+                [meta.encode_to_vec()],
+            )
+            .unwrap();
+        }
+
+        let parser = AntigravityParser::with_base_dir(conv_dir);
+        let listed = parser.list_conversations().unwrap();
+        assert_eq!(listed.len(), cases.len());
+        for summary in &listed {
+            assert_eq!(
+                summary.folder_path.as_deref(),
+                Some(expected.as_str()),
+                "{}",
+                summary.id
+            );
+        }
+        for (id, _) in &cases {
+            let detail = parser.get_conversation(id).unwrap();
+            assert_eq!(detail.summary.folder_path.as_deref(), Some(expected.as_str()), "{id}");
+        }
     }
 
     /// One question of an `ask_question` step, options numbered from `"1"` the

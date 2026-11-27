@@ -326,6 +326,13 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             // `<GEMINI_HOME>/antigravity-cli/conversations/<id>.db`。
             // 根目录仅指向 `conversations` 子目录而非 `antigravity-cli` 本身，
             // 避免将同级凭据、缓存或设置文件打进备份包。
+            //
+            // The CLI's shared `conversation_summaries.db` is deliberately NOT
+            // archived: it indexes every conversation, so a whole-file restore
+            // either skips the restored sessions' rows or replaces the rows of
+            // sessions created since the backup. Nothing needs it — each
+            // trajectory `.db` records its own workspace in
+            // `trajectory_metadata_blob`, which the parser reads.
             agent: "antigravity",
             root: antigravity::resolve_antigravity_sessions_dir(),
             is_file: false,
@@ -345,19 +352,6 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "antigravity-acp",
             root: antigravity::resolve_antigravity_legacy_sessions_dir(),
             is_file: false,
-            sqlite: true,
-            include_top: None,
-            indexes: &[],
-        },
-        ExternalSource {
-            // Antigravity CLI 不再为每个会话生成 `.meta` sidecar，而是把
-            // `workspace_uris`（会话目录）索引在父目录的 `conversation_summaries.db`。
-            // 单独注册一个 file source（而不是把上面的 root 上移到 `antigravity-cli`），
-            // 这样旧备份里的 `external/antigravity/<id>.db` 还原路径保持兼容，
-            // 同时新备份还原后也不会丢失 CLI 会话的工作区路径。
-            agent: "antigravity-summaries",
-            root: antigravity::resolve_antigravity_cli_dir().join("conversation_summaries.db"),
-            is_file: true,
             sqlite: true,
             include_top: None,
             indexes: &[],
