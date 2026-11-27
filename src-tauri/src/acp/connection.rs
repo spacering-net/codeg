@@ -3264,6 +3264,7 @@ pub async fn spawn_agent_connection(
                 .await;
         }
 
+        let failed = result.is_err();
         if let Err(e) = result {
             let code = e.code().map(String::from);
             emit_with_state(
@@ -3305,6 +3306,8 @@ pub async fn spawn_agent_connection(
             },
         )
         .await;
+        let session = state_clone.read().await;
+        crate::host_plugins::lifecycle::observe_agent_close(&emitter_clone, &session, failed);
                 // Connection loop ended; `block_on` returns and `_cleanup`
                 // (bound at the top of the thread body) drops next, removing
                 // the manager map entry — same as on a panic unwind.
