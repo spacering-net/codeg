@@ -1220,6 +1220,18 @@ pub fn build_router_with_srn(
         .route("/mcp_inventory", post(handlers::mcp::mcp_inventory))
         .route("/mcp_apply", post(handlers::mcp::mcp_apply))
         .route("/mcp_probe", post(handlers::mcp::mcp_probe))
+        .route("/mcp_oauth_list", post(handlers::mcp::mcp_oauth_list))
+        .route("/mcp_oauth_start", post(handlers::mcp::mcp_oauth_start))
+        .route(
+            "/mcp_oauth_complete_callback",
+            post(handlers::mcp::mcp_oauth_complete_callback),
+        )
+        .route("/mcp_oauth_cancel", post(handlers::mcp::mcp_oauth_cancel))
+        .route("/mcp_oauth_revoke", post(handlers::mcp::mcp_oauth_revoke))
+        .route(
+            "/mcp_oauth_bridge_definition",
+            post(handlers::mcp::mcp_oauth_bridge_definition),
+        )
         .route(
             "/mcp_parse_snippet",
             post(handlers::mcp::mcp_parse_snippet),

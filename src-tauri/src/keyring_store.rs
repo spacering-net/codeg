@@ -97,9 +97,7 @@ fn read_tokens_at_checked(
     #[cfg(unix)]
     if path.exists() {
         use std::os::unix::fs::PermissionsExt;
-        if let Err(err) =
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        {
+        if let Err(err) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
             // Keep reading (a read-only mount is not made worse), but make the
             // failed hardening observable instead of silently world-readable.
             tracing::warn!(
@@ -109,8 +107,9 @@ fn read_tokens_at_checked(
         }
     }
     match std::fs::read_to_string(path) {
-        Ok(raw) => serde_json::from_str(&raw)
-            .map_err(|e| format!("token store is not readable JSON: {e}")),
+        Ok(raw) => {
+            serde_json::from_str(&raw).map_err(|e| format!("token store is not readable JSON: {e}"))
+        }
         // A store that was never written is legitimately empty.
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             Ok(std::collections::HashMap::new())
@@ -120,8 +119,40 @@ fn read_tokens_at_checked(
 }
 
 #[cfg(not(feature = "tauri-runtime"))]
-fn write_tokens(tokens: &std::collections::HashMap<String, String>) -> Result<(), String> {
-    write_tokens_at(&tokens_file_path(), tokens)
+fn update_tokens(key: String, value: Option<&str>) -> Result<(), String> {
+    update_tokens_at(&tokens_file_path(), key, value)
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+fn update_tokens_at(
+    path: &std::path::Path,
+    key: String,
+    value: Option<&str>,
+) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "token store path has no parent directory".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("failed to create token store directory: {e}"))?;
+    // Lock a separate inode because the transaction atomically replaces the
+    // data file. All credential writers share this lock, including tools in
+    // another process using the same data directory.
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(parent.join(".tokens.json.lock"))
+        .map_err(|e| format!("failed to open token store lock: {e}"))?;
+    lock.lock()
+        .map_err(|e| format!("failed to lock token store: {e}"))?;
+    let mut tokens = read_tokens_at_checked(path)?;
+    if let Some(value) = value {
+        tokens.insert(key, value.to_owned());
+    } else if tokens.remove(&key).is_none() {
+        return Ok(());
+    }
+    write_tokens_at(path, &tokens)
 }
 
 /// Persist the token map without ever exposing a wide-permission file, even
@@ -178,17 +209,14 @@ fn write_tokens_at(
 
     #[cfg(not(unix))]
     {
-        // Non-Unix server builds are outside the supported surface; keep the
-        // plain write rather than pretending NTFS ACL hardening exists here.
-        std::fs::write(path, json).map_err(|e| format!("failed to write token store: {e}"))
+        crate::commands::mcp_engine::fsio::write_atomic(path, json.as_bytes())
+            .map_err(|e| format!("failed to write token store: {e}"))
     }
 }
 
 #[cfg(not(feature = "tauri-runtime"))]
 pub fn set_token(account_id: &str, token: &str) -> Result<(), String> {
-    let mut tokens = read_tokens();
-    tokens.insert(token_key(account_id), token.to_string());
-    write_tokens(&tokens)
+    update_tokens(token_key(account_id), Some(token))
 }
 
 #[cfg(not(feature = "tauri-runtime"))]
@@ -198,9 +226,7 @@ pub fn get_token(account_id: &str) -> Option<String> {
 
 #[cfg(not(feature = "tauri-runtime"))]
 pub fn delete_token(account_id: &str) -> Result<(), String> {
-    let mut tokens = read_tokens();
-    tokens.remove(&token_key(account_id));
-    write_tokens(&tokens)
+    update_tokens(token_key(account_id), None)
 }
 
 // ── Chat channel token helpers ──
@@ -234,9 +260,7 @@ pub fn delete_channel_token(channel_id: i32) -> Result<(), String> {
 
 #[cfg(not(feature = "tauri-runtime"))]
 pub fn set_channel_token(channel_id: i32, token: &str) -> Result<(), String> {
-    let mut tokens = read_tokens();
-    tokens.insert(channel_token_key(channel_id), token.to_string());
-    write_tokens(&tokens)
+    update_tokens(channel_token_key(channel_id), Some(token))
 }
 
 #[cfg(not(feature = "tauri-runtime"))]
@@ -246,9 +270,7 @@ pub fn get_channel_token(channel_id: i32) -> Option<String> {
 
 #[cfg(not(feature = "tauri-runtime"))]
 pub fn delete_channel_token(channel_id: i32) -> Result<(), String> {
-    let mut tokens = read_tokens();
-    tokens.remove(&channel_token_key(channel_id));
-    write_tokens(&tokens)
+    update_tokens(channel_token_key(channel_id), None)
 }
 
 // ── Named secrets ──
@@ -294,9 +316,7 @@ pub fn delete_secret(name: &str) -> Result<(), String> {
 
 #[cfg(not(feature = "tauri-runtime"))]
 pub fn set_secret(name: &str, value: &str) -> Result<(), String> {
-    let mut tokens = read_tokens();
-    tokens.insert(secret_key(name), value.to_string());
-    write_tokens(&tokens)
+    update_tokens(secret_key(name), Some(value))
 }
 
 #[cfg(not(feature = "tauri-runtime"))]
@@ -308,13 +328,29 @@ pub fn get_secret(name: &str) -> Result<Option<String>, String> {
 
 #[cfg(not(feature = "tauri-runtime"))]
 pub fn delete_secret(name: &str) -> Result<(), String> {
-    let mut tokens = read_tokens();
-    tokens.remove(&secret_key(name));
-    write_tokens(&tokens)
+    update_tokens(secret_key(name), None)
 }
 
 #[cfg(all(test, not(feature = "tauri-runtime")))]
 mod tests {
+    #[test]
+    fn concurrent_credential_updates_preserve_every_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokens.json");
+        let ready = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            for index in 0..8 {
+                let path = &path;
+                let ready = &ready;
+                scope.spawn(move || {
+                    ready.wait();
+                    update_tokens_at(path, format!("route:{index}"), Some("value")).unwrap();
+                });
+            }
+        });
+        assert_eq!(read_tokens_at_checked(&path).unwrap().len(), 8);
+    }
+
     use super::*;
 
     #[test]

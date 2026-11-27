@@ -35,6 +35,7 @@ pub(crate) mod inventory;
 pub(crate) mod json_doc;
 pub mod lock;
 pub mod model;
+pub mod oauth;
 mod paused;
 pub(crate) mod plugin_gate;
 mod probe;

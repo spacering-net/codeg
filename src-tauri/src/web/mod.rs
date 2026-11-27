@@ -902,6 +902,10 @@ pub(crate) async fn do_start_web_server_tauri(
 
     // Build AppState for the router
     let app_state = Arc::new(AppState {
+        mcp_oauth_bridge: app
+            .state::<Arc<crate::commands::mcp_engine::oauth::McpOAuthBridge>>()
+            .inner()
+            .clone(),
         // The service and access the desktop built at startup, so a CLI
         // reaching this web service and one on the loopback see the same runs.
         cli_runs: app

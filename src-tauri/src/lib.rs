@@ -187,6 +187,11 @@ mod tauri_app {
         if let Some(tm) = app.try_state::<TerminalManager>() {
             tm.kill_all();
         }
+        if let Some(bridge) =
+            app.try_state::<std::sync::Arc<crate::commands::mcp_engine::oauth::McpOAuthBridge>>()
+        {
+            tauri::async_runtime::block_on(bridge.shutdown());
+        }
         crate::office_watch::stop_all_office_watches();
         if let Some(cm) = app.try_state::<ConnectionManager>() {
             tauri::async_runtime::block_on(cm.disconnect_all());
@@ -1443,6 +1448,13 @@ mod tauri_app {
                     });
                 }
 
+                let mcp_oauth_bridge = crate::commands::mcp_engine::oauth::McpOAuthBridge::new(
+                    &effective_data_dir,
+                    web::event_bridge::EventEmitter::from_app(app.handle()),
+                );
+                app.manage(mcp_oauth_bridge.clone());
+                tauri::async_runtime::block_on(mcp_oauth_bridge.start_if_persisted());
+
                 match tauri::async_runtime::block_on(web::load_web_service_config(&db.conn)) {
                     Ok(config) if config.auto_start => {
                         let port = config.port.unwrap_or(web::DEFAULT_WEB_SERVICE_PORT);
@@ -2509,6 +2521,12 @@ mod tauri_app {
                 crate::commands::mcp_engine::mcp_apply,
                 crate::commands::mcp_engine::mcp_parse_snippet,
                 crate::commands::mcp_engine::mcp_probe,
+                crate::commands::mcp_engine::oauth::tauri_commands::mcp_oauth_list,
+                crate::commands::mcp_engine::oauth::tauri_commands::mcp_oauth_start,
+                crate::commands::mcp_engine::oauth::tauri_commands::mcp_oauth_complete_callback,
+                crate::commands::mcp_engine::oauth::tauri_commands::mcp_oauth_cancel,
+                crate::commands::mcp_engine::oauth::tauri_commands::mcp_oauth_revoke,
+                crate::commands::mcp_engine::oauth::tauri_commands::mcp_oauth_bridge_definition,
                 crate::commands::harness::harness_status,
                 crate::commands::harness::harness_config,
                 crate::commands::harness::harness_list,

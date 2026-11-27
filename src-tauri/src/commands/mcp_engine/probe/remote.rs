@@ -49,10 +49,18 @@ impl Remote {
         ] {
             request_headers.remove(name);
         }
-        let client = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|_| network_error())?;
+        let mut builder = Client::builder().redirect(reqwest::redirect::Policy::none());
+        // A bridge definition carries a local bearer token. System HTTP
+        // proxies must not receive it, even if NO_PROXY omits loopback.
+        if match url.host() {
+            Some(url::Host::Ipv4(addr)) => addr.is_loopback(),
+            Some(url::Host::Ipv6(addr)) => addr.is_loopback(),
+            Some(url::Host::Domain(host)) => host == "localhost",
+            None => false,
+        } {
+            builder = builder.no_proxy();
+        }
+        let client = builder.build().map_err(|_| network_error())?;
         Ok(Self {
             url,
             headers: request_headers,

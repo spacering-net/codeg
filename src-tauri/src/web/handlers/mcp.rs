@@ -13,6 +13,11 @@ use crate::commands::mcp::{
     McpMarketplaceServerDetail,
 };
 use crate::commands::mcp_engine;
+use crate::commands::mcp_engine::oauth::{
+    McpOAuthBridgeDefinitionRequest, McpOAuthBridgeSnapshot, McpOAuthCancelRequest,
+    McpOAuthCancelResult, McpOAuthCompleteCallbackRequest, McpOAuthRevokeRequest,
+    McpOAuthRouteInfo, McpOAuthStartRequest, McpOAuthStartResult,
+};
 use crate::commands::mcp_engine::{
     McpAgentId, McpApplyRequest, McpApplyResult, McpInventory, McpOp, McpProbeRequest,
     McpProbeResult, McpSnippet,
@@ -216,4 +221,65 @@ pub async fn mcp_probe(
     Json(request): Json<McpProbeRequest>,
 ) -> Json<McpProbeResult> {
     Json(mcp_engine::mcp_probe_at(&state.db, request, &state.data_dir).await)
+}
+
+pub async fn mcp_oauth_list(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<McpOAuthBridgeSnapshot>, AppCommandError> {
+    state.mcp_oauth_bridge.mcp_oauth_list_core().await.map(Json)
+}
+
+pub async fn mcp_oauth_start(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(request): Json<McpOAuthStartRequest>,
+) -> Result<Json<McpOAuthStartResult>, AppCommandError> {
+    state
+        .mcp_oauth_bridge
+        .mcp_oauth_start_core(request)
+        .await
+        .map(Json)
+}
+
+pub async fn mcp_oauth_complete_callback(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(request): Json<McpOAuthCompleteCallbackRequest>,
+) -> Result<Json<McpOAuthRouteInfo>, AppCommandError> {
+    state
+        .mcp_oauth_bridge
+        .mcp_oauth_complete_callback_core(request)
+        .await
+        .map(Json)
+}
+
+pub async fn mcp_oauth_cancel(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(request): Json<McpOAuthCancelRequest>,
+) -> Result<Json<McpOAuthCancelResult>, AppCommandError> {
+    state
+        .mcp_oauth_bridge
+        .mcp_oauth_cancel_core(request)
+        .await
+        .map(Json)
+}
+
+pub async fn mcp_oauth_revoke(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(request): Json<McpOAuthRevokeRequest>,
+) -> Result<Json<McpOAuthBridgeSnapshot>, AppCommandError> {
+    state
+        .mcp_oauth_bridge
+        .mcp_oauth_revoke_core(request)
+        .await
+        .map(Json)
+}
+
+pub async fn mcp_oauth_bridge_definition(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(request): Json<McpOAuthBridgeDefinitionRequest>,
+) -> Result<Json<mcp_engine::model::McpDefinition>, AppCommandError> {
+    state
+        .mcp_oauth_bridge
+        .mcp_oauth_bridge_definition_core(request)
+        .await
+        .map(Json)
 }
