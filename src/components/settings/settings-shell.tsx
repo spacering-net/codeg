@@ -20,6 +20,7 @@ import {
   MonitorCog,
   SendHorizontal,
   Palette,
+  Puzzle,
   Server,
   Settings,
   SlidersHorizontal,
@@ -56,6 +57,7 @@ interface SettingsNavItem {
     | "system"
     | "web_service"
     | "logs"
+    | "plugins"
   icon: ComponentType<{ className?: string }>
 }
 
@@ -124,6 +126,11 @@ const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
     href: "/settings/logs",
     labelKey: "logs",
     icon: FileSpreadsheet,
+  },
+  {
+    href: "/settings/plugins",
+    labelKey: "plugins",
+    icon: Puzzle,
   },
   {
     href: "/settings/system",
