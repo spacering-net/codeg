@@ -181,6 +181,25 @@
     }
   },
   {
+    "name": "project_knowledge",
+    "description": "Manage shared notes and Markdown plans across this project's sessions and worktrees. For a codeg://knowledge/<kind>/<id> attachment, read by kind and id when you need the contents. Proactively record confirmed decisions, constraints, and reusable findings as notes. If verified information supersedes a note, update it in place and record the reason or source. Keep notes that are merely old. Search for an existing entry before creating one. For substantial multi-step work, save an agreed or clearly scoped plan once it is actionable. Start it with a short Markdown checklist under ## Steps. When a step becomes its own Codeg board task, record the task ID on that step. Use the board card as the source for its execution and review status. Before ending each turn that changed the plan, update the same plan by ID, check off completed steps, and record changed scope, blockers, or the next step. When the plan is complete, mark the completed steps and summarize the outcome in that same entry. Use list to find entries and read to get the full body. Save with title and body, adding an id to update an entry. For edits and deletion, pass the previous body as expected. If the entry changed, read it again and reconcile your update.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["list", "read", "save", "delete"] },
+        "kind": { "type": "string", "enum": ["note", "plan"] },
+        "query": { "type": "string", "description": "Filter by text when listing." },
+        "offset": { "type": "integer", "minimum": 0, "description": "Pass nextOffset from the previous list response." },
+        "id": { "type": "string" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160, "description": "Display title for save, on one line. Pass it separately from the body." },
+        "body": { "type": "string", "description": "Note text or Markdown plan content. When passing title, start directly with the contents." },
+        "expected": { "type": "string", "description": "The previous body returned by read." }
+      },
+      "required": ["action", "kind"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "get_session_info",
     "description": "Look up a session/conversation the user referenced in their message and return what it is: its title, which agent ran it, its status, workspace folder, git branch, model, message count, and token-usage stats — and, on request, a compact view of its most recent messages. RECOGNIZING A MENTIONED SESSION: the user can @-mention a past session directly in their message — it appears as a Markdown link `[Session title](codeg://session/<number>)`, whose text is that session's title and whose `<number>` is codeg's internal conversation id (e.g. `[Fix auth](codeg://session/214)` is the session titled 'Fix auth'). Such a mention IS the user explicitly pointing you at that session, even when they never name this tool — call it whenever what that session is about or what happened in it matters to the request (e.g. to continue its work, build on its results, answer questions about it, or summarize it). If the message mentions several sessions, make one call per session. Pass the NUMBER from the reference as `session_id` (it is codeg's internal conversation id, NOT the agent's own session id). The result is read-only and never modifies the session. A session that no longer exists returns a `found: false` result you can act on — it is not an error.",
     "inputSchema": {

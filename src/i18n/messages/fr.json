@@ -1,4 +1,28 @@
 {
+  "ProjectKnowledge": {
+    "title": "Connaissances du projet",
+    "notes": "Notes",
+    "plans": "Plans",
+    "newNote": "Nouvelle note",
+    "newPlan": "Nouveau plan",
+    "searchNotes": "Rechercher des notes",
+    "searchPlans": "Rechercher des plans",
+    "noNotes": "Aucune note",
+    "noPlans": "Aucun plan",
+    "noResults": "Aucun résultat",
+    "untitled": "Sans titre",
+    "back": "Retour",
+    "edit": "Modifier",
+    "save": "Enregistrer",
+    "delete": "Supprimer",
+    "cancel": "Annuler",
+    "planTitle": "Titre (facultatif)",
+    "planBody": "Rédiger le plan en Markdown",
+    "noteBody": "Rédiger une note",
+    "preview": "Aperçu",
+    "deletePrompt": "Supprimer « {title} » ?",
+    "storageError": "Impossible d’enregistrer les modifications dans ce navigateur."
+  },
   "HtmlCodePreview": {
     "code": "Code",
     "preview": "Aperçu",

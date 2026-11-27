@@ -45,6 +45,7 @@ pub mod opencode_credentials;
 pub mod personal_agent;
 pub mod pet;
 pub mod project_boot;
+pub mod project_knowledge;
 pub mod question;
 pub mod quick_messages;
 pub mod science;

@@ -6,9 +6,7 @@ import {
   ChevronRight,
   ListTodo,
   Plus,
-  Search,
   SquareArrowOutUpRight,
-  X,
 } from "lucide-react"
 import {
   groupTasksByColumn,
@@ -20,12 +18,6 @@ import { searchTerms, taskMatchesSearch } from "@/components/tasks/task-search"
 import { TaskTimeFilter } from "@/components/tasks/task-time-filter"
 import { useTaskDialogs } from "@/components/tasks/use-task-dialogs"
 import { Button } from "@/components/ui/button"
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from "@/components/ui/input-group"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useTasksView } from "@/contexts/tasks-view-context"
@@ -41,6 +33,7 @@ import { cn } from "@/lib/utils"
 import { requestTasksFocus } from "@/lib/workbench-focus"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { GIT_TOOLBAR_ICON_BUTTON_CLASS } from "./git-toolbar-controls"
+import { AuxPanelSearchToolbar } from "./aux-panel-search-toolbar"
 import { AuxPanelNoFolderEmpty } from "./aux-panel-no-folder-empty"
 
 /**
@@ -175,37 +168,11 @@ export function TasksAuxTab() {
     <div className="flex h-full min-h-0 flex-col">
       {/* The h-10 band every aux tab opens with: the search where the changes
           tab keeps its commit field, then the two actions. */}
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border/50 pl-2 pr-2">
-        <InputGroup className="h-7 min-w-0 flex-1 rounded-full">
-          <InputGroupAddon align="inline-start">
-            <Search className="size-3.5" aria-hidden />
-          </InputGroupAddon>
-          <InputGroupInput
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape" && searchInput !== "") {
-                e.preventDefault()
-                setSearchInput("")
-              }
-            }}
-            placeholder={t("searchPlaceholder")}
-            aria-label={t("searchPlaceholder")}
-            className="h-7 text-xs"
-          />
-          {searchInput !== "" ? (
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton
-                size="icon-xs"
-                aria-label={t("clearSearch")}
-                title={t("clearSearch")}
-                onClick={() => setSearchInput("")}
-              >
-                <X className="size-3" />
-              </InputGroupButton>
-            </InputGroupAddon>
-          ) : null}
-        </InputGroup>
+      <AuxPanelSearchToolbar
+        query={searchInput}
+        onQueryChange={setSearchInput}
+        placeholder={t("searchPlaceholder")}
+      >
         <TaskTimeFilter
           value={timeFilter}
           onValueChange={saveTasksTimeFilter}
@@ -233,7 +200,7 @@ export function TasksAuxTab() {
         >
           <SquareArrowOutUpRight className="size-3.5" aria-hidden />
         </Button>
-      </div>
+      </AuxPanelSearchToolbar>
 
       {loading && tasks.length === 0 ? (
         <TasksAuxSkeleton />

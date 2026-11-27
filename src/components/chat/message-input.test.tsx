@@ -28,6 +28,7 @@ import {
 import {
   emitAttachFileToSession,
   emitAttachPageToSession,
+  emitAttachReferenceToSession,
   emitAttachSessionToSession,
 } from "@/lib/session-attachment-events"
 import type { DbConversationSummary } from "@/lib/types"
@@ -523,8 +524,10 @@ describe("MessageInput attach-to-chat insertion position", () => {
     composerHandle.current = null
   })
 
-  async function mountWithEditor() {
-    renderInput({ attachmentTabId: "tab-1" })
+  async function mountWithEditor(
+    onSend?: React.ComponentProps<typeof MessageInput>["onSend"]
+  ) {
+    renderInput({ attachmentTabId: "tab-1", ...(onSend && { onSend }) })
     await waitFor(
       () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
       { timeout: 5000 }
@@ -583,6 +586,31 @@ describe("MessageInput attach-to-chat insertion position", () => {
     )
     assertBetweenHelloAndWorld(serializeDocToText(editor.state.doc), link)
   })
+
+  it.each(["note", "plan"])(
+    "sends the %s as a project knowledge reference",
+    async (kind) => {
+      const onSend = vi.fn()
+      const editor = await mountWithEditor(onSend)
+      const label =
+        "A long project knowledge title with the full description shown on hover"
+      const uri =
+        "codeg://knowledge/" + kind + "/335dcbfe-278d-4ffd-affa-5ddc68fd6148"
+      let accepted = false
+      act(() => {
+        accepted = emitAttachReferenceToSession({ tabId: "tab-1", label, uri })
+      })
+      expect(accepted).toBe(true)
+      expect(
+        await screen.findByRole("img", { name: "file: " + label })
+      ).toHaveAttribute("title", label)
+      fireEvent.keyDown(editor.view.dom, { key: "Enter" })
+      expect(onSend).toHaveBeenCalledTimes(1)
+      expect(onSend.mock.calls[0][0].blocks).toEqual([
+        { type: "text", text: "[" + label + "](" + uri + ")" },
+      ])
+    }
+  )
 
   // The built-in browser's "send to chat". The block is page content, so it
   // goes behind a badge rather than into the prose — but only where the agent

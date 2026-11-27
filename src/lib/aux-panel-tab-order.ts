@@ -2,7 +2,7 @@
 
 /**
  * The right sidebar's (aux panel's) tabs — Session Details, Files, Changes,
- * Commits, Automations, Tasks, Issues, Pull requests — and the order the user
+ * Commits, Automations, Tasks, Project Knowledge, Issues, Pull requests — and the order the user
  * dragged them into on the panel's vertical tab rail.
  *
  * Kept in localStorage next to the panel's own open/width state
@@ -20,8 +20,8 @@ const ORDER_KEY = "workspace:right-sidebar-tab-order"
 /**
  * Every aux-panel tab, in the built-in order.
  *
- * The last four are the project's own work, read off the folder the active
- * conversation belongs to: its automations, its task board, and its
+ * The last five are the project's own work, read off the folder the active
+ * conversation belongs to: its automations, task board, knowledge, and
  * repository's issues and pull (merge) requests. They follow Commits, so a
  * rail stored before they existed keeps its own order and gains them as one
  * block right after Commits, wherever it was dragged to (see
@@ -34,6 +34,7 @@ export const AUX_PANEL_TABS = [
   "git_log",
   "automations",
   "tasks",
+  "project_knowledge",
   "issues",
   "pull_requests",
 ] as const

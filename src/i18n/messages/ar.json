@@ -1,4 +1,28 @@
 {
+  "ProjectKnowledge": {
+    "title": "معرفة المشروع",
+    "notes": "ملاحظات",
+    "plans": "خطط",
+    "newNote": "ملاحظة جديدة",
+    "newPlan": "خطة جديدة",
+    "searchNotes": "البحث في الملاحظات",
+    "searchPlans": "البحث في الخطط",
+    "noNotes": "لا توجد ملاحظات بعد",
+    "noPlans": "لا توجد خطط بعد",
+    "noResults": "لا توجد نتائج",
+    "untitled": "بلا عنوان",
+    "back": "رجوع",
+    "edit": "تحرير",
+    "save": "حفظ",
+    "delete": "حذف",
+    "cancel": "إلغاء",
+    "planTitle": "العنوان (اختياري)",
+    "planBody": "اكتب الخطة بتنسيق Markdown",
+    "noteBody": "اكتب ملاحظة",
+    "preview": "معاينة",
+    "deletePrompt": "هل تريد حذف «{title}»؟",
+    "storageError": "تعذر حفظ التغييرات في هذا المتصفح."
+  },
   "HtmlCodePreview": {
     "code": "الكود",
     "preview": "معاينة",

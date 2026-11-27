@@ -1,4 +1,28 @@
 {
+  "ProjectKnowledge": {
+    "title": "프로젝트 지식",
+    "notes": "노트",
+    "plans": "계획",
+    "newNote": "새 노트",
+    "newPlan": "새 계획",
+    "searchNotes": "노트 검색",
+    "searchPlans": "계획 검색",
+    "noNotes": "아직 노트가 없습니다",
+    "noPlans": "아직 계획이 없습니다",
+    "noResults": "검색 결과 없음",
+    "untitled": "제목 없음",
+    "back": "뒤로",
+    "edit": "편집",
+    "save": "저장",
+    "delete": "삭제",
+    "cancel": "취소",
+    "planTitle": "제목(선택 사항)",
+    "planBody": "Markdown으로 계획 작성",
+    "noteBody": "노트 작성",
+    "preview": "미리보기",
+    "deletePrompt": "‘{title}’을(를) 삭제할까요?",
+    "storageError": "이 브라우저에 변경 사항을 저장하지 못했습니다."
+  },
   "HtmlCodePreview": {
     "code": "코드",
     "preview": "미리 보기",

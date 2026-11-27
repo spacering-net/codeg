@@ -96,20 +96,27 @@ export function emitAttachPageToSession(
   return event.detail.accepted === true
 }
 
-export const APPEND_TEXT_TO_SESSION_EVENT = "codeg:append-text-to-session"
+export const ATTACH_REFERENCE_TO_SESSION_EVENT =
+  "codeg:attach-reference-to-session"
 
-export interface AppendTextToSessionDetail {
+export interface AttachReferenceToSessionDetail {
   tabId: string
-  text: string
+  label: string
+  uri: string
+  accepted?: boolean
 }
 
-export function emitAppendTextToSession(
-  detail: AppendTextToSessionDetail
-): void {
-  if (typeof window === "undefined") return
+export function emitAttachReferenceToSession(
+  detail: AttachReferenceToSessionDetail
+): boolean {
+  if (typeof window === "undefined") return false
   window.dispatchEvent(
-    new CustomEvent<AppendTextToSessionDetail>(APPEND_TEXT_TO_SESSION_EVENT, {
-      detail,
-    })
+    new CustomEvent<AttachReferenceToSessionDetail>(
+      ATTACH_REFERENCE_TO_SESSION_EVENT,
+      {
+        detail,
+      }
+    )
   )
+  return detail.accepted === true
 }

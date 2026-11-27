@@ -146,6 +146,7 @@ pub struct TokenStats {
 }
 
 pub struct DelegationListener {
+    pub project_knowledge: std::sync::OnceLock<(sea_orm::DatabaseConnection, PathBuf)>,
     pub broker: Arc<DelegationBroker>,
     pub tokens: Arc<TokenRegistry>,
     pub parent_lookup: Arc<dyn ParentSessionLookup>,
@@ -202,6 +203,7 @@ impl DelegationListener {
         results: Arc<dyn ResultToolAccess>,
     ) -> Arc<Self> {
         Arc::new(Self {
+            project_knowledge: std::sync::OnceLock::new(),
             broker,
             tokens,
             parent_lookup,
@@ -584,6 +586,12 @@ impl DelegationListener {
                 // and there is nothing to tear down on cancel.
                 session_response(self.process_session_info(req).await)?
             }
+            BrokerMessage::ProjectKnowledge { token, request } => BrokerResponse {
+                outcome: match self.process_project_knowledge(&token, request).await {
+                    Ok(value) => value,
+                    Err(error) => serde_json::json!({ "error": error }),
+                },
+            },
             BrokerMessage::TaskProgress(req) => {
                 task_ack_response(self.process_task_progress(req).await)?
             }
@@ -952,6 +960,32 @@ impl DelegationListener {
         self.session_info
             .resolve(req.session_id, req.max_messages.unwrap_or(0))
             .await
+    }
+
+    async fn process_project_knowledge(
+        &self,
+        token: &str,
+        request: crate::commands::project_knowledge::Request,
+    ) -> Result<serde_json::Value, String> {
+        let entry = self
+            .tokens
+            .lookup(token)
+            .await
+            .filter(|entry| !entry.agent_hosts_tools)
+            .ok_or("Project knowledge is unavailable for this session")?;
+        let id = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+            .ok_or("No active Codeg conversation")?;
+        let (db, data_dir) = self
+            .project_knowledge
+            .get()
+            .ok_or("Project knowledge is unavailable")?;
+        let conversation = crate::db::service::conversation_service::get_by_id(db, id)
+            .await
+            .map_err(|error| error.to_string())?;
+        crate::commands::project_knowledge::run(db, data_dir, conversation.folder_id, request).await
     }
 
     /// Validate the token and list the browser tabs an agent may know about.

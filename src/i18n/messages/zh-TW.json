@@ -1,4 +1,28 @@
 {
+  "ProjectKnowledge": {
+    "title": "專案知識",
+    "notes": "筆記",
+    "plans": "計畫",
+    "newNote": "新增筆記",
+    "newPlan": "新增計畫",
+    "searchNotes": "搜尋筆記",
+    "searchPlans": "搜尋計畫",
+    "noNotes": "尚無筆記",
+    "noPlans": "尚無計畫",
+    "noResults": "找不到結果",
+    "untitled": "未命名",
+    "back": "返回",
+    "edit": "編輯",
+    "save": "儲存",
+    "delete": "刪除",
+    "cancel": "取消",
+    "planTitle": "標題（選填）",
+    "planBody": "用 Markdown 撰寫計畫",
+    "noteBody": "寫筆記",
+    "preview": "預覽",
+    "deletePrompt": "刪除「{title}」？",
+    "storageError": "此瀏覽器無法儲存變更。"
+  },
   "HtmlCodePreview": {
     "code": "程式碼",
     "preview": "預覽",

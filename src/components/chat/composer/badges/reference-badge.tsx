@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils"
 import { useAssistant } from "@/stores/assistants-store"
 import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
 
+import { isKnowledgeReferenceUri } from "../reference-uri"
 import type { ReferenceAttrs } from "../types"
 
 const ICON_CLASS = "size-3.5 shrink-0"
@@ -269,7 +270,9 @@ function BadgeChip({
     <span
       data-reference-badge=""
       data-ref-type={data.refType}
-      title={data.uri ?? data.label}
+      title={
+        data.uri && !isKnowledgeReferenceUri(data.uri) ? data.uri : data.label
+      }
       // The badge is an inline contentEditable=false atom. `role="img"` makes it
       // a single named unit so `aria-label` is a reliable accessible name (a
       // bare span's aria-label is not), and collapses the decorative icon —
@@ -279,7 +282,7 @@ function BadgeChip({
       tabIndex={onOpen ? 0 : undefined}
       aria-label={`${data.refType}: ${data.label || data.id}`}
       className={cn(
-        "inline-flex max-w-[18rem] items-center gap-0.5 align-middle text-[0.85em] font-medium leading-snug",
+        "inline-flex max-w-[min(100%,18rem)] items-center gap-0.5 align-middle text-[0.85em] font-medium leading-snug",
         colorClass,
         className
       )}

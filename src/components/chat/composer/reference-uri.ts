@@ -16,6 +16,11 @@ const ASSISTANT_URI = /^codeg:\/\/assistant\/([1-9]\d{0,9})$/i
 // A personal assistant by its uid — the shape the backend's routing scan
 // (`agent_mentions.rs` `bot_reference_regex`) accepts.
 const BOT_URI = /^codeg:\/\/bot\/([0-9a-z_-]{1,64})$/
+const KNOWLEDGE_URI = /^codeg:\/\/knowledge\/(?:note|plan)\/([0-9a-f-]+)$/i
+export function isKnowledgeReferenceUri(uri: string): boolean {
+  return KNOWLEDGE_URI.test(uri)
+}
+
 const SESSION_URI = /^codeg:\/\/session\/(.+)$/i
 const COMMIT_URI = /^codeg:\/\/commit\/.*@(.+)$/i
 // command / skill / expert tokens, surfaced as badges in transcript user messages
@@ -205,6 +210,16 @@ export function parseCodegReferenceUri(
       label: (label || id).replace(/^[/$]/, "") || id,
       uri,
       meta: prefix ? { invocationPrefix: prefix } : null,
+    }
+  }
+
+  if (isKnowledgeReferenceUri(uri)) {
+    return {
+      refType: "file",
+      id: uri,
+      label: label || uri,
+      uri,
+      meta: { fileKind: "file" },
     }
   }
 

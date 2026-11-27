@@ -560,6 +560,9 @@ async fn async_main(
                 manager: Arc::new(state.connection_manager.clone_ref()),
             }),
         );
+        let _ = listener
+            .project_knowledge
+            .set((state.db.conn.clone(), state.data_dir.clone()));
         // Bind through the service handle rather than a bare `listener.run`
         // spawn: it keeps the bind error and the accept-loop handle around, so
         // the workspace status indicator can report why the broker socket is

@@ -1,4 +1,28 @@
 {
+  "ProjectKnowledge": {
+    "title": "プロジェクトナレッジ",
+    "notes": "ノート",
+    "plans": "計画",
+    "newNote": "新しいノート",
+    "newPlan": "新しい計画",
+    "searchNotes": "ノートを検索",
+    "searchPlans": "計画を検索",
+    "noNotes": "ノートはまだありません",
+    "noPlans": "計画はまだありません",
+    "noResults": "結果が見つかりません",
+    "untitled": "無題",
+    "back": "戻る",
+    "edit": "編集",
+    "save": "保存",
+    "delete": "削除",
+    "cancel": "キャンセル",
+    "planTitle": "タイトル（任意）",
+    "planBody": "Markdown で計画を記述",
+    "noteBody": "ノートを書く",
+    "preview": "プレビュー",
+    "deletePrompt": "「{title}」を削除しますか？",
+    "storageError": "このブラウザーに変更を保存できませんでした。"
+  },
   "HtmlCodePreview": {
     "code": "コード",
     "preview": "プレビュー",

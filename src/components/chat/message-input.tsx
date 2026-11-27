@@ -70,11 +70,11 @@ import {
   ATTACH_FILE_TO_SESSION_EVENT,
   ATTACH_PAGE_TO_SESSION_EVENT,
   ATTACH_SESSION_TO_SESSION_EVENT,
-  APPEND_TEXT_TO_SESSION_EVENT,
+  ATTACH_REFERENCE_TO_SESSION_EVENT,
   type AttachFileToSessionDetail,
   type AttachPageToSessionDetail,
   type AttachSessionToSessionDetail,
-  type AppendTextToSessionDetail,
+  type AttachReferenceToSessionDetail,
 } from "@/lib/session-attachment-events"
 import {
   ConversationContextBar,
@@ -491,6 +491,7 @@ export function MessageInput({
     hasUploadingImage,
     hydrateFromBlocks,
     imagePromptBlocks,
+    insertFileReferences,
   } = attach
   const menuShortcuts = useComposerShortcuts({
     editorRef,
@@ -1533,29 +1534,27 @@ export function MessageInput({
   useEffect(() => {
     if (!attachmentTabId) return
 
-    const handleAppendText = (event: Event) => {
-      const customEvent = event as CustomEvent<AppendTextToSessionDetail>
-      if (!customEvent.detail) return
-      if (customEvent.detail.tabId !== attachmentTabId) return
-      const appendText = customEvent.detail.text
-      const editor = editorRef.current?.getEditor()
-      if (!editor) return
-      // Append at the very end, separated by a space when the document isn't
-      // empty (and doesn't already end in whitespace).
-      const ed = editorRef.current
-      const needsSpace = ed != null && !ed.isEmpty()
-      editor
-        .chain()
-        .focus("end")
-        .insertContent(`${needsSpace ? " " : ""}${appendText}`)
-        .run()
+    const handleAttachReference = (event: Event) => {
+      const { detail } = event as CustomEvent<AttachReferenceToSessionDetail>
+      if (detail?.tabId !== attachmentTabId) return
+      if (!editorRef.current?.getEditor()) return
+      insertFileReferences([{ name: detail.label, uri: detail.uri }], {
+        atCaret: true,
+      })
+      detail.accepted = true
     }
 
-    window.addEventListener(APPEND_TEXT_TO_SESSION_EVENT, handleAppendText)
+    window.addEventListener(
+      ATTACH_REFERENCE_TO_SESSION_EVENT,
+      handleAttachReference
+    )
     return () => {
-      window.removeEventListener(APPEND_TEXT_TO_SESSION_EVENT, handleAppendText)
+      window.removeEventListener(
+        ATTACH_REFERENCE_TO_SESSION_EVENT,
+        handleAttachReference
+      )
     }
-  }, [attachmentTabId])
+  }, [attachmentTabId, insertFileReferences])
 
   const buildDraft = useCallback((): PromptDraft | null => {
     const editor = editorRef.current?.getEditor()
