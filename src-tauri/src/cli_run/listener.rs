@@ -306,7 +306,8 @@ mod tests {
     async fn access(data_dir: &Path) -> (Arc<CliAccess>, crate::db::AppDatabase) {
         let db = test_helpers::fresh_in_memory_db().await;
         let bus = Arc::new(InternalEventBus::new(Arc::new(EventBusMetrics::default())));
-        let emitter = EventEmitter::web_only(Arc::new(WebEventBroadcaster::new()), bus.clone());
+        let emitter =
+            EventEmitter::web_only(Arc::new(WebEventBroadcaster::new()), bus.clone(), None);
         let service = CliRunService::new(
             &db,
             &ConnectionManager::new(),
