@@ -133,6 +133,16 @@ export function buildConversationDraftStorageKey(
   return `conv:${conversationId}`
 }
 
+/** Draft key for a personal assistant's input box: one draft per assistant,
+ *  by its uid where it has one — an id freed by a deleted assistant can be
+ *  handed to a new one, which must not open with the old one's text. */
+export function buildPersonalAgentDraftStorageKey(agent: {
+  id: number
+  uid: string | null
+}): string {
+  return agent.uid ? `pa:uid:${agent.uid}` : `pa:id:${agent.id}`
+}
+
 /** Draft key prefix for an unbound (new-conversation) tab. Split groups each own
  *  their own draft tab, so the composer text is keyed PER TAB — the old shared
  *  `"new"` key made two groups' drafts overwrite each other. Draft tab ids

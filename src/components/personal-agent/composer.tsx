@@ -24,6 +24,12 @@
  * Its own box rather than the board's `TaskMessageComposer`: no slash
  * commands (a typed `/compact` would bypass the compaction codeg keeps
  * account of), no quick messages or skills, and a quote above the line.
+ *
+ * What is typed is kept as the assistant's draft, as the conversation box
+ * keeps its own: saved a moment after the last edit (and when the box goes,
+ * on a switch to another assistant), put back when the box opens again, and
+ * dropped once it is sent. Pictures and pasted files are not kept — their
+ * bytes live in this box only.
  */
 
 import {
@@ -35,6 +41,7 @@ import {
   useState,
 } from "react"
 import { useTranslations } from "next-intl"
+import type { JSONContent } from "@tiptap/core"
 import { ArrowUp } from "lucide-react"
 import { toast } from "sonner"
 
@@ -45,7 +52,10 @@ import {
   RichComposer,
   type RichComposerHandle,
 } from "@/components/chat/composer/rich-composer"
-import { isEmbeddedReferenceUri } from "@/components/chat/composer/reference-uri"
+import {
+  isEmbeddedReferenceUri,
+  stripEmbeddedReferences,
+} from "@/components/chat/composer/reference-uri"
 import { useComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
 import { useComposerChromeFocus } from "@/components/chat/composer/use-composer-chrome-focus"
 import { useComposerMentionLabels } from "@/components/chat/composer/use-composer-mention-labels"
@@ -58,6 +68,12 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { personalAgentSend } from "@/lib/api"
 import { extractAppCommandError } from "@/lib/app-error"
+import {
+  buildPersonalAgentDraftStorageKey,
+  clearMessageInputDraftV2,
+  loadMessageInputDraftV2,
+  saveMessageInputDraftV2,
+} from "@/lib/message-input-draft"
 import type {
   PersonalAgentInfo,
   PersonalAgentStatus,
@@ -78,6 +94,8 @@ const ASSUMED_PROMPT_CAPABILITIES: PromptCapabilitiesInfo = {
   embedded_context: true,
 }
 const HEIGHT_MS = 180
+/** How long after the last edit the draft is saved. */
+const DRAFT_SAVE_MS = 300
 
 /** The "+": a wash of the text colour — apart from the box's own surface
  *  and from the theme colour the send button carries, translucent so it
@@ -228,6 +246,57 @@ export function PersonalAgentComposer({
     }
   }, [])
 
+  // The draft: what the last edit left, saved a moment later (`null` clears
+  // it; `undefined` is nothing waiting). Taken at the edit, so the box going
+  // away before the save — the owner switched assistants — still saves it.
+  const draftKey = buildPersonalAgentDraftStorageKey(agent)
+  const pendingDraft = useRef<JSONContent | null | undefined>(undefined)
+  const draftTimer = useRef<number | null>(null)
+  const writeDraft = useCallback(() => {
+    if (draftTimer.current != null) {
+      window.clearTimeout(draftTimer.current)
+      draftTimer.current = null
+    }
+    const doc = pendingDraft.current
+    if (doc === undefined) return
+    pendingDraft.current = undefined
+    if (doc) saveMessageInputDraftV2(draftKey, doc)
+    else clearMessageInputDraftV2(draftKey)
+  }, [draftKey])
+  const noteDraft = useCallback(() => {
+    const ed = editorRef.current
+    if (!ed) return
+    pendingDraft.current = ed.isEmpty()
+      ? null
+      : stripEmbeddedReferences(ed.getJSON())
+    if (draftTimer.current != null) window.clearTimeout(draftTimer.current)
+    draftTimer.current = window.setTimeout(writeDraft, DRAFT_SAVE_MS)
+  }, [writeDraft])
+  useEffect(() => writeDraft, [writeDraft])
+
+  // The saved draft goes back in once the editor is there — before a card's
+  // message, which goes after it. Deferred a frame: a restored badge is a
+  // React node view, which must not render inside this effect. Read once, as
+  // the box opens: without one there is nothing to wait for.
+  const [restoring] = useState(() => loadMessageInputDraftV2(draftKey))
+  const [hydrated, setHydrated] = useState(restoring == null)
+  useEffect(() => {
+    if (!editorReady || !restoring) return
+    const loaded = restoring
+    const raf = requestAnimationFrame(() => {
+      const ed = editorRef.current
+      if (ed) {
+        if (loaded.kind === "doc") ed.setDoc(loaded.doc)
+        else ed.setText(loaded.markdown)
+        setText(ed.getText())
+      }
+      setHydrated(true)
+    })
+    return () => cancelAnimationFrame(raf)
+    // Once, for the box's own assistant (the page keys the box by it).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorReady])
+
   // While it sends, the box is locked — the text, the attachments, a card's
   // "put in the box" — so what it clears on return is exactly what went:
   // the page reads whether this assistant's box is sending.
@@ -259,6 +328,10 @@ export function PersonalAgentComposer({
       return
     }
     const body = editorRef.current.getText()
+    // The stored draft is what goes: should the box be gone when it lands,
+    // that is what the send drops.
+    writeDraft()
+    const sentDraft = loadMessageInputDraftV2(draftKey)
     const blocks = [...embeddedBlocks(), ...attach.imagePromptBlocks()]
     // What this send settles, taken now — not read again from the page
     // when it returns.
@@ -285,8 +358,18 @@ export function PersonalAgentComposer({
       // owner switched assistants): it is this assistant's, and answered.
       ui.clearAnswerSending(bot, requestId)
       if (sentAnswer) ui.clearPendingAnswer(bot, sentAnswer.itemId)
-      if (!mounted.current) return
+      if (!mounted.current) {
+        // Unless it was written over since (the box opened again, and the
+        // owner typed on).
+        const now = loadMessageInputDraftV2(draftKey)
+        if (JSON.stringify(now) === JSON.stringify(sentDraft)) {
+          clearMessageInputDraftV2(draftKey)
+        }
+        return
+      }
       editorRef.current?.clear()
+      pendingDraft.current = null
+      writeDraft()
       attach.clearAttachments()
       setText("")
       setWrapped(false)
@@ -337,7 +420,7 @@ export function PersonalAgentComposer({
   const draftApplied = useRef(draftN ?? null)
   useEffect(() => {
     const editor = editorRef.current
-    if (draftN == null || !draft || !editor) return
+    if (!hydrated || draftN == null || !draft || !editor) return
     if (draftApplied.current === draftN) return
     draftApplied.current = draftN
     const before = editor.isEmpty() ? "" : editor.getText().trimEnd()
@@ -347,7 +430,7 @@ export function PersonalAgentComposer({
     editor.focus()
     // Only a new draft puts it in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftN, editorReady])
+  }, [draftN, hydrated])
 
   // Open the box once the text wraps (the editor's own size changes with
   // every wrap, and with the box's width); `onChange` closes it once the
@@ -551,6 +634,7 @@ export function PersonalAgentComposer({
                   onChange={(next) => {
                     setText(next)
                     if (next.length === 0) setWrapped(false)
+                    noteDraft()
                   }}
                   onReady={() => setEditorReady(true)}
                   onSubmit={() => void send()}
