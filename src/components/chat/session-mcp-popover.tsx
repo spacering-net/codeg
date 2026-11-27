@@ -3,6 +3,7 @@
 import { useCallback, useState, useSyncExternalStore } from "react"
 import {
   Activity,
+  KeyRound,
   Loader2,
   PauseCircle,
   Plug,
@@ -373,6 +374,33 @@ export function SessionMcpPopover({
                         {t("latency", { ms: probeResult.latency_ms })}
                       </span>
                     )}
+                    {row.oauthBridged &&
+                      row.oauthRoute?.status === "authorized" && (
+                        <span className="text-3xs text-muted-foreground">
+                          {t("oauthBridge")}
+                        </span>
+                      )}
+                    {harnessAvailable &&
+                      row.status === "auth_required" &&
+                      (row.transport === "http" || row.transport === "sse") && (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          onClick={() => {
+                            setOpen(false)
+                            openHarness({
+                              section: "mcp",
+                              serverKey: row.key,
+                              openOAuth: true,
+                            })
+                          }}
+                          className="h-5 gap-1 border-amber-500/40 px-1.5 text-3xs text-amber-800 hover:bg-amber-500/15 dark:text-amber-200"
+                        >
+                          <KeyRound aria-hidden="true" className="size-2.5" />
+                          {t("authorize")}
+                        </Button>
+                      )}
                     {row.status === "connection_failed" &&
                       row.canPause &&
                       isOwner && (

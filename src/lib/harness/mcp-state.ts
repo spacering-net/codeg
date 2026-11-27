@@ -624,6 +624,16 @@ export type McpBulkDialog =
       flow: McpFlow
     }
 
+export interface McpOAuthDialogState {
+  kind: "oauth"
+  id: number
+  serverKey: string
+  upstreamUrl: string
+  transport: "http" | "sse"
+  resourceMetadataUrl?: string | null
+  initialMode?: "authorize" | "apply" | "restore"
+}
+
 export type McpDialog =
   | McpEditorDialog
   | McpRemoveDialog
@@ -631,6 +641,7 @@ export type McpDialog =
   | McpPasteDialog
   | McpConfirmDialog
   | McpBulkDialog
+  | McpOAuthDialogState
 
 export const MCP_DIALOG = defineHarnessSlot<McpDialog | null>("mcp", () => null)
 
@@ -662,14 +673,24 @@ function setFlow(
   update: (flow: McpFlow) => McpFlow
 ) {
   slots.set(MCP_DIALOG, (prev) => {
-    if (!prev || prev.id !== id || prev.kind === "confirm") return prev
+    if (
+      !prev ||
+      prev.id !== id ||
+      prev.kind === "confirm" ||
+      prev.kind === "oauth"
+    ) {
+      return prev
+    }
     return { ...prev, flow: update(prev.flow) }
   })
 }
 
 function flowOf(slots: HarnessSlotStore, id: number): McpFlow | null {
   const dialog = slots.get(MCP_DIALOG)
-  return dialog && dialog.id === id && dialog.kind !== "confirm"
+  return dialog &&
+    dialog.id === id &&
+    dialog.kind !== "confirm" &&
+    dialog.kind !== "oauth"
     ? dialog.flow
     : null
 }
@@ -986,6 +1007,7 @@ export function planForDialog(
       break
     }
     case "confirm":
+    case "oauth":
       return null
   }
   return ops.length > 0 ? planOf(ops, model.inventory) : null
@@ -1016,7 +1038,13 @@ export async function reviewDialog(
 ): Promise<void> {
   const dialog = slots.get(MCP_DIALOG)
   const model = currentModel(slots)
-  if (!dialog || dialog.id !== id || dialog.kind === "confirm" || !model) {
+  if (
+    !dialog ||
+    dialog.id !== id ||
+    dialog.kind === "confirm" ||
+    dialog.kind === "oauth" ||
+    !model
+  ) {
     return
   }
   const plan = planForDialog(dialog, model)
@@ -1482,6 +1510,17 @@ export async function runAgentBatchProbe(
     )
   }
   await Promise.all(tasks)
+}
+
+export function openOAuthDialog(
+  slots: HarnessSlotStore,
+  params: Omit<McpOAuthDialogState, "kind" | "id">
+): void {
+  slots.set(MCP_DIALOG, {
+    kind: "oauth",
+    id: ++lastDialog,
+    ...params,
+  })
 }
 
 export function clearMcpProbes(slots: HarnessSlotStore): void {

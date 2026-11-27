@@ -118,6 +118,17 @@ describe("harnessTargetOf", () => {
       section: "mcp",
       serverKey: "github",
     })
+    expect(
+      harnessTargetOf({
+        section: "mcp",
+        serverKey: "notion",
+        openOAuth: true,
+      })
+    ).toEqual({
+      section: "mcp",
+      serverKey: "notion",
+      openOAuth: true,
+    })
     expect(harnessTargetOf({ section: "skills", skillId: "pdf" })).toEqual({
       section: "skills",
       skillId: "pdf",

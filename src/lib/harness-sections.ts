@@ -133,6 +133,8 @@ export type HarnessOpenRequest =
       serverKey?: string
       /** An agent id (built-in slug or `custom:<id>`) to focus in the Agents view. */
       agentId?: string
+      /** When opening a server, immediately open its Codeg OAuth bridge dialog. */
+      openOAuth?: boolean
     }
   | {
       section: "skills"
@@ -156,7 +158,12 @@ export type HarnessOpenRequest =
  */
 export type HarnessOpenTarget =
   | { section: "discover"; itemRef: string; intent?: HarnessOpenIntent }
-  | { section: "mcp"; serverKey?: string; agentId?: string }
+  | {
+      section: "mcp"
+      serverKey?: string
+      agentId?: string
+      openOAuth?: boolean
+    }
   | { section: "skills"; skillId: string }
   | { section: "plugins"; itemId: string }
   | { section: "packs"; tab: HarnessPackTab }
@@ -186,7 +193,9 @@ export function harnessTargetOf(
         : { section: "discover", itemRef: request.itemRef }
     case "mcp":
       if (request.serverKey) {
-        return { section: "mcp", serverKey: request.serverKey }
+        return request.openOAuth
+          ? { section: "mcp", serverKey: request.serverKey, openOAuth: true }
+          : { section: "mcp", serverKey: request.serverKey }
       }
       if (request.agentId) {
         return { section: "mcp", agentId: request.agentId }

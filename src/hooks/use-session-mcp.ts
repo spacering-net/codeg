@@ -16,6 +16,7 @@
  */
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react"
 
+import { resetMcpOAuthStoreForTests, useMcpOAuth } from "./use-mcp-oauth"
 import { mcpApply, mcpInventory, mcpProbe, onMcpChanged } from "@/lib/mcp/api"
 import { mcpFailureOf, type McpFailure } from "@/lib/mcp/errors"
 import { isSaved } from "@/lib/mcp/results"
@@ -262,6 +263,7 @@ export async function runSessionMcpProbe(
 
 /** Test-only reset to keep unit tests isolated. */
 export function resetSessionMcpStoreForTests(): void {
+  resetMcpOAuthStoreForTests()
   unsubChanged?.()
   unsubChanged = null
   unsubReconnect?.()
@@ -324,6 +326,9 @@ export function useSessionMcp(
   } = options
 
   const store = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  const { snapshot: oauthSnapshot } = useMcpOAuth({
+    active: Boolean(active && agentType),
+  })
 
   useEffect(() => {
     if (!active || !agentType) return
@@ -348,6 +353,7 @@ export function useSessionMcp(
       configStale,
       configStaleKind,
       observedToolsByServer,
+      oauthSnapshot,
     })
   }, [
     agentType,
@@ -360,6 +366,7 @@ export function useSessionMcp(
     configStale,
     configStaleKind,
     observedToolsByServer,
+    oauthSnapshot,
   ])
 
   const inventoryAgent = useMemo(

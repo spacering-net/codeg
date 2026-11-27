@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import { resetSessionMcpStoreForTests } from "@/hooks/use-session-mcp"
-import { agent, entry, inventory, stdio } from "@/lib/mcp/test-fixtures"
+import { agent, entry, inventory, remote, stdio } from "@/lib/mcp/test-fixtures"
 import type { ConnectionState } from "@/contexts/acp-connections-context"
 import { SessionMcpPopover } from "./session-mcp-popover"
 
@@ -191,6 +191,99 @@ describe("SessionMcpPopover", () => {
     fireEvent.click(reconnectBtn)
     await waitFor(() => {
       expect(mocks.reapplyConfig).toHaveBeenCalledWith("tab-1")
+    })
+  })
+
+  it("shows OAuth bridge label and Authorize CTA for expired bridged server", async () => {
+    const notion = entry(
+      "notion",
+      remote("http", "http://127.0.0.1:43210/mcp/route-notion", {
+        Authorization: "Bearer bridge-tok",
+      })
+    )
+    const linear = entry(
+      "linear",
+      remote("http", "http://127.0.0.1:43210/mcp/route-linear", {
+        Authorization: "Bearer bridge-tok-2",
+      })
+    )
+    mocks.mcpInventory.mockResolvedValue(
+      inventory([agent("claude_code", [notion, linear])])
+    )
+    mocks.conn = {
+      agentType: "claude_code",
+      status: "connected",
+      isViewer: false,
+      isDelegationChild: false,
+      configStale: false,
+      configStaleKind: null,
+      sessionFailures: [],
+      mcpState: {
+        delivery: "codeg_session",
+        supports_mcp: true,
+        codeg_mcp_attached: true,
+        servers: [
+          {
+            key: "notion",
+            transport: "http",
+            origin: "codeg_session",
+            fingerprint: notion.fingerprint,
+            status: "attached",
+          },
+          {
+            key: "linear",
+            transport: "http",
+            origin: "codeg_session",
+            fingerprint: linear.fingerprint,
+            status: "attached",
+          },
+        ],
+      },
+    }
+
+    const { setMcpOAuthSnapshot } = await import("@/hooks/use-mcp-oauth")
+    setMcpOAuthSnapshot({
+      bridge_running: true,
+      bridge_base_url: "http://127.0.0.1:43210",
+      routes: [
+        {
+          route_id: "route-notion",
+          upstream_url: "https://mcp.notion.com/mcp",
+          transport: "http",
+          bridge_url: "http://127.0.0.1:43210/mcp/route-notion",
+          status: "expired",
+          scopes: [],
+          has_refresh_token: false,
+          updated_at: "2026-11-27T00:00:00Z",
+        },
+        {
+          route_id: "route-linear",
+          upstream_url: "https://mcp.linear.app/mcp",
+          transport: "http",
+          bridge_url: "http://127.0.0.1:43210/mcp/route-linear",
+          status: "authorized",
+          scopes: [],
+          has_refresh_token: true,
+          updated_at: "2026-11-27T00:00:00Z",
+        },
+      ],
+    })
+
+    renderPopover()
+    fireEvent.click(screen.getByTestId("session-mcp-trigger"))
+
+    await waitFor(() => {
+      expect(screen.getByText("OAuth bridge")).toBeInTheDocument()
+      expect(
+        screen.getByRole("button", { name: /^Authorize$/i })
+      ).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: /^Authorize$/i }))
+    expect(mocks.openHarness).toHaveBeenCalledWith({
+      section: "mcp",
+      serverKey: "notion",
+      openOAuth: true,
     })
   })
 })

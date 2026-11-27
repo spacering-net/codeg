@@ -22,6 +22,11 @@ import type {
   SessionMcpState,
 } from "@/lib/types"
 import { agentTypeToMcpApp, extractMcpInitFailure } from "./failure-recovery"
+import {
+  matchOAuthRouteForDefinition,
+  type McpOAuthBridgeSnapshot,
+  type McpOAuthRouteInfo,
+} from "./oauth"
 import type {
   McpAgentId,
   McpAgentInventory,
@@ -78,6 +83,10 @@ export interface UnifiedMcpServerRow {
   removedPendingReconnect: boolean
   fingerprint: string | null
   definition: McpDefinition | null
+  /** Matched Codeg OAuth route (direct or bridged), when available. */
+  oauthRoute?: McpOAuthRouteInfo | null
+  /** True when the server's definition points to Codeg's local OAuth bridge. */
+  oauthBridged?: boolean
 }
 
 export interface UnifiedMcpSummary {
@@ -114,6 +123,8 @@ export interface DeriveSessionMcpStateInput {
   /** Optional map of MCP server key -> tool names observed in transcript
    *  (excluding `codeg-mcp`). */
   observedToolsByServer?: Readonly<Record<string, readonly string[]>>
+  /** Optional host OAuth bridge snapshot for classifying bridged route status. */
+  oauthSnapshot?: McpOAuthBridgeSnapshot | null
 }
 
 const RESERVED_KEYS = new Set(["codeg-mcp", "codeg_mcp"])
@@ -273,6 +284,7 @@ export function deriveSessionMcpState(
     configStale = false,
     configStaleKind = null,
     observedToolsByServer,
+    oauthSnapshot = null,
   } = input
 
   const mcpAgentId = agentTypeToMcpApp(agentType)
@@ -403,6 +415,18 @@ export function deriveSessionMcpState(
         probeResult.status !== "auth_required")
     const probeHealthy = probeResult?.status === "ok"
 
+    const oauthMatch = matchOAuthRouteForDefinition(
+      invEntry?.definition ?? null,
+      oauthSnapshot
+    )
+    const oauthRoute = oauthMatch?.route ?? null
+    const oauthBridged = oauthMatch?.kind === "bridged"
+    const bridgedAuthRequired = Boolean(
+      oauthBridged &&
+      oauthRoute &&
+      (oauthRoute.status === "expired" || oauthRoute.status === "revoked")
+    )
+
     const skippedByCaps =
       sessionEntry?.status === "skipped_transport" ||
       (invEntry != null &&
@@ -414,7 +438,7 @@ export function deriveSessionMcpState(
       status = "saved_pending_reconnect"
     } else if (invEntry != null && !invEntry.enabled) {
       status = "paused"
-    } else if (probeAuthRequired) {
+    } else if (probeAuthRequired || bridgedAuthRequired) {
       status = "auth_required"
     } else if (
       sessionEntry?.status === "failed" ||
@@ -445,7 +469,7 @@ export function deriveSessionMcpState(
       failureReason ??
       sessionEntry?.detail ??
       probeResult?.detail ??
-      null ??
+      (bridgedAuthRequired ? (oauthRoute?.last_error ?? null) : null) ??
       (probe?.phase === "error" ? (probe.failure?.detail ?? null) : null)
 
     const paused = Boolean(invEntry != null && !invEntry.enabled)
@@ -482,6 +506,8 @@ export function deriveSessionMcpState(
       removedPendingReconnect,
       fingerprint,
       definition: invEntry?.definition ?? null,
+      oauthRoute,
+      oauthBridged,
     }
   })
 

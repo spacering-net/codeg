@@ -53,7 +53,9 @@ import {
   HarnessViewProvider,
   useHarnessView,
 } from "@/contexts/harness-view-context"
+import { resetMcpOAuthStoreForTests } from "@/hooks/use-mcp-oauth"
 import { DISCOVER_DETAIL, DISCOVER_FILTERS } from "@/lib/harness/discover-state"
+import type { McpOAuthBridgeSnapshot } from "@/lib/mcp/oauth"
 import {
   agent,
   agentResult,
@@ -192,11 +194,29 @@ function engine(command: string, args: unknown) {
           checked_at: "2026-11-26T00:00:00Z",
         }
   }
+  if (command === "mcp_oauth_list") {
+    return oauthSnapshotAnswer
+  }
+  if (command === "mcp_oauth_revoke") {
+    const routeId = (args as { route_id: string }).route_id
+    oauthSnapshotAnswer = {
+      ...oauthSnapshotAnswer,
+      routes: oauthSnapshotAnswer.routes.map((route) =>
+        route.route_id === routeId ? { ...route, status: "revoked" } : route
+      ),
+    }
+    return oauthSnapshotAnswer
+  }
   throw new Error(`unexpected command ${command}`)
 }
 
 let pasteAnswer: unknown = null
 let probeAnswer: ((args: unknown) => unknown) | null = null
+let oauthSnapshotAnswer: McpOAuthBridgeSnapshot = {
+  bridge_running: true,
+  bridge_base_url: "http://127.0.0.1:43210",
+  routes: [],
+}
 
 const callsOf = (command: string) =>
   mocks.call.mock.calls.filter(([name]) => name === command)
@@ -277,10 +297,17 @@ function usualFiles(): McpInventory {
 beforeEach(() => {
   localStorage.clear()
   resetFingerprints()
+  resetMcpOAuthStoreForTests()
   files = usualFiles()
   applyAnswer = null
   applied.length = 0
   pasteAnswer = null
+  probeAnswer = null
+  oauthSnapshotAnswer = {
+    bridge_running: true,
+    bridge_base_url: "http://127.0.0.1:43210",
+    routes: [],
+  }
   mocks.mobile = false
   mocks.desktop = true
   mocks.remote = null
@@ -2023,5 +2050,113 @@ describe("MCP — probes, soft pause, and cross-agent bulk allocation (#1296 / #
         definition: { type: "stdio", command: "npx", args: ["-y", "github"] },
       },
     ])
+  })
+
+  it("shows Codeg OAuth proxy bridge card with port-drift sync, revoke, non-revealable bridge token, and probe auth_required CTA", async () => {
+    const user = userEvent.setup()
+    const secretBridgeToken = "bridge-token-never-reveal-123"
+    files = inventory([
+      agent("claude_code", [
+        entry(
+          "notion",
+          remote("http", "http://127.0.0.1:59999/mcp/route-notion", {
+            Authorization: `Bearer ${secretBridgeToken}`,
+          })
+        ),
+        entry("figma", remote("http", "https://mcp.figma.com/mcp")),
+      ]),
+      agent("codex", []),
+    ])
+    oauthSnapshotAnswer = {
+      bridge_running: true,
+      bridge_base_url: "http://127.0.0.1:43210",
+      routes: [
+        {
+          route_id: "route-notion",
+          upstream_url: "https://mcp.notion.com/mcp",
+          transport: "http",
+          bridge_url: "http://127.0.0.1:43210/mcp/route-notion",
+          status: "authorized",
+          issuer: "https://auth.notion.com",
+          scopes: ["read"],
+          has_refresh_token: true,
+          updated_at: "2026-11-27T00:00:00Z",
+        },
+      ],
+    }
+    probeAnswer = () => ({
+      status: "auth_required",
+      latency_ms: 88,
+      http_status: 401,
+      auth_hint: {
+        scheme: "Bearer",
+        resource_metadata:
+          "https://mcp.figma.com/.well-known/oauth-protected-resource",
+      },
+      tools: [],
+      tools_count: 0,
+      checked_at: "2026-11-27T00:00:00Z",
+    })
+
+    const { container } = render(<Harness />)
+
+    // 1. Bridged server with port drift
+    const notionDetail = await openServer(user, "notion")
+    await waitFor(() => {
+      expect(
+        within(notionDetail).getByText("Codeg OAuth proxy bridge")
+      ).toBeInTheDocument()
+      expect(
+        within(notionDetail).getByText(/Local bridge port changed/i)
+      ).toBeInTheDocument()
+      expect(
+        within(notionDetail).getByRole("button", { name: "Sync bridge URL" })
+      ).toBeInTheDocument()
+    })
+
+    // Security check: bridge Authorization header stays masked with NO reveal button
+    expect(container.textContent).not.toContain(secretBridgeToken)
+    expect(
+      within(notionDetail).queryByRole("button", {
+        name: /Show Authorization/i,
+      })
+    ).toBeNull()
+
+    // Revoke authorization calls mcp_oauth_revoke and updates card status
+    await user.click(
+      within(notionDetail).getByRole("button", {
+        name: "Revoke authorization",
+      })
+    )
+    await waitFor(() => {
+      expect(callsOf("mcp_oauth_revoke")).toEqual([
+        ["mcp_oauth_revoke", { route_id: "route-notion" }],
+      ])
+      expect(within(notionDetail).getByText("Revoked")).toBeInTheDocument()
+    })
+
+    // 2. Unbridged remote server -> probe returns auth_required -> OAuth CTA opens dialog
+    const figmaDetail = await openServer(user, "figma")
+    await user.click(
+      within(figmaDetail).getAllByRole("button", { name: "Test connection" })[0]
+    )
+    const oauthBtn = await within(figmaDetail).findByRole("button", {
+      name: "Authorize with Codeg (OAuth)",
+    })
+    await user.click(oauthBtn)
+    const modal = await screen.findByRole("dialog")
+    expect(
+      within(modal).getByText("https://mcp.figma.com/mcp")
+    ).toBeInTheDocument()
+    await user.click(within(modal).getByRole("button", { name: "Cancel" }))
+
+    // 3. openHarness({ section: "mcp", serverKey: "figma", openOAuth: true }) opens OAuth dialog directly
+    await act(async () => {
+      view.open({ section: "mcp", serverKey: "figma", openOAuth: true })
+    })
+    const directModal = await screen.findByRole("dialog")
+    expect(
+      within(directModal).getByRole("button", { name: "Authorize in browser" })
+    ).toBeInTheDocument()
   })
 })

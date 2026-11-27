@@ -83,9 +83,13 @@ export function McpProbeButton({
 export function McpProbePanel({
   record,
   compact = false,
+  onAuthorizeOAuth,
 }: {
   record: McpProbeRecord | null | undefined
   compact?: boolean
+  /** When provided and status is `auth_required`, renders an inline OAuth
+   *  authorization CTA button inside the OAuth hint block. */
+  onAuthorizeOAuth?: (resourceMetadataUrl?: string | null) => void
 }) {
   const t = useTranslations("Harness.mcp.probe")
   const [toolsOpen, setToolsOpen] = useState(false)
@@ -141,6 +145,7 @@ export function McpProbePanel({
       onToggleTools={() => setToolsOpen((open) => !open)}
       stderrOpen={stderrOpen}
       onToggleStderr={() => setStderrOpen((open) => !open)}
+      onAuthorizeOAuth={onAuthorizeOAuth}
     />
   )
 }
@@ -153,6 +158,7 @@ function ProbeResultCard({
   onToggleTools,
   stderrOpen,
   onToggleStderr,
+  onAuthorizeOAuth,
 }: {
   result: McpProbeResult
   loading: boolean
@@ -161,6 +167,7 @@ function ProbeResultCard({
   onToggleTools: () => void
   stderrOpen: boolean
   onToggleStderr: () => void
+  onAuthorizeOAuth?: (resourceMetadataUrl?: string | null) => void
 }) {
   const t = useTranslations("Harness.mcp.probe")
   const status = result.status
@@ -246,12 +253,28 @@ function ProbeResultCard({
       </div>
 
       {isAuth && (
-        <div className="space-y-1 text-2xs text-muted-foreground">
+        <div className="space-y-1.5 text-2xs text-muted-foreground">
           <p>{t("authRequiredHint")}</p>
           {result.auth_hint?.resource_metadata && (
             <bdi dir="ltr" className="block truncate font-mono text-foreground">
               <MachineText>{result.auth_hint.resource_metadata}</MachineText>
             </bdi>
+          )}
+          {onAuthorizeOAuth && (
+            <div className="pt-0.5">
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={() =>
+                  onAuthorizeOAuth(result.auth_hint?.resource_metadata ?? null)
+                }
+                className="h-6 gap-1.5 text-2xs"
+              >
+                <KeyRound aria-hidden="true" className="size-3" />
+                {t("authorizeOAuth")}
+              </Button>
+            </div>
           )}
         </div>
       )}

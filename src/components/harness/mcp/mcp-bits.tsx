@@ -139,6 +139,7 @@ export function SecretText({
   masked,
   secret,
   label,
+  revealable = true,
 }: {
   value: string
   /** The value with its secret parts masked: all of it, or part of an
@@ -146,21 +147,26 @@ export function SecretText({
   masked?: string
   secret: boolean
   label: string
+  /** When `false`, secret values stay permanently masked with no reveal button
+   *  (e.g. local OAuth proxy bridge bearer tokens). */
+  revealable?: boolean
 }) {
   const [revealed, setRevealed] = useState(false)
-  const shown = secret && !revealed ? (masked ?? MASK) : value
+  const canReveal = secret && revealable
+  const isRevealed = canReveal && revealed
+  const shown = secret && !isRevealed ? (masked ?? MASK) : value
   return (
     <span className="inline-flex min-w-0 max-w-full items-start gap-1">
       <bdi
         dir="ltr"
-        data-mcp-secret={secret ? (revealed ? "shown" : "masked") : undefined}
+        data-mcp-secret={secret ? (isRevealed ? "shown" : "masked") : undefined}
         className="min-w-0 font-mono"
       >
-        <MachineText>{shown === "" ? " " : shown}</MachineText>
+        <MachineText>{shown === "" ? "\u00A0" : shown}</MachineText>
       </bdi>
-      {secret && (
+      {canReveal && (
         <RevealButton
-          revealed={revealed}
+          revealed={isRevealed}
           onToggle={() => setRevealed((prev) => !prev)}
           label={label}
           className="-my-0.5"

@@ -250,4 +250,60 @@ describe("SessionMcpSection", () => {
     fireEvent.click(screen.getByRole("button", { name: /Agent settings/i }))
     expect(mocks.openSettingsWindow).toHaveBeenCalledWith("agents")
   })
+
+  it("shows Authorize CTA for auth_required HTTP server and OAuth bridge indicator for bridged servers", async () => {
+    const notion = entry("notion", remote("http", "https://mcp.notion.com/mcp"))
+    const linear = entry(
+      "linear",
+      remote("http", "http://127.0.0.1:43210/mcp/route-linear", {
+        Authorization: "Bearer bridge-tok",
+      })
+    )
+    mocks.mcpInventory.mockResolvedValue(
+      inventory([agent("claude_code", [notion, linear])])
+    )
+    mocks.mcpProbe.mockResolvedValue({
+      status: "auth_required",
+      latency_ms: 95,
+      http_status: 401,
+      auth_hint: { scheme: "Bearer" },
+      tools: [],
+      tools_count: 0,
+      checked_at: "2026-11-27T00:00:00Z",
+    })
+
+    const { setMcpOAuthSnapshot } = await import("@/hooks/use-mcp-oauth")
+    setMcpOAuthSnapshot({
+      bridge_running: true,
+      bridge_base_url: "http://127.0.0.1:43210",
+      routes: [
+        {
+          route_id: "route-linear",
+          upstream_url: "https://mcp.linear.app/mcp",
+          transport: "http",
+          bridge_url: "http://127.0.0.1:43210/mcp/route-linear",
+          status: "authorized",
+          scopes: [],
+          has_refresh_token: true,
+          updated_at: "2026-11-27T00:00:00Z",
+        },
+      ],
+    })
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByText("notion")).toBeInTheDocument()
+      expect(screen.getByText("OAuth bridge")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Test notion" }))
+    const authBtn = await screen.findByRole("button", { name: /^Authorize$/i })
+    fireEvent.click(authBtn)
+    expect(mocks.openHarness).toHaveBeenCalledWith({
+      section: "mcp",
+      serverKey: "notion",
+      openOAuth: true,
+    })
+  })
 })

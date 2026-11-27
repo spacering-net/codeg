@@ -326,4 +326,66 @@ describe("deriveSessionMcpState", () => {
       "linear-app": ["create_issue"],
     })
   })
+
+  it("marks bridged OAuth servers as auth_required when route is expired or revoked, and exposes oauthBridged metadata", () => {
+    const notionBridged = entry(
+      "notion",
+      remote("http", "http://127.0.0.1:43210/mcp/route-notion", {
+        Authorization: "Bearer bridge-tok",
+      })
+    )
+    const linearBridged = entry(
+      "linear",
+      remote("http", "http://127.0.0.1:43210/mcp/route-linear", {
+        Authorization: "Bearer bridge-tok-2",
+      })
+    )
+    const inv = agent("claude_code", [notionBridged, linearBridged], {
+      delivery: "codeg_session",
+    })
+
+    const result = deriveSessionMcpState({
+      agentType: "claude_code",
+      connectionStatus: "connected",
+      inventoryAgent: inv,
+      oauthSnapshot: {
+        bridge_running: true,
+        bridge_base_url: "http://127.0.0.1:43210",
+        routes: [
+          {
+            route_id: "route-notion",
+            upstream_url: "https://mcp.notion.com/mcp",
+            transport: "http",
+            bridge_url: "http://127.0.0.1:43210/mcp/route-notion",
+            status: "expired",
+            scopes: ["read"],
+            has_refresh_token: false,
+            last_error: "OAuth token expired",
+            updated_at: "2026-11-27T00:00:00Z",
+          },
+          {
+            route_id: "route-linear",
+            upstream_url: "https://mcp.linear.app/mcp",
+            transport: "http",
+            bridge_url: "http://127.0.0.1:43210/mcp/route-linear",
+            status: "authorized",
+            scopes: ["read"],
+            has_refresh_token: true,
+            updated_at: "2026-11-27T00:00:00Z",
+          },
+        ],
+      },
+    })
+
+    const byKey = new Map(result.rows.map((r) => [r.key, r]))
+    expect(byKey.get("notion")?.status).toBe("auth_required")
+    expect(byKey.get("notion")?.oauthBridged).toBe(true)
+    expect(byKey.get("notion")?.oauthRoute?.status).toBe("expired")
+    expect(byKey.get("notion")?.detail).toBe("OAuth token expired")
+
+    expect(byKey.get("linear")?.status).toBe("configured")
+    expect(byKey.get("linear")?.oauthBridged).toBe(true)
+    expect(byKey.get("linear")?.oauthRoute?.status).toBe("authorized")
+    expect(result.summary.attentionCount).toBe(1)
+  })
 })
