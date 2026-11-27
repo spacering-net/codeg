@@ -419,8 +419,10 @@ pub fn avatars_dir(data_dir: &Path) -> PathBuf {
 }
 
 /// Whether `name` is one of the pictures the page hands over for an
-/// assistant: `<bot>.png` or `<bot>-tray.png`.
+/// assistant: `<bot>.png` or `<bot>-tray.png`, or one of them half written
+/// (`.png.tmp`, an interrupted write's leftover).
 fn is_avatar_png(name: &str) -> bool {
+    let name = name.strip_suffix(".tmp").unwrap_or(name);
     let Some(stem) = name.strip_suffix(".png") else {
         return false;
     };
@@ -451,22 +453,23 @@ pub fn adopt_legacy_avatar_cache(data_dir: &Path) -> Option<PathBuf> {
     }
     let target = avatars_dir(data_dir);
     std::fs::create_dir_all(target.parent()?).ok()?;
-    if !target.exists() {
-        // None of this cache kept yet: the whole folder goes over.
-        return std::fs::rename(&legacy, &target).ok().map(|_| target);
+    // None of this cache kept yet: the whole folder goes over, in one step
+    // where it can (not across volumes).
+    if !target.exists() && std::fs::rename(&legacy, &target).is_ok() {
+        return Some(target);
     }
-    // Kept already: the page draws these again on every start, so what is
-    // left over only has to stop blocking the directory.
+    // Kept already, or the folder would not go over whole: picture by
+    // picture. The page draws these again on every start, so one that will
+    // not move only has to stop blocking the directory.
+    let _ = std::fs::create_dir_all(&target);
     for entry in std::fs::read_dir(&legacy).ok()? {
         let entry = entry.ok()?;
         let to = target.join(entry.file_name());
-        if to.exists() {
+        if to.exists() || std::fs::rename(entry.path(), &to).is_err() {
             let _ = std::fs::remove_file(entry.path());
-        } else {
-            let _ = std::fs::rename(entry.path(), &to);
         }
     }
-    let _ = std::fs::remove_dir(&legacy);
+    std::fs::remove_dir(&legacy).ok()?;
     Some(target)
 }
 
@@ -4600,6 +4603,34 @@ mod tests {
         assert!(ensure_initialized(&default_workdir(data), AppLocale::En)
             .await
             .is_err());
+    }
+
+    /// Some of the cache kept already (a newer build ran, then an older
+    /// one): what is new goes over, what is kept stays, and the folder is
+    /// gone — a half-written picture too.
+    #[tokio::test]
+    async fn a_face_cache_kept_already_takes_the_rest_over() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path();
+        let dir = default_workdir(data);
+        let legacy = dir.join("avatars");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("3.png"), b"old").unwrap();
+        std::fs::write(legacy.join("4-tray.png"), b"tray").unwrap();
+        std::fs::write(legacy.join("5.png.tmp"), b"half").unwrap();
+        std::fs::create_dir_all(avatars_dir(data)).unwrap();
+        std::fs::write(avatars_dir(data).join("3.png"), b"new").unwrap();
+        assert!(adopt_legacy_avatar_cache(data).is_some());
+        assert!(!legacy.exists());
+        assert_eq!(
+            std::fs::read(avatars_dir(data).join("3.png")).unwrap(),
+            b"new"
+        );
+        assert_eq!(
+            std::fs::read(avatars_dir(data).join("4-tray.png")).unwrap(),
+            b"tray"
+        );
+        assert!(ensure_initialized(&dir, AppLocale::En).await.unwrap());
     }
 
     /// Once made, the directory is the owner's: what is in it stays.
