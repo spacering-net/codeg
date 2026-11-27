@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 #[cfg(target_os = "macos")]
-use std::sync::atomic::AtomicU32;
-#[cfg(target_os = "macos")]
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering as AtomicOrdering};
 use std::sync::Mutex;
 
@@ -1312,6 +1310,11 @@ pub async fn open_project_boot_window(
 pub const PET_WINDOW_LABEL: &str = "pet";
 const PET_HOVER_ENTER_EVENT: &str = "pet://hover-enter";
 const PET_HOVER_LEAVE_EVENT: &str = "pet://hover-leave";
+const PET_DRAG_DIRECTION_EVENT: &str = "pet://drag-direction";
+const PET_DRAG_TICK_MS: u64 = 8;
+const PET_DRAG_DIRECTION_IDLE_MS: u128 = 160;
+const PET_DRAG_DIRECTION_THRESHOLD_LOGICAL: f64 = 1.0;
+const PET_CLICK_THRESHOLD_LOGICAL: f64 = 5.0;
 /// Single-frame logical pixel dimensions, locked to the Codex sprite-sheet
 /// contract. The window is sized as one frame × user scale, with no extra
 /// chrome — DPR handling lives inside the webview.
@@ -1325,6 +1328,105 @@ pub(crate) const PET_BASE_HEIGHT: f64 = 208.0;
 /// watcher's transition detector then misses the post-dismiss enter and
 /// the user has to wiggle off-pet-and-back to re-trigger waving.
 static PET_HOVER_WAS_INSIDE: AtomicBool = AtomicBool::new(false);
+
+struct ActivePetDrag {
+    id: u64,
+    max_travel_logical: f64,
+    emitted_dir: Option<crate::models::pet::PetState>,
+    last_placed_origin: Option<(f64, f64, Option<f64>)>,
+}
+
+#[derive(Default)]
+struct PetDragSessions {
+    active: Option<ActivePetDrag>,
+    latest_seen_id: Option<u64>,
+    completed_results: HashMap<u64, PetDragEndResult>,
+}
+
+struct PetDragSessionEnd {
+    result: PetDragEndResult,
+    finished_active: bool,
+    last_placed_origin: Option<(f64, f64, Option<f64>)>,
+}
+
+impl PetDragSessions {
+    fn observe_start(&mut self, session_id: u64) -> bool {
+        if self.latest_seen_id.is_some_and(|id| id >= session_id) {
+            return false;
+        }
+        self.latest_seen_id = Some(session_id);
+        true
+    }
+
+    fn start(&mut self, session: ActivePetDrag) -> bool {
+        if self.latest_seen_id != Some(session.id) {
+            return false;
+        }
+        self.active = Some(session);
+        true
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    fn start_native_move(&self, session_id: u64, primary_button_down: bool, begin: impl FnOnce()) {
+        // The threshold request can beat the async pet_start_drag task.
+        if primary_button_down && self.latest_seen_id.is_none_or(|id| id <= session_id) {
+            begin();
+        }
+    }
+
+    fn finish(&mut self, session_id: u64, retain_result: bool) -> Option<PetDragSessionEnd> {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|session| session.id == session_id)
+        {
+            let session = self.active.take()?;
+            let result = PetDragEndResult {
+                clicked: session.max_travel_logical < PET_CLICK_THRESHOLD_LOGICAL,
+            };
+            if retain_result {
+                self.completed_results.insert(session_id, result);
+            }
+            return Some(PetDragSessionEnd {
+                result,
+                finished_active: true,
+                last_placed_origin: session.last_placed_origin,
+            });
+        }
+
+        self.completed_results
+            .remove(&session_id)
+            .map(|result| PetDragSessionEnd {
+                result,
+                finished_active: false,
+                last_placed_origin: None,
+            })
+    }
+}
+
+static PET_DRAG_SESSIONS: std::sync::LazyLock<Mutex<PetDragSessions>> =
+    std::sync::LazyLock::new(|| Mutex::new(PetDragSessions::default()));
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PetDragMode {
+    Tracked,
+    NativeOs,
+    Noop,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PetDragStartResult {
+    pub mode: PetDragMode,
+    pub session_id: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PetDragEndResult {
+    pub clicked: bool,
+}
 
 /// Apply the pet-window-specific platform style. Deliberately separate from
 /// `apply_platform_window_style`: that helper sets a solid background color
@@ -1685,6 +1787,210 @@ pub async fn open_pet_window(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn macos_primary_scale_factor_opt(app: &AppHandle) -> Option<f64> {
+    app.primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.scale_factor())
+        .filter(|sf| sf.is_finite() && *sf > 0.0)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_primary_scale_factor(app: &AppHandle) -> f64 {
+    macos_primary_scale_factor_opt(app).unwrap_or(1.0)
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn macos_cursor_logical_points(cursor_physical: (f64, f64), primary_sf: f64) -> Option<(f64, f64)> {
+    if !cursor_physical.0.is_finite()
+        || !cursor_physical.1.is_finite()
+        || !primary_sf.is_finite()
+        || primary_sf <= 0.0
+    {
+        return None;
+    }
+    Some((
+        cursor_physical.0 / primary_sf,
+        cursor_physical.1 / primary_sf,
+    ))
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn macos_cursor_logical_if_scale_consistent(
+    scale_before: f64,
+    cursor_physical: (f64, f64),
+    scale_after: f64,
+) -> Option<(f64, f64)> {
+    if !scale_before.is_finite()
+        || !scale_after.is_finite()
+        || scale_before <= 0.0
+        || scale_after <= 0.0
+        || (scale_before - scale_after).abs() >= 1e-6
+    {
+        return None;
+    }
+    macos_cursor_logical_points(cursor_physical, scale_after)
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn macos_cursor_logical_sample(
+    mut read_scale: impl FnMut() -> Option<f64>,
+    read_cursor: impl FnOnce() -> Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    let scale_before = read_scale()?;
+    let cursor_physical = read_cursor()?;
+    let scale_after = read_scale()?;
+    macos_cursor_logical_if_scale_consistent(scale_before, cursor_physical, scale_after)
+}
+
+/// Global cursor in Cocoa logical points (top-left of main screen `(0, 0)`,
+/// Y increasing downward — the exact space `LogicalPosition` expects).
+///
+/// `tao`'s `cursor_position()` on macOS multiplies `NSEvent::mouseLocation` by
+/// `primary_monitor().scale_factor()`, whereas `window.outer_position()`
+/// multiplies by `window.scale_factor()`. Dividing each by the factor `tao`
+/// applied puts both into unified Cocoa logical points across all displays.
+#[cfg(target_os = "macos")]
+fn macos_cursor_logical(app: &AppHandle, primary_sf: f64) -> Option<(f64, f64)> {
+    let cursor = app.cursor_position().ok()?;
+    macos_cursor_logical_points((cursor.x, cursor.y), primary_sf)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_cursor_logical_current(app: &AppHandle) -> Option<(f64, f64)> {
+    macos_cursor_logical_sample(
+        || macos_primary_scale_factor_opt(app),
+        || app.cursor_position().ok().map(|c| (c.x, c.y)),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn macos_window_logical_rect(window: &tauri::WebviewWindow) -> Option<(f64, f64, f64, f64)> {
+    let sf = window
+        .scale_factor()
+        .ok()
+        .filter(|sf| sf.is_finite() && *sf > 0.0)
+        .unwrap_or(1.0);
+    let pos = window.outer_position().ok()?;
+    let size = window.outer_size().ok()?;
+    Some((
+        f64::from(pos.x) / sf,
+        f64::from(pos.y) / sf,
+        f64::from(size.width) / sf,
+        f64::from(size.height) / sf,
+    ))
+}
+
+/// macOS drag target in Cocoa logical points. AppKit's multi-monitor desktop
+/// is one continuous logical space, so preserving the initial logical grab
+/// offset keeps the pet glued to the cursor across 2× ↔ 1× screen seams.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn compute_macos_drag_origin(
+    cursor_log: (f64, f64),
+    grab_offset_log: (f64, f64),
+) -> (f64, f64) {
+    (
+        cursor_log.0 - grab_offset_log.0,
+        cursor_log.1 - grab_offset_log.1,
+    )
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_drag_cursor_is_continuous(previous_cursor: (f64, f64), cursor: (f64, f64)) -> bool {
+    // Allow fast mouse motion at the 8 ms poll cadence, while rejecting a
+    // one-frame scale jump even when it lands inside a different display.
+    const MAX_STEP_LOGICAL: f64 = 256.0;
+    (cursor.0 - previous_cursor.0).hypot(cursor.1 - previous_cursor.1) <= MAX_STEP_LOGICAL
+}
+
+/// Physical desktop drag target for Windows / X11 Linux.
+///
+/// Preserves the normalized grab anchor `(rel_x, rel_y) ∈ [0, 1]²` across
+/// `WM_DPICHANGED` window resizes so the grabbed point on the sprite stays
+/// pinned under the cursor when crossing mixed-DPI monitor seams. Once the
+/// window's scale matches the cursor's monitor, a center hysteresis guard keeps
+/// the window center from falling back onto an adjacent monitor with a
+/// different DPI (preventing Win32 `WM_DPICHANGED` ping-pong on edge grabs).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn compute_physical_drag_origin(
+    cursor_phys: (f64, f64),
+    anchor_ratio: (f64, f64),
+    win_size_phys: (f64, f64),
+    win_sf: f64,
+    monitors: &[(i32, i32, u32, u32, f64)],
+) -> (i32, i32) {
+    let (w, h) = win_size_phys;
+    let mut x = cursor_phys.0 - anchor_ratio.0 * w;
+    let mut y = cursor_phys.1 - anchor_ratio.1 * h;
+
+    let contains = |(mx, my, mw, mh, _): (i32, i32, u32, u32, f64), px: f64, py: f64| {
+        mw > 0
+            && mh > 0
+            && px >= f64::from(mx)
+            && px < f64::from(mx) + f64::from(mw)
+            && py >= f64::from(my)
+            && py < f64::from(my) + f64::from(mh)
+    };
+
+    if let Some(&(mx, my, mw, mh, cursor_sf)) = monitors
+        .iter()
+        .find(|&&m| m.4.is_finite() && m.4 > 0.0 && contains(m, cursor_phys.0, cursor_phys.1))
+    {
+        if (cursor_sf - win_sf).abs() < 0.01 {
+            let cx = x + w / 2.0;
+            let cy = y + h / 2.0;
+            let flips_to_other_dpi = monitors.iter().any(|&other| {
+                other.4.is_finite()
+                    && other.4 > 0.0
+                    && (other.4 - cursor_sf).abs() >= 0.01
+                    && contains(other, cx, cy)
+            });
+            if flips_to_other_dpi {
+                let min_cx = f64::from(mx) + 1.0;
+                let max_cx = (f64::from(mx) + f64::from(mw) - 1.0).max(min_cx);
+                let min_cy = f64::from(my) + 1.0;
+                let max_cy = (f64::from(my) + f64::from(mh) - 1.0).max(min_cy);
+                x = cx.clamp(min_cx, max_cx) - w / 2.0;
+                y = cy.clamp(min_cy, max_cy) - h / 2.0;
+            }
+        }
+    }
+
+    (x.round() as i32, y.round() as i32)
+}
+
+fn is_primary_mouse_button_down() -> Option<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "CoreGraphics", kind = "framework")]
+        extern "C" {
+            fn CGEventSourceButtonState(state_id: i32, button: u32) -> bool;
+        }
+        // kCGEventSourceStateCombinedSessionState = 0, kCGMouseButtonLeft = 0
+        Some(unsafe { CGEventSourceButtonState(0, 0) })
+    }
+    #[cfg(target_os = "windows")]
+    {
+        #[link(name = "user32")]
+        extern "system" {
+            fn GetAsyncKeyState(vkey: i32) -> i16;
+            fn GetSystemMetrics(index: i32) -> i32;
+        }
+        // SM_SWAPBUTTON (23) swaps physical left/right mouse buttons.
+        let vkey = if unsafe { GetSystemMetrics(23) } != 0 {
+            0x02
+        } else {
+            0x01
+        };
+        Some(unsafe { GetAsyncKeyState(vkey) } < 0)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        None
+    }
+}
+
 /// Polls the global cursor position and emits `pet://hover-enter` whenever
 /// the cursor crosses into the pet window's bounds. Native webviews on
 /// macOS don't reliably deliver mouse events to non-key windows, so we
@@ -1709,6 +2015,8 @@ fn spawn_pet_hover_watcher(app: AppHandle) {
         // actually crosses the bounds.
         PET_HOVER_WAS_INSIDE.store(false, AtomicOrdering::Relaxed);
         let mut bounds: Option<(f64, f64, f64, f64)> = None;
+        #[cfg(target_os = "macos")]
+        let mut primary_sf: f64 = 1.0;
         let mut ticks_since_refresh: u8 = BOUNDS_REFRESH_TICKS;
         loop {
             interval.tick().await;
@@ -1717,20 +2025,31 @@ fn spawn_pet_hover_watcher(app: AppHandle) {
             };
 
             if ticks_since_refresh >= BOUNDS_REFRESH_TICKS {
-                let Ok(pos) = window.outer_position() else {
-                    continue;
-                };
-                let Ok(size) = window.outer_size() else {
-                    continue;
-                };
-                let x_min = pos.x as f64;
-                let y_min = pos.y as f64;
-                bounds = Some((
-                    x_min,
-                    x_min + size.width as f64,
-                    y_min,
-                    y_min + size.height as f64,
-                ));
+                #[cfg(target_os = "macos")]
+                {
+                    primary_sf = macos_primary_scale_factor(&app);
+                    let Some((x_min, y_min, w, h)) = macos_window_logical_rect(&window) else {
+                        continue;
+                    };
+                    bounds = Some((x_min, x_min + w, y_min, y_min + h));
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let Ok(pos) = window.outer_position() else {
+                        continue;
+                    };
+                    let Ok(size) = window.outer_size() else {
+                        continue;
+                    };
+                    let x_min = f64::from(pos.x);
+                    let y_min = f64::from(pos.y);
+                    bounds = Some((
+                        x_min,
+                        x_min + f64::from(size.width),
+                        y_min,
+                        y_min + f64::from(size.height),
+                    ));
+                }
                 ticks_since_refresh = 0;
             } else {
                 ticks_since_refresh += 1;
@@ -1739,11 +2058,18 @@ fn spawn_pet_hover_watcher(app: AppHandle) {
             let Some((x_min, x_max, y_min, y_max)) = bounds else {
                 continue;
             };
-            let Ok(cursor) = app.cursor_position() else {
+            #[cfg(target_os = "macos")]
+            let Some((cx, cy)) = macos_cursor_logical(&app, primary_sf) else {
                 continue;
             };
-            let inside =
-                cursor.x >= x_min && cursor.x < x_max && cursor.y >= y_min && cursor.y < y_max;
+            #[cfg(not(target_os = "macos"))]
+            let (cx, cy) = {
+                let Ok(cursor) = app.cursor_position() else {
+                    continue;
+                };
+                (cursor.x, cursor.y)
+            };
+            let inside = cx >= x_min && cx < x_max && cy >= y_min && cy < y_max;
             let was_inside = PET_HOVER_WAS_INSIDE.load(AtomicOrdering::Relaxed);
             if inside && !was_inside {
                 let _ = app.emit(PET_HOVER_ENTER_EVENT, ());
@@ -1800,6 +2126,478 @@ pub async fn pet_window_record_position(
     )
     .await?;
     Ok(())
+}
+
+fn take_pet_drag_session(expected_id: u64) -> Option<ActivePetDrag> {
+    let Ok(mut guard) = PET_DRAG_SESSIONS.lock() else {
+        return None;
+    };
+    if guard
+        .active
+        .as_ref()
+        .is_some_and(|session| session.id == expected_id)
+    {
+        guard.active.take()
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "tauri-runtime")]
+async fn finish_pet_drag_session(
+    app: &AppHandle,
+    expected_id: u64,
+    retain_result: bool,
+) -> Option<PetDragEndResult> {
+    let end = {
+        let Ok(mut guard) = PET_DRAG_SESSIONS.lock() else {
+            return None;
+        };
+        guard.finish(expected_id, retain_result)?
+    };
+    if !end.finished_active {
+        return Some(end.result);
+    }
+
+    let _ = app.emit_to(
+        PET_WINDOW_LABEL,
+        PET_DRAG_DIRECTION_EVENT,
+        Option::<crate::models::pet::PetState>::None,
+    );
+    if !end.result.clicked {
+        PET_HOVER_WAS_INSIDE.store(true, AtomicOrdering::Relaxed);
+        #[cfg(target_os = "macos")]
+        let origin_to_save = end.last_placed_origin;
+        #[cfg(not(target_os = "macos"))]
+        let origin_to_save = end.last_placed_origin.or_else(|| {
+            app.get_webview_window(PET_WINDOW_LABEL)
+                .and_then(|window| pet_window_live_origin(&window))
+        });
+        if let Some((x, y, position_scale_factor)) = origin_to_save {
+            if let Some(db) = app.try_state::<AppDatabase>() {
+                let _ = crate::commands::pet::pet_save_window_state_core(
+                    &db.conn,
+                    crate::models::pet::PetWindowStatePatch {
+                        x: Some(x),
+                        y: Some(y),
+                        position_scale_factor,
+                        ..Default::default()
+                    },
+                )
+                .await;
+            }
+        }
+    }
+    Some(end.result)
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn linux_native_drag_required_for_gdk_backend(gdk_backend: Option<&str>) -> bool {
+    gdk_backend != Some("GdkX11Display")
+}
+
+#[cfg(all(feature = "tauri-runtime", target_os = "linux"))]
+async fn probe_linux_gdk_backend(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+) -> Option<String> {
+    use gtk::prelude::*;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let window = window.clone();
+    if app
+        .run_on_main_thread(move || {
+            let backend = window
+                .gtk_window()
+                .ok()
+                .map(|gtk_window| gtk_window.display().type_().name().to_string());
+            let _ = tx.send(backend);
+        })
+        .is_err()
+    {
+        return None;
+    }
+    match tokio::time::timeout(std::time::Duration::from_secs(2), rx).await {
+        Ok(Ok(backend)) => backend,
+        _ => None,
+    }
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub fn pet_start_native_drag(app: AppHandle, session_id: u64) -> Result<(), AppCommandError> {
+    #[cfg(target_os = "linux")]
+    if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
+        use gtk::prelude::*;
+
+        app.run_on_main_thread(move || {
+            let Ok(gtk_window) = window.gtk_window() else {
+                return;
+            };
+            let display = gtk_window.display();
+            if !linux_native_drag_required_for_gdk_backend(Some(display.type_().name())) {
+                return;
+            }
+            let Some(pointer) = display.default_seat().and_then(|seat| seat.pointer()) else {
+                return;
+            };
+            let Some(surface) = gtk_window.window() else {
+                return;
+            };
+            let (_, x, y, modifiers) = surface.device_position(&pointer);
+            let (root_x, root_y) = surface.root_coords(x, y);
+            if let Ok(sessions) = PET_DRAG_SESSIONS.lock() {
+                sessions.start_native_move(
+                    session_id,
+                    modifiers.contains(gtk::gdk::ModifierType::BUTTON1_MASK),
+                    // Call GTK here: Tauri's start_dragging queues another request.
+                    || gtk_window.begin_move_drag(1, root_x, root_y, 0),
+                );
+            }
+        })
+        .map_err(|e| AppCommandError::window("Failed to start native pet drag", e.to_string()))?;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (app, session_id);
+    Ok(())
+}
+
+/// Begin an OS-cursor-driven drag of the floating pet window.
+///
+/// Tracking the cursor in Rust rather than JS `PointerEvent.screenX/Y` keeps
+/// cross-monitor dragging continuous at ~120 Hz without per-frame IPC and
+/// avoids both macOS `PhysicalPosition` scale division and Windows WebView2
+/// mid-drag `devicePixelRatio` jumps while preserving directional run
+/// animations. On Linux, the actual GTK backend selects native OS dragging
+/// unless the window is on X11; Wayland cannot poll a global cursor or set a
+/// window position through the compositor.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn pet_start_drag(
+    app: AppHandle,
+    session_id: u64,
+) -> Result<PetDragStartResult, AppCommandError> {
+    let observed = PET_DRAG_SESSIONS
+        .lock()
+        .ok()
+        .is_some_and(|mut sessions| sessions.observe_start(session_id));
+    if !observed {
+        return Ok(PetDragStartResult {
+            mode: PetDragMode::Noop,
+            session_id: None,
+        });
+    }
+    let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) else {
+        return Ok(PetDragStartResult {
+            mode: PetDragMode::Noop,
+            session_id: None,
+        });
+    };
+
+    #[cfg(target_os = "linux")]
+    {
+        let gdk_backend = probe_linux_gdk_backend(&app, &window).await;
+        if linux_native_drag_required_for_gdk_backend(gdk_backend.as_deref()) {
+            return Ok(PetDragStartResult {
+                mode: PetDragMode::NativeOs,
+                session_id: None,
+            });
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    let (start_cursor, grab_offset) = {
+        let Some(cursor) = macos_cursor_logical_current(&app) else {
+            return Ok(PetDragStartResult {
+                mode: PetDragMode::Noop,
+                session_id: None,
+            });
+        };
+        let Some((wx, wy, ww, wh)) = macos_window_logical_rect(&window) else {
+            return Ok(PetDragStartResult {
+                mode: PetDragMode::Noop,
+                session_id: None,
+            });
+        };
+        let offset = (
+            (cursor.0 - wx).clamp(0.0, ww.max(1.0)),
+            (cursor.1 - wy).clamp(0.0, wh.max(1.0)),
+        );
+        (cursor, offset)
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let (pet_w, pet_h, start_cursor, anchor_ratio, monitors) = {
+        let scale = match app.try_state::<AppDatabase>() {
+            Some(db) => crate::commands::pet::pet_get_settings_core(&db.conn)
+                .await?
+                .scale
+                .clamp(0.5, 3.0),
+            None => 0.75,
+        };
+        let Ok(cursor) = app.cursor_position() else {
+            return Ok(PetDragStartResult {
+                mode: PetDragMode::Noop,
+                session_id: None,
+            });
+        };
+        let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+            return Ok(PetDragStartResult {
+                mode: PetDragMode::Noop,
+                session_id: None,
+            });
+        };
+        let ww = f64::from(size.width).max(1.0);
+        let wh = f64::from(size.height).max(1.0);
+        let ratio = (
+            ((cursor.x - f64::from(pos.x)) / ww).clamp(0.0, 1.0),
+            ((cursor.y - f64::from(pos.y)) / wh).clamp(0.0, 1.0),
+        );
+        let monitors: Vec<(i32, i32, u32, u32, f64)> = app
+            .available_monitors()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| {
+                let mp = m.position();
+                let ms = m.size();
+                (mp.x, mp.y, ms.width, ms.height, m.scale_factor())
+            })
+            .collect();
+        (
+            PET_BASE_WIDTH * scale,
+            PET_BASE_HEIGHT * scale,
+            (cursor.x, cursor.y),
+            ratio,
+            monitors,
+        )
+    };
+
+    let installed = PET_DRAG_SESSIONS.lock().ok().is_some_and(|mut guard| {
+        guard.start(ActivePetDrag {
+            id: session_id,
+            max_travel_logical: 0.0,
+            emitted_dir: None,
+            last_placed_origin: None,
+        })
+    });
+    if !installed {
+        return Ok(PetDragStartResult {
+            mode: PetDragMode::Noop,
+            session_id: None,
+        });
+    }
+
+    tokio::spawn(async move {
+        use crate::models::pet::PetState;
+        use std::time::{Duration, Instant};
+
+        let mut interval = tokio::time::interval(Duration::from_millis(PET_DRAG_TICK_MS));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut saw_button_down = is_primary_mouse_button_down() == Some(true);
+        let mut last_cursor = start_cursor;
+        let mut last_applied_pos: Option<(i64, i64)> = None;
+        let mut last_motion_at: Option<Instant> = None;
+        #[cfg(not(target_os = "macos"))]
+        let mut prev_sf = window
+            .scale_factor()
+            .ok()
+            .filter(|sf| sf.is_finite() && *sf > 0.0)
+            .unwrap_or(1.0);
+
+        loop {
+            interval.tick().await;
+
+            let still_active = PET_DRAG_SESSIONS.lock().ok().is_some_and(|g| {
+                g.latest_seen_id == Some(session_id)
+                    && g.active
+                        .as_ref()
+                        .is_some_and(|session| session.id == session_id)
+            });
+            if !still_active {
+                break;
+            }
+
+            let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) else {
+                let _ = take_pet_drag_session(session_id);
+                break;
+            };
+
+            match is_primary_mouse_button_down() {
+                Some(true) => saw_button_down = true,
+                Some(false) if saw_button_down => {
+                    let _ = finish_pet_drag_session(&app, session_id, true).await;
+                    break;
+                }
+                _ => {}
+            }
+
+            #[cfg(target_os = "macos")]
+            let (travel_log, inst_dx_log, moved_this_tick, origin_to_place) = {
+                let Some(cur) = macos_cursor_logical_current(&app) else {
+                    continue;
+                };
+                let travel = (cur.0 - start_cursor.0).hypot(cur.1 - start_cursor.1);
+                let inst_dx = cur.0 - last_cursor.0;
+                let moved =
+                    (cur.0 - last_cursor.0).abs() > 0.01 || (cur.1 - last_cursor.1).abs() > 0.01;
+                let mut origin_to_place = None;
+                if moved {
+                    if !macos_drag_cursor_is_continuous(last_cursor, cur) {
+                        continue;
+                    }
+                    let (tx, ty) = compute_macos_drag_origin(cur, grab_offset);
+                    // tao checks these points against logical CGDisplayBounds.
+                    if !matches!(app.monitor_from_point(tx, ty), Ok(Some(_))) {
+                        // Keep following an on-screen cursor while the grab
+                        // offset puts the origin in a gap between displays.
+                        if matches!(app.monitor_from_point(cur.0, cur.1), Ok(Some(_))) {
+                            last_cursor = cur;
+                        }
+                        continue;
+                    }
+                    last_cursor = cur;
+                    let pos_key = ((tx * 2.0).round() as i64, (ty * 2.0).round() as i64);
+                    if last_applied_pos != Some(pos_key) {
+                        origin_to_place = Some((tx, ty, pos_key));
+                    }
+                }
+                (travel, inst_dx, moved, origin_to_place)
+            };
+
+            #[cfg(not(target_os = "macos"))]
+            let (travel_log, inst_dx_log, moved_this_tick) = {
+                let Ok(c) = app.cursor_position() else {
+                    continue;
+                };
+                let cur = (c.x, c.y);
+                let cur_sf = window
+                    .scale_factor()
+                    .ok()
+                    .filter(|sf| sf.is_finite() && *sf > 0.0)
+                    .unwrap_or(1.0);
+                let travel = ((cur.0 - start_cursor.0) / cur_sf)
+                    .hypot((cur.1 - start_cursor.1) / cur_sf);
+                let inst_dx = (cur.0 - last_cursor.0) / cur_sf;
+                let moved =
+                    (cur.0 - last_cursor.0).abs() > 0.1 || (cur.1 - last_cursor.1).abs() > 0.1;
+                last_cursor = cur;
+                if moved {
+                    let Ok(size) = window.outer_size() else {
+                        continue;
+                    };
+                    let (tx, ty) = compute_physical_drag_origin(
+                        cur,
+                        anchor_ratio,
+                        (f64::from(size.width), f64::from(size.height)),
+                        cur_sf,
+                        &monitors,
+                    );
+                    let pos_key = (i64::from(tx), i64::from(ty));
+                    if last_applied_pos != Some(pos_key) {
+                        last_applied_pos = Some(pos_key);
+                        let _ = window.set_position(tauri::PhysicalPosition::new(tx, ty));
+                        if let Ok(new_sf) = window.scale_factor() {
+                            if new_sf.is_finite()
+                                && new_sf > 0.0
+                                && (new_sf - prev_sf).abs() >= 0.01
+                            {
+                                prev_sf = new_sf;
+                                let _ = window.set_size(LogicalSize::new(pet_w, pet_h));
+                                if let Ok(resized) = window.outer_size() {
+                                    let (rx, ry) = compute_physical_drag_origin(
+                                        cur,
+                                        anchor_ratio,
+                                        (f64::from(resized.width), f64::from(resized.height)),
+                                        new_sf,
+                                        &monitors,
+                                    );
+                                    last_applied_pos = Some((i64::from(rx), i64::from(ry)));
+                                    let _ =
+                                        window.set_position(tauri::PhysicalPosition::new(rx, ry));
+                                }
+                            }
+                        }
+                    }
+                }
+                (travel, inst_dx, moved)
+            };
+
+            if moved_this_tick {
+                last_motion_at = Some(Instant::now());
+            }
+
+            let emit_dir = {
+                let Ok(mut guard) = PET_DRAG_SESSIONS.lock() else {
+                    break;
+                };
+                if guard.latest_seen_id != Some(session_id) {
+                    break;
+                }
+                let Some(session) = guard
+                    .active
+                    .as_mut()
+                    .filter(|session| session.id == session_id)
+                else {
+                    break;
+                };
+                if travel_log > session.max_travel_logical {
+                    session.max_travel_logical = travel_log;
+                }
+                #[cfg(target_os = "macos")]
+                if let Some((x, y, pos_key)) = origin_to_place {
+                    // Release and placement share this lock so release sees the
+                    // accepted origin as soon as the position is dispatched.
+                    session.last_placed_origin = Some((x, y, Some(1.0)));
+                    if window.set_position(LogicalPosition::new(x, y)).is_ok() {
+                        last_applied_pos = Some(pos_key);
+                    }
+                }
+                if inst_dx_log.abs() > PET_DRAG_DIRECTION_THRESHOLD_LOGICAL {
+                    let next = Some(if inst_dx_log > 0.0 {
+                        PetState::RunningRight
+                    } else {
+                        PetState::RunningLeft
+                    });
+                    if session.emitted_dir != next {
+                        session.emitted_dir = next;
+                        Some(next)
+                    } else {
+                        None
+                    }
+                } else if session.emitted_dir.is_some()
+                    && last_motion_at
+                        .is_some_and(|t| t.elapsed().as_millis() >= PET_DRAG_DIRECTION_IDLE_MS)
+                {
+                    session.emitted_dir = None;
+                    Some(None)
+                } else {
+                    None
+                }
+            };
+
+            if let Some(dir) = emit_dir {
+                let _ = app.emit_to(PET_WINDOW_LABEL, PET_DRAG_DIRECTION_EVENT, dir);
+            }
+        }
+    });
+
+    Ok(PetDragStartResult {
+        mode: PetDragMode::Tracked,
+        session_id: Some(session_id),
+    })
+}
+
+/// End one pet drag, persist its final origin when the pet actually moved,
+/// and report whether that interaction was a tap.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn pet_end_drag(
+    app: AppHandle,
+    session_id: u64,
+) -> Result<PetDragEndResult, AppCommandError> {
+    Ok(finish_pet_drag_session(&app, session_id, false)
+        .await
+        .unwrap_or(PetDragEndResult { clicked: false }))
 }
 
 // ─── Pet session panel (click-to-open companion window) ─────────────────
@@ -3393,8 +4191,9 @@ mod macos_fullscreen_close_tests {
 #[cfg(test)]
 mod pet_window_origin_tests {
     use super::{
-        pet_staging_origin, resolve_saved_pet_origin_macos, resolve_saved_pet_origin_physical,
-        SavedPetOrigin, PET_BASE_HEIGHT, PET_BASE_WIDTH,
+        compute_macos_drag_origin, compute_physical_drag_origin, pet_staging_origin,
+        resolve_saved_pet_origin_macos, resolve_saved_pet_origin_physical, SavedPetOrigin,
+        PET_BASE_HEIGHT, PET_BASE_WIDTH,
     };
 
     // Mixed-DPI setup: 2× primary Retina at (0, 0) + 1× external monitor to its left.
@@ -3567,5 +4366,239 @@ mod pet_window_origin_tests {
             pet_staging_origin(SavedPetOrigin { x: 5000.0, y: 10.0 }, &seam, 240.0, 260.0),
             None
         );
+    }
+
+    #[test]
+    fn macos_drag_origin_stays_continuous_across_2x_and_1x_monitors() {
+        // Grabbed at offset (48, 52) on a 2× Retina display and dragged across
+        // x = 0 onto a 1× external display: Cocoa logical points stay continuous
+        // without doubling Y off the bottom of the external monitor.
+        assert_eq!(
+            compute_macos_drag_origin((-150.0, 824.0), (48.0, 52.0)),
+            (-198.0, 772.0)
+        );
+    }
+
+    #[test]
+    fn physical_drag_origin_preserves_anchor_ratio_and_prevents_seam_oscillation() {
+        // Normal tracking away from the seam keeps the grabbed point pinned.
+        assert_eq!(
+            compute_physical_drag_origin(
+                (-500.0, 500.0),
+                (0.5, 0.5),
+                (144.0, 156.0),
+                1.0,
+                &MIXED_DPI_LEFT,
+            ),
+            (-572, 422)
+        );
+
+        // Extreme right-edge grab (`rel_x = 0.9`) crossing from 1× left monitor
+        // `[-1920, 0)` onto 2× primary `[0, 3024)` at `cursor_x = 80`: once the
+        // window has resized to `288×312` at `win_sf = 2.0`, naive placement
+        // `80 - 0.9 * 288 = -179.2` puts the window center at `-35.2 < 0` back
+        // on the 1× monitor, causing Win32 WM_DPICHANGED ping-pong. The guard
+        // keeps the center at `+1` (`x = 1 - 144 = -143`) on the cursor's monitor.
+        let (x, y) = compute_physical_drag_origin(
+            (80.0, 500.0),
+            (0.9, 0.5),
+            (288.0, 312.0),
+            2.0,
+            &MIXED_DPI_LEFT,
+        );
+        assert_eq!(x, -143);
+        assert_eq!(y, 344);
+        assert!(80 >= x && 80 <= x + 288, "cursor remains inside pet window");
+    }
+
+    #[test]
+    fn pet_drag_end_preserves_the_native_result_for_the_same_session() {
+        let mut sessions = super::PetDragSessions::default();
+        assert!(sessions.observe_start(11));
+        assert!(sessions.start(super::ActivePetDrag {
+            id: 11,
+            max_travel_logical: 1.0,
+            emitted_dir: None,
+            last_placed_origin: None,
+        }));
+
+        let native_end = sessions
+            .finish(11, true)
+            .expect("native release ends the drag");
+        assert!(native_end.finished_active);
+        assert!(native_end.result.clicked);
+
+        let renderer_end = sessions
+            .finish(11, false)
+            .expect("renderer receives the saved result");
+        assert!(!renderer_end.finished_active);
+        assert!(renderer_end.result.clicked);
+    }
+
+    #[test]
+    fn renderer_first_pet_drag_end_does_not_cache_a_stale_result() {
+        let mut sessions = super::PetDragSessions::default();
+        assert!(sessions.observe_start(12));
+        assert!(sessions.start(super::ActivePetDrag {
+            id: 12,
+            max_travel_logical: 1.0,
+            emitted_dir: None,
+            last_placed_origin: None,
+        }));
+
+        let end = sessions.finish(12, false).expect("renderer ends the drag");
+        assert!(end.finished_active);
+        assert!(end.result.clicked);
+        assert!(sessions.finish(12, false).is_none());
+    }
+
+    #[test]
+    fn stale_pet_drag_end_cannot_finish_the_next_session() {
+        let mut sessions = super::PetDragSessions::default();
+        assert!(sessions.observe_start(20));
+        assert!(sessions.start(super::ActivePetDrag {
+            id: 20,
+            max_travel_logical: 0.0,
+            emitted_dir: None,
+            last_placed_origin: None,
+        }));
+        assert!(sessions.observe_start(21));
+        assert!(sessions.start(super::ActivePetDrag {
+            id: 21,
+            max_travel_logical: 0.0,
+            emitted_dir: None,
+            last_placed_origin: None,
+        }));
+
+        assert!(sessions.finish(20, false).is_none());
+        assert_eq!(sessions.active.as_ref().map(|session| session.id), Some(21));
+    }
+
+    #[test]
+    fn late_pet_drag_start_cannot_overwrite_a_newer_session() {
+        let mut sessions = super::PetDragSessions::default();
+        // B reaches Rust first but has not installed its polling session yet.
+        assert!(sessions.observe_start(22));
+        assert!(!sessions.observe_start(21));
+        assert!(!sessions.start(super::ActivePetDrag {
+            id: 21,
+            max_travel_logical: 0.0,
+            emitted_dir: None,
+            last_placed_origin: None,
+        }));
+        assert!(sessions.start(super::ActivePetDrag {
+            id: 22,
+            max_travel_logical: 10.0,
+            emitted_dir: None,
+            last_placed_origin: Some((550.0, 450.0, Some(1.0))),
+        }));
+        assert!(!sessions.start(super::ActivePetDrag {
+            id: 21,
+            max_travel_logical: 0.0,
+            emitted_dir: None,
+            last_placed_origin: None,
+        }));
+        assert_eq!(sessions.active.as_ref().map(|session| session.id), Some(22));
+        assert!(sessions.finish(21, false).is_none());
+        assert_eq!(sessions.active.as_ref().map(|session| session.id), Some(22));
+
+        let end = sessions.finish(22, false).expect("session B still ends normally");
+        assert!(end.finished_active);
+        assert!(!end.result.clicked);
+        assert_eq!(end.last_placed_origin, Some((550.0, 450.0, Some(1.0))));
+
+        // Even after B ends, stale A (id 21) must not install itself.
+        assert!(!sessions.start(super::ActivePetDrag {
+            id: 21,
+            max_travel_logical: 0.0,
+            emitted_dir: None,
+            last_placed_origin: None,
+        }));
+        assert!(sessions.active.is_none());
+    }
+
+    #[test]
+    fn linux_native_move_checks_the_gesture_at_dispatch() {
+        let mut sessions = super::PetDragSessions::default();
+        assert!(sessions.observe_start(21));
+        assert!(sessions.observe_start(22));
+
+        let mut moves = 0;
+        sessions.start_native_move(21, true, || moves += 1);
+        sessions.start_native_move(22, false, || moves += 1);
+        assert_eq!(moves, 0);
+        sessions.start_native_move(22, true, || moves += 1);
+        assert_eq!(moves, 1);
+    }
+
+    #[test]
+    fn macos_cursor_reads_the_current_primary_scale_for_each_sample() {
+        let scale = std::cell::Cell::new(1.0);
+
+        assert_eq!(
+            super::macos_cursor_logical_sample(|| Some(scale.get()), || Some((320.0, 240.0))),
+            Some((320.0, 240.0))
+        );
+        scale.set(2.0);
+        assert_eq!(
+            super::macos_cursor_logical_sample(|| Some(scale.get()), || Some((640.0, 480.0))),
+            Some((320.0, 240.0))
+        );
+    }
+
+    #[test]
+    fn macos_cursor_rejects_mismatched_scale_around_cursor_read() {
+        // Cursor was multiplied by 2× (logical 900, 400 -> physical 1800, 800)
+        // while the pre-read scale was 1×: must drop the sample instead of
+        // producing the doubled logical point (1800, 800).
+        assert_eq!(
+            super::macos_cursor_logical_if_scale_consistent(1.0, (1800.0, 800.0), 2.0),
+            None
+        );
+        assert_eq!(
+            super::macos_cursor_logical_if_scale_consistent(2.0, (900.0, 400.0), 1.0),
+            None
+        );
+        assert_eq!(
+            super::macos_cursor_logical_if_scale_consistent(2.0, (1800.0, 800.0), 2.0),
+            Some((900.0, 400.0))
+        );
+
+        let scale = std::cell::Cell::new(1.0);
+        let mismatched = super::macos_cursor_logical_sample(
+            || Some(scale.get()),
+            || {
+                scale.set(2.0);
+                Some((1800.0, 800.0))
+            },
+        );
+        assert_eq!(mismatched, None);
+
+        let consistent =
+            super::macos_cursor_logical_sample(|| Some(scale.get()), || Some((1800.0, 800.0)));
+        assert_eq!(consistent, Some((900.0, 400.0)));
+    }
+
+    #[test]
+    fn macos_drag_rejects_a_doubled_point_with_matching_scale_reads() {
+        let previous = (900.0, 400.0);
+        let doubled = super::macos_cursor_logical_if_scale_consistent(1.0, (1800.0, 800.0), 1.0)
+            .expect("matching scales alone accept the doubled point");
+        assert!(!super::macos_drag_cursor_is_continuous(previous, doubled));
+        assert!(super::macos_drag_cursor_is_continuous(
+            previous,
+            (905.0, 402.0),
+        ));
+    }
+
+    #[test]
+    fn linux_drag_mode_follows_the_actual_gdk_backend() {
+        assert!(!super::linux_native_drag_required_for_gdk_backend(Some(
+            "GdkX11Display"
+        )));
+        assert!(super::linux_native_drag_required_for_gdk_backend(Some(
+            "GdkWaylandDisplay"
+        )));
+        assert!(super::linux_native_drag_required_for_gdk_backend(None));
     }
 }

@@ -157,6 +157,31 @@ export async function recordPetWindowPosition(
   return getTransport().call("pet_window_record_position", { x, y })
 }
 
+export type PetDragMode = "tracked" | "native_os" | "noop"
+
+export interface PetDragStartResult {
+  mode: PetDragMode
+  sessionId: number | null
+}
+
+export interface PetDragEndResult {
+  clicked: boolean
+}
+
+export async function startPetDrag(
+  sessionId: number
+): Promise<PetDragStartResult> {
+  return getTransport().call("pet_start_drag", { sessionId })
+}
+
+export async function startNativePetDrag(sessionId: number): Promise<void> {
+  return getTransport().call("pet_start_native_drag", { sessionId })
+}
+
+export async function endPetDrag(sessionId: number): Promise<PetDragEndResult> {
+  return getTransport().call("pet_end_drag", { sessionId })
+}
+
 // Toggle the session panel anchored next to the sprite (open if closed, close
 // if open). Tauri-only. The backend guards the toggle-vs-blur race so a tap
 // that dismissed the panel via click-away doesn't immediately reopen it.

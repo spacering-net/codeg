@@ -1,14 +1,14 @@
 "use client"
 
 import { useCallback, useEffect, useRef } from "react"
-import { isDesktop } from "@/lib/transport"
-import { recordPetWindowPosition } from "@/lib/pet/api"
 import type { PetState } from "@/lib/pet/animation"
+import { endPetDrag, startNativePetDrag, startPetDrag } from "@/lib/pet/api"
+import { disposeTauriListener } from "@/lib/tauri-listener"
+import { isDesktop } from "@/lib/transport"
 
 const CLICK_THRESHOLD_PX = 5
-const DIRECTION_IDLE_MS = 160
-const DIRECTION_THRESHOLD_PX = 1
-const PERSIST_DEBOUNCE_MS = 220
+const PET_DRAG_DIRECTION_EVENT = "pet://drag-direction"
+let lastDragSeq = 0
 
 export interface UsePetDragOptions {
   /**
@@ -19,7 +19,7 @@ export interface UsePetDragOptions {
   onDragDirection: (state: PetState | null) => void
   /**
    * Fired on pointer-up when total movement was below the click threshold.
-   * Parents typically map this to a one-shot waving animation.
+   * Parents typically map this to a one-shot jumping animation.
    */
   onClick: () => void
 }
@@ -28,233 +28,227 @@ export interface UsePetDragResult {
   onPointerDown: (event: React.PointerEvent) => void
 }
 
+interface ActivePointerDrag {
+  seq: number
+  phase: "starting" | "tracked" | "native"
+  sessionId?: number
+  startX: number
+  startY: number
+  maxScreenTravel: number
+  nativeDragRequested: boolean
+}
+
 /**
- * Custom (non-native) drag for the floating pet window.
+ * OS-cursor-driven drag controller for the floating pet window.
  *
- * Why not `WebviewWindow.startDragging()`?
- * - On macOS, native window drag enters a modal run-loop that throttles JS
- *   timers — the sprite animation freezes mid-drag.
- * - We can't observe the cursor delta during native drag, so we can't
- *   switch the sprite to the directional `running-right` / `running-left`
- *   row, which is the whole point of those Codex animation rows.
- *
- * Approach:
- * 1. On pointerdown, snapshot the screen pointer position and the window's
- *    current outer position (converted to logical pixels via the active
- *    monitor's scale factor).
- * 2. On each pointermove, compute the logical delta and `setPosition` to
- *    `start + delta`, scheduled through `requestAnimationFrame` to coalesce
- *    move events at display refresh rate.
- * 3. Track horizontal direction; emit `running_right` / `running_left` to
- *    the parent. After `DIRECTION_IDLE_MS` of no horizontal motion, clear
- *    the directional state so the pet returns to its base animation while
- *    the user holds the window still.
- * 4. On pointerup with cumulative travel < `CLICK_THRESHOLD_PX`, treat as a
- *    click and fire `onClick`. Otherwise clear the directional state and
- *    debounce-persist the final position to the DB.
+ * Why drive positioning from Rust (`pet_start_drag` / `pet_end_drag`) instead
+ * of per-frame JS `PointerEvent.screenX/Y` + `setPosition`?
+ * - Native `WebviewWindow.startDragging()` enters a modal OS run-loop on macOS
+ *   and Windows that freezes JS sprite timers mid-drag and hides cursor deltas.
+ * - Per-frame JS `screenX/Y` breaks across mixed-DPI displays: on macOS,
+ *   `PhysicalPosition` divides by the window's live `scale_factor()` (doubling
+ *   coordinates on 2x -> 1x crossings); on Windows, WebView2's `screenX/Y`
+ *   jumps mid-drag when `WM_DPICHANGED` changes `devicePixelRatio`.
+ * - Polling the OS cursor in Rust at ~120 Hz eliminates per-frame IPC lag,
+ *   keeps coordinates in each OS's true global space across monitors, emits
+ *   `pet://drag-direction` only on state transitions, and atomically persists
+ *   the final `(x, y, scale_factor)` on release.
  */
 export function usePetDrag(opts: UsePetDragOptions): UsePetDragResult {
-  const draggingRef = useRef(false)
-  const startScreenRef = useRef<{ x: number; y: number } | null>(null)
-  const startWinLogicalRef = useRef<{ x: number; y: number } | null>(null)
-  const scaleFactorRef = useRef(1)
-  const totalMovedRef = useRef(0)
-  const lastScreenXRef = useRef<number | null>(null)
-  const lastDirRef = useRef<"left" | "right" | null>(null)
-  const dirIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const rafRef = useRef<number | null>(null)
-  const pendingPosRef = useRef<{ x: number; y: number } | null>(null)
-  const positionInFlightRef = useRef(false)
-  const persistAfterFlushRef = useRef(false)
-  const setPositionFnRef = useRef<
-    ((x: number, y: number) => Promise<void>) | null
-  >(null)
+  const activeRef = useRef<ActivePointerDrag | null>(null)
 
-  // Keep the latest opts in a ref so the global pointer listeners (set up
-  // once) always call into the current closure, without re-binding on
-  // every render.
   const optsRef = useRef(opts)
   useEffect(() => {
     optsRef.current = opts
   }, [opts])
 
-  const persistPosition = useCallback(async () => {
+  // Subscribe once to direction transitions emitted by the Rust drag loop.
+  useEffect(() => {
     if (!isDesktop()) return
-    try {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window")
-      const win = getCurrentWindow()
-      const pos = await win.outerPosition()
-      await recordPetWindowPosition(pos.x, pos.y)
-    } catch (err) {
-      console.warn("[Pet] failed to persist window position:", err)
+    let unlisten: (() => void) | null = null
+    let cancelled = false
+
+    void (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event")
+        const off = await listen<PetState | null>(
+          PET_DRAG_DIRECTION_EVENT,
+          (event) => {
+            if (cancelled) return
+            const payload = event.payload
+            optsRef.current.onDragDirection(
+              payload === "running_left" || payload === "running_right"
+                ? payload
+                : null
+            )
+          }
+        )
+        if (cancelled) {
+          disposeTauriListener(off, "Pet")
+        } else {
+          unlisten = off
+        }
+      } catch (err) {
+        console.warn("[Pet] drag-direction subscription failed:", err)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      disposeTauriListener(unlisten, "Pet")
     }
   }, [])
 
+  // Track pointer release globally (paired with pointer capture on press) so
+  // releasing off-window or before `pet_start_drag` resolves always settles.
   useEffect(() => {
     let disposed = false
 
-    function persistWhenSettled() {
-      if (!persistAfterFlushRef.current || disposed) return
-
-      if (positionInFlightRef.current || rafRef.current !== null) {
-        return
-      }
-
-      if (pendingPosRef.current) {
-        rafRef.current = requestAnimationFrame(flushPosition)
-        return
-      }
-
-      persistAfterFlushRef.current = false
-      void persistPosition()
-    }
-
-    function flushPosition() {
-      rafRef.current = null
-      if (positionInFlightRef.current) return
-      const p = pendingPosRef.current
-      pendingPosRef.current = null
-      if (!p || !setPositionFnRef.current) return
-      positionInFlightRef.current = true
-      void setPositionFnRef.current(p.x, p.y).finally(() => {
-        positionInFlightRef.current = false
-        if (disposed) return
-        if (pendingPosRef.current && rafRef.current === null) {
-          rafRef.current = requestAnimationFrame(flushPosition)
-        }
-        persistWhenSettled()
-      })
-    }
-
     function onPointerMove(e: PointerEvent) {
-      if (!draggingRef.current) return
-      const start = startScreenRef.current
-      const winStart = startWinLogicalRef.current
-      if (!start || !winStart) return
-
-      const dxLog = e.screenX - start.x
-      const dyLog = e.screenY - start.y
-      const dist = Math.sqrt(dxLog * dxLog + dyLog * dyLog)
-      if (dist > totalMovedRef.current) totalMovedRef.current = dist
-
-      // Direction tracks the *instant* frame-to-frame motion, not cumulative
-      // displacement from drag start. With cumulative, after a long left-drag
-      // the user has to overshoot back past the origin before the pet flips
-      // to running_right — feels sticky. Frame-delta flips as soon as motion
-      // reverses.
-      const lastX = lastScreenXRef.current ?? e.screenX
-      const instantDx = e.screenX - lastX
-      lastScreenXRef.current = e.screenX
-
-      if (Math.abs(instantDx) > DIRECTION_THRESHOLD_PX) {
-        const dir: "left" | "right" = instantDx > 0 ? "right" : "left"
-        if (dir !== lastDirRef.current) {
-          lastDirRef.current = dir
-          optsRef.current.onDragDirection(
-            dir === "right" ? "running_right" : "running_left"
-          )
-        }
+      const active = activeRef.current
+      if (!active || active.phase === "tracked" || (e.buttons & 1) === 0) {
+        return
       }
+      const dist = Math.hypot(
+        e.screenX - active.startX,
+        e.screenY - active.startY
+      )
+      if (dist > active.maxScreenTravel) {
+        active.maxScreenTravel = dist
+      }
+      if (
+        dist > CLICK_THRESHOLD_PX &&
+        !active.nativeDragRequested &&
+        activeRef.current?.seq === active.seq
+      ) {
+        // The GTK check also handles moves that beat the backend probe reply.
+        active.nativeDragRequested = true
+        void startNativePetDrag(active.seq).catch((err) => {
+          console.warn("[Pet] native drag start failed:", err)
+        })
+      }
+    }
 
-      // Refresh idle timer on *every* pointermove, not just frames that
-      // cross the direction threshold. Otherwise a slow drag (sub-pixel
-      // per frame) never refreshes the timer and falls back to the
-      // default animation while the user is still actively dragging.
-      if (dirIdleTimerRef.current) clearTimeout(dirIdleTimerRef.current)
-      dirIdleTimerRef.current = setTimeout(() => {
-        if (draggingRef.current) {
-          lastDirRef.current = null
+    function finishPointer(isCancel: boolean, event: PointerEvent) {
+      const active = activeRef.current
+      if (!active) return
+      activeRef.current = null
+
+      if (active.phase !== "tracked") {
+        // A pending tracked start ends its own session after the IPC returns;
+        // native OS dragging has no Rust session to end.
+        const releaseTravel = Number.isFinite(event.screenX)
+          ? Math.hypot(
+              event.screenX - active.startX,
+              event.screenY - active.startY
+            )
+          : 0
+        const maxTravel = Math.max(active.maxScreenTravel, releaseTravel)
+        if (!isCancel && maxTravel < CLICK_THRESHOLD_PX) {
+          optsRef.current.onClick()
+        } else {
           optsRef.current.onDragDirection(null)
         }
-      }, DIRECTION_IDLE_MS)
-
-      // Update window position. Compose in logical coordinates for
-      // monitor-DPR independence, then convert to physical for the API.
-      const physX = (winStart.x + dxLog) * scaleFactorRef.current
-      const physY = (winStart.y + dyLog) * scaleFactorRef.current
-      pendingPosRef.current = { x: Math.round(physX), y: Math.round(physY) }
-      if (rafRef.current === null && !positionInFlightRef.current) {
-        rafRef.current = requestAnimationFrame(flushPosition)
+        return
       }
-    }
 
-    function onPointerUp() {
-      if (!draggingRef.current) return
-      draggingRef.current = false
-      if (dirIdleTimerRef.current) {
-        clearTimeout(dirIdleTimerRef.current)
-        dirIdleTimerRef.current = null
-      }
-      const moved = totalMovedRef.current
-      totalMovedRef.current = 0
-      lastDirRef.current = null
-      lastScreenXRef.current = null
-
-      if (moved < CLICK_THRESHOLD_PX) {
-        optsRef.current.onClick()
-      } else {
+      if (active.sessionId === undefined) {
         optsRef.current.onDragDirection(null)
+        return
       }
 
-      if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
-      persistTimerRef.current = setTimeout(() => {
-        persistAfterFlushRef.current = true
-        persistWhenSettled()
-      }, PERSIST_DEBOUNCE_MS)
+      void endPetDrag(active.sessionId)
+        .then((res) => {
+          if (disposed) return
+          if (!isCancel && res.clicked) {
+            optsRef.current.onClick()
+          } else {
+            optsRef.current.onDragDirection(null)
+          }
+        })
+        .catch((err) => {
+          console.warn("[Pet] drag end failed:", err)
+          if (!disposed) optsRef.current.onDragDirection(null)
+        })
     }
+
+    const onPointerUp = (event: PointerEvent) => finishPointer(false, event)
+    const onPointerCancel = (event: PointerEvent) => finishPointer(true, event)
 
     window.addEventListener("pointermove", onPointerMove)
     window.addEventListener("pointerup", onPointerUp)
-    window.addEventListener("pointercancel", onPointerUp)
+    window.addEventListener("pointercancel", onPointerCancel)
     return () => {
       disposed = true
+      const active = activeRef.current
+      if (active?.phase === "tracked" && active.sessionId !== undefined) {
+        void endPetDrag(active.sessionId).catch(() => {})
+      }
+      activeRef.current = null
       window.removeEventListener("pointermove", onPointerMove)
       window.removeEventListener("pointerup", onPointerUp)
-      window.removeEventListener("pointercancel", onPointerUp)
-      if (dirIdleTimerRef.current) clearTimeout(dirIdleTimerRef.current)
-      if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
-      persistAfterFlushRef.current = false
-      pendingPosRef.current = null
+      window.removeEventListener("pointercancel", onPointerCancel)
     }
-  }, [persistPosition])
+  }, [])
 
   const onPointerDown = useCallback((event: React.PointerEvent) => {
     if (event.button !== 0) return
     if (!isDesktop()) return
-    // Prevent the default drag-region behaviour and text selection.
     event.preventDefault()
+
+    try {
+      event.currentTarget?.setPointerCapture?.(event.pointerId)
+    } catch {
+      // Synthetic events or platforms without pointer capture support.
+    }
+
+    // Rust keeps its high-water mark when the pet webview is recreated.
+    lastDragSeq = Math.max(
+      lastDragSeq + 1,
+      Math.floor((performance.timeOrigin + performance.now()) * 1000)
+    )
+    const seq = lastDragSeq
+    activeRef.current = {
+      seq,
+      phase: "starting",
+      startX: event.screenX,
+      startY: event.screenY,
+      maxScreenTravel: 0,
+      nativeDragRequested: false,
+    }
 
     void (async () => {
       try {
-        const [{ getCurrentWindow }, dpiModule] = await Promise.all([
-          import("@tauri-apps/api/window"),
-          import("@tauri-apps/api/dpi"),
-        ])
-        const win = getCurrentWindow()
-        const scale = await win.scaleFactor()
-        const pos = await win.outerPosition()
-
-        scaleFactorRef.current = scale
-        startScreenRef.current = { x: event.screenX, y: event.screenY }
-        startWinLogicalRef.current = { x: pos.x / scale, y: pos.y / scale }
-        totalMovedRef.current = 0
-        lastScreenXRef.current = event.screenX
-        lastDirRef.current = null
-        draggingRef.current = true
-
-        const PhysicalPosition = dpiModule.PhysicalPosition
-        setPositionFnRef.current = async (x, y) => {
-          try {
-            await win.setPosition(new PhysicalPosition(x, y))
-          } catch (err) {
-            console.warn("[Pet] setPosition failed:", err)
+        const res = await startPetDrag(seq)
+        if (activeRef.current?.seq !== seq) {
+          if (res.mode === "tracked" && res.sessionId !== null) {
+            void endPetDrag(res.sessionId).catch(() => {})
           }
+          return
         }
+
+        if (res.mode === "tracked") {
+          if (res.sessionId === null) {
+            activeRef.current = null
+            optsRef.current.onDragDirection(null)
+            return
+          }
+          activeRef.current.phase = "tracked"
+          activeRef.current.sessionId = res.sessionId
+          return
+        }
+
+        if (res.mode === "native_os") {
+          activeRef.current.phase = "native"
+          return
+        }
+
+        activeRef.current = null
       } catch (err) {
         console.warn("[Pet] drag start failed:", err)
-        draggingRef.current = false
+        if (activeRef.current?.seq === seq) {
+          activeRef.current = null
+        }
       }
     })()
   }, [])
