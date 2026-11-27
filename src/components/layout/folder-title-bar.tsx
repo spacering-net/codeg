@@ -26,6 +26,7 @@ import { WorkbenchRouteChromeActions } from "@/components/workbench/workbench-co
 import { MAC_TRAFFIC_LIGHT_INSET } from "@/lib/window-chrome"
 import { cn } from "@/lib/utils"
 import { WindowControls } from "./window-controls"
+import { WorkspaceHeaderPluginActions } from "./workspace-header-plugin-actions"
 
 /**
  * Mobile-only workspace title bar (`h-10`, matching the desktop column strip).
@@ -136,6 +137,7 @@ export function FolderTitleBar() {
           overlay renders the same WorkbenchRouteStrip the desktop shell does),
           so there is no back arrow here. */}
       <div className="flex shrink-0 items-center gap-1 pr-2">
+        <WorkspaceHeaderPluginActions compact />
         {/* Conversations only, exactly as on desktop (see RightEdgeChrome): a
             full-page route overlays the workspace the terminal and aux panel act
             on, so toggling either there does nothing you can see. This bar sits

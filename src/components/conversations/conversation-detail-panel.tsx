@@ -75,6 +75,7 @@ import { useFeedbackEnabled } from "@/hooks/use-feedback-enabled"
 import { useSessionFeedback } from "@/hooks/use-session-feedback"
 import { AgentSelector } from "@/components/chat/agent-selector"
 import { ChatInput } from "@/components/chat/chat-input"
+import type { HostPluginSessionContext } from "@/lib/host-plugins"
 import { WelcomeHero, WelcomeTip } from "@/components/chat/welcome-hero"
 import { QuickActions } from "@/components/chat/quick-actions"
 import type { ComposerInjectContent } from "@/components/chat/message-input"
@@ -94,6 +95,7 @@ import { useZoomLevel } from "@/hooks/use-appearance"
 import { isDesktop } from "@/lib/platform"
 import { ChromeReserve } from "@/components/layout/chrome-reserve"
 import { leftChromeReserve, rightChromeReserve } from "@/lib/window-chrome"
+import { useRightChromeExtraWidth } from "@/components/layout/workspace-header-plugin-actions"
 import {
   acpFork,
   acpStopAsyncTask,
@@ -440,6 +442,20 @@ const ConversationTabView = memo(function ConversationTabView({
   const isChatDraft = useMemo(
     () => ownTab?.isChat === true && !hasPersistedConversation,
     [ownTab, hasPersistedConversation]
+  )
+  const pluginContext = useMemo<HostPluginSessionContext>(
+    () => ({
+      folderId:
+        ownFolderId != null &&
+        ownFolderId > 0 &&
+        folder?.kind !== "chat" &&
+        ownTab?.isChat !== true
+          ? ownFolderId
+          : null,
+      conversationId: dbConversationId,
+      sessionKey: tabId,
+    }),
+    [ownFolderId, folder?.kind, ownTab?.isChat, dbConversationId, tabId]
   )
 
   // Expose the runtime session key to the tab so the aux panel (Diff sidebar)
@@ -2806,6 +2822,8 @@ const ConversationTabView = memo(function ConversationTabView({
           : undefined
       }
       steerChannel={feedback.channel}
+      pluginContext={pluginContext}
+      pluginSlotEnabled={isVisible}
     >
       {isWelcomeMode ? (
         // Same overlay scrollbar as the sidebar / file lists (os-theme-codeg)
@@ -2899,6 +2917,8 @@ const ConversationTabView = memo(function ConversationTabView({
                 feedbackAddDisabled={!feedback.canSubmit}
                 injectContent={composerInject}
                 onInjectConsumed={handleComposerInjectConsumed}
+                pluginContext={pluginContext}
+                pluginSlotEnabled={isVisible}
                 flush
                 tall
               />
@@ -3001,6 +3021,7 @@ function SplitStripCornerReserve({ side }: { side: "left" | "right" }) {
   const { mode, conversationMaximized } = useWorkspaceView()
   const { isMac, isWindows, isLinux } = usePlatform()
   const { zoomLevel } = useZoomLevel()
+  const rightChromeExtra = useRightChromeExtraWidth()
   if (isMobile) return null
   const holdsRight = mode === "conversation" || conversationMaximized
   if (side === "right" && !holdsRight) return null
@@ -3011,7 +3032,8 @@ function SplitStripCornerReserve({ side }: { side: "left" | "right" }) {
         : leftChromeReserve(isMac && isDesktop(), zoomLevel)
       : auxOpen
         ? 0
-        : rightChromeReserve(isDesktop() && (isWindows || isLinux), zoomLevel)
+        : rightChromeReserve(isDesktop() && (isWindows || isLinux), zoomLevel) +
+          rightChromeExtra
   return <ChromeReserve width={width} />
 }
 
