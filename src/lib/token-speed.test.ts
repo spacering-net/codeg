@@ -152,7 +152,6 @@ describe("TokenSpeedTracker", () => {
   it("opens at the real rate even when the store's first samples are empty", () => {
     // The store notifies once per wire envelope (EVENT_APPLIED) before the
     // batched content delta lands, so most samples carry no new tokens at all.
-    // Bias correction is what keeps that from dragging the opening reading to 0.
     const tracker = new TokenSpeedTracker()
     const rate = 60
     let produced = 0
@@ -169,20 +168,45 @@ describe("TokenSpeedTracker", () => {
     expect(first as number).toBeLessThan(rate * 1.15)
   })
 
-  it("smooths a burst followed by silence", () => {
+  it("preserves the rolling average velocity through silence instead of decaying to 0", () => {
+    // Matching Hermes: when output pauses, hold the last rolling average speed
+    // rather than falling to 0.0 tok/s.
     const tracker = new TokenSpeedTracker()
     tracker.observe(0, 0)
     tracker.observe(200, 1000)
     const rate = tracker.observe(200, 2000)
-    expect(rate).toBeGreaterThan(0)
-    expect(rate as number).toBeLessThan(200)
+    expect(rate).toBeCloseTo(200)
   })
 
-  it("decays toward zero over a long pause", () => {
+  it("holds velocity across a long pause rather than decaying toward zero", () => {
+    // Hermes parity: an idle gap does not poison the rate or drag it to 0.
     const tracker = new TokenSpeedTracker()
     tracker.observe(0, 0)
     tracker.observe(100, 1000)
-    expect(tracker.observe(100, 10_000)).toBeLessThan(1)
+    expect(tracker.observe(100, 10_000)).toBeCloseTo(100)
+  })
+
+  it("averages over a sliding window of the last 10 samples (Hermes-style)", () => {
+    const tracker = new TokenSpeedTracker(10)
+    tracker.observe(0, 0)
+    // 10 samples at 50 tok/s (25 tokens per 500ms)
+    let t = 0
+    let tokens = 0
+    for (let i = 0; i < 10; i++) {
+      t += 500
+      tokens += 25
+      tracker.observe(tokens, t)
+    }
+    expect(tracker.observe(tokens, t)).toBeCloseTo(50)
+
+    // Next 10 samples at 100 tok/s (50 tokens per 500ms)
+    for (let i = 0; i < 10; i++) {
+      t += 500
+      tokens += 50
+      tracker.observe(tokens, t)
+    }
+    // All 10 older samples have been pushed out; average is now exactly 100 tok/s
+    expect(tracker.observe(tokens, t)).toBeCloseTo(100)
   })
 
   it("ignores non-positive time deltas", () => {
