@@ -1381,6 +1381,17 @@ impl DelegationListener {
             .clone()
             .or_else(|| Some(entry.working_dir.to_string_lossy().to_string()));
 
+        // Optional per-call session mode. Blank/whitespace is treated as
+        // omitted so a model emitting `""` cannot clear the configured
+        // default by accident.
+        let permission_mode = req
+            .input
+            .get("permission_mode")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
         let delegation_req = DelegationRequest {
             parent_connection_id: req.parent_connection_id,
             parent_conversation_id,
@@ -1389,6 +1400,7 @@ impl DelegationListener {
             task,
             working_dir,
             requested_working_dir,
+            permission_mode,
             external_handle: req.external_handle,
             assistant,
             asked: Some(asked),
@@ -2499,6 +2511,7 @@ mod tests {
                 task: "do x".into(),
                 working_dir: None,
                 requested_working_dir: None,
+                permission_mode: None,
                 external_handle: None,
                 assistant: None,
                 asked: None,
@@ -2655,6 +2668,7 @@ mod tests {
                         task: "do x".into(),
                         working_dir: None,
                         requested_working_dir: None,
+                        permission_mode: None,
                         external_handle: None,
                         assistant: None,
                         asked: None,
@@ -2760,6 +2774,7 @@ mod tests {
                 task: "do x".into(),
                 working_dir: None,
                 requested_working_dir: None,
+                permission_mode: None,
                 external_handle: None,
                 assistant: None,
                 asked: None,
@@ -2814,6 +2829,7 @@ mod tests {
                     task: "do x".into(),
                     working_dir: None,
                     requested_working_dir: None,
+                    permission_mode: None,
                     external_handle: Some("h-1".into()),
                     assistant: None,
                     asked: None,
@@ -4532,7 +4548,10 @@ mod tests {
         // which a caller could not pass back).
         let ack = serve(
             listener,
-            call(json!({"assistant_id": "3", "agent_type": "not-an-agent", "task": "review"})),
+            call(json!({
+                "assistant_id": "3", "agent_type": "not-an-agent", "task": "review",
+                "permission_mode": "other-mode"
+            })),
         )
         .await;
         assert_eq!(ack["status"], "running");
