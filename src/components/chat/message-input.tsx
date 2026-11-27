@@ -149,6 +149,13 @@ import { ComposerAddMenu } from "@/components/chat/composer/composer-add-menu"
 import { ComposerImageThumbnails } from "@/components/chat/composer/composer-image-thumbnails"
 import { useComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
 import { useComposerShortcuts } from "@/components/chat/composer/use-composer-shortcuts"
+import { HostPluginSlot } from "@/components/host-plugin-slot"
+import { PluginComposerPills } from "@/components/plugins/plugin-composer-actions"
+import {
+  hostPluginSessionScopeKey,
+  type HostPluginSessionContext,
+  type PluginComposerInsertResult,
+} from "@/lib/host-plugins"
 
 /**
  * Payload pushed into the composer from outside (e.g. a welcome-page quick
@@ -288,6 +295,11 @@ interface MessageInputProps {
    * component knows the action row that separates them.
    */
   tall?: boolean
+  /** Workspace + session isolation context for `composer` host plugin surfaces.
+   *  Omitted on standalone/non-session composers so no plugin catalog is queried. */
+  pluginContext?: HostPluginSessionContext | null
+  /** Gate host plugin catalog subscription while a keep-alive composer is hidden. */
+  pluginSlotEnabled?: boolean
 }
 
 // Non-image files attach as inline file badges in the editor (like `@`-file
@@ -383,6 +395,8 @@ export function MessageInput({
   onInjectConsumed,
   getSentHistory,
   tall = false,
+  pluginContext = null,
+  pluginSlotEnabled = true,
 }: MessageInputProps) {
   const t = useTranslations("Folder.chat.messageInput")
   const tQueue = useTranslations("Folder.chat.messageQueue")
@@ -1564,10 +1578,15 @@ export function MessageInput({
       // empty (and doesn't already end in whitespace).
       const ed = editorRef.current
       const needsSpace = ed != null && !ed.isEmpty()
+      const separator = needsSpace
+        ? appendText.includes("\n")
+          ? "\n"
+          : " "
+        : ""
       editor
         .chain()
         .focus("end")
-        .insertContent(`${needsSpace ? " " : ""}${appendText}`)
+        .insertContent(textToInlineContent(`${separator}${appendText}`))
         .run()
     }
 
@@ -1933,6 +1952,53 @@ export function MessageInput({
     ed.focus()
   }, [offeredSuggestion])
 
+  const pluginInsertGuardRef = useRef({
+    pluginContext,
+    pluginSlotEnabled,
+    effectiveDraftStorageKey,
+    isEditingQueueItem,
+    flushDraftSave,
+  })
+  useLayoutEffect(() => {
+    pluginInsertGuardRef.current = {
+      pluginContext,
+      pluginSlotEnabled,
+      effectiveDraftStorageKey,
+      isEditingQueueItem,
+      flushDraftSave,
+    }
+  })
+
+  // Controlled plain-text insertion for `composer` plugin surfaces: writes
+  // literal inline text (with `\n` → hardBreak, never hydrating badges/HTML)
+  // at ProseMirror's live caret/selection without stealing modal focus or
+  // auto-sending, then flushes the standard debounced draft persistence.
+  const handlePluginComposerInsertText = useCallback(
+    (text: string, expectedScopeKey: string): PluginComposerInsertResult => {
+      const guard = pluginInsertGuardRef.current
+      if (
+        !guard.pluginSlotEnabled ||
+        !guard.pluginContext ||
+        hostPluginSessionScopeKey(guard.pluginContext) !== expectedScopeKey
+      ) {
+        throw new Error("Plugin composer surface is no longer active")
+      }
+      const editor = editorRef.current?.getEditor()
+      if (!editor || editor.isDestroyed) {
+        throw new Error("Composer is unavailable")
+      }
+      const applied = editor.commands.insertContent(textToInlineContent(text))
+      if (!applied) {
+        throw new Error("Failed to insert text into composer")
+      }
+      if (!guard.isEditingQueueItem && guard.effectiveDraftStorageKey) {
+        guard.flushDraftSave()
+      }
+      return { inserted: true, length: text.length }
+    },
+    []
+  )
+
   const actionButtons = isEditingQueueItem ? (
     <div className="flex items-center gap-1">
       <Button
@@ -2279,6 +2345,22 @@ export function MessageInput({
                       }
                       onChange={handleSessionSettingChange}
                     />
+                  )}
+                  {pluginContext && (
+                    <>
+                      <HostPluginSlot
+                        slot="composer"
+                        sessionContext={pluginContext}
+                        enabled={pluginSlotEnabled}
+                        onComposerInsertText={handlePluginComposerInsertText}
+                      />
+                      <PluginComposerPills
+                        sessionContext={pluginContext}
+                        enabled={pluginSlotEnabled}
+                        disabled={disabled}
+                        onComposerInsertText={handlePluginComposerInsertText}
+                      />
+                    </>
                   )}
                 </div>
                 <div className="shrink-0">{actionButtons}</div>

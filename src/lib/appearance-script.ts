@@ -84,6 +84,7 @@ export const STORAGE_KEY_CUSTOM_THEME_ENABLED = "codeg-custom-theme-enabled"
 export const STORAGE_KEY_CUSTOM_CSS = "codeg-custom-css"
 export const STORAGE_KEY_CUSTOM_CSS_ENABLED = "codeg-custom-css-enabled"
 export const STORAGE_KEY_CUSTOM_STYLE_SUSPENDED = "codeg-custom-style-suspended"
+export const STORAGE_KEY_PLUGIN_THEME = "codeg-plugin-theme"
 
 /**
  * 同步执行的 inline 脚本，由 layout.tsx 通过 dangerouslySetInnerHTML 注入。
