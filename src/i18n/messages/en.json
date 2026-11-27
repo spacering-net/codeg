@@ -64,8 +64,32 @@
       "browser": "Browser Use",
       "computer_use": "Computer Use",
       "quick_messages": "Quick Messages",
-      "logs": "Runtime Logs"
+      "logs": "Runtime Logs",
+      "plugins": "Plugins"
     }
+  },
+  "HostPlugins": {
+    "add": "Add Plugin",
+    "sourceDescription": "Enter an npm package, a GitHub repository, or an absolute directory on the connected host.",
+    "source": "Plugin source",
+    "registry": "npm registry",
+    "mirror": "China mirror",
+    "sourceHint": "Codeg installs the codeg-plugin.json manifest and starts the plugin disabled.",
+    "sourceUnsupported": "Update the connected Codeg host to install from a source.",
+    "cancel": "Cancel",
+    "install": "Install",
+    "installing": "Installing…",
+    "title": "Plugins",
+    "import": "Import Manifest",
+    "fileTooLarge": "The plugin manifest exceeds 64 KiB.",
+    "empty": "No plugins installed.",
+    "loading": "Loading…",
+    "unsupported": "Update the connected Codeg host to manage plugins.",
+    "retry": "Retry",
+    "enable": "Enable {name}",
+    "remove": "Remove {name}",
+    "choosePanel": "Plugin panel",
+    "noTurns": "No turns recorded in this workspace."
   },
   "AppearanceSettings": {
     "sectionTitle": "Theme Appearance",
