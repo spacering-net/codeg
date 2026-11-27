@@ -28,6 +28,7 @@ pub mod app_state;
 pub mod appimage_env;
 pub mod automation;
 pub mod backgrounds;
+pub mod host_plugins;
 /// Built-in browser. Only its wire types and its grant rules compile in server
 /// mode — see `browser/mod.rs` for why those two, and only those two.
 pub mod browser;
@@ -827,6 +828,20 @@ mod tauri_app {
                 // plain launch would open a database Tauri's directory does
                 // not hold.
                 let effective_data_dir = paths::resolve_effective_data_dir(&app_data_dir);
+                {
+                    let plugins = std::sync::Arc::new(crate::host_plugins::HostPlugins::new(
+                        &effective_data_dir,
+                    ));
+                    let events = app
+                        .state::<std::sync::Arc<crate::acp::InternalEventBus>>()
+                        .subscribe();
+                    let connections = app.state::<ConnectionManager>().clone_ref();
+                    let emitter = web::event_bridge::EventEmitter::from_app(app.handle());
+                    app.manage(plugins.clone());
+                    tauri::async_runtime::spawn(async move {
+                        plugins.observe_turns(events, connections, emitter).await;
+                    });
+                }
                 let derived_data_dir = paths::desktop_data_dir(
                     None,
                     dirs::data_dir().as_deref(),
@@ -2417,6 +2432,9 @@ mod tauri_app {
                 quick_messages_commands::quick_messages_update,
                 quick_messages_commands::quick_messages_delete,
                 quick_messages_commands::quick_messages_reorder,
+                crate::commands::host_plugins::host_plugins_list,
+                crate::commands::host_plugins::host_plugins_apply,
+                crate::commands::host_plugins::host_plugins_activity,
                 automation_commands::automation_list,
                 automation_commands::automation_get,
                 automation_commands::automation_runs,

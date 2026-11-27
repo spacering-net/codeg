@@ -64,8 +64,22 @@
       "browser": "브라우저 사용",
       "computer_use": "컴퓨터 사용",
       "quick_messages": "빠른 메시지",
-      "logs": "실행 로그"
+      "logs": "실행 로그",
+      "plugins": "플러그인"
     }
+  },
+  "HostPlugins": {
+    "title": "플러그인",
+    "import": "매니페스트 가져오기",
+    "fileTooLarge": "플러그인 매니페스트가 64 KiB를 초과합니다.",
+    "empty": "설치된 플러그인이 없습니다.",
+    "loading": "불러오는 중…",
+    "unsupported": "플러그인을 관리하려면 연결된 Codeg 호스트를 업데이트하세요.",
+    "retry": "다시 시도",
+    "enable": "{name} 활성화",
+    "remove": "{name} 제거",
+    "choosePanel": "플러그인 패널",
+    "noTurns": "이 작업 공간에 기록된 턴이 없습니다."
   },
   "AppearanceSettings": {
     "sectionTitle": "테마 모양",
