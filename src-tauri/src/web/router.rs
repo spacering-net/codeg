@@ -1493,6 +1493,10 @@ pub fn build_router_with_srn(
             post(handlers::acp::acp_get_session_snapshot_by_conversation),
         )
         .route(
+            "/acp_pending_session_reply_prompts",
+            post(handlers::acp::acp_pending_session_reply_prompts),
+        )
+        .route(
             "/acp_find_connection_for_conversation",
             post(handlers::acp::acp_find_connection_for_conversation),
         )

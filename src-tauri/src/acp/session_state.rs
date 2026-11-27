@@ -2520,6 +2520,19 @@ impl SessionState {
         None
     }
 
+    pub(crate) fn active_turn_prompt(&self) -> Option<(BlockedKind, String)> {
+        if self.active_turn_id.is_none()
+            || matches!(
+                self.status,
+                ConnectionStatus::Disconnected | ConnectionStatus::Error
+            )
+        {
+            return None;
+        }
+        self.blocking_prompt(0)
+            .map(|prompt| (prompt.kind, prompt.request_id))
+    }
+
     /// Lazily initialize `self.live_message` and return a mutable reference
     /// to it. Centralizes the "create-if-absent" pattern shared by the
     /// text/thinking delta appenders, the tool-call ref pusher, and the

@@ -70,6 +70,7 @@ import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale
 import { PiProjectTrustBanner } from "@/components/chat/pi-project-trust-banner"
 import { FeedbackNotesDisplay } from "@/components/chat/feedback-notes-display"
 import { FeedbackDialog } from "@/components/chat/feedback-dialog"
+import { SessionReplyPrompts } from "./session-reply-prompts"
 import { AgentDiagnosticsDialog } from "@/components/settings/agent-diagnostics-dialog"
 import { useFeedbackEnabled } from "@/hooks/use-feedback-enabled"
 import { useSessionFeedback } from "@/hooks/use-session-feedback"
@@ -2706,6 +2707,12 @@ const ConversationTabView = memo(function ConversationTabView({
       topBanner={
         <>
           <SessionConfigStaleBanner contextKey={tabId} />
+          {isActive && dbConversationId != null && (
+            <SessionReplyPrompts
+              key={dbConversationId}
+              conversationId={dbConversationId}
+            />
+          )}
           <PiProjectTrustBanner
             contextKey={tabId}
             agentType={selectedAgent}

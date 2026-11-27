@@ -7,6 +7,7 @@ use tokio::task::JoinSet;
 
 use super::connection::SteerOutcome;
 use super::delegation::broker::DelegationBroker;
+use super::delegation::types::BlockedKind;
 use super::error::AcpError;
 use super::manager::ConnectionManager;
 use super::prompt_receipt::{PromptReceipt, PromptReceiptSink, ReceiptVia};
@@ -18,7 +19,79 @@ use crate::db::entities::{conversation, session_message};
 use crate::db::service::session_message_service as queue;
 use crate::db::service::{conversation_service, folder_service};
 use crate::db::AppDatabase;
-use crate::web::event_bridge::EventEmitter;
+use crate::web::event_bridge::{emit_event, EventEmitter, SESSION_REPLY_PROMPTS_CHANGED_EVENT};
+
+#[derive(Debug, serde::Serialize)]
+pub struct SessionReplyPrompt {
+    pub conversation_id: i32,
+    pub folder_id: i32,
+    pub agent_type: crate::models::AgentType,
+    pub title: Option<String>,
+    pub request_id: String,
+    pub kind: BlockedKind,
+}
+
+/// Read only prompts belonging to turns that currently owe this conversation a reply.
+pub(crate) async fn pending_reply_prompts(
+    db: &DatabaseConnection,
+    manager: &ConnectionManager,
+    sender_id: i32,
+) -> Result<Vec<SessionReplyPrompt>, DbErr> {
+    let inputs = session_message::Entity::find()
+        .filter(session_message::Column::SenderConversationId.eq(sender_id))
+        .filter(session_message::Column::ReplyBack.eq(true))
+        .filter(session_message::Column::RecipientTurnId.is_not_null())
+        .filter(session_message::Column::Status.is_in(["dispatching", "in_flight", "received"]))
+        .all(db)
+        .await?;
+
+    let mut prompts = Vec::new();
+    let mut seen = HashSet::new();
+    for input in inputs {
+        if !seen.insert((input.conversation_id, input.recipient_turn_id.clone())) {
+            continue;
+        }
+        let Some(connection_id) = manager
+            .find_connection_by_conversation_id(input.conversation_id)
+            .await
+        else {
+            continue;
+        };
+        let Some(state) = manager.get_state(&connection_id).await else {
+            continue;
+        };
+        let prompt = {
+            let state = state.read().await;
+            if state.active_turn_id != input.recipient_turn_id {
+                continue;
+            }
+            state.active_turn_prompt()
+        };
+        let Some((kind, request_id)) = prompt else {
+            continue;
+        };
+        let Some(target) = conversation::Entity::find_by_id(input.conversation_id)
+            .filter(conversation::Column::DeletedAt.is_null())
+            .one(db)
+            .await?
+        else {
+            continue;
+        };
+        let Some(agent_type) = crate::models::AgentType::from_wire(&target.agent_type) else {
+            continue;
+        };
+        prompts.push(SessionReplyPrompt {
+            conversation_id: target.id,
+            folder_id: target.folder_id,
+            agent_type,
+            title: target.title,
+            request_id,
+            kind,
+        });
+    }
+    prompts.sort_by_key(|prompt| prompt.conversation_id);
+    Ok(prompts)
+}
 
 pub(crate) const PROMPT_ID_PREFIX: &str = "session-message-";
 type TurnResult = Result<Option<String>, String>;
@@ -608,7 +681,18 @@ async fn dispatch(
             )
             .await
         {
-            Ok(SteerOutcome::Injected) => false,
+            Ok(SteerOutcome::Injected) => {
+                // A new sender can join a turn whose prompt was already visible.
+                if row.reply_back {
+                    if let Some((state, emitter)) = manager.get_state_and_emitter(&connection).await
+                    {
+                        if state.read().await.active_turn_prompt().is_some() {
+                            emit_event(&emitter, SESSION_REPLY_PROMPTS_CHANGED_EVENT, recipient_id);
+                        }
+                    }
+                }
+                false
+            }
             Ok(SteerOutcome::StartedNewTurn) => {
                 return finish(
                     db,
@@ -785,5 +869,134 @@ async fn finish(
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod reply_prompt_tests {
+    use super::*;
+    use crate::acp::manager::ConnectionManager;
+    use crate::acp::types::AcpEvent;
+    use crate::db::service::turn_delivery_service;
+    use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+    use crate::models::AgentType;
+    use crate::web::event_bridge::emit_with_state;
+
+    #[tokio::test]
+    async fn reply_prompt_is_visible_to_its_sender_until_resolved() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/session-reply-prompts").await;
+        let sender = seed_conversation(&db, folder, AgentType::Codex).await;
+        let unrelated = seed_conversation(&db, folder, AgentType::Codex).await;
+        let worker = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let manager = ConnectionManager::new();
+        manager
+            .insert_test_connection("worker", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let state = manager.get_state("worker").await.unwrap();
+        let message = queue::enqueue(
+            &db.conn,
+            sender,
+            worker,
+            "check".into(),
+            "queue".into(),
+            true,
+        )
+        .await
+        .unwrap();
+        let input = queue::queued(&db.conn).await.unwrap().pop().unwrap();
+        queue::claim(&db.conn, &input, false).await.unwrap();
+        let turn = turn_delivery_service::begin(&db.conn, worker, Some(&message), None)
+            .await
+            .unwrap();
+        {
+            let mut session = state.write().await;
+            session.conversation_id = Some(worker);
+            session.active_turn_id = Some(turn.clone());
+            session.status = crate::acp::types::ConnectionStatus::Prompting;
+        }
+        emit_with_state(
+            &state,
+            &EventEmitter::Noop,
+            AcpEvent::PermissionRequest {
+                request_id: "permission-1".into(),
+                tool_call: serde_json::json!({}),
+                options: vec![],
+                queued: 0,
+            },
+        )
+        .await;
+
+        let prompts = pending_reply_prompts(&db.conn, &manager, sender)
+            .await
+            .unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].conversation_id, worker);
+        assert_eq!(prompts[0].request_id, "permission-1");
+        assert_eq!(prompts[0].kind, BlockedKind::Permission);
+        assert!(pending_reply_prompts(&db.conn, &manager, unrelated)
+            .await
+            .unwrap()
+            .is_empty());
+
+        emit_with_state(
+            &state,
+            &EventEmitter::Noop,
+            AcpEvent::PermissionResolved {
+                request_id: "permission-1".into(),
+                option_id: None,
+                origin: None,
+            },
+        )
+        .await;
+        assert!(pending_reply_prompts(&db.conn, &manager, sender)
+            .await
+            .unwrap()
+            .is_empty());
+
+        emit_with_state(
+            &state,
+            &EventEmitter::Noop,
+            AcpEvent::QuestionRequest {
+                question_id: "question-1".into(),
+                questions: vec![crate::acp::question::QuestionSpec {
+                    id: "platform".into(),
+                    question: "Which platform should I verify?".into(),
+                    header: "Platform".into(),
+                    multi_select: false,
+                    options: vec![],
+                    is_secret: false,
+                    allow_other: true,
+                }],
+            },
+        )
+        .await;
+        let prompts = pending_reply_prompts(&db.conn, &manager, sender)
+            .await
+            .unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].kind, BlockedKind::Question);
+        assert_eq!(prompts[0].request_id, "question-1");
+
+        emit_with_state(
+            &state,
+            &EventEmitter::Noop,
+            AcpEvent::StatusChanged {
+                status: crate::acp::types::ConnectionStatus::Disconnected,
+            },
+        )
+        .await;
+        assert!(pending_reply_prompts(&db.conn, &manager, sender)
+            .await
+            .unwrap()
+            .is_empty());
+        turn_delivery_service::complete(&db.conn, &turn, "end_turn", "done")
+            .await
+            .unwrap();
+        assert!(queue::queued(&db.conn)
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.conversation_id == sender && !row.reply_back));
     }
 }

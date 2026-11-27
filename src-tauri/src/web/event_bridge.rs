@@ -229,6 +229,7 @@ pub fn install_tauri_app_handle(app: &tauri::AppHandle) {
 
 /// Global side-channel for cross-client conversation list/status sync.
 pub const CONVERSATION_CHANGED_EVENT: &str = "conversation://changed";
+pub const SESSION_REPLY_PROMPTS_CHANGED_EVENT: &str = "session-reply-prompts://changed";
 
 /// Global side-channel announcing a live-feedback enable/disable. The settings
 /// UI runs in a SEPARATE window (`openSettingsWindow`), so the conversation
@@ -661,12 +662,30 @@ pub async fn emit_with_state_built<F>(
 where
     F: FnOnce(&mut SessionState) -> Option<AcpEvent>,
 {
-    let (envelope_arc, stream, evicted, turn_file_jobs) = {
+    let (envelope_arc, stream, evicted, turn_file_jobs, reply_prompt_change) = {
         let mut s = state.write().await;
         let Some(payload) = build(&mut s) else {
             return false;
         };
+        let can_change_prompt = matches!(
+            payload,
+            AcpEvent::PermissionRequest { .. }
+                | AcpEvent::PermissionResolved { .. }
+                | AcpEvent::QuestionRequest { .. }
+                | AcpEvent::QuestionResolved { .. }
+                | AcpEvent::PlanApprovalRequest { .. }
+                | AcpEvent::PlanApprovalResolved { .. }
+                | AcpEvent::StatusChanged { .. }
+                | AcpEvent::TurnComplete { .. }
+        );
+        let previous_prompt = can_change_prompt.then(|| s.active_turn_prompt()).flatten();
         s.apply_event(&payload);
+        let reply_prompt_change = if can_change_prompt && previous_prompt != s.active_turn_prompt()
+        {
+            s.conversation_id
+        } else {
+            None
+        };
         s.event_seq += 1;
         let envelope = Arc::new(EventEnvelope {
             seq: s.event_seq,
@@ -675,7 +694,13 @@ where
         });
         let evicted = s.push_recent_event(Arc::clone(&envelope));
         let turn_file_jobs = std::mem::take(&mut s.turn_file_jobs);
-        (envelope, s.event_stream(), evicted, turn_file_jobs)
+        (
+            envelope,
+            s.event_stream(),
+            evicted,
+            turn_file_jobs,
+            reply_prompt_change,
+        )
     };
 
     // Office auto-preview: confirm the files this turn's tool calls named.
@@ -729,6 +754,16 @@ where
             }
         }
         EventEmitter::Noop => {}
+    }
+
+    // An independent collaborator may have no viewer attached to its ACP stream.
+    // Broadcast only an invalidation; the snapshot endpoint filters by sender.
+    if let Some(conversation_id) = reply_prompt_change {
+        emit_event(
+            emitter,
+            SESSION_REPLY_PROMPTS_CHANGED_EVENT,
+            conversation_id,
+        );
     }
 
     // Bridge conversation status transitions onto the global
@@ -845,6 +880,49 @@ mod tests {
             rx.try_recv().is_err(),
             "non-status ACP events must not emit on conversation://changed"
         );
+    }
+
+    #[tokio::test]
+    async fn reply_prompt_lifecycle_reaches_clients_not_attached_to_the_collaborator() {
+        let state = fresh_state();
+        {
+            let mut session = state.write().await;
+            session.conversation_id = Some(7);
+            session.active_turn_id = Some("reply-turn".to_string());
+        }
+        let broadcaster = Arc::new(WebEventBroadcaster::new());
+        let mut events = broadcaster.subscribe();
+        let emitter = EventEmitter::test_web_only(broadcaster);
+
+        emit_with_state(
+            &state,
+            &emitter,
+            AcpEvent::PermissionRequest {
+                request_id: "permission-1".into(),
+                tool_call: serde_json::json!({}),
+                options: vec![],
+                queued: 0,
+            },
+        )
+        .await;
+
+        let event = events.try_recv().expect("show the active request");
+        assert_eq!(event.channel, "session-reply-prompts://changed");
+        assert_eq!(*event.payload, serde_json::json!(7));
+
+        emit_with_state(
+            &state,
+            &emitter,
+            AcpEvent::StatusChanged {
+                status: crate::acp::types::ConnectionStatus::Disconnected,
+            },
+        )
+        .await;
+
+        let event = events.try_recv().expect("clear the inactive request");
+        assert_eq!(event.channel, "session-reply-prompts://changed");
+        assert_eq!(*event.payload, serde_json::json!(7));
+        assert!(events.try_recv().is_err());
     }
 
     #[test]

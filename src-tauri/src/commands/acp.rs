@@ -13126,6 +13126,18 @@ pub async fn acp_get_session_snapshot_by_conversation(
 /// launched in the folder it is in NOW: one still running in the folder it left
 /// (a client that missed the move, or a turn that was in flight) is not
 /// something to attach to — the next prompt there is refused anyway.
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn acp_pending_session_reply_prompts(
+    manager: State<'_, ConnectionManager>,
+    db: State<'_, crate::db::AppDatabase>,
+    conversation_id: i32,
+) -> Result<Vec<crate::acp::session_messages::SessionReplyPrompt>, String> {
+    crate::acp::session_messages::pending_reply_prompts(&db.conn, &manager, conversation_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 pub(crate) async fn acp_find_connection_for_conversation_core(
     manager: &ConnectionManager,
     db: &sea_orm::DatabaseConnection,
