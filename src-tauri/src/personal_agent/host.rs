@@ -267,6 +267,9 @@ impl EngineHost {
         // made is tried again at the next start, and when it is first
         // needed — where why it cannot is said.
         super::ready::fill_brains(&self.db, &self.emitter).await;
+        // The face cache an older build wrote into the primary's default
+        // directory: out before one is made there, which needs it empty.
+        super::workdir::adopt_legacy_avatar_cache(&self.data_dir);
         super::ready::ensure_all_ready(&self.db, &self.data_dir).await;
         self.primary.boot().await;
         self.running.store(true, Ordering::SeqCst);

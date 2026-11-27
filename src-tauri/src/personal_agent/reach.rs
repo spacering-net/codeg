@@ -1747,10 +1747,7 @@ pub async fn set_gate(db: &sea_orm::DatabaseConnection, g: Gate) -> Result<(), S
 /// An assistant's face as a picture, for the notifications the desktop
 /// posts (the page draws it).
 pub fn avatar_png(data_dir: &std::path::Path, bot: i32) -> PathBuf {
-    data_dir
-        .join("personal-agent")
-        .join("avatars")
-        .join(format!("{bot}.png"))
+    super::workdir::avatars_dir(data_dir).join(format!("{bot}.png"))
 }
 
 /// The most a face picture may weigh.
