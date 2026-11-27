@@ -1424,6 +1424,7 @@ pub enum ConnectionCommand {
     Steer {
         blocks: Vec<PromptInputBlock>,
         expect_turns_completed: Option<u64>,
+        message_result: Option<super::session_messages::TurnSender>,
         reply: tokio::sync::oneshot::Sender<Result<SteerOutcome, AcpError>>,
     },
     /// Stop one AIR async task (`_session/async_task/stop`; claude-agent-acp
@@ -4267,6 +4268,18 @@ fn map_session_config_select_option(
         value: option.value.to_string(),
         name: option.name.clone(),
         description: option.description.clone(),
+        context_window: of_model
+            .then(|| {
+                let meta = option.meta.as_ref()?;
+                ["contextWindow", "context_window", "totalContextTokens"]
+                    .into_iter()
+                    .find_map(|key| {
+                        meta.get(key)
+                            .and_then(|value| value.as_u64())
+                            .filter(|size| *size > 0)
+                    })
+            })
+            .flatten(),
         reasoning_efforts: of_model
             .then(|| air_model_reasoning_efforts(option.meta.as_ref()))
             .flatten(),
@@ -5115,6 +5128,7 @@ fn build_grok_effort_option(
                 .clone()
                 .or_else(|| grok_effort_description(id).map(str::to_string)),
             reasoning_efforts: None,
+            context_window: None,
         })
         .collect();
     if let Some(def) = &spec.default {
@@ -5128,6 +5142,7 @@ fn build_grok_effort_option(
                     // switchable list, so it has no grok description — supply ours.
                     description: grok_effort_description(def).map(str::to_string),
                     reasoning_efforts: None,
+                    context_window: None,
                 },
             );
         }
@@ -5193,6 +5208,7 @@ const GROK_MODELS_UPDATE_METHOD: &str = "_x.ai/models/update";
 /// [`fold_grok_catalog_into_picker`].
 fn parse_grok_model_catalog(params: &serde_json::Value) -> Option<GrokModelCatalog> {
     let entries = params.get("availableModels")?.as_array()?;
+    let specs = parse_grok_model_specs(Some(params));
     let mut models: Vec<SessionConfigSelectOptionInfo> = Vec::new();
     for entry in entries {
         let Some(model_id) = entry
@@ -5215,15 +5231,13 @@ fn parse_grok_model_catalog(params: &serde_json::Value) -> Option<GrokModelCatal
             name: name.to_string(),
             description: None,
             reasoning_efforts: None,
+            context_window: specs.get(model_id).and_then(|spec| spec.context_window),
         });
     }
     if models.is_empty() {
         return None;
     }
-    Some(GrokModelCatalog {
-        models,
-        specs: parse_grok_model_specs(Some(params)),
-    })
+    Some(GrokModelCatalog { models, specs })
 }
 
 /// Fold a catalog broadcast's specs into the session's.
@@ -5347,6 +5361,7 @@ fn kept_select_row(
             name: name(),
             description: description.map(str::to_string),
             reasoning_efforts: None,
+            context_window: None,
         })
 }
 
@@ -5414,6 +5429,7 @@ fn synthesize_grok_config_options(
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
             reasoning_efforts: None,
+            context_window: None,
         });
     }
 
@@ -5425,10 +5441,15 @@ fn synthesize_grok_config_options(
                     name: id.to_string(),
                     description: None,
                     reasoning_efforts: None,
+                    context_window: None,
                 });
             }
             model_current = Some(id.to_string());
         }
+    }
+
+    for model in &mut model_opts {
+        model.context_window = specs.get(&model.value).and_then(|spec| spec.context_window);
     }
 
     let mut result: Vec<SessionConfigOptionInfo> = Vec::new();
@@ -5605,6 +5626,7 @@ fn session_model_state_option(
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
                 reasoning_efforts: None,
+                context_window: None,
             })
         })
         .collect();
@@ -5695,6 +5717,7 @@ fn mode_state_option(
             name: mode.name.clone(),
             description: mode.description.clone(),
             reasoning_efforts: None,
+            context_window: None,
         })
         .collect();
     if options.is_empty() {
@@ -5772,6 +5795,7 @@ fn kiro_thinking_option(reasoning: &KiroReasoning) -> Option<SessionConfigOption
         name: value.to_string(),
         description: None,
         reasoning_efforts: None,
+        context_window: None,
     };
     Some(SessionConfigOptionInfo {
         id: KIRO_THINKING_OPTION_ID.to_string(),
@@ -5817,6 +5841,7 @@ fn kiro_effort_option(reasoning: &KiroReasoning) -> Option<SessionConfigOptionIn
                     name: level.clone(),
                     description: None,
                     reasoning_efforts: None,
+                    context_window: None,
                 })
                 .collect(),
             groups: Vec::new(),
@@ -8527,6 +8552,7 @@ fn is_executable_file(path: &Path) -> bool {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct CompanionFeatureFlags {
     delegation: bool,
+    session_messaging: bool,
     feedback: bool,
     ask: bool,
     sessions: bool,
@@ -8571,6 +8597,9 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     let mut features: Vec<&str> = Vec::new();
     if flags.delegation {
         features.push("delegation");
+    }
+    if flags.session_messaging {
+        features.push("session_messaging");
     }
     if flags.feedback {
         features.push("feedback");
@@ -8697,7 +8726,8 @@ where
     // withholds this group too. The other groups stay: they surface codeg's own
     // state (feedback, ask, session info, task reporting), not arbitrary file
     // or command execution on the user's machine.
-    let delegation_configured = injection.broker.config_snapshot().await.enabled;
+    let config = injection.broker.config_snapshot().await;
+    let delegation_configured = config.enabled;
     let delegation_enabled = delegation_configured && host_tools.hosts_channels();
     if delegation_configured && !delegation_enabled {
         // The one combination that looks like a bug from the settings UI: the
@@ -8726,6 +8756,7 @@ where
     };
     let flags = CompanionFeatureFlags {
         delegation: delegation_enabled,
+        session_messaging: config.session_messaging_enabled && host_tools.hosts_channels(),
         // The personal agent takes the owner's words only as queued messages
         // its engine delivers; a live-feedback note has no way in, and the
         // tool would only leave empty checks in its replies.
@@ -13015,6 +13046,22 @@ async fn apply_preferred_session_options(
     };
     let never_replayed =
         |config_id: &str| config_option_never_replayed(agent_type, &pinned, config_id);
+    let mode_option = preferred_mode_id.and_then(|mode| {
+        options.iter().find(|option| {
+            is_mode_config_option(option)
+                && !never_replayed(&option.id.to_string())
+                && matches!(option.kind, SessionConfigKind::Select(_))
+                && !config_option_rejects_value(option, mode)
+        })
+    });
+    let mut config_with_mode;
+    let preferred_config_values = if let (Some(option), Some(mode)) = (mode_option, preferred_mode_id) {
+        config_with_mode = preferred_config_values.clone();
+        config_with_mode.entry(option.id.to_string()).or_insert_with(|| mode.to_owned());
+        &config_with_mode
+    } else {
+        preferred_config_values
+    };
     // When the agent's own mode selector is among the saved options, the replay
     // below restores the mode through it, and the saved legacy mode is not sent
     // as well: a row saved before the session followed that selector can hold
@@ -13037,7 +13084,7 @@ async fn apply_preferred_session_options(
                     })
         })
     });
-    if let Some(pref_mode) = preferred_mode_id.filter(|_| !mode_restored_by_option) {
+    if let Some(pref_mode) = preferred_mode_id.filter(|_| !mode_restored_by_option && mode_option.is_none()) {
         let needs_apply = session
             .modes()
             .as_ref()
@@ -16775,6 +16822,7 @@ async fn run_conversation_loop(
                                 Some(ConnectionCommand::Steer {
                                     blocks,
                                     expect_turns_completed,
+                                    message_result,
                                     reply,
                                 }) => {
                                     // Aimed at a turn that is over: the one
@@ -16817,6 +16865,15 @@ async fn run_conversation_loop(
                                     // decline beside the steer.
                                     if let Some(inj) = delegation_injection {
                                         inj.questions.cancel_questions_by_parent(conn_id).await;
+                                    }
+                                    if let Some(reply) = message_result {
+                                        let mut state = state.write().await;
+                                        let turn = state.turns_completed;
+                                        state.message_turns.push(super::session_messages::TurnWaiter {
+                                            prompt_id: None,
+                                            turn: Some(turn),
+                                            reply: Some(reply),
+                                        });
                                     }
                                     let outcome = send_steer_request(&cx, &sid, &blocks).await;
                                     // A steered message still lands in the
@@ -40245,6 +40302,7 @@ mod tests {
             name: "Opus".into(),
             description: None,
             reasoning_efforts: None,
+            context_window: None,
         };
         assert_eq!(
             serde_json::to_value(&plain).unwrap(),
@@ -40694,12 +40752,14 @@ mod tests {
                         name: "Thinking: off".to_string(),
                         description: None,
                         reasoning_efforts: None,
+                        context_window: None,
                     },
                     SessionConfigSelectOptionInfo {
                         value: "high".to_string(),
                         name: "Thinking: high".to_string(),
                         description: None,
                         reasoning_efforts: None,
+                        context_window: None,
                     },
                 ],
                 groups: vec![],
@@ -42012,12 +42072,14 @@ mod tests {
                         name: "Grok 4.5".to_string(),
                         description: None,
                         reasoning_efforts: None,
+                        context_window: None,
                     },
                     SessionConfigSelectOptionInfo {
                         value: "grok-composer-2.5-fast".to_string(),
                         name: "Composer 2.5".to_string(),
                         description: None,
                         reasoning_efforts: None,
+                        context_window: None,
                     },
                 ],
                 groups: Vec::new(),
@@ -49129,6 +49191,7 @@ mod tests {
         assert_eq!(
             companion_features_arg(CompanionFeatureFlags {
                 delegation: true,
+                session_messaging: false,
                 feedback: true,
                 ask: true,
                 sessions: true,
@@ -51746,6 +51809,7 @@ mod tests {
             let (reply, outcome) = oneshot::channel();
             self.cmd_tx
                 .send(ConnectionCommand::Steer {
+                    message_result: None,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     expect_turns_completed: None,
                     reply,
@@ -53193,6 +53257,7 @@ mod tests {
             let (reply, outcome) = oneshot::channel();
             self.cmd_tx
                 .send(ConnectionCommand::Steer {
+                    message_result: None,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     expect_turns_completed: expect,
                     reply,
@@ -53331,6 +53396,7 @@ mod tests {
                             name: "Opus".to_string(),
                             description: None,
                             reasoning_efforts: None,
+                            context_window: None,
                         }],
                         groups: Vec::new(),
                     }),

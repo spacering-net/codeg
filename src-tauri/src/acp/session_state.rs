@@ -884,6 +884,9 @@ pub struct SessionState {
     /// `ConnectionManager::submit_feedback_native`, which re-checks it across
     /// attachment hydration so a steered note cannot ride into the next turn.
     pub turns_completed: u64,
+    pub(crate) last_turn_complete_seq: u64,
+    pub(crate) settled_turn_seq: u64,
+    pub(crate) message_turns: Vec<super::session_messages::TurnWaiter>,
 
     /// Auto-preview work scheduled by `apply_event` for the files the running
     /// turn's tool calls name (see `crate::agent_turn_files`). `apply_event`
@@ -1108,6 +1111,9 @@ impl SessionState {
             turn_in_flight: false,
             agent_initiated_turn: false,
             turns_completed: 0,
+            last_turn_complete_seq: 0,
+            settled_turn_seq: 0,
+            message_turns: Vec::new(),
             turn_file_jobs: Vec::new(),
             last_turn_ended_abnormally: false,
             config_stale: false,
@@ -1189,7 +1195,38 @@ impl SessionState {
             ),
             _ => None,
         };
+        if let AcpEvent::UserMessage { message_id, .. } = payload {
+            for waiter in &mut self.message_turns {
+                if waiter.prompt_id.as_deref() == Some(message_id) {
+                    waiter.turn = Some(self.turns_completed);
+                }
+            }
+        }
+        let completed_turn = self.turns_completed;
         self.apply_event_inner(payload);
+        match payload {
+            AcpEvent::TurnComplete { stop_reason, .. } => {
+                self.last_turn_complete_seq = self.event_seq + 1;
+                self.message_turns.retain_mut(|waiter| {
+                    if waiter.turn == Some(completed_turn) {
+                        if let Some(reply) = waiter.reply.take() {
+                            let _ = reply.send(if stop_reason == "end_turn" {
+                                Ok(self.last_assistant_text.clone())
+                            } else {
+                                Err(format!("recipient turn ended: {stop_reason}"))
+                            });
+                        }
+                        false
+                    } else {
+                        waiter.reply.as_ref().is_some_and(|tx| !tx.is_closed())
+                    }
+                });
+            }
+            AcpEvent::StatusChanged {
+                status: ConnectionStatus::Disconnected | ConnectionStatus::Error,
+            } => self.message_turns.clear(),
+            _ => {},
+        }
         self.track_turn_files(payload, was_prompting, tool_call_before);
     }
 
@@ -6258,6 +6295,7 @@ mod tests {
             name: value.into(),
             description: None,
             reasoning_efforts: None,
+            context_window: None,
         };
         let listing = |id: &str, current: &str, values: &[&str]| {
             let mut option = select_option(id, Some("mode"), current);

@@ -12513,6 +12513,7 @@ pub(crate) async fn spawn_with_conversation_selection(
 pub(crate) struct SpawnedConversationConnection {
     pub connection_id: String,
     pub bound: Result<(), AcpError>,
+    pub reused: bool,
 }
 
 /// [`spawn_with_conversation_selection`] that hands the connection back even
@@ -12548,30 +12549,31 @@ pub(crate) async fn spawn_and_bind_conversation_selection(
         client_config_values,
     )
     .await;
-    let connection_id = manager
-        .spawn_agent(
+    let spawned = manager
+        .spawn_agent_with_outcome(
             agent_type,
             working_dir,
             session_id,
             runtime_env,
             owner_window_label,
             emitter,
-            selection.mode_id.clone(),
-            selection.config_values.clone(),
+            selection.mode_id,
+            selection.config_values,
         )
         .await?;
     // Before returning, so a setter right after connect finds the binding.
     let bound = match selection.row_id {
         Some(row_id) => {
             manager
-                .bind_selection_conversation(&connection_id, row_id, selection.composer_mode_id)
+                .bind_selection_conversation(&spawned.connection_id, row_id, selection.composer_mode_id)
                 .await
         }
         None => Ok(()),
     };
     Ok(SpawnedConversationConnection {
-        connection_id,
+        connection_id: spawned.connection_id,
         bound,
+        reused: spawned.reused,
     })
 }
 

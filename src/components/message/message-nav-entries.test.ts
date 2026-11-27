@@ -102,6 +102,29 @@ const LOADED = [user("turn-4", "third"), write("turn-5", "/repo/b.ts")]
 const THREAD_INDEX = new Map([["turn-4", 0]])
 
 describe("buildMessageNavEntries", () => {
+  it("shows the body of cross-session messages in history and the loaded window", () => {
+    const entries = buildMessageNavEntries({
+      earlierTurns: [
+        user(
+          "turn-0",
+          "[Codeg message from conversation 58; message e58829d9-8fd1-4fc0-82be-94dfa081c453]\n\nReview the changes"
+        ),
+      ],
+      earlierUserCount: 1,
+      loadedTurns: [
+        user(
+          "turn-1",
+          "[Codeg message from conversation 62]\n\n[Automatic reply from session 62]\n\nReview complete"
+        ),
+      ],
+      threadIndexByTurnId: new Map([["turn-1", 0]]),
+    })
+    expect(entries.map((entry) => entry.label)).toEqual([
+      "Review the changes",
+      "Review complete",
+    ])
+  })
+
   it("lists every message, numbering the earlier ones first", () => {
     const entries = buildMessageNavEntries({
       earlierTurns: EARLIER,

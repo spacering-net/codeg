@@ -837,6 +837,8 @@
     "generalConfigDescriptionClaude": "API URL、API Key、Claude モデルを設定し、ネイティブ JSON 設定と同期します。",
     "generalConfigDescriptionDefault": "API URL、API Key、Model を設定し、ネイティブ JSON 設定を管理します。",
     "multiAgent": {
+      "sessionMessaging": "セッション間通信",
+      "sessionMessagingHint": "エージェントが独立したセッションを作成してメッセージを交換できるようにします。既存のセッションでは再接続後にツールを利用できます。",
       "title": "マルチエージェント連携",
       "description": "アクティブなエージェントがサブタスクを他のエージェントに委任できるようにします。",
       "enable": "委任を有効化",
@@ -3906,6 +3908,7 @@
         "downloadFailed": "{name} のダウンロードに失敗しました"
       },
       "messageList": {
+        "sessionMessageSource": "送信元セッション：{session}",
         "loading": "読み込み中...",
         "loadBackgroundActivity": "バックグラウンドの動作を読み込む",
         "loadEarlier": "以前のメッセージを読み込む",
@@ -4105,6 +4108,13 @@
         "htmlPreviewHide": "プレビューを閉じる"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "セッション「{session}」にメッセージを送信",
+          "send": "セッションにメッセージを送信",
+          "create": "セッションを作成",
+          "current": "現在のセッションを表示",
+          "list": "セッションを検索"
+        },
         "oauth": {
           "waiting": "{server} の認可を待機中",
           "reconnecting": "{server} に再接続中…",

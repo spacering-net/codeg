@@ -7,6 +7,7 @@
 //! [`DelegationBroker`]. The listener is the boundary between the wire and
 //! the broker, plus the place where the per-launch token policy is enforced.
 
+use super::transport::BrokerListAgentOptionsRequest;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,15 +30,14 @@ use crate::acp::delegation::transport::{
     read_frame, write_frame, BrokerAskRequest, BrokerBrowserActRequest,
     BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
     BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest,
-    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerComputerActRequest,
-    BrokerComputerAppsRequest, BrokerComputerCaptureRequest, BrokerComputerLaunchRequest,
-    BrokerComputerSnapshotRequest,
-    BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCommitFeedbackRequest,
-    BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerMessage, BrokerRequest,
-    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerResponse,
-    BrokerResultSchemaRequest, BrokerResumeTaskRequest, BrokerSessionRequest,
-    BrokerStatusRequest, BrokerSubmitResultRequest, BrokerTaskCompleteRequest,
-    BrokerTaskProgressRequest,
+    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerCommitFeedbackRequest,
+    BrokerComputerActRequest, BrokerComputerAppsRequest, BrokerComputerCaptureRequest,
+    BrokerComputerLaunchRequest, BrokerComputerSnapshotRequest, BrokerComputerVerifyRequest,
+    BrokerComputerWindowsRequest, BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest,
+    BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerMessage, BrokerRenameSessionRequest,
+    BrokerRequest, BrokerResponse, BrokerResultSchemaRequest, BrokerResumeTaskRequest,
+    BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
+    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
 };
 use crate::acp::delegation::assistants::assistant_not_found_message;
 use crate::acp::delegation::types::{
@@ -145,8 +145,49 @@ pub struct TokenStats {
     pub parent_connections: usize,
 }
 
+const SESSION_READ_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+const SESSION_READ_CAPACITY: usize = 256;
+const WAIT_FOR_REPLY: &str =
+    "An automatic reply is scheduled. If nothing else is actionable, end this turn and resume when it arrives.";
+
+#[derive(Default)]
+struct RecentSessionReads {
+    entries: HashMap<(String, i32, [u8; 32]), std::time::Instant>,
+}
+
+impl RecentSessionReads {
+    fn omit_unchanged(&mut self, caller: &str, refresh: bool, info: &mut SessionInfo) {
+        use sha2::{Digest, Sha256};
+
+        let Some(messages) = &info.messages else {
+            return;
+        };
+        let Ok(encoded) = serde_json::to_vec(messages) else {
+            return;
+        };
+        let key = (caller.to_owned(), info.session_id, Sha256::digest(encoded).into());
+        let now = std::time::Instant::now();
+        self.entries
+            .retain(|_, seen| now.duration_since(*seen) < SESSION_READ_WINDOW);
+        if !refresh && self.entries.contains_key(&key) {
+            info.messages = None;
+            info.note = Some("Recent messages are unchanged and were already returned. Wait for the automatic reply when one is pending, or pass refresh=true to read them again.".into());
+            return;
+        }
+        if self.entries.len() >= SESSION_READ_CAPACITY {
+            if let Some(key) = self.entries.keys().next().cloned() {
+                self.entries.remove(&key);
+            }
+        }
+        self.entries.insert(key, now);
+    }
+}
+
 pub struct DelegationListener {
+    recent_session_reads: tokio::sync::Mutex<RecentSessionReads>,
     pub broker: Arc<DelegationBroker>,
+    pub session_message_db: std::sync::OnceLock<sea_orm::DatabaseConnection>,
+    pub session_creator: std::sync::OnceLock<crate::acp::session_messages::SessionCreator>,
     pub tokens: Arc<TokenRegistry>,
     pub parent_lookup: Arc<dyn ParentSessionLookup>,
     /// Pulls pending live-feedback notes for the `check_user_feedback` tool.
@@ -202,6 +243,9 @@ impl DelegationListener {
         results: Arc<dyn ResultToolAccess>,
     ) -> Arc<Self> {
         Arc::new(Self {
+            recent_session_reads: tokio::sync::Mutex::default(),
+            session_message_db: std::sync::OnceLock::new(),
+            session_creator: std::sync::OnceLock::new(),
             broker,
             tokens,
             parent_lookup,
@@ -482,6 +526,21 @@ impl DelegationListener {
             }
             BrokerMessage::CancelTask(req) => report_response(self.process_cancel_task(req).await)?,
             BrokerMessage::ResumeTask(req) => report_response(self.process_resume_task(req).await)?,
+            BrokerMessage::CreateSession(req) => BrokerResponse {
+                outcome: self.process_create_session(req).await,
+            },
+            BrokerMessage::ListAgentOptions(req) => BrokerResponse {
+                outcome: self.process_list_agent_options(req).await,
+            },
+            BrokerMessage::SessionMessage(req) => BrokerResponse {
+                outcome: self.process_session_message(req).await,
+            },
+            BrokerMessage::GetCurrentSession { token } => BrokerResponse {
+                outcome: self.process_session_discovery(&token, None).await,
+            },
+            BrokerMessage::ListSessions { token, args } => BrokerResponse {
+                outcome: self.process_session_discovery(&token, Some(args)).await,
+            },
             BrokerMessage::Feedback(req) => {
                 // at-least-once delivery: READ pending notes (no mutation),
                 // WRITE the response, and COMMIT them delivered ONLY on a
@@ -577,6 +636,12 @@ impl DelegationListener {
                 write_frame(conn, &resp).await?;
                 return Ok(());
             }
+            BrokerMessage::StopSession(req) => BrokerResponse {
+                outcome: self.process_stop_session(req).await,
+            },
+            BrokerMessage::RenameSession(req) => BrokerResponse {
+                outcome: self.process_rename_session(req).await,
+            },
             BrokerMessage::SessionInfo(req) => {
                 // Read-only resolution (DB + a bounded transcript parse). No
                 // peer-close race needed: unlike Status/Ask this never blocks on
@@ -887,6 +952,198 @@ impl DelegationListener {
             .await
     }
 
+    async fn process_list_agent_options(&self, req: BrokerListAgentOptionsRequest) -> Value {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return serde_json::json!({"error": "invalid token"});
+        };
+        if entry.agent_hosts_tools {
+            return serde_json::json!({"error": "tool is unavailable for this agent"});
+        }
+        let Some(agent_type) = crate::models::AgentType::from_wire(&req.agent_type) else {
+            return serde_json::json!({"error": "invalid agent_type"});
+        };
+
+        let config = self.broker.config_snapshot().await;
+        if !config.enabled && !config.session_messaging_enabled {
+            return serde_json::json!({"error": "delegation and session messaging are disabled"});
+        }
+        let Some(creator) = self.session_creator.get() else {
+            return serde_json::json!({"error": "session tools are unavailable"});
+        };
+        let inherited_mode_id = creator.inherited_mode_id(&entry.parent_connection_id, agent_type).await;
+        let preferences = config.agent_defaults.get(&agent_type)
+            .map(|defaults| defaults.config_values.clone()).unwrap_or_default();
+        match creator.list_agent_options(
+            agent_type,
+            Some(entry.working_dir.to_string_lossy().into_owned()),
+            preferences,
+        ).await {
+            Ok(options) => serde_json::json!({
+                "agent_type": req.agent_type,
+                "model_option_id": options.model_option_id,
+                "models": options.models,
+                "modes": options.modes,
+                "inherited_mode_id": inherited_mode_id,
+            }),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    async fn process_create_session(
+        &self,
+        req: super::transport::BrokerCreateSessionRequest,
+    ) -> Value {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return serde_json::json!({"error": "Session creation is unavailable"});
+        };
+        let config = self.broker.config_snapshot().await;
+        if entry.agent_hosts_tools || !config.session_messaging_enabled {
+            return serde_json::json!({"error": "Session creation is disabled"});
+        }
+        if let Err(error) = req.validate() {
+            return serde_json::json!({"error": error});
+        }
+        let Some(creator) = self.session_creator.get() else {
+            return serde_json::json!({"error": "Session creation is unavailable"});
+        };
+        match creator
+            .create(&entry.parent_connection_id, req, &config.agent_defaults, &self.broker)
+            .await
+        {
+            Ok((conversation_id, message_id)) => serde_json::json!({
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "automatic_reply": true,
+                "note": WAIT_FOR_REPLY,
+            }),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    async fn process_session_message(
+        &self,
+        req: super::transport::BrokerSessionMessageRequest,
+    ) -> Value {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return serde_json::json!({"error": "Session messaging is unavailable"});
+        };
+        if entry.agent_hosts_tools || !self.broker.config_snapshot().await.session_messaging_enabled {
+            return serde_json::json!({"error": "Session messaging is disabled"});
+        }
+        let Some(sender) = self.parent_lookup.current_conversation_id(&entry.parent_connection_id).await else {
+            return serde_json::json!({"error": "Sender has no active conversation"});
+        };
+        let Some(db) = self.session_message_db.get() else {
+            return serde_json::json!({"error": "Session messaging is unavailable"});
+        };
+        match crate::db::service::session_message_service::enqueue(
+            db, sender, req.conversation_id, req.message, req.mode, req.reply,
+        ).await {
+            Ok(message_id) if req.reply => serde_json::json!({
+                "message_id": message_id,
+                "automatic_reply": true,
+                "note": WAIT_FOR_REPLY,
+            }),
+            Ok(message_id) => serde_json::json!({"message_id": message_id}),
+            Err(error) => serde_json::json!({"error": error.to_string()}),
+        }
+    }
+
+    async fn process_session_discovery(
+        &self,
+        token: &str,
+        args: Option<super::transport::ListSessionsArgs>,
+    ) -> Value {
+        use crate::db::service::{conversation_service, folder_service};
+        use serde_json::json;
+
+        let Some(entry) = self.tokens.lookup(token).await else {
+            return json!({"error": "Session discovery is unavailable"});
+        };
+        if entry.agent_hosts_tools || !self.broker.config_snapshot().await.session_messaging_enabled {
+            return json!({"error": "Session messaging is disabled"});
+        }
+        let Some(conversation_id) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return json!({"error": "Caller has no active conversation"});
+        };
+        let Some(db) = self.session_message_db.get() else {
+            return json!({"error": "Session discovery is unavailable"});
+        };
+        let caller = match conversation_service::get_by_id(db, conversation_id).await {
+            Ok(caller) => caller,
+            Err(error) => return json!({"error": error.to_string()}),
+        };
+        let Some(args) = args else {
+            let folder_path = match folder_service::get_folder_by_id(db, caller.folder_id).await {
+                Ok(folder) => folder.map(|folder| folder.path),
+                Err(error) => return json!({"error": error.to_string()}),
+            };
+            return json!({
+                "conversation_id": conversation_id,
+                "folder_id": caller.folder_id,
+                "folder_path": folder_path,
+                "title": caller.title,
+                "agent_type": caller.agent_type,
+                "status": caller.status,
+                "parent_conversation_id": caller.parent_id,
+            });
+        };
+
+        let limit = args.limit.unwrap_or(50);
+        if !(1..=200).contains(&limit) {
+            return json!({"error": "limit must be between 1 and 200"});
+        }
+        if args.current_folder && args.folder_id.is_some() {
+            return json!({"error": "Use either current_folder or folder_id"});
+        }
+        let folder_ids = match args.folder_id {
+            Some(folder_id) => match folder_service::get_folder_by_id(db, folder_id).await {
+                Ok(Some(_)) => Some(vec![folder_id]),
+                Ok(None) => return json!({"sessions": [], "next_offset": null}),
+                Err(error) => return json!({"error": error.to_string()}),
+            },
+            None if args.current_folder => Some(vec![caller.folder_id]),
+            None => None,
+        };
+        let rows = match conversation_service::list_all(
+            db,
+            folder_ids,
+            args.agent_type,
+            args.search,
+            None,
+            None,
+            true,
+        )
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => return json!({"error": error.to_string()}),
+        };
+        let offset = args.offset as usize;
+        let limit = limit as usize;
+        let next_offset = offset.checked_add(limit).filter(|next| *next < rows.len());
+        let sessions: Vec<_> = rows
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|row| {
+                json!({
+                    "conversation_id": row.id,
+                    "folder_id": row.folder_id,
+                    "title": row.title,
+                    "agent_type": row.agent_type,
+                    "status": row.status,
+                    "parent_conversation_id": row.parent_id,
+                })
+            })
+            .collect();
+        json!({"sessions": sessions, "next_offset": next_offset})
+    }
+
     /// Validate the token and resolve the `check_user_feedback` target: the
     /// caller's parent connection id. `None` on an invalid token — the LLM can't
     /// usefully distinguish "no notes" from "bad token", and we don't leak which.
@@ -930,6 +1187,59 @@ impl DelegationListener {
             .await;
     }
 
+    async fn session_control_target(
+        &self,
+        token: &str,
+        requested: Option<i32>,
+    ) -> Result<(i32, i32), &'static str> {
+        let entry = self.tokens.lookup(token).await
+            .filter(|entry| !entry.agent_hosts_tools)
+            .ok_or("Session control is unavailable")?;
+        let caller_id = self.parent_lookup.current_conversation_id(&entry.parent_connection_id)
+            .await.ok_or("Caller has no active conversation")?;
+        Ok((caller_id, requested.unwrap_or(caller_id)))
+    }
+
+    async fn process_stop_session(&self, req: super::transport::BrokerStopSessionRequest) -> Value {
+        let (caller_id, session_id) = match self.session_control_target(&req.token, req.session_id).await {
+            Ok(ids) => ids,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let Some(creator) = self.session_creator.get() else {
+            return serde_json::json!({"error": "Session control is unavailable"});
+        };
+        if !self.broker.config_snapshot().await.session_messaging_enabled {
+            return serde_json::json!({"error": "Session messaging is disabled"});
+        }
+        if let Err(error) = crate::commands::session_info::authorize_session_control(
+            &creator.db, caller_id, session_id,
+        ).await {
+            return serde_json::json!({"error": error});
+        }
+        match creator.manager.cancel_conversation_turn(&creator.db, session_id).await {
+            Ok(requested) => serde_json::json!({
+                "session_id": session_id,
+                "status": if requested { "stop_requested" } else { "idle" },
+            }),
+            Err(error) => serde_json::json!({"error": error.to_string()}),
+        }
+    }
+
+    async fn process_rename_session(&self, req: BrokerRenameSessionRequest) -> Value {
+        let (caller_id, session_id) = match self.session_control_target(&req.token, req.session_id).await {
+            Ok(ids) => ids,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        match self
+            .session_info
+            .rename(caller_id, session_id, req.title.clone())
+            .await
+        {
+            Ok(()) => serde_json::json!({"session_id": session_id, "title": req.title.trim()}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
     /// Validate the token and resolve the `get_session_info` target. An invalid
     /// token yields a `found:false` outcome (the LLM can't usefully distinguish it
     /// from a deleted session, and we don't leak which).
@@ -949,9 +1259,17 @@ impl DelegationListener {
         if self.tokens.lookup(&req.token).await.is_none() {
             return SessionInfo::not_found(req.session_id);
         }
-        self.session_info
+        let mut info = self
+            .session_info
             .resolve(req.session_id, req.max_messages.unwrap_or(0))
-            .await
+            .await;
+        if info.messages.is_some() {
+            self.recent_session_reads
+                .lock()
+                .await
+                .omit_unchanged(&req.token, req.refresh, &mut info);
+        }
+        info
     }
 
     /// Validate the token and list the browser tabs an agent may know about.
@@ -1948,9 +2266,23 @@ mod tests {
     struct StubSessionInfo {
         known: std::collections::HashSet<i32>,
         calls: tokio::sync::Mutex<Vec<(i32, u32)>>,
+        renames: tokio::sync::Mutex<Vec<(i32, i32, String)>>,
     }
     #[async_trait]
     impl SessionInfoAccess for StubSessionInfo {
+        async fn rename(
+            &self,
+            caller_id: i32,
+            session_id: i32,
+            title: String,
+        ) -> Result<(), String> {
+            self.renames
+                .lock()
+                .await
+                .push((caller_id, session_id, title));
+            Ok(())
+        }
+
         async fn resolve(&self, session_id: i32, max_messages: u32) -> SessionInfo {
             self.calls.lock().await.push((session_id, max_messages));
             if self.known.contains(&session_id) {
@@ -3150,6 +3482,98 @@ mod tests {
         assert!(feedback.committed.lock().await.is_empty());
     }
 
+    #[tokio::test]
+    async fn rename_session_uses_authenticated_caller_and_blocks_host_tools() {
+        let tokens = Arc::new(TokenRegistry::default());
+        for (token, agent_hosts_tools) in [("allowed", false), ("host", true)] {
+            tokens
+                .register(
+                    token.into(),
+                    TokenEntry {
+                        agent_hosts_tools,
+                        parent_connection_id: "parent-conn".into(),
+                        working_dir: PathBuf::from("/tmp"),
+                    },
+                )
+                .await;
+        }
+        let access = Arc::new(StubSessionInfo::default());
+        let listener = make_session_listener(tokens, access.clone());
+        for (token, session_id, allowed) in [
+            ("invalid", None, false),
+            ("host", Some(42), false),
+            ("allowed", None, true),
+            ("allowed", Some(42), true),
+        ] {
+            let (mut client, mut server) = duplex(8 * 1024);
+            let listener = listener.clone();
+            let task = tokio::spawn(async move {
+                listener.serve_one(&mut server).await.unwrap();
+            });
+            write_frame(
+                &mut client,
+                &BrokerMessage::RenameSession(BrokerRenameSessionRequest {
+                    token: token.into(),
+                    session_id,
+                    title: "Chosen".into(),
+                }),
+            )
+            .await
+            .unwrap();
+            let response: BrokerResponse = read_frame(&mut client).await.unwrap();
+            task.await.unwrap();
+            assert_eq!(response.outcome.get("error").is_none(), allowed);
+            if allowed {
+                assert_eq!(response.outcome["session_id"], session_id.unwrap_or(1));
+            }
+        }
+        assert_eq!(
+            *access.renames.lock().await,
+            vec![(1, 1, "Chosen".to_owned()), (1, 42, "Chosen".to_owned()),]
+        );
+    }
+
+    #[test]
+    fn repeated_session_transcript_is_omitted_until_it_changes_or_is_refreshed() {
+        use crate::acp::session_info::{SessionMessageItem, SessionMessages};
+
+        let mut reads = RecentSessionReads::default();
+        let mut response = SessionInfo {
+            found: true,
+            session_id: 42,
+            status: Some("in_progress".into()),
+            messages: Some(SessionMessages {
+                total: 1,
+                included: 1,
+                truncated: false,
+                items: vec![SessionMessageItem {
+                    role: "assistant".into(),
+                    text: "Working".into(),
+                    tools: vec![],
+                }],
+            }),
+            ..Default::default()
+        };
+        reads.omit_unchanged("caller", false, &mut response.clone());
+        let mut repeat = response.clone();
+        reads.omit_unchanged("caller", false, &mut repeat);
+        assert!(repeat.messages.is_none());
+        assert!(repeat.note.unwrap().contains("unchanged"));
+        assert_eq!(repeat.status, response.status);
+
+        let mut other = response.clone();
+        reads.omit_unchanged("another caller", false, &mut other);
+        assert!(other.messages.is_some());
+
+        let mut refreshed = response.clone();
+        reads.omit_unchanged("caller", true, &mut refreshed);
+        assert!(refreshed.messages.is_some());
+
+        response.messages.as_mut().unwrap().items[0].text = "Finished".into();
+        reads.omit_unchanged("caller", false, &mut response);
+        assert!(response.messages.is_some());
+    }
+
     /// A valid `get_session_info` resolves the session by id and returns its
     /// metadata; the resolver is called with the requested id + max_messages.
     #[tokio::test]
@@ -3179,6 +3603,7 @@ mod tests {
             token: "tok".into(),
             session_id: 42,
             max_messages: Some(15),
+            refresh: false,
         });
         write_frame(&mut client, &msg).await.unwrap();
         let resp: BrokerResponse = read_frame(&mut client).await.unwrap();
@@ -3223,6 +3648,7 @@ mod tests {
                 token: "tok".into(),
                 session_id: id,
                 max_messages: Some(0),
+                refresh: false,
             });
             write_frame(&mut client, &msg).await.unwrap();
             let resp: BrokerResponse = read_frame(&mut client).await.unwrap();
@@ -3252,6 +3678,7 @@ mod tests {
             token: "bogus".into(),
             session_id: 42,
             max_messages: None,
+            refresh: false,
         });
         write_frame(&mut client, &msg).await.unwrap();
         let resp: BrokerResponse = read_frame(&mut client).await.unwrap();

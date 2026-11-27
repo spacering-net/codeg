@@ -837,6 +837,8 @@
     "generalConfigDescriptionClaude": "Configurez l'API URL, l'API Key et les modèles Claude ; synchronisé avec la configuration JSON native.",
     "generalConfigDescriptionDefault": "Configurez l'API URL, l'API Key et le Model, et gérez la configuration JSON native.",
     "multiAgent": {
+      "sessionMessaging": "Communication entre sessions",
+      "sessionMessagingHint": "Permet aux agents de créer des sessions indépendantes et d’échanger des messages. Reconnectez les sessions existantes pour accéder aux outils.",
       "title": "Collaboration multi-agent",
       "description": "Permet aux agents actifs de déléguer des sous-tâches à d’autres agents.",
       "enable": "Activer la délégation",
@@ -3906,6 +3908,7 @@
         "downloadFailed": "Échec du téléchargement de {name}"
       },
       "messageList": {
+        "sessionMessageSource": "De la session : {session}",
         "loading": "Chargement...",
         "loadBackgroundActivity": "Charger l'activité en arrière-plan",
         "loadEarlier": "Charger les messages précédents",
@@ -4105,6 +4108,13 @@
         "htmlPreviewHide": "Masquer l’aperçu"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "Envoyer un message à {session}",
+          "send": "Envoyer un message à une session",
+          "create": "Créer une session",
+          "current": "Afficher la session actuelle",
+          "list": "Rechercher des sessions"
+        },
         "oauth": {
           "waiting": "En attente d’autorisation pour {server}",
           "reconnecting": "Reconnexion à {server}…",

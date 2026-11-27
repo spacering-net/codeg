@@ -837,6 +837,8 @@
     "generalConfigDescriptionClaude": "اضبط API URL وAPI Key ونماذج Claude؛ متزامن مع إعداد JSON الأصلي.",
     "generalConfigDescriptionDefault": "اضبط API URL وAPI Key وModel، وأدر إعداد JSON الأصلي.",
     "multiAgent": {
+      "sessionMessaging": "التواصل بين الجلسات",
+      "sessionMessagingHint": "يتيح للوكلاء إنشاء جلسات مستقلة وتبادل الرسائل. أعد توصيل الجلسات المفتوحة لاستخدام هذه الأدوات.",
       "title": "تعاون متعدد الوكلاء",
       "description": "اسمح للوكلاء النشطين بتفويض المهام الفرعية إلى وكلاء آخرين.",
       "enable": "تفعيل التفويض",
@@ -3906,6 +3908,7 @@
         "downloadFailed": "فشل تنزيل {name}"
       },
       "messageList": {
+        "sessionMessageSource": "من الجلسة: {session}",
         "loading": "جارٍ التحميل...",
         "loadBackgroundActivity": "تحميل نشاط الخلفية",
         "loadEarlier": "تحميل الرسائل السابقة",
@@ -4105,6 +4108,13 @@
         "htmlPreviewHide": "إخفاء المعاينة"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "إرسال رسالة إلى {session}",
+          "send": "إرسال رسالة إلى جلسة",
+          "create": "إنشاء جلسة",
+          "current": "عرض الجلسة الحالية",
+          "list": "البحث عن جلسات"
+        },
         "oauth": {
           "waiting": "بانتظار تفويض {server}",
           "reconnecting": "جارٍ إعادة الاتصال بـ {server}…",

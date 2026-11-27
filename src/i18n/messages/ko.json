@@ -837,6 +837,8 @@
     "generalConfigDescriptionClaude": "API URL, API Key, Claude 모델을 설정하고 네이티브 JSON 구성과 동기화합니다.",
     "generalConfigDescriptionDefault": "API URL, API Key, Model을 설정하고 네이티브 JSON 구성을 관리합니다.",
     "multiAgent": {
+      "sessionMessaging": "세션 간 통신",
+      "sessionMessagingHint": "에이전트가 독립 세션을 만들고 메시지를 주고받을 수 있습니다. 기존 세션은 다시 연결하면 도구를 사용할 수 있습니다.",
       "title": "다중 에이전트 협업",
       "description": "활성 에이전트가 하위 작업을 다른 에이전트에게 위임할 수 있도록 합니다.",
       "enable": "위임 사용",
@@ -3906,6 +3908,7 @@
         "downloadFailed": "{name} 다운로드 실패"
       },
       "messageList": {
+        "sessionMessageSource": "보낸 세션: {session}",
         "loading": "불러오는 중...",
         "loadBackgroundActivity": "백그라운드 활동 불러오기",
         "loadEarlier": "이전 메시지 불러오기",
@@ -4105,6 +4108,13 @@
         "htmlPreviewHide": "미리보기 닫기"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "{session} 세션에 메시지 보내기",
+          "send": "세션 메시지 보내기",
+          "create": "세션 만들기",
+          "current": "현재 세션 보기",
+          "list": "세션 찾기"
+        },
         "oauth": {
           "waiting": "{server} 승인 대기 중",
           "reconnecting": "{server}에 다시 연결 중…",
