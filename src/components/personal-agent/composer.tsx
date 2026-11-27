@@ -145,6 +145,12 @@ interface ComposerProps {
  *  own, never a later send's. */
 let lastRequest = 0
 
+/** The sends out now, by draft key, each with the boxes to tell when it
+ *  settles: a box opened again for the assistant meanwhile (the owner
+ *  switched away and back) holds the text going out, locked as the box that
+ *  sent it was, and lets it go once it went. */
+const outgoing = new Map<string, Set<() => void>>()
+
 export function PersonalAgentComposer({
   agent,
   agentName,
@@ -167,6 +173,10 @@ export function PersonalAgentComposer({
   const chromeFocus = useComposerChromeFocus(editorRef)
   const [text, setText] = useState("")
   const [sending, setSending] = useState(false)
+  const draftKey = buildPersonalAgentDraftStorageKey(agent)
+  // A send from an earlier box for this assistant is still out.
+  const [awaiting, setAwaiting] = useState(() => outgoing.has(draftKey))
+  const busy = sending || awaiting
 
   const { groupLabels, uiLabels, primaryAssistantName } =
     useComposerMentionLabels()
@@ -194,7 +204,7 @@ export function PersonalAgentComposer({
     editorRef,
     containerRef,
     // Nothing added while it sends: the box is locked until it returns.
-    disabled: status.engine !== "here" || sending,
+    disabled: status.engine !== "here" || busy,
     promptCapabilities: ASSUMED_PROMPT_CAPABILITIES,
     defaultPath: agent.workdir,
     logLabel: "PersonalAgentComposer",
@@ -227,7 +237,7 @@ export function PersonalAgentComposer({
     attach.attachments.length === 0 &&
     // eslint-disable-next-line react-hooks/refs -- the pasted files' bytes sit in a ref the editor writes; every edit re-renders, so this reads it fresh
     embeddedBlocks().length === 0
-  const canSend = !readOnly && !sending && !empty
+  const canSend = !readOnly && !busy && !empty
   const hasImages = attach.imageAttachments.length > 0
   // The text has needed a second line since the box was last empty.
   const [wrapped, setWrapped] = useState(false)
@@ -249,7 +259,6 @@ export function PersonalAgentComposer({
   // The draft: what the last edit left, saved a moment later (`null` clears
   // it; `undefined` is nothing waiting). Taken at the edit, so the box going
   // away before the save — the owner switched assistants — still saves it.
-  const draftKey = buildPersonalAgentDraftStorageKey(agent)
   const pendingDraft = useRef<JSONContent | null | undefined>(undefined)
   const draftTimer = useRef<number | null>(null)
   const writeDraft = useCallback(() => {
@@ -282,10 +291,11 @@ export function PersonalAgentComposer({
   const [hydrated, setHydrated] = useState(restoring == null)
   useEffect(() => {
     if (!editorReady || !restoring) return
-    const loaded = restoring
     const raf = requestAnimationFrame(() => {
       const ed = editorRef.current
-      if (ed) {
+      // Read again: a send settled meanwhile may have dropped it.
+      const loaded = loadMessageInputDraftV2(draftKey)
+      if (ed && loaded) {
         if (loaded.kind === "doc") ed.setDoc(loaded.doc)
         else ed.setText(loaded.markdown)
         setText(ed.getText())
@@ -297,16 +307,42 @@ export function PersonalAgentComposer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editorReady])
 
+  // Opened while an earlier box's send is out: locked until it settles, then
+  // emptied if it went (the send drops the stored draft), kept otherwise.
+  useEffect(() => {
+    if (!awaiting) return
+    let live = true
+    const settle = () => {
+      if (!live) return
+      if (!loadMessageInputDraftV2(draftKey)) {
+        editorRef.current?.clear()
+        pendingDraft.current = null
+        writeDraft()
+        setText("")
+        setWrapped(false)
+      }
+      setAwaiting(false)
+    }
+    const waiting = outgoing.get(draftKey)
+    if (waiting) waiting.add(settle)
+    // Settled between this box's first render and now.
+    else void Promise.resolve().then(settle)
+    return () => {
+      live = false
+      waiting?.delete(settle)
+    }
+  }, [awaiting, draftKey, writeDraft])
+
   // While it sends, the box is locked — the text, the attachments, a card's
   // "put in the box" — so what it clears on return is exactly what went:
   // the page reads whether this assistant's box is sending.
   const bot = agent.id
   useEffect(() => {
-    if (!sending) return
+    if (!busy) return
     const ui = usePersonalAgentUi.getState()
     ui.setComposerSending(bot, true)
     return () => ui.setComposerSending(bot, false)
-  }, [bot, sending])
+  }, [bot, busy])
   // The quote as the page has it now: one picked while a send is out is not
   // to be undone by that send's failure.
   const quotingNow = useRef(quoting)
@@ -329,9 +365,9 @@ export function PersonalAgentComposer({
     }
     const body = editorRef.current.getText()
     // The stored draft is what goes: should the box be gone when it lands,
-    // that is what the send drops.
+    // that is what the send drops; a box opened again meanwhile restores it,
+    // locked until then.
     writeDraft()
-    const sentDraft = loadMessageInputDraftV2(draftKey)
     const blocks = [...embeddedBlocks(), ...attach.imagePromptBlocks()]
     // What this send settles, taken now — not read again from the page
     // when it returns.
@@ -345,6 +381,7 @@ export function PersonalAgentComposer({
     refocus.current =
       containerRef.current?.contains(document.activeElement) ?? false
     setSending(true)
+    outgoing.set(draftKey, new Set())
     try {
       await personalAgentSend(
         body,
@@ -359,12 +396,9 @@ export function PersonalAgentComposer({
       ui.clearAnswerSending(bot, requestId)
       if (sentAnswer) ui.clearPendingAnswer(bot, sentAnswer.itemId)
       if (!mounted.current) {
-        // Unless it was written over since (the box opened again, and the
-        // owner typed on).
-        const now = loadMessageInputDraftV2(draftKey)
-        if (JSON.stringify(now) === JSON.stringify(sentDraft)) {
-          clearMessageInputDraftV2(draftKey)
-        }
+        // Gone, the box saved what it held — what went (it was locked) —
+        // and a box opened for the assistant since is locked too.
+        clearMessageInputDraftV2(draftKey)
         return
       }
       editorRef.current?.clear()
@@ -401,6 +435,9 @@ export function PersonalAgentComposer({
       toast.error(errorText(e))
     } finally {
       setSending(false)
+      const waiting = outgoing.get(draftKey)
+      outgoing.delete(draftKey)
+      waiting?.forEach((settle) => settle())
     }
   }
 
@@ -574,7 +611,7 @@ export function PersonalAgentComposer({
               <div className="flex" style={{ gridArea: "plus" }}>
                 <ComposerAddMenu
                   attachOnly
-                  disabled={readOnly || sending}
+                  disabled={readOnly || busy}
                   attachments={attach}
                   // `border-0`: the button's transparent border would clip
                   // the fill a pixel short of the send button's on each side.
@@ -614,7 +651,7 @@ export function PersonalAgentComposer({
                   <ComposerImageThumbnails
                     attachments={attach.imageAttachments}
                     onRemove={attach.removeAttachment}
-                    disabled={sending}
+                    disabled={busy}
                   />
                 </div>
               ) : null}
@@ -624,7 +661,7 @@ export function PersonalAgentComposer({
                   defaultText=""
                   placeholder={placeholder}
                   ariaLabel={t("ariaLabel")}
-                  disabled={readOnly || sending}
+                  disabled={readOnly || busy}
                   referenceSearch={referenceSearch}
                   mentionUiLabels={uiLabels}
                   tabLabels={groupLabels}
@@ -664,7 +701,7 @@ export function PersonalAgentComposer({
                   title={turn ? t("queue") : t("send")}
                   aria-label={turn ? t("queue") : t("send")}
                 >
-                  {sending ? (
+                  {busy ? (
                     <SyncedSpinner small className="size-4" />
                   ) : (
                     <ArrowUp className="size-4" />

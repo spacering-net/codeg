@@ -486,6 +486,56 @@ describe("PersonalAgentComposer", () => {
     expect(box().value).toBe("")
   })
 
+  it("holds a send still out in a box opened again for the assistant, and lets it go once it went", async () => {
+    const lands: ((v: unknown) => void)[] = []
+    const fails: ((e: unknown) => void)[] = []
+    api.personalAgentSend.mockImplementation(
+      () =>
+        new Promise((resolve, reject) => {
+          lands.push(resolve)
+          fails.push(reject)
+        })
+    )
+    const props = { onClearQuote: vi.fn(), onSent: vi.fn() }
+    const { rerender } = render(<Page id={1} {...props} />)
+    fireEvent.change(box(), { target: { value: "going out" } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    })
+    // Away and back while it is out: the text shows, locked as it was.
+    rerender(<Page id={2} {...props} />)
+    rerender(<Page id={1} {...props} />)
+    await waitFor(() => expect(box().value).toBe("going out"))
+    expect(box().disabled).toBe(true)
+    expect(usePersonalAgentUi.getState().composerSending[1]).toBe(true)
+    await act(async () => {
+      lands[0]({ id: 9 })
+    })
+    // It went: gone from the box and from the draft, for good.
+    expect(box().value).toBe("")
+    expect(box().disabled).toBe(false)
+    expect(storedText(1)).toBeNull()
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 350))
+    })
+    expect(storedText(1)).toBeNull()
+
+    // One that fails stays, to be tried again.
+    fireEvent.change(box(), { target: { value: "again" } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    })
+    rerender(<Page id={2} {...props} />)
+    rerender(<Page id={1} {...props} />)
+    await waitFor(() => expect(box().value).toBe("again"))
+    await act(async () => {
+      fails[1](new Error("offline"))
+    })
+    expect(box().value).toBe("again")
+    expect(box().disabled).toBe(false)
+    expect(storedText(1)).toBe("again")
+  })
+
   it("keeps what is typed as the assistant's own draft, and puts it back when the box opens again", async () => {
     const props = { onClearQuote: vi.fn(), onSent: vi.fn() }
     const { rerender } = render(<Page id={1} {...props} />)
