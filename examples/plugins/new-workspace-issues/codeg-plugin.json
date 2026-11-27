@@ -1,0 +1,120 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.new-workspace-issues",
+  "name": "New Workspace Issues",
+  "nameTranslations": {
+    "es": "Incidencias para espacios nuevos",
+    "zh-CN": "新工作区工单"
+  },
+  "version": "1.0.0",
+  "settings": {
+    "version": 1,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "branchPrefix": { "enum": ["issue", "work"] }
+      },
+      "required": ["branchPrefix"],
+      "additionalProperties": false
+    },
+    "defaults": { "branchPrefix": "issue" }
+  },
+  "server": {
+    "entry": "issues.mjs",
+    "methods": ["search-issues"],
+    "rpc": {
+      "search-issues": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "itemId": { "const": "issue" },
+            "target": { "enum": ["workspace", "worktree"] },
+            "query": { "type": "string" },
+            "folderPath": { "type": "string" },
+            "baseRef": { "type": "string" },
+            "branch": { "type": "string" },
+            "metadata": { "type": "object" },
+            "locale": { "type": "string" }
+          },
+          "required": ["itemId", "target", "locale"],
+          "additionalProperties": false
+        },
+        "output": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "label": { "type": "string" },
+                  "description": { "type": "string" },
+                  "patch": {
+                    "type": "object",
+                    "properties": {
+                      "branch": { "type": "string" },
+                      "metadata": {
+                        "type": "object",
+                        "properties": {
+                          "issues.id": { "type": "string" }
+                        },
+                        "required": ["issues.id"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": ["branch", "metadata"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["id", "label", "patch"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["items"],
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "contributes": {
+    "newWorkspaceItems": [
+      {
+        "id": "issue",
+        "title": "Issue",
+        "titleTranslations": { "es": "Incidencia", "zh-CN": "工单" },
+        "description": "Use an issue to suggest a branch name.",
+        "descriptionTranslations": {
+          "es": "Usa una incidencia para sugerir un nombre de rama.",
+          "zh-CN": "根据工单建议分支名。"
+        },
+        "control": {
+          "kind": "combobox",
+          "searchMethod": "search-issues",
+          "placeholder": "Search by issue ID or title",
+          "placeholderTranslations": {
+            "es": "Busca por ID o título",
+            "zh-CN": "按工单 ID 或标题搜索"
+          }
+        }
+      },
+      {
+        "id": "draft",
+        "title": "Mark as draft",
+        "titleTranslations": {
+          "es": "Marcar como borrador",
+          "zh-CN": "标记为草稿"
+        },
+        "target": "worktree",
+        "control": {
+          "kind": "toggle",
+          "defaultValue": false,
+          "enabledPatch": { "metadata": { "issues.draft": true } },
+          "disabledPatch": { "metadata": { "issues.draft": null } }
+        }
+      }
+    ]
+  }
+}

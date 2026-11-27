@@ -70,6 +70,14 @@ import type {
   FolderLinkStatus,
 } from "@/lib/types"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import {
+  PluginNewWorkspaceItems,
+  type PluginMetadataMap,
+} from "@/components/plugins/plugin-new-workspace-items"
+import {
+  applyNewWorkspacePatch,
+  type NewWorkspacePatch,
+} from "@/lib/host-plugins"
 
 type View = "pick-root" | "links" | "add-targets"
 
@@ -111,6 +119,8 @@ export function WorkspaceFolderDialog({
     folder ?? null
   )
   const [rootPath, setRootPath] = useState("")
+  const [pluginMetadata, setPluginMetadata] = useState<PluginMetadataMap>({})
+  const [pluginResetNonce, setPluginResetNonce] = useState(0)
   const [browserBusy, setBrowserBusy] = useState(false)
   const [openingRoot, setOpeningRoot] = useState(false)
   const rootBrowserRef = useRef<DirectoryBrowserHandle>(null)
@@ -149,6 +159,8 @@ export function WorkspaceFolderDialog({
     setView(folder ? "links" : "pick-root")
     setRootFolder(folder ?? null)
     setRootPath(folder?.path ?? "")
+    setPluginMetadata({})
+    setPluginResetNonce((prev) => prev + 1)
     setTargetPath("")
     setPickedTargets([])
     setPending([])
@@ -177,6 +189,48 @@ export function WorkspaceFolderDialog({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- kicks off an async links fetch (flips the loading flag first)
     void refreshLinks(rootFolder.id)
   }, [open, rootFolder, refreshLinks])
+
+  const handleApplyPluginPatch = useCallback(
+    (pluginId: string, patch: NewWorkspacePatch) => {
+      if ("rootPath" in patch && patch.rootPath !== undefined) {
+        setRootPath(patch.rootPath === null ? "" : patch.rootPath)
+      }
+      if (patch.metadata && Object.keys(patch.metadata).length > 0) {
+        setPluginMetadata((prev) => {
+          const next = applyNewWorkspacePatch(
+            { metadata: prev[pluginId] ?? {} },
+            { metadata: patch.metadata }
+          )
+          if (Object.keys(next.metadata).length === 0) {
+            if (!(pluginId in prev)) return prev
+            const rest = { ...prev }
+            delete rest[pluginId]
+            return rest
+          }
+          return { ...prev, [pluginId]: next.metadata }
+        })
+      }
+    },
+    []
+  )
+
+  const handlePrunePlugins = useCallback(
+    (activePluginIds: ReadonlySet<string>) => {
+      setPluginMetadata((prev) => {
+        let changed = false
+        const next: PluginMetadataMap = {}
+        for (const [pluginId, value] of Object.entries(prev)) {
+          if (activePluginIds.has(pluginId)) {
+            next[pluginId] = value
+          } else {
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
+    },
+    []
+  )
 
   // ── Step 1: workspace root ────────────────────────────────────────────────
 
@@ -423,6 +477,17 @@ export function WorkspaceFolderDialog({
                 ) : null
               }
             />
+            {open && (
+              <PluginNewWorkspaceItems
+                target="workspace"
+                folderPath={rootPath || undefined}
+                metadataByPlugin={pluginMetadata}
+                onApplyPatch={handleApplyPluginPatch}
+                onPrunePlugins={handlePrunePlugins}
+                disabled={openingRoot || browserBusy}
+                resetKey={`workspace:${pluginResetNonce}`}
+              />
+            )}
             <DialogFooter>
               <Button
                 variant="outline"

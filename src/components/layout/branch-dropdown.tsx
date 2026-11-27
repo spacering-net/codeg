@@ -48,6 +48,14 @@ import {
 } from "@/lib/api"
 import { subscribe } from "@/lib/platform"
 import { DirectoryPathInput } from "@/components/shared/directory-path-input"
+import {
+  PluginNewWorkspaceItems,
+  type PluginMetadataMap,
+} from "@/components/plugins/plugin-new-workspace-items"
+import {
+  applyNewWorkspacePatch,
+  type NewWorkspacePatch,
+} from "@/lib/host-plugins"
 import { useSwitchToBranch } from "@/hooks/use-switch-to-branch"
 import {
   buildBranchTree,
@@ -195,6 +203,10 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
   const [worktreeOpen, setWorktreeOpen] = useState(false)
   const [worktreeBranchName, setWorktreeBranchName] = useState("")
   const [worktreePath, setWorktreePath] = useState("")
+  const [worktreeBaseRef, setWorktreeBaseRef] = useState("")
+  const [worktreePluginMetadata, setWorktreePluginMetadata] =
+    useState<PluginMetadataMap>({})
+  const [worktreeSessionNonce, setWorktreeSessionNonce] = useState(0)
 
   // Task running, credential retry, pull/fetch/window openers and the
   // conflict/stash dialogs all live in the shared hook, so the aux-panel git
@@ -395,8 +407,67 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
     setWorktreePath(
       siblingFsPath(folderPath, `${folderName}-${currentBranch}-${random}`)
     )
+    setWorktreeBaseRef(currentBranch)
+    setWorktreePluginMetadata({})
+    setWorktreeSessionNonce((prev) => prev + 1)
     setWorktreeOpen(true)
   }
+
+  const handleWorktreeOpenChange = useCallback((nextOpen: boolean) => {
+    setWorktreeOpen(nextOpen)
+    if (!nextOpen) {
+      setWorktreePluginMetadata({})
+      setWorktreeBaseRef("")
+    }
+  }, [])
+
+  const handleApplyWorktreePluginPatch = useCallback(
+    (pluginId: string, patch: NewWorkspacePatch) => {
+      if ("branch" in patch && patch.branch !== undefined) {
+        setWorktreeBranchName(patch.branch === null ? "" : patch.branch)
+      }
+      if ("rootPath" in patch && patch.rootPath !== undefined) {
+        setWorktreePath(patch.rootPath === null ? "" : patch.rootPath)
+      }
+      if ("baseRef" in patch && patch.baseRef !== undefined) {
+        setWorktreeBaseRef(patch.baseRef === null ? "" : patch.baseRef)
+      }
+      if (patch.metadata && Object.keys(patch.metadata).length > 0) {
+        setWorktreePluginMetadata((prev) => {
+          const next = applyNewWorkspacePatch(
+            { metadata: prev[pluginId] ?? {} },
+            { metadata: patch.metadata }
+          )
+          if (Object.keys(next.metadata).length === 0) {
+            if (!(pluginId in prev)) return prev
+            const rest = { ...prev }
+            delete rest[pluginId]
+            return rest
+          }
+          return { ...prev, [pluginId]: next.metadata }
+        })
+      }
+    },
+    []
+  )
+
+  const handlePruneWorktreePlugins = useCallback(
+    (activePluginIds: ReadonlySet<string>) => {
+      setWorktreePluginMetadata((prev) => {
+        let changed = false
+        const next: PluginMetadataMap = {}
+        for (const [pluginId, value] of Object.entries(prev)) {
+          if (activePluginIds.has(pluginId)) {
+            next[pluginId] = value
+          } else {
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
+    },
+    []
+  )
 
   async function handleNewWorktree() {
     const name = worktreeBranchName.trim()
@@ -807,12 +878,14 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={worktreeOpen} onOpenChange={setWorktreeOpen}>
+      <Dialog open={worktreeOpen} onOpenChange={handleWorktreeOpenChange}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{t("dialogs.newWorktreeTitle")}</DialogTitle>
             <DialogDescription>
-              {t("dialogs.newWorktreeDescription", { branch: branch ?? "-" })}
+              {t("dialogs.newWorktreeDescription", {
+                branch: worktreeBaseRef || branch || "-",
+              })}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -840,9 +913,25 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
                 onValueChange={setWorktreePath}
               />
             </div>
+            {worktreeOpen && (
+              <PluginNewWorkspaceItems
+                target="worktree"
+                folderPath={folderPath}
+                baseRef={worktreeBaseRef || undefined}
+                branch={worktreeBranchName || undefined}
+                metadataByPlugin={worktreePluginMetadata}
+                onApplyPatch={handleApplyWorktreePluginPatch}
+                onPrunePlugins={handlePruneWorktreePlugins}
+                disabled={loading}
+                resetKey={`${folderId}:${folderPath}:${worktreeSessionNonce}`}
+              />
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setWorktreeOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => handleWorktreeOpenChange(false)}
+            >
               {tCommon("cancel")}
             </Button>
             <Button
