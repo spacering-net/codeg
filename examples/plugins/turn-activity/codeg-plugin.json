@@ -1,0 +1,21 @@
+{
+  "apiVersion": 1,
+  "id": "codeg.turn-activity",
+  "name": "Turn Activity",
+  "version": "1.0.0",
+  "contributes": {
+    "workspacePanels": [
+      { "id": "activity", "title": "Turn Activity", "view": "turnActivity" }
+    ],
+    "commands": [
+      {
+        "id": "open-activity",
+        "title": "Open Turn Activity",
+        "action": { "type": "openWorkspacePanel", "panelId": "activity" }
+      }
+    ],
+    "hooks": [
+      { "event": "session.turnCompleted", "action": "recordTurnActivity" }
+    ]
+  }
+}
