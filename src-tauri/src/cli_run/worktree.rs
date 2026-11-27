@@ -9,6 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::host_plugins::lifecycle::{Event as PluginEvent, Worktree, WorktreeOrigin};
+use crate::web::event_bridge::EventEmitter;
+
 use super::service::CliError;
 use super::wire::WorktreeInfo;
 
@@ -33,6 +36,17 @@ impl RunWorktree {
             path: self.root.to_string_lossy().into_owned(),
             branch: self.branch.clone(),
         }
+    }
+
+    pub(super) fn observe(&self, emitter: &EventEmitter, event: PluginEvent) {
+        Worktree {
+            folder_id: None,
+            repository_path: &self.repository.to_string_lossy(),
+            path: &self.root.to_string_lossy(),
+            branch: Some(&self.branch),
+            origin: WorktreeOrigin::Cli,
+        }
+        .observe(emitter, event);
     }
 }
 
@@ -69,7 +83,12 @@ pub fn check_name(name: &str) -> Result<(), String> {
 /// that fails there — a hook that refuses, say — takes away only what is
 /// provably its own (`undo`), never what another run or another program made
 /// under the same names.
-pub async fn create(workspace: &str, name: &str, run_id: &str) -> Result<RunWorktree, CliError> {
+pub async fn create(
+    workspace: &str,
+    name: &str,
+    run_id: &str,
+    emitter: Option<&EventEmitter>,
+) -> Result<RunWorktree, CliError> {
     if !name.is_empty() {
         check_name(name).map_err(|m| CliError::usage("bad_worktree_name", m))?;
     }
@@ -108,7 +127,23 @@ pub async fn create(workspace: &str, name: &str, run_id: &str) -> Result<RunWork
     let mut first_error = None;
     for label in [base, retry] {
         let branch = format!("cli/{label}");
-        let root = parent.join(format!("{repo_name}-cli-{label}"));
+        let mut root = parent.join(format!("{repo_name}-cli-{label}"));
+        if let Some(emitter) = emitter {
+            let requested = root.to_string_lossy();
+            let destination = Worktree {
+                folder_id: None,
+                repository_path: &top,
+                path: &requested,
+                branch: Some(&branch),
+                origin: WorktreeOrigin::Cli,
+            }
+            .destination(emitter)
+            .await
+            .map_err(|error| CliError::execution("worktree_failed", error.to_string()))?;
+            if destination != requested {
+                root = PathBuf::from(destination);
+            }
+        }
         match attempt(&repository, &root, &branch, run_id).await {
             Ok(()) => {
                 let workspace = in_worktree(&root, &prefix);
@@ -149,6 +184,9 @@ pub async fn create(workspace: &str, name: &str, run_id: &str) -> Result<RunWork
 /// One try at a worktree at `root` on a new `branch`; on failure, nothing
 /// this try claimed is left.
 async fn attempt(repository: &Path, root: &Path, branch: &str, run_id: &str) -> Result<(), String> {
+    if let Some(parent) = root.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
     // The directory: created empty, which fails if anything is there.
     std::fs::create_dir(root).map_err(|e| format!("{}: {e}", root.display()))?;
     // The branch, from what is checked out: creating a ref that exists fails.
@@ -342,28 +380,21 @@ async fn git(dir: &Path, args: &[&str]) -> Result<(), String> {
 }
 
 /// Take away a worktree no run used: its checkout, then its branch. Best
-/// effort; what is left is logged.
-pub async fn remove(worktree: &RunWorktree) {
-    let root = worktree.root.to_string_lossy().into_owned();
-    for args in [
-        vec!["worktree", "remove", "--force", root.as_str()],
-        vec!["branch", "-D", worktree.branch.as_str()],
-    ] {
-        let done = crate::process::tokio_command("git")
-            .args(&args)
-            .current_dir(&worktree.repository)
-            .output()
-            .await;
-        match done {
-            Ok(out) if out.status.success() => {}
-            Ok(out) => tracing::warn!(
-                "[cli] could not undo the unused worktree {root} (git {}): {}",
-                args.join(" "),
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
-            Err(e) => tracing::warn!("[cli] could not undo the unused worktree {root}: {e}"),
-        }
+/// effort; returns whether Git removed the checkout.
+pub async fn remove(worktree: &RunWorktree) -> bool {
+    let root = worktree.root.to_string_lossy();
+    let checkout = git(
+        &worktree.repository,
+        &["worktree", "remove", "--force", &root],
+    )
+    .await;
+    if let Err(e) = &checkout {
+        tracing::warn!("[cli] could not remove the unused worktree {root}: {e}");
     }
+    if let Err(e) = git(&worktree.repository, &["branch", "-D", &worktree.branch]).await {
+        tracing::warn!("[cli] could not delete the branch of unused worktree {root}: {e}");
+    }
+    checkout.is_ok()
 }
 
 /// The top of the repository `workspace` is in, and the workspace's path
@@ -468,7 +499,9 @@ mod tests {
     async fn a_worktree_is_made_next_to_the_repository_on_its_own_branch() {
         let (outer, repo) = repository();
         let run_id = "8d0c7c2e-3f0b-4a5e-9c1b-6f2d1e0a7b44";
-        let made = create(&repo.to_string_lossy(), "", run_id).await.unwrap();
+        let made = create(&repo.to_string_lossy(), "", run_id, None)
+            .await
+            .unwrap();
         assert_eq!(made.branch, "cli/8d0c7c2e");
         let root = std::fs::canonicalize(&made.root).unwrap();
         let expected = std::fs::canonicalize(outer.path())
@@ -482,18 +515,20 @@ mod tests {
         assert_eq!(listed.locked, None, "its setting-up lock is lifted");
 
         // The same name again: taken, so the next one has more of the id.
-        let again = create(&repo.to_string_lossy(), "", run_id).await.unwrap();
+        let again = create(&repo.to_string_lossy(), "", run_id, None)
+            .await
+            .unwrap();
         assert_eq!(again.branch, "cli/8d0c7c2e-3f0b4a");
         assert_ne!(again.root, made.root);
 
         // A name of one's own, from a subdirectory: the same subdirectory.
-        let named = create(&repo.join("sub").to_string_lossy(), "review", run_id)
+        let named = create(&repo.join("sub").to_string_lossy(), "review", run_id, None)
             .await
             .unwrap();
         assert_eq!(named.branch, "cli/review");
         assert!(named.workspace.ends_with("sub"), "{}", named.workspace);
         assert!(Path::new(&named.workspace).join("file").is_file());
-        let named_again = create(&repo.to_string_lossy(), "review", run_id)
+        let named_again = create(&repo.to_string_lossy(), "review", run_id, None)
             .await
             .unwrap();
         assert_eq!(named_again.branch, "cli/review-8d0c7c");
@@ -510,14 +545,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plugin_placement_preserves_the_requested_subdirectory_and_cleanup() {
+        use crate::host_plugins::{source::Registry, Mutation};
+
+        let (outer, repo) = repository();
+        let source = outer.path().join("plugin");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(
+            source.join("codeg-plugin.json"),
+            r#"{
+                "apiVersion": 2, "id": "test.cli-placement", "name": "CLI placement",
+                "version": "1.0.0", "server": { "entry": "place.mjs", "methods": [] },
+                "contributes": { "lifecycleHooks": [
+                    { "event": "worktree.create.before", "method": "place" }
+                ] }
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            source.join("place.mjs"),
+            r#"export const handle = (_, input) => ({ path: input.path + "-placed" })"#,
+        )
+        .unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let state = crate::app_state::AppState::new_for_test(db, data.path().to_owned());
+        let preview = state
+            .host_plugins
+            .preview_install(source.to_str().unwrap(), Registry::Npm, None)
+            .await
+            .unwrap();
+        let preview = serde_json::to_value(preview).unwrap();
+        let ticket = preview["ticket"].as_str().unwrap().parse().unwrap();
+        state.host_plugins.confirm_install(ticket).unwrap();
+        state
+            .host_plugins
+            .apply(Mutation::SetEnabled {
+                id: "test.cli-placement".into(),
+                enabled: true,
+            })
+            .unwrap();
+
+        let made = create(
+            &repo.join("sub").to_string_lossy(),
+            "review",
+            "8d0c7c2e-3f0b-4a5e-9c1b-6f2d1e0a7b44",
+            Some(&state.emitter),
+        )
+        .await
+        .unwrap();
+
+        assert!(made.root.ends_with("repo-cli-review-placed"));
+        assert_eq!(Path::new(&made.workspace), made.root.join("sub"));
+        assert!(made.root.join("sub/file").is_file());
+        assert!(!outer.path().join("repo-cli-review").exists());
+        assert!(remove(&made).await);
+        assert!(!made.root.exists());
+    }
+
+    #[tokio::test]
     async fn outside_a_repository_there_is_no_worktree_to_make() {
         let plain = tempfile::tempdir().unwrap();
-        let err = create(&plain.path().to_string_lossy(), "", "8d0c7c2e")
+        let err = create(&plain.path().to_string_lossy(), "", "8d0c7c2e", None)
             .await
             .unwrap_err();
         assert_eq!(err.body.error.code, "not_a_git_repository");
         assert_eq!(err.status, 400);
-        let err = create(&plain.path().to_string_lossy(), "../x", "8d0c7c2e")
+        let err = create(&plain.path().to_string_lossy(), "../x", "8d0c7c2e", None)
             .await
             .unwrap_err();
         assert_eq!(err.body.error.code, "bad_worktree_name");
@@ -534,7 +628,7 @@ mod tests {
         std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
         std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let err = create(&repo.to_string_lossy(), "hooked", "8d0c7c2e-3f0b")
+        let err = create(&repo.to_string_lossy(), "hooked", "8d0c7c2e-3f0b", None)
             .await
             .unwrap_err();
         assert_eq!(err.body.error.code, "worktree_failed");
@@ -561,7 +655,7 @@ mod tests {
     async fn a_branch_made_elsewhere_under_the_name_is_left_alone() {
         let (outer, repo) = repository();
         super::test_support::git(&repo, &["branch", "cli/taken"]);
-        let made = create(&repo.to_string_lossy(), "taken", "8d0c7c2e-3f0b")
+        let made = create(&repo.to_string_lossy(), "taken", "8d0c7c2e-3f0b", None)
             .await
             .unwrap();
         assert_eq!(made.branch, "cli/taken-8d0c7c");
@@ -694,7 +788,7 @@ mod tests {
         let (outer, repo) = repository();
         let untracked = repo.join("new");
         std::fs::create_dir_all(&untracked).unwrap();
-        let err = create(&untracked.to_string_lossy(), "x", "8d0c7c2e")
+        let err = create(&untracked.to_string_lossy(), "x", "8d0c7c2e", None)
             .await
             .unwrap_err();
         assert_eq!(err.body.error.code, "workspace_not_in_worktree");

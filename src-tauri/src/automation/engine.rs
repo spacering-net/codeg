@@ -31,11 +31,12 @@ use crate::commands::acp::{build_session_runtime_env, verify_agent_installed};
 use crate::commands::conversations::{create_conversation_core, emit_conversation_upsert};
 use crate::commands::folders::{
     emit_folder_upsert, get_folder_core, git_checkout, git_is_clean, git_list_branches,
-    git_worktree_add, open_worktree_folder_core, resolve_worktree_folder_core,
+    git_worktree_add_core, open_worktree_folder_core, resolve_worktree_folder_core,
 };
 use crate::db::entities::conversation::{self, ConversationStatus};
 use crate::db::service::{automation_service, conversation_service};
 use crate::db::AppDatabase;
+use crate::host_plugins::lifecycle::{Event as PluginEvent, Worktree, WorktreeOrigin};
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
 use crate::models::{
     AgentType, AutomationConfig, AutomationInfo, AutomationRunStatus, IsolationMode,
@@ -656,24 +657,49 @@ impl AutomationEngine {
                     name => name,
                 };
                 let dir = format!("{}-automation-{}-run-{}", repo_name, auto.id, run_id);
-                let mut wt_path = sibling_path(&root.path, &dir);
+                let requested_path = sibling_path(&root.path, &dir);
+                let plan = Worktree {
+                    folder_id: Some(root_folder_id),
+                    repository_path: &root.path,
+                    path: &requested_path,
+                    branch: Some(&branch),
+                    origin: WorktreeOrigin::Automation,
+                };
+                let mut wt_path = plan
+                    .destination(&self.emitter)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let mut branch_used = branch.clone();
 
                 // Retry once with a short suffix if a leftover collides (a prior
                 // attempt for this run id that failed before cleanup).
-                if let Err(e) =
-                    git_worktree_add(root.path.clone(), branch.clone(), wt_path.clone(), None).await
-                {
+                if let Err(e) = git_worktree_add_core(&root.path, &branch, &wt_path, None).await {
                     let suffix = short_suffix(run_id);
-                    let branch2 = format!("{branch}-{suffix}");
-                    wt_path = sibling_path(&root.path, &format!("{dir}-{suffix}"));
-                    git_worktree_add(root.path.clone(), branch2, wt_path.clone(), None)
+                    branch_used = format!("{branch}-{suffix}");
+                    let retry_path = sibling_path(&root.path, &format!("{dir}-{suffix}"));
+                    wt_path = Worktree {
+                        path: &retry_path,
+                        branch: Some(&branch_used),
+                        ..plan
+                    }
+                    .destination(&self.emitter)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    git_worktree_add_core(&root.path, &branch_used, &wt_path, None)
                         .await
                         .map_err(|_| format!("worktree add failed: {e}"))?;
                 }
 
-                let wt = open_worktree_folder_core(&self.db, wt_path, root_folder_id)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                Worktree {
+                    path: &wt_path,
+                    branch: Some(&branch_used),
+                    ..plan
+                }
+                .observe(&self.emitter, PluginEvent::WorktreeCreated);
+                let wt =
+                    open_worktree_folder_core(&self.emitter, &self.db, wt_path, root_folder_id)
+                        .await
+                        .map_err(|e| e.to_string())?;
                 Ok(ResolvedCwd {
                     folder_id: wt.id,
                     working_dir: wt.path,

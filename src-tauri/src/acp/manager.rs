@@ -5754,13 +5754,13 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         // folder_id must be None too — the manager's create-new-row branch
         // requires folder_id, which we resolve from the child's working_dir
         // via folder_service. Do that lookup here so the trait stays small.
-        let working_dir_pathbuf = {
+        let (working_dir_pathbuf, emitter) = {
             let conns = self.manager.connections.lock().await;
             let conn = conns
                 .get(conn_id)
                 .ok_or_else(|| SpawnerError::Send(format!("child {conn_id} not found")))?;
             let s = conn.state.read().await;
-            s.working_dir.clone()
+            (s.working_dir.clone(), conn.emitter.clone())
         };
         let folder_path = working_dir_pathbuf
             .ok_or_else(|| {
@@ -5770,16 +5770,15 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
             })?
             .to_string_lossy()
             .to_string();
-        // `ensure_folder_for_path`, NOT `add_folder`: the row exists to carry the
-        // child's `folder_id` and to resolve its cwd on resume, and neither of
-        // those reads `is_open`. Opening it would turn whatever `working_dir` the
-        // agent picked — a PR checkout under /tmp, a throwaway worktree — into a
-        // top-level project in the user's sidebar, and would silently reopen a
-        // folder the user had closed.
-        let folder =
-            crate::db::service::folder_service::ensure_folder_for_path(&self.db.conn, &folder_path)
-                .await
-                .map_err(|e| SpawnerError::Send(format!("ensure_folder_for_path: {e}")))?;
+        // The closed row carries the child's folder ID and its cwd on resume.
+        let folder = crate::commands::folders::register_closed_workspace_with_plugins(
+            &emitter,
+            &self.db,
+            &folder_path,
+            None,
+        )
+        .await
+        .map_err(|e| SpawnerError::Send(format!("register child workspace: {e}")))?;
 
         let result = self
             .manager

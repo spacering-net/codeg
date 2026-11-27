@@ -1,0 +1,23 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.workspace-lifecycle",
+  "name": "Workspace Lifecycle",
+  "version": "1.3.0",
+  "server": { "entry": "workspace.mjs", "methods": [] },
+  "client": { "entry": "events.html" },
+  "contributes": {
+    "settingsPanel": { "id": "events", "title": "Workspace Events" },
+    "lifecycleHooks": [
+      { "event": "workspace.open.before", "method": "before-open" },
+      { "event": "workspace.open.after", "method": "after-open" },
+      { "event": "workspace.close.after", "method": "after-close" },
+      { "event": "workspace.create.before", "method": "before-create" },
+      { "event": "workspace.create.after", "method": "after-create" },
+      { "event": "workspace.archive.after", "method": "after-archive" },
+      { "event": "worktree.create.before", "method": "before-worktree" },
+      { "event": "worktree.create.after", "method": "worktree-created" },
+      { "event": "worktree.archive.after", "method": "worktree-archived" },
+      { "event": "session.turn.completed", "method": "turn-completed" }
+    ]
+  }
+}
