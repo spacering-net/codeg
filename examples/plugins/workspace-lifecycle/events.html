@@ -1,0 +1,33 @@
+<style>
+  :root {
+    color-scheme: light dark;
+    font: 14px system-ui;
+  }
+  li {
+    overflow-wrap: anywhere;
+  }
+</style>
+<p id="status" role="status">Connecting…</p>
+<ol id="events"></ol>
+<script>
+  window.codeg.ready.then(() => {
+    document.getElementById("status").textContent =
+      "Listening for workspace, worktree, and turn events."
+    const events = document.getElementById("events")
+    window.codeg.events.subscribe((event) => {
+      if (!("data" in event)) return
+      const { event: name, data } = event
+      const row = document.createElement("li")
+      const details = [name]
+      if (data && typeof data === "object" && !Array.isArray(data)) {
+        const { folderId, path, stopReason } = data
+        if (typeof folderId === "number") details.push(`folder #${folderId}`)
+        if (typeof path === "string") details.push(path)
+        if (typeof stopReason === "string") details.push(stopReason)
+      }
+      row.textContent = details.filter(Boolean).join(" · ")
+      events.prepend(row)
+      if (events.children.length > 20) events.lastElementChild.remove()
+    })
+  })
+</script>

@@ -1,0 +1,62 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.metrics-provider",
+  "name": "Workspace Metrics Provider",
+  "nameTranslations": {
+    "es": "Proveedor de métricas del espacio",
+    "zh-CN": "工作区指标提供方"
+  },
+  "version": "1.0.0",
+  "services": {
+    "provides": [
+      {
+        "name": "workspace.metrics",
+        "version": 1,
+        "methods": ["summarize"],
+        "description": "Calculate a weighted metric for a workspace.",
+        "descriptionTranslations": {
+          "es": "Calcula una métrica ponderada para un espacio.",
+          "zh-CN": "计算工作区的加权指标。"
+        }
+      }
+    ]
+  },
+  "settings": {
+    "version": 1,
+    "defaults": { "weight": 2 },
+    "schema": {
+      "type": "object",
+      "properties": {
+        "weight": { "type": "integer", "minimum": 1, "maximum": 10 }
+      },
+      "required": ["weight"],
+      "additionalProperties": false
+    }
+  },
+  "server": {
+    "entry": "metrics.mjs",
+    "methods": ["summarize"],
+    "rpc": {
+      "summarize": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "fileCount": { "type": "integer", "minimum": 0, "maximum": 10000 }
+          },
+          "required": ["fileCount"],
+          "additionalProperties": false
+        },
+        "output": {
+          "type": "object",
+          "properties": {
+            "fileCount": { "type": "integer", "minimum": 0 },
+            "score": { "type": "integer", "minimum": 0 }
+          },
+          "required": ["fileCount", "score"],
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "contributes": {}
+}

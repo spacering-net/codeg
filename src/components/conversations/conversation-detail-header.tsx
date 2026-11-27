@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useCallback, useState } from "react"
+import { memo, useCallback, useMemo, useState } from "react"
 import {
   ChevronRight,
   Circle,
@@ -63,7 +63,9 @@ import {
 } from "./active-session-details"
 import { SessionDetailsDialog } from "./session-details-dialog"
 import { ConversationHeaderTags } from "./conversation-tag-picker"
+import { HostPluginSlot } from "@/components/host-plugin-slot"
 import { useIsMobile } from "@/hooks/use-mobile"
+import type { HostPluginSessionContext } from "@/lib/host-plugins"
 
 interface ConversationDetailHeaderProps {
   tabId: string
@@ -147,6 +149,19 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
       ? null
       : (s.conversations.find((c) => c.id === conversationId)?.git_branch ??
         null)
+  )
+  const folderKind = useAppWorkspaceStore((s) =>
+    folderId > 0
+      ? s.allFolders?.find((f) => f.id === folderId)?.kind
+      : undefined
+  )
+  const pluginSessionContext = useMemo<HostPluginSessionContext>(
+    () => ({
+      folderId: folderId > 0 && folderKind !== "chat" ? folderId : null,
+      conversationId,
+      sessionKey: tabId,
+    }),
+    [folderId, folderKind, conversationId, tabId]
   )
   const isMobile = useIsMobile()
 
@@ -265,7 +280,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     // message canvas below it rather than as a frosted chrome band. With a
     // workspace background image on, the tab strip above it is transparent too,
     // so the whole top of the column reveals the canvas.
-    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/50 px-3">
+    <div className="@container flex h-10 shrink-0 items-center gap-2 border-b border-border/50 px-3">
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
         {/* Folder selector — replaces the old folder-name breadcrumb. Switches
             folders for a draft; a static chip for a bound conversation. */}
@@ -297,7 +312,11 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
           </div>
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center">
+      <div className="flex shrink-0 items-center gap-1">
+        <HostPluginSlot
+          slot="sessionHeader"
+          sessionContext={pluginSessionContext}
+        />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button

@@ -169,6 +169,7 @@ export function CustomStyleSection() {
     setCustomStyleSuspended,
     safeStyleRequested,
     customStyleSuppressed,
+    activeTokenOverrides,
   } = useCustomStyle()
   const { themeColor } = useThemeColor()
   const { shortcuts } = useShortcutSettings()
@@ -199,6 +200,7 @@ export function CustomStyleSection() {
     })
     return () => cancelAnimationFrame(frame)
   }, [
+    activeTokenOverrides,
     expanded,
     customTheme,
     isDarkMode,

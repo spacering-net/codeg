@@ -56,6 +56,9 @@ vi.mock("./session-details-dialog", () => ({
 vi.mock("@/components/chat/conversation-context-bar", () => ({
   ConversationHeaderFolderPicker: () => null,
 }))
+vi.mock("@/components/host-plugin-slot", () => ({
+  HostPluginSlot: () => null,
+}))
 
 import { ConversationDetailHeader } from "./conversation-detail-header"
 

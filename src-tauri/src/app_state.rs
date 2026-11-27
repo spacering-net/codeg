@@ -15,6 +15,7 @@ use crate::workspace_transfer::WorkspaceTransferManager;
 
 pub struct AppState {
     pub db: AppDatabase,
+    pub host_plugins: Arc<crate::host_plugins::HostPlugins>,
     pub connection_manager: ConnectionManager,
     pub terminal_manager: TerminalManager,
     pub event_broadcaster: Arc<WebEventBroadcaster>,
@@ -250,7 +251,14 @@ impl AppState {
         let broadcaster = Arc::new(WebEventBroadcaster::new());
         let metrics = Arc::new(EventBusMetrics::default());
         let acp_event_bus = Arc::new(InternalEventBus::new(metrics));
-        let emitter = EventEmitter::web_only(broadcaster.clone(), acp_event_bus.clone());
+        let host_plugins = Arc::new(crate::host_plugins::HostPlugins::with_database(
+            &data_dir, &db,
+        ));
+        let emitter = EventEmitter::web_only(
+            broadcaster.clone(),
+            acp_event_bus.clone(),
+            Some(host_plugins.clone()),
+        );
 
         let connection_manager = default_connection_manager();
         let cli_runs = crate::cli_run::CliRunService::new(
@@ -275,6 +283,7 @@ impl AppState {
         ) = build_delegation_stack(&connection_manager, db.conn.clone(), data_dir.clone());
 
         Self {
+            host_plugins,
             db,
             connection_manager,
             terminal_manager: default_terminal_manager(),

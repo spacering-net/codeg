@@ -1,0 +1,67 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.metrics-consumer",
+  "name": "Workspace Metrics",
+  "nameTranslations": {
+    "es": "Métricas del espacio",
+    "zh-CN": "工作区指标"
+  },
+  "version": "1.0.0",
+  "services": {
+    "requires": [{ "service": "workspace.metrics" }]
+  },
+  "events": {
+    "publishes": [
+      {
+        "name": "metrics.summary",
+        "scope": "workspace",
+        "description": "The workspace metrics were refreshed.",
+        "descriptionTranslations": {
+          "es": "Se actualizaron las métricas del espacio.",
+          "zh-CN": "工作区指标已刷新。"
+        },
+        "payloadSchema": {
+          "type": "object",
+          "properties": {
+            "fileCount": { "type": "integer", "minimum": 0 },
+            "score": { "type": "integer", "minimum": 0 }
+          },
+          "required": ["fileCount", "score"],
+          "additionalProperties": false
+        }
+      }
+    ]
+  },
+  "server": {
+    "entry": "consumer.mjs",
+    "methods": ["refresh"],
+    "rpc": {
+      "refresh": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "folderId": { "type": "integer", "minimum": 1 },
+            "fileCount": { "type": "integer", "minimum": 0, "maximum": 10000 }
+          },
+          "required": ["folderId", "fileCount"],
+          "additionalProperties": false
+        },
+        "output": { "type": "object" }
+      }
+    }
+  },
+  "client": { "entry": "metrics.html" },
+  "contributes": {
+    "workspacePanels": [
+      {
+        "id": "metrics",
+        "title": "Workspace Metrics",
+        "titleTranslations": {
+          "es": "Métricas del espacio",
+          "zh-CN": "工作区指标"
+        },
+        "view": "client"
+      }
+    ]
+  }
+}
