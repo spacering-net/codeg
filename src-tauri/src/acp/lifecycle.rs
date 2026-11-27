@@ -181,6 +181,34 @@ async fn handle_event_with_retry(
     broker: Option<&Arc<DelegationBroker>>,
     known: Option<&ConnHandle>,
 ) {
+    let durable_turn = if matches!(envelope.payload, AcpEvent::TurnComplete { .. }) {
+        match live_or_known(manager, &envelope.connection_id, known).await {
+            Some(((state, _), _)) => state
+                .read()
+                .await
+                .completed_turns
+                .contains_key(&envelope.seq),
+            None => false,
+        }
+    } else {
+        false
+    };
+    if durable_turn {
+        let mut attempts = 0u64;
+        loop {
+            match handle_event(db_conn, manager, envelope, broker, known).await {
+                Ok(()) => return,
+                Err(error) => {
+                    attempts += 1;
+                    if attempts == 1 || attempts.is_multiple_of(30) {
+                        tracing::error!(%error, attempts, connection_id = %envelope.connection_id,
+                            "turn result persistence blocked; retaining frozen result and retrying");
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
     match handle_event(db_conn, manager, envelope, broker, known).await {
         Ok(()) => return,
         Err(e) => {
@@ -423,7 +451,7 @@ pub(crate) async fn handle_event(
             else {
                 return Ok(());
             };
-            let (conversation_id, last_text, claimed) = {
+            let (conversation_id, last_text, claimed, frozen_turn) = {
                 let mut snap = state_arc.write().await;
                 // Re-entrant for this worker: a retry of this same envelope
                 // claims again and goes on. Only a CLI run's fallback that
@@ -431,8 +459,12 @@ pub(crate) async fn handle_event(
                 let claimed = snap.claim_turn_status(envelope.seq, TurnStatusWriter::Lifecycle);
                 (
                     snap.conversation_id,
-                    snap.last_assistant_text.clone(),
+                    snap.completed_turns
+                        .get(&envelope.seq)
+                        .map(|(_, text)| text.clone())
+                        .unwrap_or_else(|| snap.last_assistant_text.clone()),
                     claimed,
+                    snap.completed_turns.get(&envelope.seq).cloned(),
                 )
             };
             // No conversation row bound (defensive — should never happen in
@@ -441,11 +473,23 @@ pub(crate) async fn handle_event(
             let Some(cid) = conversation_id else {
                 return Ok(());
             };
+            if let Some((turn_id, text)) = frozen_turn {
+                crate::db::service::turn_delivery_service::complete(
+                    db_conn,
+                    &turn_id,
+                    stop_reason,
+                    text.as_deref().unwrap_or_default(),
+                )
+                .await?;
+            }
             if !live {
                 if claimed {
                     write_dropped_turn_status(db_conn, &state_arc, &emitter, cid, stop_reason)
                         .await?;
                 }
+                let mut state = state_arc.write().await;
+                state.settled_turn_seq = state.settled_turn_seq.max(envelope.seq);
+                state.completed_turns.remove(&envelope.seq);
                 return Ok(());
             }
             if claimed {
@@ -465,6 +509,9 @@ pub(crate) async fn handle_event(
                 )
                 .await;
             }
+            let mut state = state_arc.write().await;
+            state.settled_turn_seq = state.settled_turn_seq.max(envelope.seq);
+            state.completed_turns.remove(&envelope.seq);
             Ok(())
         }
         AcpEvent::NativeSessionTitle { title } => {
@@ -598,8 +645,17 @@ async fn forward_turn_complete_to_broker(
         );
         return;
     }
-    let agent_type = row.agent_type;
-    let outcome = match stop_reason {
+    let outcome = delegation_turn_outcome(conversation_id, row.agent_type, stop_reason, last_text);
+    broker.complete_call(&call_id, outcome).await;
+}
+
+pub(crate) fn delegation_turn_outcome(
+    conversation_id: i32,
+    agent_type: crate::models::AgentType,
+    stop_reason: &str,
+    last_text: Option<String>,
+) -> DelegationOutcome {
+    match stop_reason {
         "end_turn" => DelegationOutcome::Ok(DelegationSuccess {
             text: last_text.unwrap_or_default(),
             child_conversation_id: conversation_id,
@@ -639,8 +695,7 @@ async fn forward_turn_complete_to_broker(
             DelegationError::ChildUnknown(other.to_string()),
             Some(conversation_id),
         ),
-    };
-    broker.complete_call(&call_id, outcome).await;
+    }
 }
 
 /// Snapshot the connection's `(state, emitter)` into the lifecycle cache when
@@ -4049,6 +4104,74 @@ mod tests {
             .unwrap()
             .expect("conversation row exists")
             .status
+    }
+
+    #[tokio::test]
+    async fn durable_turn_retries_past_legacy_limit_without_losing_result() {
+        use crate::db::service::{
+            session_message_service as queue, turn_delivery_service as delivery,
+        };
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder = test_helpers::seed_folder(&db, "/tmp/persistent-turn-retry").await;
+        let parent = test_helpers::seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let child = test_helpers::seed_conversation(&db, folder, AgentType::Codex).await;
+        let input_id = queue::enqueue(&db.conn, parent, child, "task".into(), "queue".into(), true)
+            .await
+            .unwrap();
+        let input = queue::queued(&db.conn).await.unwrap().remove(0);
+        queue::claim(&db.conn, &input, true).await.unwrap();
+        let turn = delivery::begin(&db.conn, child, Some(&input_id), None)
+            .await
+            .unwrap();
+        let manager = Arc::new(ConnectionManager::new());
+        let connection = fake_connection_with_state("durable", Some(child));
+        let state = connection.state.clone();
+        state
+            .write()
+            .await
+            .completed_turns
+            .insert(1, (turn, Some("frozen answer".into())));
+        manager
+            .connections
+            .lock()
+            .await
+            .insert("durable".into(), connection);
+        db.conn.execute(Statement::from_string(DbBackend::Sqlite,
+            "CREATE TRIGGER block_delivery BEFORE INSERT ON session_message BEGIN SELECT RAISE(ABORT, 'temporary failure'); END".to_owned())).await.unwrap();
+        let task_db = db.conn.clone();
+        let task_manager = manager.clone();
+        let task = tokio::spawn(async move {
+            let envelope = EventEnvelope {
+                seq: 1,
+                connection_id: "durable".into(),
+                payload: AcpEvent::TurnComplete {
+                    session_id: "s".into(),
+                    stop_reason: "end_turn".into(),
+                    agent_type: "codex".into(),
+                },
+            };
+            handle_event_with_retry(&task_db, &task_manager, &envelope, None, None).await;
+        });
+        // The former bounded policy has already exhausted its retries here.
+        tokio::time::sleep(Duration::from_millis(3200)).await;
+        assert!(!task.is_finished());
+        assert!(state.read().await.completed_turns.contains_key(&1));
+        db.conn
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "DROP TRIGGER block_delivery".to_owned(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+        let replies = queue::queued(&db.conn).await.unwrap();
+        assert_eq!(replies.len(), 1);
+        assert!(replies[0].message.contains("frozen answer"));
+        assert!(state.read().await.completed_turns.is_empty());
     }
 
     #[tokio::test]

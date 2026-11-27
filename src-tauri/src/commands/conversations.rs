@@ -3027,7 +3027,7 @@ pub async fn create_chat_dir(app: tauri::AppHandle) -> Result<CreateChatDirResul
     Ok(CreateChatDirResult { path })
 }
 
-async fn detect_git_branch(path: &str) -> Option<String> {
+pub(crate) async fn detect_git_branch(path: &str) -> Option<String> {
     let output = crate::process::tokio_command("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(path)

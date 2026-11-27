@@ -1416,6 +1416,7 @@ pub enum ConnectionCommand {
     Steer {
         blocks: Vec<PromptInputBlock>,
         expect_turns_completed: Option<u64>,
+        message_delivery: Option<super::session_messages::SessionMessageDelivery>,
         reply: tokio::sync::oneshot::Sender<Result<SteerOutcome, AcpError>>,
     },
     /// Stop one AIR async task (`_session/async_task/stop`; claude-agent-acp
@@ -2966,6 +2967,11 @@ pub async fn spawn_agent_connection(
         None, // folder_id 由后续 prompt handler 在首次 send 时绑定 (Phase 2)
     );
 
+    initial_state.turn_database = selection
+        .as_ref()
+        .and_then(|selection| selection.db())
+        .cloned();
+
     // Install the SessionStarted dedup signal BEFORE wrapping into Arc so the
     // first event (StatusChanged{Connecting} below) doesn't race with the
     // installer. The receiver is returned to `spawn_agent`, which holds the
@@ -3232,10 +3238,9 @@ pub async fn spawn_agent_connection(
             selection.finalize(&conn_id, &state_clone).await;
         }
 
-        // Revoke the per-launch token + cascade cancel any still-pending
-        // delegations AND questions owned by this parent connection. All are
-        // best-effort: a missing token entry is a no-op, and both
-        // `cancel_by_parent` calls are safe on an empty pending map.
+        // Revoke per-launch access and forget this driver's tool identities.
+        // Delegation tasks and results belong to the conversation and keep
+        // running after an ordinary disconnect; parked questions are declined.
         if let Some(inj) = delegation_for_cleanup {
             let token = {
                 let snap = state_clone.read().await;
@@ -3244,7 +3249,7 @@ pub async fn spawn_agent_connection(
             if let Some(tok) = token {
                 inj.tokens.revoke(&tok).await;
             }
-            inj.broker.cancel_by_parent(&conn_id).await;
+            inj.broker.detach_parent(&conn_id).await;
             // Reclaim a parked `ask_user_question` instead of waiting for the
             // companion's ask socket to close (which a reparented/hard-killed
             // agent may never do); the dropped sender declines the tool cleanly.
@@ -4259,6 +4264,18 @@ fn map_session_config_select_option(
         value: option.value.to_string(),
         name: option.name.clone(),
         description: option.description.clone(),
+        context_window: of_model
+            .then(|| {
+                let meta = option.meta.as_ref()?;
+                ["contextWindow", "context_window", "totalContextTokens"]
+                    .into_iter()
+                    .find_map(|key| {
+                        meta.get(key)
+                            .and_then(|value| value.as_u64())
+                            .filter(|size| *size > 0)
+                    })
+            })
+            .flatten(),
         reasoning_efforts: of_model
             .then(|| air_model_reasoning_efforts(option.meta.as_ref()))
             .flatten(),
@@ -5107,6 +5124,7 @@ fn build_grok_effort_option(
                 .clone()
                 .or_else(|| grok_effort_description(id).map(str::to_string)),
             reasoning_efforts: None,
+            context_window: None,
         })
         .collect();
     if let Some(def) = &spec.default {
@@ -5120,6 +5138,7 @@ fn build_grok_effort_option(
                     // switchable list, so it has no grok description — supply ours.
                     description: grok_effort_description(def).map(str::to_string),
                     reasoning_efforts: None,
+                    context_window: None,
                 },
             );
         }
@@ -5185,6 +5204,7 @@ const GROK_MODELS_UPDATE_METHOD: &str = "_x.ai/models/update";
 /// [`fold_grok_catalog_into_picker`].
 fn parse_grok_model_catalog(params: &serde_json::Value) -> Option<GrokModelCatalog> {
     let entries = params.get("availableModels")?.as_array()?;
+    let specs = parse_grok_model_specs(Some(params));
     let mut models: Vec<SessionConfigSelectOptionInfo> = Vec::new();
     for entry in entries {
         let Some(model_id) = entry
@@ -5207,15 +5227,13 @@ fn parse_grok_model_catalog(params: &serde_json::Value) -> Option<GrokModelCatal
             name: name.to_string(),
             description: None,
             reasoning_efforts: None,
+            context_window: specs.get(model_id).and_then(|spec| spec.context_window),
         });
     }
     if models.is_empty() {
         return None;
     }
-    Some(GrokModelCatalog {
-        models,
-        specs: parse_grok_model_specs(Some(params)),
-    })
+    Some(GrokModelCatalog { models, specs })
 }
 
 /// Fold a catalog broadcast's specs into the session's.
@@ -5339,6 +5357,7 @@ fn kept_select_row(
             name: name(),
             description: description.map(str::to_string),
             reasoning_efforts: None,
+            context_window: None,
         })
 }
 
@@ -5406,6 +5425,7 @@ fn synthesize_grok_config_options(
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
             reasoning_efforts: None,
+            context_window: None,
         });
     }
 
@@ -5417,10 +5437,15 @@ fn synthesize_grok_config_options(
                     name: id.to_string(),
                     description: None,
                     reasoning_efforts: None,
+                    context_window: None,
                 });
             }
             model_current = Some(id.to_string());
         }
+    }
+
+    for model in &mut model_opts {
+        model.context_window = specs.get(&model.value).and_then(|spec| spec.context_window);
     }
 
     let mut result: Vec<SessionConfigOptionInfo> = Vec::new();
@@ -5597,6 +5622,7 @@ fn session_model_state_option(
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
                 reasoning_efforts: None,
+                context_window: None,
             })
         })
         .collect();
@@ -5687,6 +5713,7 @@ fn mode_state_option(
             name: mode.name.clone(),
             description: mode.description.clone(),
             reasoning_efforts: None,
+            context_window: None,
         })
         .collect();
     if options.is_empty() {
@@ -5764,6 +5791,7 @@ fn kiro_thinking_option(reasoning: &KiroReasoning) -> Option<SessionConfigOption
         name: value.to_string(),
         description: None,
         reasoning_efforts: None,
+        context_window: None,
     };
     Some(SessionConfigOptionInfo {
         id: KIRO_THINKING_OPTION_ID.to_string(),
@@ -5809,6 +5837,7 @@ fn kiro_effort_option(reasoning: &KiroReasoning) -> Option<SessionConfigOptionIn
                     name: level.clone(),
                     description: None,
                     reasoning_efforts: None,
+                    context_window: None,
                 })
                 .collect(),
             groups: Vec::new(),
@@ -8519,6 +8548,7 @@ fn is_executable_file(path: &Path) -> bool {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct CompanionFeatureFlags {
     delegation: bool,
+    session_messaging: bool,
     feedback: bool,
     ask: bool,
     sessions: bool,
@@ -8563,6 +8593,9 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     let mut features: Vec<&str> = Vec::new();
     if flags.delegation {
         features.push("delegation");
+    }
+    if flags.session_messaging {
+        features.push("session_messaging");
     }
     if flags.feedback {
         features.push("feedback");
@@ -8689,7 +8722,8 @@ where
     // withholds this group too. The other groups stay: they surface codeg's own
     // state (feedback, ask, session info, task reporting), not arbitrary file
     // or command execution on the user's machine.
-    let delegation_configured = injection.broker.config_snapshot().await.enabled;
+    let config = injection.broker.config_snapshot().await;
+    let delegation_configured = config.enabled;
     let delegation_enabled = delegation_configured && host_tools.hosts_channels();
     if delegation_configured && !delegation_enabled {
         // The one combination that looks like a bug from the settings UI: the
@@ -8718,6 +8752,7 @@ where
     };
     let flags = CompanionFeatureFlags {
         delegation: delegation_enabled,
+        session_messaging: config.session_messaging_enabled && host_tools.hosts_channels(),
         // The personal agent takes the owner's words only as queued messages
         // its engine delivers; a live-feedback note has no way in, and the
         // tool would only leave empty checks in its replies.
@@ -13007,6 +13042,22 @@ async fn apply_preferred_session_options(
     };
     let never_replayed =
         |config_id: &str| config_option_never_replayed(agent_type, &pinned, config_id);
+    let mode_option = preferred_mode_id.and_then(|mode| {
+        options.iter().find(|option| {
+            is_mode_config_option(option)
+                && !never_replayed(&option.id.to_string())
+                && matches!(option.kind, SessionConfigKind::Select(_))
+                && !config_option_rejects_value(option, mode)
+        })
+    });
+    let mut config_with_mode;
+    let preferred_config_values = if let (Some(option), Some(mode)) = (mode_option, preferred_mode_id) {
+        config_with_mode = preferred_config_values.clone();
+        config_with_mode.entry(option.id.to_string()).or_insert_with(|| mode.to_owned());
+        &config_with_mode
+    } else {
+        preferred_config_values
+    };
     // When the agent's own mode selector is among the saved options, the replay
     // below restores the mode through it, and the saved legacy mode is not sent
     // as well: a row saved before the session followed that selector can hold
@@ -13029,7 +13080,7 @@ async fn apply_preferred_session_options(
                     })
         })
     });
-    if let Some(pref_mode) = preferred_mode_id.filter(|_| !mode_restored_by_option) {
+    if let Some(pref_mode) = preferred_mode_id.filter(|_| !mode_restored_by_option && mode_option.is_none()) {
         let needs_apply = session
             .modes()
             .as_ref()
@@ -15862,6 +15913,31 @@ async fn run_conversation_loop(
                     cancel_grok_agent_turn_asks(delegation_injection, conn_id).await;
                 }
 
+                {
+                    let mut state = state.write().await;
+                    if let Some(turn_id) = state.pending_turn_id.take() {
+                        if let Some(db) = &state.turn_database {
+                            let mut attempts = 0u64;
+                            loop {
+                                match crate::db::service::turn_delivery_service::activate(
+                                    db, &turn_id,
+                                )
+                                .await
+                                {
+                                    Ok(()) => break,
+                                    Err(error) => {
+                                        attempts += 1;
+                                        if attempts == 1 || attempts.is_multiple_of(30) {
+                                            tracing::error!(%error, attempts, "prompt activation blocked on persistence");
+                                        }
+                                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                                    }
+                                }
+                            }
+                        }
+                        state.active_turn_id = Some(turn_id);
+                    }
+                }
                 // The personal agent's reply to this prompt starts with this
                 // prompt's own turn — not at the command, which Grok's turn
                 // closed just above can precede — and in the same critical
@@ -16440,7 +16516,13 @@ async fn run_conversation_loop(
                                     // result. Turn-scoped — the connection is
                                     // still alive.
                                     if let Some(inj) = delegation_injection {
-                                        inj.broker.cancel_by_parent_turn(conn_id).await;
+                                        let parent_conversation_id = {
+                                            let state = state.read().await;
+                                            state.conversation_id.or(state.selection_conversation_id)
+                                        };
+                                        inj.broker
+                                            .cancel_by_parent_turn_for_conversation(conn_id, parent_conversation_id)
+                                            .await;
                                     }
                                     break;
                                 }
@@ -16637,7 +16719,13 @@ async fn run_conversation_loop(
                             // race-double-drain.
                             if reason_str != "end_turn" {
                                 if let Some(inj) = delegation_injection {
-                                    inj.broker.cancel_by_parent_turn(conn_id).await;
+                                    let parent_conversation_id = {
+                                        let state = state.read().await;
+                                        state.conversation_id.or(state.selection_conversation_id)
+                                    };
+                                    inj.broker
+                                        .cancel_by_parent_turn_for_conversation(conn_id, parent_conversation_id)
+                                        .await;
                                 }
                             }
                             break;
@@ -16777,6 +16865,7 @@ async fn run_conversation_loop(
                                 Some(ConnectionCommand::Steer {
                                     blocks,
                                     expect_turns_completed,
+                                    message_delivery,
                                     reply,
                                 }) => {
                                     // Aimed at a turn that is over: the one
@@ -16820,7 +16909,29 @@ async fn run_conversation_loop(
                                     if let Some(inj) = delegation_injection {
                                         inj.questions.cancel_questions_by_parent(conn_id).await;
                                     }
+                                    let delivery_binding = if let Some(message) = message_delivery.as_ref() {
+                                        let turn_id = state.read().await.active_turn_id.clone();
+                                        let Some(turn_id) = turn_id else {
+                                            let _ = reply.send(Err(AcpError::NoActiveTurn));
+                                            continue;
+                                        };
+                                        let previous = match crate::db::service::turn_delivery_service::bind(&message.db, message.message_id, &turn_id).await {
+                                            Ok(previous) => previous,
+                                            Err(error) => {
+                                                let _ = reply.send(Err(AcpError::protocol(error.to_string())));
+                                                continue;
+                                            }
+                                        };
+                                        Some((message.db.clone(), message.message_id, previous))
+                                    } else { None };
                                     let outcome = send_steer_request(&cx, &sid, &blocks).await;
+                                    if !matches!(outcome, Ok(SteerOutcome::Injected)) {
+                                        if let Some((db, message_id, previous)) = delivery_binding {
+                                            if let Err(error) = crate::db::service::turn_delivery_service::unbind(&db, message_id, &previous).await {
+                                                tracing::error!(%error, "could not detach unaccepted session message from turn");
+                                            }
+                                        }
+                                    }
                                     // A steered message still lands in the
                                     // agent's OWN transcript: as a user record
                                     // when it runs as a turn of its own, and as
@@ -16959,7 +17070,13 @@ async fn run_conversation_loop(
                                     // drain-first lock guarantees no double
                                     // DelegationCompleted emit.
                                     if let Some(inj) = delegation_injection {
-                                        inj.broker.cancel_by_parent_turn(conn_id).await;
+                                        let parent_conversation_id = {
+                                            let state = state.read().await;
+                                            state.conversation_id.or(state.selection_conversation_id)
+                                        };
+                                        inj.broker
+                                            .cancel_by_parent_turn_for_conversation(conn_id, parent_conversation_id)
+                                            .await;
                                         // Reclaim any parked `ask_user_question` /
                                         // Grok `exit_plan_mode` approval owned by this
                                         // connection. Unlike `perms` (drained inline
@@ -17251,7 +17368,13 @@ async fn run_conversation_loop(
                 // backgrounds the slow child teardown): see inner Cancel
                 // handler above for rationale.
                 if let Some(inj) = delegation_injection {
-                    inj.broker.cancel_by_parent_turn(conn_id).await;
+                    let parent_conversation_id = {
+                        let state = state.read().await;
+                        state.conversation_id.or(state.selection_conversation_id)
+                    };
+                    inj.broker
+                        .cancel_by_parent_turn_for_conversation(conn_id, parent_conversation_id)
+                        .await;
                 }
                 if closed_agent_turn {
                     cancel_grok_agent_turn_asks(delegation_injection, conn_id).await;
@@ -26210,8 +26333,38 @@ async fn open_grok_agent_turn(
     prompt_id: String,
     cb_state: &mut CodeBuddyLiveState,
 ) {
-    if !state.write().await.begin_agent_initiated_turn() {
-        return;
+    {
+        let mut state = state.write().await;
+        if !state.begin_agent_initiated_turn() {
+            return;
+        }
+        if let (Some(db), Some(conversation_id)) =
+            (state.turn_database.clone(), state.conversation_id)
+        {
+            let mut attempts = 0u64;
+            loop {
+                match crate::db::service::turn_delivery_service::begin(
+                    &db,
+                    conversation_id,
+                    None,
+                    None,
+                )
+                .await
+                {
+                    Ok(turn_id) => {
+                        state.active_turn_id = Some(turn_id);
+                        break;
+                    }
+                    Err(error) => {
+                        attempts += 1;
+                        if attempts == 1 || attempts.is_multiple_of(30) {
+                            tracing::error!(%error, attempts, "agent-initiated turn admission blocked on persistence");
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        }
     }
     // The same one-turn scope a prompt's turn start resets (see there): a
     // prior turn's background sub-agent must not tick into this one.
@@ -40244,6 +40397,7 @@ mod tests {
             name: "Opus".into(),
             description: None,
             reasoning_efforts: None,
+            context_window: None,
         };
         assert_eq!(
             serde_json::to_value(&plain).unwrap(),
@@ -40693,12 +40847,14 @@ mod tests {
                         name: "Thinking: off".to_string(),
                         description: None,
                         reasoning_efforts: None,
+                        context_window: None,
                     },
                     SessionConfigSelectOptionInfo {
                         value: "high".to_string(),
                         name: "Thinking: high".to_string(),
                         description: None,
                         reasoning_efforts: None,
+                        context_window: None,
                     },
                 ],
                 groups: vec![],
@@ -42011,12 +42167,14 @@ mod tests {
                         name: "Grok 4.5".to_string(),
                         description: None,
                         reasoning_efforts: None,
+                        context_window: None,
                     },
                     SessionConfigSelectOptionInfo {
                         value: "grok-composer-2.5-fast".to_string(),
                         name: "Composer 2.5".to_string(),
                         description: None,
                         reasoning_efforts: None,
+                        context_window: None,
                     },
                 ],
                 groups: Vec::new(),
@@ -49128,6 +49286,7 @@ mod tests {
         assert_eq!(
             companion_features_arg(CompanionFeatureFlags {
                 delegation: true,
+                session_messaging: false,
                 feedback: true,
                 ask: true,
                 sessions: true,
@@ -51745,6 +51904,7 @@ mod tests {
             let (reply, outcome) = oneshot::channel();
             self.cmd_tx
                 .send(ConnectionCommand::Steer {
+                    message_delivery: None,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     expect_turns_completed: None,
                     reply,
@@ -53192,6 +53352,7 @@ mod tests {
             let (reply, outcome) = oneshot::channel();
             self.cmd_tx
                 .send(ConnectionCommand::Steer {
+                    message_delivery: None,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     expect_turns_completed: expect,
                     reply,
@@ -53330,6 +53491,7 @@ mod tests {
                             name: "Opus".to_string(),
                             description: None,
                             reasoning_efforts: None,
+                            context_window: None,
                         }],
                         groups: Vec::new(),
                     }),
@@ -55897,5 +56059,42 @@ mod trae_handshake_tests {
                 "{agent_type}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod durable_agent_turn_tests {
+    use super::*;
+    use crate::db::{service::turn_delivery_service as delivery, test_helpers};
+    use sea_orm::EntityTrait;
+
+    #[tokio::test]
+    async fn agent_initiated_continuation_gets_durable_identity_before_streaming() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder = test_helpers::seed_folder(&db, "/tmp/agent-turn-delivery").await;
+        let conversation = test_helpers::seed_conversation(&db, folder, AgentType::Grok).await;
+        let mut initial = SessionState::new(
+            "agent-turn".into(),
+            AgentType::Grok,
+            None,
+            "test".into(),
+            None,
+        );
+        initial.conversation_id = Some(conversation);
+        initial.turn_database = Some(db.conn.clone());
+        let state = Arc::new(RwLock::new(initial));
+        let mut live = CodeBuddyLiveState::default();
+        open_grok_agent_turn(&state, &EventEmitter::Noop, "native-turn".into(), &mut live).await;
+        let turn_id = state.read().await.active_turn_id.clone().unwrap();
+        let saved = crate::db::entities::conversation_turn::Entity::find_by_id(turn_id.clone())
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.conversation_id, conversation);
+        assert_eq!(saved.state, "in_flight");
+        delivery::complete(&db.conn, &turn_id, "end_turn", "background answer")
+            .await
+            .unwrap();
     }
 }

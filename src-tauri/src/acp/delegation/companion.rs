@@ -48,6 +48,7 @@ use crate::acp::chat_authoring::{
     NewAutomationSpec, NewWorkTaskSpec, MAX_PROMPT_CHARS, MAX_TITLE_CHARS,
     MAX_WORK_TASK_ATTACHMENTS,
 };
+use crate::acp::delegation::transport::{client_list_agent_options_round_trip, BrokerListAgentOptionsRequest};
 use crate::acp::delegation::transport::{
     client_ask_round_trip, client_browser_act_round_trip, client_browser_capture_round_trip,
     client_browser_console_round_trip, client_browser_eval_round_trip,
@@ -59,17 +60,18 @@ use crate::acp::delegation::transport::{
     client_computer_verify_round_trip, client_computer_windows_round_trip,
     client_create_automation_round_trip, client_create_work_task_round_trip,
     client_feedback_round_trip, client_list_assistants_round_trip, client_ping,
-    client_result_schema_round_trip, client_resume_task_round_trip, client_round_trip,
-    client_session_round_trip, client_status_round_trip, client_submit_result_round_trip,
-    client_task_complete_round_trip, client_task_progress_round_trip, BrokerAskRequest,
-    BrokerBrowserActRequest, BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest,
-    BrokerBrowserEvalRequest, BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest,
-    BrokerBrowserTabsRequest, BrokerCancelRequest, BrokerCancelTaskRequest,
-    BrokerCommitFeedbackRequest, BrokerComputerActRequest, BrokerComputerAppsRequest,
-    BrokerComputerCaptureRequest, BrokerComputerClipboardRequest, BrokerComputerLaunchRequest,
-    BrokerComputerSnapshotRequest, BrokerComputerVerifyRequest, BrokerComputerWindowsRequest,
-    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
-    BrokerListAssistantsRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
+    client_rename_session_round_trip, client_result_schema_round_trip,
+    client_resume_task_round_trip, client_round_trip, client_session_round_trip,
+    client_status_round_trip, client_submit_result_round_trip, client_task_complete_round_trip,
+    client_task_progress_round_trip, BrokerAskRequest, BrokerBrowserActRequest,
+    BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
+    BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest,
+    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerCommitFeedbackRequest,
+    BrokerComputerActRequest, BrokerComputerAppsRequest, BrokerComputerCaptureRequest,
+    BrokerComputerClipboardRequest, BrokerComputerLaunchRequest, BrokerComputerSnapshotRequest,
+    BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCreateAutomationRequest,
+    BrokerCreateWorkTaskRequest, BrokerFeedbackRequest, BrokerListAssistantsRequest,
+    BrokerRenameSessionRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
     BrokerResumeTaskRequest, BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
     BrokerTaskCompleteRequest, BrokerTaskProgressRequest, ThreadReply,
 };
@@ -162,6 +164,7 @@ pub fn err(id: Value, code: i64, message: impl Into<String>) -> JsonRpcResponse 
 #[derive(Debug, Clone, Copy)]
 pub struct CompanionFeatures {
     pub delegation: bool,
+    pub session_messaging: bool,
     pub feedback: bool,
     pub ask: bool,
     pub sessions: bool,
@@ -232,6 +235,7 @@ impl CompanionFeatures {
         let Some(s) = raw else {
             return Self {
                 delegation: true,
+                session_messaging: false,
                 feedback: false,
                 ask: false,
                 sessions: false,
@@ -249,6 +253,7 @@ impl CompanionFeatures {
         };
         let mut f = Self {
             delegation: false,
+            session_messaging: false,
             feedback: false,
             ask: false,
             sessions: false,
@@ -266,6 +271,7 @@ impl CompanionFeatures {
         for tok in s.split(',').map(str::trim).filter(|t| !t.is_empty()) {
             match tok {
                 "delegation" => f.delegation = true,
+                "session_messaging" => f.session_messaging = true,
                 "feedback" => f.feedback = true,
                 "ask" => f.ask = true,
                 "sessions" => f.sessions = true,
@@ -290,7 +296,7 @@ impl CompanionFeatures {
         match name {
             "check_user_feedback" => self.feedback,
             "ask_user_question" => self.ask,
-            "get_session_info" => self.sessions,
+            "get_session_info" | "rename_session" => self.sessions,
             "task_progress" | "task_complete" => self.tasks,
             "submit_result" => self.result,
             "create_automation" => self.automations,
@@ -366,10 +372,14 @@ impl CompanionFeatures {
             "computer_clipboard_read" | "computer_clipboard_write" => {
                 self.computer && self.computer_clipboard
             }
+            "list_agent_options" => self.delegation || self.session_messaging,
             "delegate_to_agent"
             | "get_delegation_status"
             | "cancel_delegation"
             | "resume_delegation" => self.delegation,
+            "send_to_session" | "create_session" | "get_current_session" | "list_sessions" | "stop_session" => {
+                self.session_messaging
+            }
             _ => false,
         }
     }
@@ -737,11 +747,25 @@ pub async fn dispatch_line(
                 ),
                 None => all,
             };
+            if !ctx.features.session_messaging {
+                if let Some(list) = tools.as_array_mut() {
+                    for tool in list {
+                        if tool["name"] == "delegate_to_agent" {
+                            if let Some(properties) =
+                                tool["inputSchema"]["properties"].as_object_mut()
+                            {
+                                properties.remove("notify_mode");
+                                properties.remove("follow");
+                            }
+                        }
+                    }
+                }
+            }
             if ctx.features.personal_agent {
                 offer_for_on_ask(&mut tools);
             }
             remove_disabled_agents_from_delegate_enum(&mut tools, &ctx.disabled_agents);
-            append_custom_agents_to_delegate_enum(&mut tools, &ctx.custom_agents);
+            append_custom_agents_to_creation_tools(&mut tools, &ctx.custom_agents);
             if ctx.features.allows_tool("delegate_to_agent") {
                 offer_assistants_in_delegate_schema(ctx, &mut tools).await;
             }
@@ -800,24 +824,31 @@ fn remove_disabled_agents_from_delegate_enum(tools: &mut Value, disabled_agents:
 /// schema shape change) leaves the tools untouched rather than erroring —
 /// serving the narrower built-in enum is strictly better than serving no
 /// tools at all.
-fn append_custom_agents_to_delegate_enum(tools: &mut Value, custom_agents: &[String]) {
+fn append_custom_agents_to_creation_tools(tools: &mut Value, custom_agents: &[String]) {
     if custom_agents.is_empty() {
         return;
     }
     let Some(arr) = tools.as_array_mut() else {
         return;
     };
-    let Some(variants) = arr
-        .iter_mut()
-        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("delegate_to_agent"))
-        .and_then(|t| t.pointer_mut("/inputSchema/properties/agent_type/enum"))
-        .and_then(|e| e.as_array_mut())
-    else {
-        return;
-    };
-    for slug in custom_agents {
-        if !variants.iter().any(|v| v.as_str() == Some(slug)) {
-            variants.push(Value::String(slug.clone()));
+    for tool in arr.iter_mut().filter(|tool| {
+        matches!(
+            tool.get("name").and_then(Value::as_str),
+            Some("delegate_to_agent" | "create_session")
+        )
+    }) {
+        if let Some(variants) = tool
+            .pointer_mut("/inputSchema/properties/agent_type/enum")
+            .and_then(Value::as_array_mut)
+        {
+            for slug in custom_agents {
+                if !variants
+                    .iter()
+                    .any(|variant| variant.as_str() == Some(slug))
+                {
+                    variants.push(Value::String(slug.clone()));
+                }
+            }
         }
     }
 }
@@ -1030,7 +1061,45 @@ async fn build_tools_call_spawn(
         return LineAction::Respond(err(id, -32602, format!("unknown tool: {name}")));
     }
     match name.as_str() {
+        "list_agent_options" => {
+            let agent_type = match arguments.get("agent_type").and_then(Value::as_str) {
+                Some(value) if !value.is_empty() => value.to_owned(),
+                _ => {
+                    return LineAction::Respond(err(
+                        id,
+                        -32602,
+                        "list_agent_options requires agent_type",
+                    ))
+                }
+            };
+            if arguments.as_object().is_some_and(|args| args.len() != 1) {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "list_agent_options accepts only agent_type",
+                ));
+            }
+            let request = BrokerListAgentOptionsRequest {
+                token: ctx.token.clone(),
+                agent_type,
+            };
+            let round_trip =
+                Box::pin(
+                    async move { client_list_agent_options_round_trip(&socket, &request).await },
+                );
+            register_and_spawn(inflight, id, None, round_trip, render_agent_options_result).await
+        }
         "delegate_to_agent" => {
+            if !ctx.features.session_messaging
+                && (arguments.get("notify_mode").and_then(Value::as_str) == Some("deliver")
+                    || arguments.get("follow").and_then(Value::as_bool) == Some(true))
+            {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "automatic delivery requires session messaging",
+                ));
+            }
             // MCP clients (Codex / Claude Code) generally do NOT populate
             // `_meta.tool_use_id` when calling an MCP server. We still surface it
             // when present (the most precise binding), but a missing one is
@@ -1241,6 +1310,46 @@ async fn build_tools_call_spawn(
             let round_trip = Box::pin(async move { client_ask_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_ask_result).await
         }
+        "stop_session" => {
+            let session_id = match optional_session_id(&arguments) {
+                Ok(id) => id,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
+            };
+            let req = super::transport::BrokerStopSessionRequest {
+                token: ctx.token.clone(),
+                session_id,
+            };
+            let round_trip = Box::pin(async move {
+                super::transport::client_stop_session_round_trip(&socket, req).await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_session_control_result).await
+        }
+        "rename_session" => {
+            let Some(title) = arguments
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+            else {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "rename_session requires a non-empty title",
+                ));
+            };
+            let session_id = match optional_session_id(&arguments) {
+                Ok(id) => id,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
+            };
+            let req = BrokerRenameSessionRequest {
+                token: ctx.token.clone(),
+                session_id,
+                title: title.to_owned(),
+            };
+            let round_trip =
+                Box::pin(async move { client_rename_session_round_trip(&socket, req).await });
+            register_and_spawn(inflight, id, None, round_trip, render_session_control_result).await
+        }
         "get_session_info" => {
             // `session_id` is the codeg conversation id the agent read out of a
             // `codeg://session/<id>` reference. Accept a JSON number or a numeric
@@ -1264,12 +1373,77 @@ async fn build_tools_call_spawn(
                 token: ctx.token.clone(),
                 session_id,
                 max_messages: Some(max_messages),
+                refresh: arguments
+                    .get("refresh")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             };
             // No external_handle: a read-only lookup has nothing to cancel
             // broker-side — canceling only suppresses the response.
             let round_trip =
                 Box::pin(async move { client_session_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_session_result).await
+        }
+        "get_current_session" => {
+            let token = ctx.token.clone();
+            let round_trip = Box::pin(async move {
+                super::transport::client_current_session_round_trip(&socket, token).await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_session_action).await
+        }
+        "list_sessions" => {
+            let parsed = if arguments.is_null() {
+                Ok(super::transport::ListSessionsArgs::default())
+            } else {
+                serde_json::from_value(arguments)
+            };
+            let args = match parsed {
+                Ok(args) => args,
+                Err(error) => {
+                    return LineAction::Respond(err(id, -32602, format!("list_sessions: {error}")));
+                }
+            };
+            let token = ctx.token.clone();
+            let round_trip = Box::pin(async move {
+                super::transport::client_list_sessions_round_trip(&socket, token, args).await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_session_action).await
+        }
+        "create_session" => {
+            let mut input = arguments.clone();
+            if let Some(object) = input.as_object_mut() {
+                object.insert("token".into(), Value::String(ctx.token.clone()));
+            }
+            let req =
+                match serde_json::from_value::<super::transport::BrokerCreateSessionRequest>(input) {
+                    Ok(req) => req,
+                    Err(error) => {
+                        return LineAction::Respond(err(id, -32602, format!("create_session: {error}")));
+                    }
+                };
+            if let Err(error) = req.validate() {
+                return LineAction::Respond(err(id, -32602, error));
+            }
+            let round_trip = Box::pin(async move {
+                super::transport::client_create_session_round_trip(&socket, req).await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_session_action).await
+        }
+        "send_to_session" => {
+            let mut input = arguments.clone();
+            if let Some(object) = input.as_object_mut() {
+                object.insert("token".into(), Value::String(ctx.token.clone()));
+            }
+            let Ok(req) = serde_json::from_value::<super::transport::BrokerSessionMessageRequest>(input) else {
+                return LineAction::Respond(err(id, -32602, "send_to_session requires conversation_id, message, mode and reply"));
+            };
+            if req.conversation_id <= 0 || req.message.trim().is_empty() || !matches!(req.mode.as_str(), "queue" | "steer") {
+                return LineAction::Respond(err(id, -32602, "invalid conversation_id, message or mode"));
+            }
+            let round_trip = Box::pin(async move {
+                super::transport::client_session_message_round_trip(&socket, req).await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_session_action).await
         }
         "browser_list_tabs" => {
             let req = BrokerBrowserTabsRequest {
@@ -2000,6 +2174,14 @@ fn normalize_status_task_ids(arguments: &Value) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+fn render_agent_options_result(outcome: &Value) -> Value {
+    json!({
+        "content": [{"type": "text", "text": outcome.to_string()}],
+        "structuredContent": outcome,
+        "isError": outcome.get("error").is_some(),
+    })
+}
+
 /// Render the `get_delegation_status` round-trip outcome (always a
 /// `{ "tasks": [..] }` envelope from the broker) into an MCP `tools/call`
 /// result. EVERY poll renders through [`render_batch_report`] — a single id and
@@ -2413,6 +2595,16 @@ fn truncate_chars(s: &str, cap: usize) -> String {
     crate::acp::chat_authoring::truncate_chars(s, cap)
 }
 
+fn optional_session_id(arguments: &Value) -> Result<Option<i32>, &'static str> {
+    if arguments.get("session_id").is_none() {
+        return Ok(None);
+    }
+    parse_session_id(arguments)
+        .filter(|id| *id > 0)
+        .map(Some)
+        .ok_or("session_id must be a positive conversation ID")
+}
+
 /// Extract the `session_id` integer from the `get_session_info` arguments,
 /// tolerating a JSON number (int or whole float) or a numeric string — some MCP
 /// hosts stringify integer args. `None` for missing / non-integer / out-of-range,
@@ -2459,6 +2651,14 @@ fn parse_max_messages(arguments: &Value) -> u32 {
         Some(n) => n.min(u64::from(MAX_SESSION_MESSAGES)) as u32,
         None => DEFAULT_MAX_MESSAGES,
     }
+}
+
+fn render_session_control_result(outcome: &Value) -> Value {
+    json!({
+        "content": [{"type": "text", "text": outcome.to_string()}],
+        "structuredContent": outcome,
+        "isError": outcome.get("error").is_some(),
+    })
 }
 
 /// Map the `get_session_info` round-trip outcome (a serialized
@@ -4514,6 +4714,15 @@ fn parse_thread_replies(arguments: &Value) -> Vec<ThreadReply> {
 /// `{ recorded, note? }` ack) into an MCP `tools/call` result. A report that
 /// could not be attributed (no active work task for this session) is readable
 /// text with `isError: false` — the agent just carries on with its work.
+fn render_session_action(outcome: &Value) -> Value {
+    let error = outcome.get("error").and_then(Value::as_str);
+    json!({
+        "content": [{"type": "text", "text": error.map_or_else(|| outcome.to_string(), str::to_owned)}],
+        "isError": error.is_some(),
+        "structuredContent": outcome
+    })
+}
+
 pub fn render_task_ack(outcome: &Value) -> Value {
     let recorded = outcome
         .get("recorded")
@@ -4680,6 +4889,17 @@ fn render_session_summary_text(o: &Value) -> String {
     {
         out.push_str(&format!("Total tokens: {tokens}\n"));
     }
+    if let Some(collaborators) = o.get("collaborators").and_then(Value::as_array).filter(|rows| !rows.is_empty()) {
+        out.push_str("Independent collaboration sessions:\n");
+        for row in collaborators {
+            let id = row.get("session_id").and_then(Value::as_i64).unwrap_or(0);
+            let status = row.get("status").and_then(Value::as_str).unwrap_or("unknown");
+            out.push_str(&format!("- session #{id}: status={status}\n"));
+        }
+        if o.get("collaborators_truncated").and_then(Value::as_bool) == Some(true) {
+            out.push_str("Additional collaboration sessions omitted (limit 200).\n");
+        }
+    }
     if let Some(note) = s("note") {
         out.push_str(&format!("Note: {note}\n"));
     }
@@ -4795,6 +5015,7 @@ mod tests {
         // keep seeing exactly the three delegation tools.
         ctx_with(CompanionFeatures {
             delegation: true,
+            session_messaging: false,
             feedback: false,
             ask: false,
             sessions: false,
@@ -4850,17 +5071,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_four_delegation_tools() {
+    async fn tools_list_returns_delegation_tools_and_agent_options() {
         let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
         let resp = unwrap_respond(dispatch_for_test(line).await);
         let result = resp.result.unwrap();
         let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 4);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"delegate_to_agent"));
-        assert!(names.contains(&"get_delegation_status"));
-        assert!(names.contains(&"cancel_delegation"));
-        assert!(names.contains(&"resume_delegation"));
+        assert_eq!(
+            names,
+            [
+                "delegate_to_agent",
+                "list_agent_options",
+                "get_delegation_status",
+                "cancel_delegation",
+                "resume_delegation",
+            ]
+        );
         // resume_delegation requires only task_id; reason is optional and
         // there is deliberately NO task-text parameter (no new iterations).
         let resume = tools
@@ -5427,6 +5653,7 @@ mod tests {
 
     const FEEDBACK_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        session_messaging: false,
         feedback: true,
         ask: false,
         sessions: false,
@@ -5443,6 +5670,7 @@ mod tests {
     };
     const BOTH: CompanionFeatures = CompanionFeatures {
         delegation: true,
+        session_messaging: false,
         feedback: true,
         ask: false,
         sessions: false,
@@ -5459,6 +5687,7 @@ mod tests {
     };
     const ASK_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        session_messaging: false,
         feedback: false,
         ask: true,
         sessions: false,
@@ -5475,6 +5704,7 @@ mod tests {
     };
     const SESSIONS_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        session_messaging: false,
         feedback: false,
         ask: false,
         sessions: true,
@@ -5522,13 +5752,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn automatic_delivery_parameters_follow_session_messaging_feature() {
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let without = unwrap_respond(dispatch_for_test(line).await)
+            .result
+            .unwrap();
+        let delegate = without["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "delegate_to_agent")
+            .unwrap();
+        assert!(delegate["inputSchema"]["properties"]["notify_mode"].is_null());
+        assert!(delegate["inputSchema"]["properties"]["follow"].is_null());
+        let with = unwrap_respond(
+            dispatch_with_features(
+                CompanionFeatures {
+                    session_messaging: true,
+                    ..BOTH
+                },
+                line,
+            )
+            .await,
+        )
+        .result
+        .unwrap();
+        let delegate = with["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "delegate_to_agent")
+            .unwrap();
+        assert!(delegate["inputSchema"]["properties"]["notify_mode"].is_object());
+        assert!(delegate["inputSchema"]["properties"]["follow"].is_object());
+        let refused = unwrap_respond(dispatch_for_test(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"delegate_to_agent","arguments":{"agent_type":"codex","task":"x","notify_mode":"deliver"}}}"#).await);
+        assert_eq!(refused.error.unwrap().code, -32602);
+    }
+
+    #[tokio::test]
     async fn tools_list_hides_feedback_when_disabled() {
         // Default ctx is delegation-only: check_user_feedback must not appear.
         let names = list_tool_names(
             dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(!names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 4);
     }
 
     #[tokio::test]
@@ -5537,7 +5804,6 @@ mod tests {
             dispatch_with_features(BOTH, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 5);
     }
 
     #[tokio::test]
@@ -5632,6 +5898,67 @@ mod tests {
             assert_eq!(e.code, -32602);
             assert!(e.message.contains("task_id"));
         }
+    }
+
+    #[tokio::test]
+    async fn create_session_validates_required_fields_and_feature_gate() {
+        let features = CompanionFeatures::parse(Some("session_messaging"));
+        let names = list_tool_names(dispatch_with_features(
+            features, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+        ).await);
+        assert!(names.contains(&"create_session".into()));
+        assert!(names.contains(&"send_to_session".into()));
+        assert!(!names.contains(&"delegate_to_agent".into()));
+
+        let invalid = json!({
+            "jsonrpc": "2.0", "id": 41, "method": "tools/call",
+            "params": {"name": "create_session", "arguments": {
+                "agent_type": "claude_code", "title": "C"
+            }}
+        }).to_string();
+        let error = unwrap_respond(dispatch_with_features(features, &invalid).await).error.unwrap();
+        assert_eq!(error.code, -32602);
+
+        let valid = json!({
+            "jsonrpc": "2.0", "id": 42, "method": "tools/call",
+            "params": {"name": "create_session", "arguments": {
+                "title": "C", "message": "Continue the story.", "mode_id": "read-only",
+                "config_values": {"model": "gpt-6.2-sol", "reasoning_effort": "high"}
+            }}
+        }).to_string();
+        assert!(matches!(
+            dispatch_with_features(features, &valid).await,
+            LineAction::Spawn(_)
+        ));
+        for (path, field) in [
+            ("/params/arguments", "mode_id"),
+            ("/params/arguments/config_values", "model"),
+            ("/params/arguments/config_values", "reasoning_effort"),
+        ] {
+            let mut request: Value = serde_json::from_str(&valid).unwrap();
+            request
+                .pointer_mut(path)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            let error =
+                unwrap_respond(dispatch_with_features(features, &request.to_string()).await)
+                    .error
+                    .unwrap();
+            assert_eq!(error.code, -32602, "missing {field}");
+        }
+        let invalid_agent = valid.replace(
+            "\"title\":\"C\"",
+            "\"agent_type\":\"claude\",\"title\":\"C\"",
+        );
+        let error = unwrap_respond(dispatch_with_features(features, &invalid_agent).await)
+            .error
+            .unwrap();
+        assert!(error.message.contains("unknown agent type: claude"));
+        let error = unwrap_respond(dispatch_with_features(FEEDBACK_ONLY, &valid).await).error.unwrap();
+        assert_eq!(error.code, -32602);
+        assert!(error.message.contains("unknown tool"));
     }
 
     #[tokio::test]
@@ -5891,7 +6218,7 @@ mod tests {
             dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(!names.contains(&"get_session_info".to_string()));
-        // sessions feature on → exactly that one tool surfaces.
+        // The sessions group exposes both lookup and rename.
         let names = list_tool_names(
             dispatch_with_features(
                 SESSIONS_ONLY,
@@ -5899,7 +6226,49 @@ mod tests {
             )
             .await,
         );
-        assert_eq!(names, vec!["get_session_info".to_string()]);
+        assert_eq!(
+            names,
+            vec!["rename_session".to_string(), "get_session_info".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_session_validates_arguments_and_uses_sessions_gate() {
+        for arguments in [
+            json!({"title": "New title"}),
+            json!({"session_id": 42, "title": "Child"}),
+        ] {
+            let line = json!({
+                "jsonrpc": "2.0", "id": 40, "method": "tools/call",
+                "params": {"name": "rename_session", "arguments": arguments}
+            })
+            .to_string();
+            assert!(matches!(
+                dispatch_with_features(SESSIONS_ONLY, &line).await,
+                LineAction::Spawn(_)
+            ));
+            assert!(matches!(
+                dispatch_for_test(&line).await,
+                LineAction::Respond(_)
+            ));
+        }
+        for arguments in [
+            json!({}),
+            json!({"title": "   "}),
+            json!({"title": 3}),
+            json!({"session_id": "bad", "title": "Name"}),
+            json!({"session_id": 0, "title": "Name"}),
+        ] {
+            let line = json!({
+                "jsonrpc": "2.0", "id": 41, "method": "tools/call",
+                "params": {"name": "rename_session", "arguments": arguments}
+            })
+            .to_string();
+            match dispatch_with_features(SESSIONS_ONLY, &line).await {
+                LineAction::Respond(response) => assert_eq!(response.error.unwrap().code, -32602),
+                _ => panic!("invalid rename arguments must be rejected"),
+            }
+        }
     }
 
     #[tokio::test]
@@ -5967,6 +6336,7 @@ mod tests {
 
     const AUTOMATIONS_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        session_messaging: false,
         feedback: false,
         ask: false,
         sessions: false,
@@ -5983,6 +6353,7 @@ mod tests {
     };
     const TASKBOARD_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        session_messaging: false,
         feedback: false,
         ask: false,
         sessions: false,
@@ -6019,6 +6390,7 @@ mod tests {
 
     const PERSONAL_AGENT_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        session_messaging: false,
         feedback: false,
         ask: false,
         sessions: false,
@@ -7014,6 +7386,7 @@ mod tests {
 
     const BROWSER_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        session_messaging: false,
         feedback: false,
         ask: false,
         sessions: false,
@@ -8753,7 +9126,9 @@ mod tests {
             BrokerMessage::Ping => Some(json!({"ok": true})),
             _ => None,
         });
-        let delegate = delegate_schema(&ctx_on(&sock)).await;
+        let mut ctx = ctx_on(&sock);
+        ctx.features.session_messaging = true;
+        let delegate = delegate_schema(&ctx).await;
         assert_eq!(delegate, embedded_delegate_schema());
         assert_eq!(
             delegate["inputSchema"]["required"],

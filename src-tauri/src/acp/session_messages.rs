@@ -1,0 +1,1002 @@
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
+
+use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, TransactionTrait};
+use tokio::task::JoinSet;
+
+use super::connection::SteerOutcome;
+use super::delegation::broker::DelegationBroker;
+use super::delegation::types::BlockedKind;
+use super::error::AcpError;
+use super::manager::ConnectionManager;
+use super::prompt_receipt::{PromptReceipt, PromptReceiptSink, ReceiptVia};
+use super::types::{
+    ConnectionStatus, PromptInputBlock, SessionConfigKindInfo, SessionConfigOptionInfo,
+};
+use crate::db::entities::folder::FolderKind;
+use crate::db::entities::{conversation, session_message};
+use crate::db::service::session_message_service as queue;
+use crate::db::service::{conversation_service, folder_service};
+use crate::db::AppDatabase;
+use crate::web::event_bridge::{emit_event, EventEmitter, SESSION_REPLY_PROMPTS_CHANGED_EVENT};
+
+#[derive(Debug, serde::Serialize)]
+pub struct SessionReplyPrompt {
+    pub conversation_id: i32,
+    pub folder_id: i32,
+    pub agent_type: crate::models::AgentType,
+    pub title: Option<String>,
+    pub request_id: String,
+    pub kind: BlockedKind,
+}
+
+/// Read only prompts belonging to turns that currently owe this conversation a reply.
+pub(crate) async fn pending_reply_prompts(
+    db: &DatabaseConnection,
+    manager: &ConnectionManager,
+    sender_id: i32,
+) -> Result<Vec<SessionReplyPrompt>, DbErr> {
+    let inputs = session_message::Entity::find()
+        .filter(session_message::Column::SenderConversationId.eq(sender_id))
+        .filter(session_message::Column::ReplyBack.eq(true))
+        .filter(session_message::Column::RecipientTurnId.is_not_null())
+        .filter(session_message::Column::Status.is_in(["dispatching", "in_flight", "received"]))
+        .all(db)
+        .await?;
+
+    let mut prompts = Vec::new();
+    let mut seen = HashSet::new();
+    for input in inputs {
+        if !seen.insert((input.conversation_id, input.recipient_turn_id.clone())) {
+            continue;
+        }
+        let Some(connection_id) = manager
+            .find_connection_by_conversation_id(input.conversation_id)
+            .await
+        else {
+            continue;
+        };
+        let Some(state) = manager.get_state(&connection_id).await else {
+            continue;
+        };
+        let prompt = {
+            let state = state.read().await;
+            if state.active_turn_id != input.recipient_turn_id {
+                continue;
+            }
+            state.active_turn_prompt()
+        };
+        let Some((kind, request_id)) = prompt else {
+            continue;
+        };
+        let Some(target) = conversation::Entity::find_by_id(input.conversation_id)
+            .filter(conversation::Column::DeletedAt.is_null())
+            .one(db)
+            .await?
+        else {
+            continue;
+        };
+        let Some(agent_type) = crate::models::AgentType::from_wire(&target.agent_type) else {
+            continue;
+        };
+        prompts.push(SessionReplyPrompt {
+            conversation_id: target.id,
+            folder_id: target.folder_id,
+            agent_type,
+            title: target.title,
+            request_id,
+            kind,
+        });
+    }
+    prompts.sort_by_key(|prompt| prompt.conversation_id);
+    Ok(prompts)
+}
+
+pub(crate) const PROMPT_ID_PREFIX: &str = "session-message-";
+type TurnResult = Result<Option<String>, String>;
+#[derive(Debug)]
+pub struct SessionMessageDelivery {
+    pub db: DatabaseConnection,
+    pub message_id: i32,
+}
+
+struct SessionMessageReceipt {
+    db: DatabaseConnection,
+    row_id: i32,
+}
+
+#[async_trait::async_trait]
+impl PromptReceiptSink for SessionMessageReceipt {
+    async fn attempted(&self, _op_id: &str) -> Result<(), String> {
+        if queue::transition(&self.db, self.row_id, "dispatching", "in_flight", None)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            Ok(())
+        } else {
+            Err("session message is no longer pending".into())
+        }
+    }
+
+    async fn received(&self, op_id: &str, _via: ReceiptVia) {
+        if let Err(error) =
+            queue::transition(&self.db, self.row_id, "in_flight", "received", None).await
+        {
+            tracing::warn!(%op_id, %error, "could not record session message receipt");
+        }
+    }
+}
+
+pub struct SessionCreator {
+    pub db: DatabaseConnection,
+    pub manager: Arc<ConnectionManager>,
+    pub data_dir: std::path::PathBuf,
+}
+
+fn current_permission_mode(options: &[SessionConfigOptionInfo]) -> Option<&str> {
+    options.iter().find_map(|option| match &option.kind {
+        SessionConfigKindInfo::Select(select) if option.category.as_deref() == Some("mode") => {
+            Some(select.current_value.as_str())
+        }
+        _ => None,
+    })
+}
+
+impl SessionCreator {
+    pub(crate) async fn inherited_mode_id(
+        &self,
+        caller: &str,
+        agent_type: crate::models::AgentType,
+    ) -> Option<String> {
+        let state = self.manager.get_state(caller).await?;
+        let state = state.read().await;
+        (state.agent_type == agent_type)
+            .then(|| {
+                current_permission_mode(state.config_options.as_deref().unwrap_or_default())
+                    .or(state.current_mode.as_deref())
+                    .map(str::to_owned)
+            })
+            .flatten()
+    }
+
+    /// Probe the same runtime selectors used by the settings UI.
+    pub async fn list_agent_options(
+        &self,
+        agent_type: crate::models::AgentType,
+        working_dir: Option<String>,
+        preferences: std::collections::BTreeMap<String, String>,
+    ) -> Result<super::delegation::models::AgentOptions, String> {
+        use super::delegation::models::{
+            current_model, is_model, is_reasoning, model_catalog, permission_modes, AgentOptions,
+        };
+        let db = AppDatabase { conn: self.db.clone() };
+        let runtime_env = crate::commands::acp::build_session_runtime_env(&db, agent_type, None, &self.data_dir)
+            .await.map_err(|error| error.to_string())?;
+        let probe = |values| self.manager.probe_agent_options(
+            agent_type, working_dir.clone(), runtime_env.clone(), values,
+        );
+        let snapshot = probe(preferences.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let model_option_id = snapshot
+            .config_options
+            .iter()
+            .find(|option| is_model(option))
+            .map(|option| option.id.clone());
+        let applied = model_option_id
+            .as_ref()
+            .filter(|id| !snapshot.unapplied_config_ids.contains(id))
+            .and_then(|id| preferences.get(id));
+        let mut models = model_catalog(&snapshot.config_options, applied.map(String::as_str));
+        if let Some(id) = model_option_id.as_ref() {
+            let selected = applied
+                .map(String::as_str)
+                .or_else(|| current_model(&snapshot.config_options));
+            for model in &mut models {
+                if (model.reasoning.is_some() && model.reasoning_option_id.is_some())
+                    || Some(model.slug.as_str()) == selected
+                {
+                    continue;
+                }
+                let mut values = preferences.clone();
+                // Start with the target model's default effort.
+                values.retain(|key, _| {
+                    !snapshot
+                        .config_options
+                        .iter()
+                        .any(|option| option.id == *key && is_reasoning(option))
+                });
+                values.insert(id.clone(), model.slug.clone());
+                let probed = match probe(values).await {
+                    Ok(probed) if !probed.unapplied_config_ids.contains(id) => probed,
+                    Ok(_) => continue,
+                    Err(error) => {
+                        tracing::warn!(%error, model = %model.slug, "Could not probe model reasoning choices");
+                        break;
+                    }
+                };
+                if let Some(found) = model_catalog(&probed.config_options, Some(&model.slug))
+                    .into_iter()
+                    .find(|entry| entry.slug == model.slug)
+                {
+                    model.reasoning = found.reasoning;
+                    model.reasoning_option_id = found.reasoning_option_id;
+                    model.context_window = model.context_window.or(found.context_window);
+                }
+            }
+        }
+        Ok(AgentOptions {
+            model_option_id,
+            models,
+            modes: permission_modes(&snapshot),
+        })
+    }
+
+    pub async fn create(
+        &self,
+        caller: &str,
+        request: super::delegation::transport::BrokerCreateSessionRequest,
+        agent_defaults: &std::collections::BTreeMap<
+            crate::models::AgentType,
+            super::delegation::types::AgentDelegationDefaults,
+        >,
+        broker: &DelegationBroker,
+    ) -> Result<(i32, String), String> {
+        let Some((caller_state, emitter)) = self.manager.get_state_and_emitter(caller).await else {
+            return Err("creator connection is unavailable".into());
+        };
+        let (sender, agent_type, mode) = {
+            let caller = caller_state.read().await;
+            let sender = caller
+                .conversation_id
+                .ok_or("creator has no active conversation")?;
+            let agent_type = request.agent_type.unwrap_or(caller.agent_type);
+            let mode = if agent_type == caller.agent_type {
+                let current =
+                    current_permission_mode(caller.config_options.as_deref().unwrap_or_default())
+                        .or(caller.current_mode.as_deref());
+                if request
+                    .mode_id
+                    .as_deref()
+                    .is_some_and(|requested| Some(requested) != current)
+                {
+                    return Err("same-agent sessions inherit the current permission mode".into());
+                }
+                current.map(str::to_owned)
+            } else {
+                request.mode_id.clone()
+            };
+            (sender, agent_type, mode)
+        };
+        let mut defaults = agent_defaults.get(&agent_type).cloned().unwrap_or_default();
+        if mode.is_some() {
+            defaults.mode_id.clone_from(&mode);
+            defaults.config_values.remove("mode");
+        }
+        let source = live_conversation(&self.db, sender)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or("creator conversation was deleted")?;
+        let folder = if let Some(path) = request.folder_path.as_deref() {
+            let path = path.trim();
+            if !std::path::Path::new(path).is_absolute() {
+                return Err("folder_path must be an absolute path".into());
+            }
+            folder_service::list_all_folder_details(&self.db)
+                .await
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .find(|folder| crate::parsers::path_eq_for_matching(&folder.path, path))
+                .ok_or_else(|| format!("folder_path is not registered in Codeg: {path}"))?
+        } else {
+            folder_service::get_folder_by_id(&self.db, source.folder_id)
+                .await
+                .map_err(|error| error.to_string())?
+                .ok_or("creator folder is unavailable")?
+        };
+        crate::commands::acp::verify_agent_installed(agent_type)
+            .await
+            .map_err(|error| error.to_string())?;
+        let db = AppDatabase {
+            conn: self.db.clone(),
+        };
+        let runtime_env =
+            crate::commands::acp::build_session_runtime_env(&db, agent_type, None, &self.data_dir)
+                .await
+                .map_err(|error| error.to_string())?;
+        use super::delegation::models::{is_model, validate_create_option_ids};
+        let probe = |values| {
+            self.manager.probe_agent_options(
+                agent_type,
+                Some(folder.path.clone()),
+                runtime_env.clone(),
+                values,
+            )
+        };
+        let options = probe(Default::default())
+            .await
+            .map_err(|error| error.to_string())?;
+        if let Err(error) =
+            validate_create_option_ids(&options.config_options, &request.config_values)
+        {
+            // Some models add or replace the reasoning selector when selected.
+            // Send only the confirmed model key until both keys are known.
+            let (id, model) = options
+                .config_options
+                .iter()
+                .find(|option| is_model(option))
+                .and_then(|option| request.config_values.get_key_value(&option.id))
+                .ok_or(error)?;
+            let selected = probe(std::collections::BTreeMap::from([(
+                id.clone(),
+                model.clone(),
+            )]))
+            .await
+            .map_err(|error| error.to_string())?;
+            if selected.unapplied_config_ids.contains(id) {
+                return Err(format!(
+                    "could not select model {model:?}; query list_agent_options for this agent"
+                ));
+            }
+            validate_create_option_ids(&selected.config_options, &request.config_values)?;
+        }
+        defaults.config_values.extend(request.config_values.clone());
+        let git_branch = if folder.kind == FolderKind::Chat {
+            None
+        } else {
+            crate::commands::conversations::detect_git_branch(&folder.path).await
+        };
+        let txn = self.db.begin().await.map_err(|error| error.to_string())?;
+        let title = Some(request.title.clone());
+        let created = if folder.kind == FolderKind::Chat {
+            conversation_service::create_chat(&txn, folder.id, agent_type, title, git_branch).await
+        } else {
+            conversation_service::create(&txn, folder.id, agent_type, title, git_branch).await
+        };
+        let conversation_id = created.map_err(|error| error.to_string())?.id;
+        conversation_service::link_collaborator(&txn, sender, conversation_id)
+            .await.map_err(|error| error.to_string())?;
+        conversation_service::update_title(&txn, conversation_id, request.title)
+            .await
+            .map_err(|error| error.to_string())?;
+        txn.commit().await.map_err(|error| error.to_string())?;
+        crate::commands::conversations::emit_conversation_upsert(
+            &emitter,
+            &self.db,
+            conversation_id,
+        )
+        .await;
+        let started = async {
+            let connection = crate::commands::acp::spawn_with_conversation_selection(
+                &self.manager,
+                &self.db,
+                agent_type,
+                Some(folder.path),
+                None,
+                runtime_env,
+                "session-tools".into(),
+                emitter.clone(),
+                Some(conversation_id),
+                defaults.mode_id,
+                defaults.config_values,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            // Creation accepts explicit settings for the first prompt. The shared
+            // connect path can fall back on stale saved preferences, so use its
+            // result here to reject an unavailable explicit pick before sending.
+            let confirmed = async {
+                let snapshot = self
+                    .manager
+                    .wait_for_session_options(&connection, Duration::from_secs(60))
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let current_mode =
+                    current_permission_mode(&snapshot.config_options).or_else(|| {
+                        snapshot
+                            .modes
+                            .as_ref()
+                            .map(|modes| modes.current_mode_id.as_str())
+                    });
+                if let Some(mode) = mode.as_deref().filter(|mode| Some(*mode) != current_mode) {
+                    return Err(format!(
+                        "could not apply permission mode {mode:?} for {agent_type}"
+                    ));
+                }
+                super::delegation::models::validate_config_values(
+                    &snapshot.config_options,
+                    &request.config_values,
+                )?;
+                Ok(())
+            }
+            .await;
+            if let Err(error) = confirmed {
+                let _ = self.manager.disconnect(&connection).await;
+                return Err(error);
+            }
+            Ok(connection)
+        }
+        .await;
+        let connection = match started {
+            Ok(connection) => connection,
+            Err(error) => {
+                let _ = conversation_service::update_status(
+                    &self.db,
+                    conversation_id,
+                    crate::db::entities::conversation::ConversationStatus::Cancelled,
+                )
+                .await;
+                crate::commands::conversations::emit_conversation_upsert(
+                    &emitter,
+                    &self.db,
+                    conversation_id,
+                )
+                .await;
+                return Err(format!(
+                    "conversation {conversation_id} was created but could not start: {error}"
+                ));
+            }
+        };
+        let message_id = queue::enqueue(
+            &self.db,
+            sender,
+            conversation_id,
+            request.message,
+            "queue".into(),
+            true,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        let message = session_message::Entity::find()
+            .filter(session_message::Column::MessageId.eq(message_id.clone()))
+            .one(&self.db)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or("initial message was not saved")?;
+        dispatch(
+            &self.db,
+            &self.manager,
+            broker,
+            vec![message],
+            Some(connection),
+            None,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        Ok((conversation_id, message_id))
+    }
+}
+
+pub async fn start(
+    db: DatabaseConnection,
+    manager: Arc<ConnectionManager>,
+    broker: Arc<DelegationBroker>,
+    data_dir: std::path::PathBuf,
+    emitter: EventEmitter,
+) {
+    let startup = chrono::Utc::now();
+    let recovery = loop {
+        match crate::db::service::turn_delivery_service::capture_recovery(&db, startup).await {
+            Ok(snapshot) => break snapshot,
+            Err(error) => {
+                tracing::warn!(%error, "could not capture session recovery boundary");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    };
+    while let Err(error) =
+        crate::db::service::turn_delivery_service::recover_captured(&db, recovery.clone()).await
+    {
+        tracing::warn!(%error, "could not recover session messages");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut dispatches = JoinSet::new();
+    let mut dispatching = std::collections::HashMap::new();
+    loop {
+        tokio::select! {
+            Some(result) = dispatches.join_next_with_id() => {
+                let id = match result {
+                    Ok((id, ())) => id,
+                    Err(error) => {
+                        tracing::error!(%error, "session message dispatch failed");
+                        error.id()
+                    }
+                };
+                dispatching.remove(&id);
+            }
+            _ = tick.tick() => {
+                if !broker.config_snapshot().await.session_messaging_enabled {
+                    continue;
+                }
+                let rows = match queue::queued(&db).await {
+                    Ok(rows) => rows,
+                    Err(error) => {
+                        tracing::warn!(%error, "could not read session messages");
+                        continue;
+                    }
+                };
+                let mut seen: HashSet<i32> = dispatching.values().copied().collect();
+                let mut grouped = std::collections::BTreeMap::<i32, Vec<_>>::new();
+                for row in rows {
+                    grouped.entry(row.conversation_id).or_default().push(row);
+                }
+                for (recipient, rows) in grouped {
+                    if seen.insert(recipient) {
+                        let db = db.clone();
+                        let manager = manager.clone();
+                        let broker = broker.clone();
+                        let data_dir = data_dir.clone();
+                        let emitter = emitter.clone();
+                        let task = dispatches.spawn(async move {
+                            if let Err(error) = dispatch(
+                                &db, &manager, &broker, rows, None, Some((&data_dir, &emitter)),
+                            )
+                            .await
+                            {
+                                tracing::warn!(recipient, %error, "could not dispatch session message");
+                            }
+                        });
+                        dispatching.insert(task.id(), recipient);
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn dispatch(
+    db: &DatabaseConnection,
+    manager: &ConnectionManager,
+    broker: &DelegationBroker,
+    rows: Vec<session_message::Model>,
+    initial_connection: Option<String>,
+    activation: Option<(&std::path::Path, &EventEmitter)>,
+) -> Result<(), crate::db::error::DbError> {
+    let recipient_id = rows[0].conversation_id;
+    let Some(recipient) = live_conversation(db, recipient_id).await? else {
+        for row in rows {
+            fail_queued(db, &row, "recipient was deleted").await?;
+        }
+        return Ok(());
+    };
+    let mut valid = Vec::new();
+    for row in rows {
+        if live_conversation(db, row.sender_conversation_id)
+            .await?
+            .is_some()
+        {
+            valid.push(row);
+        } else {
+            fail_queued(db, &row, "sender was deleted").await?;
+        }
+    }
+
+    if valid.is_empty() {
+        return Ok(());
+    }
+    let is_initial = initial_connection.is_some();
+    let connection = if is_initial {
+        initial_connection
+    } else {
+        match crate::models::AgentType::from_wire(&recipient.agent_type) {
+            Some(agent) => crate::commands::acp::acp_find_connection_for_conversation_core(
+                manager,
+                db,
+                recipient.id,
+                recipient.external_id.as_deref(),
+                agent,
+            )
+            .await
+            .ok()
+            .flatten()
+            .map(|info| info.connection_id),
+            None => None,
+        }
+    };
+    let connection = match (connection, activation) {
+        (Some(connection), _) => connection,
+        (None, Some((data_dir, emitter))) => {
+            match activate_recipient(db, manager, &recipient, data_dir, emitter).await {
+                Ok(connection) => connection,
+                Err(error) => {
+                    let reason = format!("could not activate recipient: {error}");
+                    for row in valid {
+                        fail_queued(db, &row, &reason).await?;
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        (None, None) => return Ok(()),
+    };
+    let Some(state) = manager.get_state(&connection).await else {
+        return Ok(());
+    };
+    let busy = {
+        let state = state.read().await;
+        if state
+            .conversation_id
+            .is_some_and(|bound| bound != recipient.id)
+        {
+            return Ok(());
+        }
+        match state.status {
+            ConnectionStatus::Connected | ConnectionStatus::Prompting => {}
+            // The connection loop processes queued prompts after its handshake.
+            ConnectionStatus::Connecting if is_initial => {}
+            _ => return Ok(()),
+        }
+        state.turn_in_flight || state.status == ConnectionStatus::Prompting
+    };
+
+    let Some(row) = valid.into_iter().find(|row| !busy || row.mode == "steer") else {
+        return Ok(());
+    };
+    if !broker.config_snapshot().await.session_messaging_enabled
+        || !queue::claim(db, &row, busy).await?
+    {
+        return Ok(());
+    }
+
+    let mut body = row.message.as_str();
+    if let Some(turn_id) = row.result_turn_id.as_deref() {
+        let prefix = format!(
+            "[Result from conversation {}; turn {turn_id}; stop_reason ",
+            row.sender_conversation_id
+        );
+        if let Some((_, legacy_body)) = body
+            .strip_prefix(&prefix)
+            .and_then(|text| text.split_once("]\n\n"))
+        {
+            body = if legacy_body.trim().is_empty() {
+                "The delegated turn returned no text."
+            } else {
+                legacy_body
+            };
+        }
+    }
+    let reply_instruction = if row.reply_back {
+        "Your final answer is sent back automatically. Put your result there once. Send a separate message only for an early handoff or a blocker requiring attention.\n\n"
+    } else {
+        ""
+    };
+    let text = format!(
+        "[Codeg message from conversation {}; message {}]\n\n{reply_instruction}{}",
+        row.sender_conversation_id, row.message_id, body
+    );
+    let prompt_id = format!("{PROMPT_ID_PREFIX}{}", row.message_id);
+    let open_prompt = if busy {
+        match manager
+            .steer_session_message(
+                &connection,
+                text.clone(),
+                SessionMessageDelivery {
+                    db: db.clone(),
+                    message_id: row.id,
+                },
+            )
+            .await
+        {
+            Ok(SteerOutcome::Injected) => {
+                // A new sender can join a turn whose prompt was already visible.
+                if row.reply_back {
+                    if let Some((state, emitter)) = manager.get_state_and_emitter(&connection).await
+                    {
+                        if state.read().await.active_turn_prompt().is_some() {
+                            emit_event(&emitter, SESSION_REPLY_PROMPTS_CHANGED_EVENT, recipient_id);
+                        }
+                    }
+                }
+                false
+            }
+            Ok(SteerOutcome::StartedNewTurn) => {
+                return finish(
+                    db,
+                    &row,
+                    Err(
+                        "steering started an untracked detached turn; delivery is unconfirmed"
+                            .into(),
+                    ),
+                )
+                .await;
+            }
+            Ok(SteerOutcome::PromptRequired)
+            | Err(AcpError::FeedbackDisabled | AcpError::NoActiveTurn) => {
+                if !queue::transition(db, row.id, "in_flight", "dispatching", None).await? {
+                    return Ok(());
+                }
+                true
+            }
+            Err(error) => return finish(db, &row, Err(error.to_string())).await,
+        }
+    } else {
+        true
+    };
+    let sent = if open_prompt {
+        let Some(frame) = super::agent_mentions::render_operation_frame(&prompt_id) else {
+            return finish(db, &row, Err("invalid session message operation ID".into())).await;
+        };
+        let receipt = PromptReceipt {
+            op_id: prompt_id.clone(),
+            sink: Arc::new(SessionMessageReceipt {
+                db: db.clone(),
+                row_id: row.id,
+            }),
+        };
+        manager
+            .send_prompt_with_receipt(
+                &AppDatabase { conn: db.clone() },
+                &connection,
+                vec![PromptInputBlock::Text { text }],
+                Some(recipient.folder_id),
+                Some(recipient.id),
+                Some(prompt_id),
+                vec![PromptInputBlock::Text { text: frame }],
+                receipt,
+            )
+            .await
+            .map(|_| ())
+    } else {
+        Ok(())
+    };
+    match sent {
+        Ok(()) => {}
+        Err(AcpError::TurnInProgress) if busy => {
+            queue::defer_as_queue(db, row.id).await?;
+        }
+        Err(AcpError::TurnInProgress) => {
+            queue::transition(db, row.id, "dispatching", "queued", None).await?;
+        }
+        Err(error) => finish(db, &row, Err(error.to_string())).await?,
+    }
+    Ok(())
+}
+
+async fn activate_recipient(
+    db: &DatabaseConnection,
+    manager: &ConnectionManager,
+    recipient: &conversation::Model,
+    data_dir: &std::path::Path,
+    emitter: &EventEmitter,
+) -> Result<String, String> {
+    let agent = crate::models::AgentType::from_wire(&recipient.agent_type)
+        .ok_or("recipient agent is unavailable")?;
+    if recipient.external_id.is_none() && recipient.message_count > 0 {
+        return Err("the recipient has history but no agent session ID".into());
+    }
+    let folder = folder_service::get_folder_by_id(db, recipient.folder_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or("recipient folder is unavailable")?;
+    crate::commands::acp::verify_agent_installed(agent)
+        .await
+        .map_err(|error| error.to_string())?;
+    let env = crate::commands::acp::build_session_runtime_env(
+        &AppDatabase { conn: db.clone() },
+        agent,
+        recipient.external_id.as_deref(),
+        data_dir,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let preferences = recipient
+        .model
+        .clone()
+        .map(|model| ("model".into(), model))
+        .into_iter()
+        .collect();
+    let outcome = crate::commands::acp::spawn_and_bind_conversation_selection(
+        manager,
+        db,
+        agent,
+        Some(folder.path),
+        recipient.external_id.clone(),
+        env,
+        "session-tools".into(),
+        emitter.clone(),
+        Some(recipient.id),
+        None,
+        preferences,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let connection = outcome.connection_id;
+    let ready: Result<(), String> = async {
+        outcome.bound.map_err(|error| error.to_string())?;
+        manager
+            .wait_for_session_options(&connection, Duration::from_secs(60))
+            .await
+            .map_err(|error| error.to_string())?;
+        let state = manager
+            .get_state(&connection)
+            .await
+            .ok_or("recipient disconnected")?;
+        let state = state.read().await;
+        if let Some(external_id) = recipient.external_id.as_deref() {
+            if state.external_id.as_deref() != Some(external_id) {
+                return Err("the agent did not resume the original session".into());
+            }
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(error) = ready {
+        if !outcome.reused {
+            let _ = manager.disconnect(&connection).await;
+        }
+        return Err(error);
+    }
+    Ok(connection)
+}
+
+async fn live_conversation(
+    db: &DatabaseConnection,
+    id: i32,
+) -> Result<Option<conversation::Model>, DbErr> {
+    conversation::Entity::find_by_id(id)
+        .filter(conversation::Column::DeletedAt.is_null())
+        .one(db)
+        .await
+}
+
+async fn fail_queued(
+    db: &DatabaseConnection,
+    row: &session_message::Model,
+    reason: &str,
+) -> Result<(), sea_orm::DbErr> {
+    queue::transition(db, row.id, "queued", "failed", Some(reason.into())).await?;
+    Ok(())
+}
+
+async fn finish(
+    db: &DatabaseConnection,
+    row: &session_message::Model,
+    outcome: TurnResult,
+) -> Result<(), crate::db::error::DbError> {
+    let (result, error) = match outcome {
+        Ok(result) => (result, None),
+        Err(error) => (None, Some(error)),
+    };
+    loop {
+        match queue::settle(db, row, error.is_none(), result.clone(), error.clone()).await {
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                tracing::warn!(message_id = %row.message_id, %error, "retrying session message settlement");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod reply_prompt_tests {
+    use super::*;
+    use crate::acp::manager::ConnectionManager;
+    use crate::acp::types::AcpEvent;
+    use crate::db::service::turn_delivery_service;
+    use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+    use crate::models::AgentType;
+    use crate::web::event_bridge::emit_with_state;
+
+    #[tokio::test]
+    async fn reply_prompt_is_visible_to_its_sender_until_resolved() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/session-reply-prompts").await;
+        let sender = seed_conversation(&db, folder, AgentType::Codex).await;
+        let unrelated = seed_conversation(&db, folder, AgentType::Codex).await;
+        let worker = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let manager = ConnectionManager::new();
+        manager
+            .insert_test_connection("worker", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let state = manager.get_state("worker").await.unwrap();
+        let message = queue::enqueue(
+            &db.conn,
+            sender,
+            worker,
+            "check".into(),
+            "queue".into(),
+            true,
+        )
+        .await
+        .unwrap();
+        let input = queue::queued(&db.conn).await.unwrap().pop().unwrap();
+        queue::claim(&db.conn, &input, false).await.unwrap();
+        let turn = turn_delivery_service::begin(&db.conn, worker, Some(&message), None)
+            .await
+            .unwrap();
+        {
+            let mut session = state.write().await;
+            session.conversation_id = Some(worker);
+            session.active_turn_id = Some(turn.clone());
+            session.status = crate::acp::types::ConnectionStatus::Prompting;
+        }
+        emit_with_state(
+            &state,
+            &EventEmitter::Noop,
+            AcpEvent::PermissionRequest {
+                request_id: "permission-1".into(),
+                tool_call: serde_json::json!({}),
+                options: vec![],
+                queued: 0,
+            },
+        )
+        .await;
+
+        let prompts = pending_reply_prompts(&db.conn, &manager, sender)
+            .await
+            .unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].conversation_id, worker);
+        assert_eq!(prompts[0].request_id, "permission-1");
+        assert_eq!(prompts[0].kind, BlockedKind::Permission);
+        assert!(pending_reply_prompts(&db.conn, &manager, unrelated)
+            .await
+            .unwrap()
+            .is_empty());
+
+        emit_with_state(
+            &state,
+            &EventEmitter::Noop,
+            AcpEvent::PermissionResolved {
+                request_id: "permission-1".into(),
+                option_id: None,
+                origin: None,
+            },
+        )
+        .await;
+        assert!(pending_reply_prompts(&db.conn, &manager, sender)
+            .await
+            .unwrap()
+            .is_empty());
+
+        emit_with_state(
+            &state,
+            &EventEmitter::Noop,
+            AcpEvent::QuestionRequest {
+                question_id: "question-1".into(),
+                questions: vec![crate::acp::question::QuestionSpec {
+                    id: "platform".into(),
+                    question: "Which platform should I verify?".into(),
+                    header: "Platform".into(),
+                    multi_select: false,
+                    options: vec![],
+                    is_secret: false,
+                    allow_other: true,
+                }],
+            },
+        )
+        .await;
+        let prompts = pending_reply_prompts(&db.conn, &manager, sender)
+            .await
+            .unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].kind, BlockedKind::Question);
+        assert_eq!(prompts[0].request_id, "question-1");
+
+        emit_with_state(
+            &state,
+            &EventEmitter::Noop,
+            AcpEvent::StatusChanged {
+                status: crate::acp::types::ConnectionStatus::Disconnected,
+            },
+        )
+        .await;
+        assert!(pending_reply_prompts(&db.conn, &manager, sender)
+            .await
+            .unwrap()
+            .is_empty());
+        turn_delivery_service::complete(&db.conn, &turn, "end_turn", "done")
+            .await
+            .unwrap();
+        assert!(queue::queued(&db.conn)
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.conversation_id == sender && !row.reply_back));
+    }
+}

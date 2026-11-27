@@ -7091,7 +7091,13 @@ async fn an_inherited_model_is_read_again_for_the_options_that_hang_off_it() {
         sel.current_value = "max".into();
         sel.options = ["max", "xhigh"]
             .iter()
-            .map(|v| crate::acp::types::SessionConfigSelectOptionInfo { value: v.to_string(), name: v.to_uppercase(), description: None, reasoning_efforts: None })
+            .map(|v| crate::acp::types::SessionConfigSelectOptionInfo {
+                value: v.to_string(),
+                name: v.to_uppercase(),
+                description: None,
+                reasoning_efforts: None,
+                context_window: None,
+            })
             .collect();
     }
     super::options::TEST_SNAPSHOTS.with(|m| {
@@ -7157,7 +7163,13 @@ async fn an_option_only_the_inherited_model_offers_can_be_named() {
         sel.current_value = "max".into();
         sel.options = ["max", "xhigh"]
             .iter()
-            .map(|v| crate::acp::types::SessionConfigSelectOptionInfo { value: v.to_string(), name: v.to_uppercase(), description: None, reasoning_efforts: None })
+            .map(|v| crate::acp::types::SessionConfigSelectOptionInfo {
+                value: v.to_string(),
+                name: v.to_uppercase(),
+                description: None,
+                reasoning_efforts: None,
+                context_window: None,
+            })
             .collect();
     }
     super::options::TEST_SNAPSHOTS.with(|m| {

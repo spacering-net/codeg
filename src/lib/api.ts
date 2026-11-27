@@ -608,6 +608,23 @@ export async function acpGetSessionSnapshotByConversation(
   })
 }
 
+export interface SessionReplyPrompt {
+  conversation_id: number
+  folder_id: number
+  agent_type: AgentType
+  title: string | null
+  request_id: string
+  kind: "permission" | "question" | "plan_approval"
+}
+
+export async function acpPendingSessionReplyPrompts(
+  conversationId: number
+): Promise<SessionReplyPrompt[]> {
+  return getTransport().call("acp_pending_session_reply_prompts", {
+    conversationId,
+  })
+}
+
 export async function acpFindConnectionForConversation(
   conversationId: number,
   sessionId: string | undefined,
@@ -6659,6 +6676,7 @@ export async function listProviderModels(
 
 export interface DelegationSettings {
   enabled: boolean
+  session_messaging_enabled?: boolean
   depth_limit: number
   /** Per-parent byte budget (in MB) for the broker's in-memory cache of
    * completed sub-agent result text. `0` = unlimited. */

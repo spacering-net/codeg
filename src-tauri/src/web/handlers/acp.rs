@@ -735,6 +735,20 @@ pub async fn acp_get_session_snapshot_by_conversation(
     Ok(Json(snap))
 }
 
+pub async fn acp_pending_session_reply_prompts(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpGetSessionSnapshotByConversationParams>,
+) -> Result<Json<Vec<crate::acp::session_messages::SessionReplyPrompt>>, AppCommandError> {
+    crate::acp::session_messages::pending_reply_prompts(
+        &state.db.conn,
+        &state.connection_manager,
+        params.conversation_id,
+    )
+    .await
+    .map(Json)
+    .map_err(|error| AppCommandError::database_error(error.to_string()))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpFindConnectionForConversationParams {
