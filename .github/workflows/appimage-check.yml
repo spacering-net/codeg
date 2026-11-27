@@ -1,0 +1,101 @@
+name: AppImage compatibility
+
+on:
+  pull_request:
+    paths:
+      - ".github/actions/pin-linuxdeploy/**"
+      - ".github/scripts/appimage-*.sh"
+      - ".github/workflows/appimage-check.yml"
+      - ".github/workflows/release.yml"
+      - "src-tauri/tauri.conf.json"
+      - "src-tauri/Cargo.toml"
+      - "src-tauri/Cargo.lock"
+      - "src-tauri/scripts/prepare-sidecars.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+
+env:
+  RUST_BACKTRACE: short
+  HUSKY: 0
+
+concurrency:
+  group: appimage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  appimage:
+    name: Build and smoke test Linux x64 AppImage
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "pnpm"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          shared-key: x86_64-unknown-linux-gnu
+
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
+      - name: Pin linuxdeploy
+        uses: ./.github/actions/pin-linuxdeploy
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Stage codeg-mcp sidecar
+        run: pnpm tauri:prepare-sidecars --target x86_64-unknown-linux-gnu
+
+      - name: Verify codeg-mcp sidecar
+        run: test -f src-tauri/binaries/codeg-mcp-x86_64-unknown-linux-gnu
+
+      - name: Build unsigned AppImage
+        env:
+          CODEG_SKIP_SIDECAR: "1"
+        run: |
+          pnpm tauri build \
+            --target x86_64-unknown-linux-gnu \
+            --bundles appimage \
+            --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Check bundled libraries
+        run: bash .github/scripts/appimage-guard.sh
+
+      - name: Smoke test on Fedora 44 with Mesa
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage_dir="$PWD/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage"
+          mapfile -d '' appimages < <(find "$appimage_dir" -maxdepth 1 -type f -name '*.AppImage' -print0)
+          test "${#appimages[@]}" -eq 1
+          docker run --rm \
+            -v "$PWD:/workspace:ro" \
+            -e APPIMAGE="/workspace/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/$(basename "${appimages[0]}")" \
+            fedora:44 \
+            bash /workspace/.github/scripts/appimage-smoke.sh
