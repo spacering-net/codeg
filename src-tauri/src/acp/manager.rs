@@ -814,15 +814,36 @@ impl ConnectionManager {
         self.delegation_injection.get().cloned()
     }
 
-    /// Cancel every delegated child `conn_id` still runs, the connection
-    /// itself staying up. For an explicit stop of the work a connection does:
-    /// a turn cancel alone leaves the children running (they are background
-    /// work — see `DelegationBroker::detach_parent_turn`), and a disconnect
-    /// cascades by itself. No-op without delegation installed.
-    pub async fn cancel_delegated_children(&self, conn_id: &str) {
-        if let Some(injection) = self.delegation_injection.get() {
-            injection.broker.cancel_children_of_parent(conn_id).await;
+    /// [`Self::cancel`] for an explicit stop of the work a connection does:
+    /// stops its turn AND every delegated child it runs, the connection itself
+    /// staying up. A plain turn cancel leaves the children running (they are
+    /// background work — see `DelegationBroker::detach_parent_turn`); a
+    /// disconnect cascades by itself.
+    ///
+    /// The stop is armed on the broker BEFORE the cancel is queued, so the
+    /// connection loop cascades when it actually handles it — reaching a child
+    /// the stopped turn started while the cancel waited in the queue — and the
+    /// children running now are canceled right away as well.
+    pub async fn cancel_with_delegated_children(
+        &self,
+        db: &DatabaseConnection,
+        conn_id: &str,
+    ) -> Result<(), AcpError> {
+        let broker = self
+            .delegation_injection
+            .get()
+            .map(|injection| injection.broker.clone());
+        if let Some(broker) = &broker {
+            broker.arm_children_cancel(conn_id).await;
         }
+        let result = self.cancel(db, conn_id).await;
+        if let Some(broker) = &broker {
+            if result.is_err() {
+                broker.disarm_children_cancel(conn_id).await;
+            }
+            broker.cancel_children_of_parent(conn_id).await;
+        }
+        result
     }
 
     /// Returns the shared terminal-shell setting consumed by ACP terminal
