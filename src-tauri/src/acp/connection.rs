@@ -1382,6 +1382,14 @@ pub enum ConnectionCommand {
         reply: Option<tokio::sync::oneshot::Sender<bool>>,
     },
     Cancel,
+    /// [`Self::Cancel`] for an explicit stop of the work this connection does
+    /// (`ConnectionManager::cancel_with_delegated_children`): the turn is
+    /// cancelled the same way, and when the loop handles it the turn's
+    /// delegated children are cancelled too instead of being left running.
+    /// Carried on the command itself so each queued stop cascades at the
+    /// moment its own handler runs — also reaching a child the stopped turn
+    /// started while the stop waited in the queue.
+    StopWork,
     RespondPermission {
         request_id: String,
         option_id: String,
@@ -16434,13 +16442,13 @@ async fn run_conversation_loop(
                                         },
                                     )
                                     .await;
-                                    // Non-`end_turn`, so cascade-cancel like
-                                    // every other turn-failure exit: the parent
-                                    // will never consume an in-flight delegation
-                                    // result. Turn-scoped — the connection is
-                                    // still alive.
+                                    // Non-`end_turn`, so detach this turn's
+                                    // delegation bookkeeping — but leave its
+                                    // running children alone: they are
+                                    // background work, and the next turn's
+                                    // status polls still collect their results.
                                     if let Some(inj) = delegation_injection {
-                                        inj.broker.cancel_by_parent_turn(conn_id).await;
+                                        inj.broker.detach_parent_turn(conn_id).await;
                                     }
                                     break;
                                 }
@@ -16612,32 +16620,22 @@ async fn run_conversation_loop(
                             if let Some(inj) = delegation_injection {
                                 inj.questions.cancel_questions_by_parent(conn_id).await;
                             }
-                            // Cascade-cancel any pending delegations whenever
-                            // the parent's turn ended for a reason other than
-                            // clean `end_turn`. The `end_turn` path lets the
-                            // legitimate delegation completion drain
-                            // naturally; every other reason (cancelled /
-                            // refusal / max_tokens / max_turn_requests / empty
-                            // / unknown) means the parent will never consume
-                            // the in-flight result, so the child must be torn
-                            // down. The connection stays alive (only the turn
-                            // ended), so use the turn-scoped cancel that keeps
-                            // the parent's `consumed` tool_call memory — a
-                            // late re-emit must not re-register and mis-bind
-                            // the next same-key delegation.
-                            //
-                            // Await inline: the fast tracker + parked-call
-                            // drain MUST finish before the loop accepts the
-                            // next prompt so it stays scoped to the just-ended
-                            // turn. The broker backgrounds the slow child
-                            // teardown (spawner.cancel/disconnect) internally,
-                            // so this won't block on slow agents; its
-                            // idempotent drain also lets the cleanup-guard
-                            // cascade at run_connection exit run without
-                            // race-double-drain.
+                            // Detach the ended turn's delegation bookkeeping
+                            // whenever it did not end cleanly. The `end_turn`
+                            // path needs nothing (its calls were consumed
+                            // normally); every other reason (cancelled /
+                            // refusal / max_tokens / …) leaves unclaimed
+                            // tool_call ids that must be tombstoned so a late
+                            // host re-emit cannot mis-bind the next same-key
+                            // delegation, and may leave a delegation mid-setup
+                            // whose task_id the turn never got (torn down).
+                            // The turn's RUNNING children are deliberately
+                            // left alone — background work by the
+                            // delegate_to_agent contract, collected by the
+                            // next turn's status polls.
                             if reason_str != "end_turn" {
                                 if let Some(inj) = delegation_injection {
-                                    inj.broker.cancel_by_parent_turn(conn_id).await;
+                                    inj.broker.detach_parent_turn(conn_id).await;
                                 }
                             }
                             break;
@@ -16879,7 +16877,12 @@ async fn run_conversation_loop(
                                         send_stop_async_task_request(&cx, &sid, &task_id).await,
                                     );
                                 }
-                                Some(ConnectionCommand::Cancel) => {
+                                Some(
+                                    command @ (ConnectionCommand::Cancel
+                                    | ConnectionCommand::StopWork),
+                                ) => {
+                                    let stop_work =
+                                        matches!(command, ConnectionCommand::StopWork);
                                     // Send CancelNotification to agent to stop the current turn
                                     let _ = cx.send_notification_to(
                                         Agent,
@@ -16930,36 +16933,34 @@ async fn run_conversation_loop(
                                         },
                                     )
                                     .await;
-                                    // Cascade-cancel any in-flight delegations owned by
-                                    // this parent connection. Idempotent with the
-                                    // cleanup-guard cancel_by_parent at the end of
-                                    // run_connection (#1: empty pending → no-op).
-                                    // Without this, a user-initiated cancel of a parent
-                                    // prompt mid-delegation would leave the child agent
-                                    // running indefinitely (broker no longer applies a
-                                    // timeout; only an MCP `notifications/cancelled` or
-                                    // a parent/child disconnect would otherwise tear
-                                    // the delegation down). Turn-scoped: the
-                                    // connection stays alive after a prompt cancel,
-                                    // so keep the parent's `consumed` tool_call
-                                    // memory (a re-emit must not mis-bind the next
-                                    // same-key delegation); the cleanup-guard
-                                    // teardown still clears everything when the
-                                    // connection finally goes away.
-                                    //
-                                    // Await inline so the fast tracker +
-                                    // parked-call drain is ordered before the
-                                    // next prompt (keeping it scoped to the
-                                    // just-ended turn); the broker backgrounds
-                                    // the slow child teardown internally, so the
-                                    // user-visible Cancel path doesn't wait on
-                                    // (potentially slow) child agent teardown.
-                                    // The user already saw the parent's
-                                    // TurnComplete above, and the broker's
-                                    // drain-first lock guarantees no double
-                                    // DelegationCompleted emit.
+                                    // A user Cancel stops the PARENT's
+                                    // generation — not its delegated children.
+                                    // Detach the dying turn's tool-call
+                                    // bookkeeping (tombstone unclaimed ids; a
+                                    // re-emit must not mis-bind the next
+                                    // same-key delegation) and leave the
+                                    // acked children running: they are
+                                    // background work by the delegate_to_agent
+                                    // contract, their results land in the
+                                    // completed-cache, and the next turn's
+                                    // status polls collect them. A delegation
+                                    // still in its setup window is torn down
+                                    // (its task_id never reached the turn).
+                                    // What still kills running ones:
+                                    // cancel_delegation per task, an explicit
+                                    // stop of this connection's work, the
+                                    // connection teardown (cancel_by_parent
+                                    // at run_connection exit), and the child's
+                                    // own terminal turn. An explicit stop
+                                    // (`StopWork`) cancels them all here.
                                     if let Some(inj) = delegation_injection {
-                                        inj.broker.cancel_by_parent_turn(conn_id).await;
+                                        if stop_work {
+                                            inj.broker
+                                                .cancel_children_of_parent(conn_id)
+                                                .await;
+                                        } else {
+                                            inj.broker.detach_parent_turn(conn_id).await;
+                                        }
                                         // Reclaim any parked `ask_user_question` /
                                         // Grok `exit_plan_mode` approval owned by this
                                         // connection. Unlike `perms` (drained inline
@@ -17207,7 +17208,8 @@ async fn run_conversation_loop(
                     crate::acp::rewind::send_rewind_request(&cx, &sid, &cursor_id).await,
                 );
             }
-            Some(ConnectionCommand::Cancel) => {
+            Some(command @ (ConnectionCommand::Cancel | ConnectionCommand::StopWork)) => {
+                let stop_work = matches!(command, ConnectionCommand::StopWork);
                 let cx = session.connection();
                 let sid = session.session_id().clone();
                 let _ = cx.send_notification_to(Agent, CancelNotification::new(sid.clone()));
@@ -17237,21 +17239,20 @@ async fn run_conversation_loop(
                 // `awaiting_input` forever, because `PermissionResolved` was only
                 // emitted from the `RespondPermission` path.
                 drain_permissions(perms, state, emitter).await;
-                // Cascade-cancel any pending delegations owned by this parent.
-                // Reached when Cancel arrives between prompts (idle path); the
-                // inner Cancel handler covers mid-prompt. Both must trigger
-                // because the per-prompt cancel path doesn't tear down the
-                // parent connection, so the cleanup-guard cancel_by_parent
-                // at run_connection's exit wouldn't fire. Turn-scoped for that
-                // same reason: the connection stays alive, so keep the parent's
-                // `consumed` tool_call memory (a re-emit must not mis-bind the
-                // next same-key delegation).
-                //
-                // Awaited inline (fast drain before the next prompt; broker
-                // backgrounds the slow child teardown): see inner Cancel
-                // handler above for rationale.
+                // Cancel between prompts: same turn-scoped detach as the inner
+                // Cancel handler — tombstone the dying turn's unclaimed
+                // tool_call ids, tear down setups still in flight, leave
+                // acked delegated children running. The
+                // connection stays alive, so keep the parent's `consumed`
+                // memory (a re-emit must not mis-bind the next same-key
+                // delegation). An explicit stop (`StopWork`) cancels the
+                // children instead.
                 if let Some(inj) = delegation_injection {
-                    inj.broker.cancel_by_parent_turn(conn_id).await;
+                    if stop_work {
+                        inj.broker.cancel_children_of_parent(conn_id).await;
+                    } else {
+                        inj.broker.detach_parent_turn(conn_id).await;
+                    }
                 }
                 if closed_agent_turn {
                     cancel_grok_agent_turn_asks(delegation_injection, conn_id).await;

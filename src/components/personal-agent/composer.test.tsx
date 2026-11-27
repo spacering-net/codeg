@@ -1,6 +1,19 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { forwardRef, useEffect, useImperativeHandle, useState } from "react"
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
@@ -31,15 +44,40 @@ vi.mock("@/components/chat/composer/rich-composer", () => ({
     },
     ref
   ) {
-    const [text, setText] = useState("")
-    useImperativeHandle(ref, () => ({
-      getText: () => text,
-      isEmpty: () => text === "",
-      setText: (next: string) => setText(next),
-      clear: () => setText(""),
-      focus: () => {},
-      getEditor: () => null,
-    }))
+    // Read at once, as the editor's own state is: the box reads it back
+    // inside the change it is told of.
+    const [text, setTextState] = useState("")
+    const current = useRef("")
+    const { onChange } = props
+    useImperativeHandle(ref, () => {
+      // As the editor does, an edit through the handle is told of too.
+      const setText = (next: string) => {
+        current.current = next
+        setTextState(next)
+        onChange?.(next)
+      }
+      return {
+        getText: () => current.current,
+        isEmpty: () => current.current === "",
+        setText,
+        setDoc: (doc: { content?: { content?: { text?: string }[] }[] }) =>
+          setText(
+            (doc.content ?? [])
+              .map((p) => (p.content ?? []).map((n) => n.text ?? "").join(""))
+              .join("\n")
+          ),
+        getJSON: () => ({
+          type: "doc",
+          content: current.current.split("\n").map((line) => ({
+            type: "paragraph",
+            content: line ? [{ type: "text", text: line }] : [],
+          })),
+        }),
+        clear: () => setText(""),
+        focus: () => {},
+        getEditor: () => null,
+      }
+    }, [onChange])
     const { onReady } = props
     useEffect(() => onReady?.(), [onReady])
     return (
@@ -50,7 +88,8 @@ vi.mock("@/components/chat/composer/rich-composer", () => ({
         disabled={props.disabled}
         value={text}
         onChange={(e) => {
-          setText(e.target.value)
+          current.current = e.target.value
+          setTextState(e.target.value)
           props.onChange?.(e.target.value)
         }}
       />
@@ -97,6 +136,12 @@ vi.mock("@/hooks/use-shortcut-settings", () => ({
   useShortcutSettings: () => ({ shortcuts: {} }),
 }))
 
+import {
+  buildPersonalAgentDraftStorageKey,
+  clearMessageInputDraftV2,
+  loadMessageInputDraftV2,
+  saveMessageInputDraftV2,
+} from "@/lib/message-input-draft"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { PersonalAgentComposer } from "./composer"
@@ -137,7 +182,18 @@ function draw(
   return onSent
 }
 
+const draftKey = (id: number) =>
+  buildPersonalAgentDraftStorageKey({ id, uid: null })
+const storedText = (id: number) => {
+  const loaded = loadMessageInputDraftV2(draftKey(id))
+  if (loaded?.kind !== "doc") return null
+  return (loaded.doc.content ?? [])
+    .map((p) => (p.content ?? []).map((n) => n.text ?? "").join(""))
+    .join("\n")
+}
+
 beforeEach(() => {
+  for (const id of [1, 2, 7]) clearMessageInputDraftV2(draftKey(id))
   api.personalAgentSend.mockReset()
   api.personalAgentSend.mockResolvedValue({ id: 9 })
   usePersonalAgentUi.setState({
@@ -423,18 +479,146 @@ describe("PersonalAgentComposer", () => {
     // Nor the page's quote and scroll, now the second's.
     expect(onClearQuote).not.toHaveBeenCalled()
     expect(onSent).not.toHaveBeenCalled()
+    // What went is no longer the first's draft; the second keeps its own.
+    expect(storedText(1)).toBeNull()
+    rerender(<Page id={1} onClearQuote={onClearQuote} onSent={onSent} />)
+    expect(storedText(2)).toBe("for the second")
+    expect(box().value).toBe("")
   })
 
-  it("puts a card's message in the box after switching assistants too", () => {
+  it("holds a send still out in a box opened again for the assistant, and lets it go once it went", async () => {
+    const lands: ((v: unknown) => void)[] = []
+    const fails: ((e: unknown) => void)[] = []
+    api.personalAgentSend.mockImplementation(
+      () =>
+        new Promise((resolve, reject) => {
+          lands.push(resolve)
+          fails.push(reject)
+        })
+    )
+    const props = { onClearQuote: vi.fn(), onSent: vi.fn() }
+    const { rerender } = render(<Page id={1} {...props} />)
+    fireEvent.change(box(), { target: { value: "going out" } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    })
+    // Away and back while it is out: the text shows, locked as it was.
+    rerender(<Page id={2} {...props} />)
+    rerender(<Page id={1} {...props} />)
+    await waitFor(() => expect(box().value).toBe("going out"))
+    expect(box().disabled).toBe(true)
+    expect(usePersonalAgentUi.getState().composerSending[1]).toBe(true)
+    await act(async () => {
+      lands[0]({ id: 9 })
+    })
+    // It went: gone from the box and from the draft, for good.
+    expect(box().value).toBe("")
+    expect(box().disabled).toBe(false)
+    expect(storedText(1)).toBeNull()
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 350))
+    })
+    expect(storedText(1)).toBeNull()
+
+    // One that fails stays, to be tried again.
+    fireEvent.change(box(), { target: { value: "again" } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    })
+    rerender(<Page id={2} {...props} />)
+    rerender(<Page id={1} {...props} />)
+    await waitFor(() => expect(box().value).toBe("again"))
+    await act(async () => {
+      fails[1](new Error("offline"))
+    })
+    expect(box().value).toBe("again")
+    expect(box().disabled).toBe(false)
+    expect(storedText(1)).toBe("again")
+  })
+
+  it("keeps what is typed as the assistant's own draft, and puts it back when the box opens again", async () => {
+    const props = { onClearQuote: vi.fn(), onSent: vi.fn() }
+    const { rerender } = render(<Page id={1} {...props} />)
+    fireEvent.change(box(), { target: { value: "half a\nthought" } })
+    // Switched before the save was due: saved as the box goes.
+    rerender(<Page id={2} {...props} />)
+    expect(box().value).toBe("")
+    expect(storedText(1)).toBe("half a\nthought")
+    rerender(<Page id={1} {...props} />)
+    await waitFor(() => expect(box().value).toBe("half a\nthought"))
+    // Restored, it can be sent as typed.
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled()
+    // Emptied, the draft goes too.
+    fireEvent.change(box(), { target: { value: "" } })
+    rerender(<Page id={2} {...props} />)
+    expect(storedText(1)).toBeNull()
+  })
+
+  it("keeps what was just typed when the page's layout changes", async () => {
+    const props = { onClearQuote: vi.fn(), onSent: vi.fn() }
+    // The same assistant's box, drawn in another place of the page: the old
+    // one goes and the new one comes in the same commit.
+    const { rerender } = render(
+      <div>
+        <Page id={1} {...props} />
+      </div>
+    )
+    fireEvent.change(box(), { target: { value: "just typed" } })
+    rerender(
+      <section>
+        <Page id={1} {...props} />
+      </section>
+    )
+    await waitFor(() => expect(box().value).toBe("just typed"))
+    expect(storedText(1)).toBe("just typed")
+  })
+
+  it("drops the draft once it is sent, and keeps it when sending failed", async () => {
+    const props = { onClearQuote: vi.fn(), onSent: vi.fn() }
+    api.personalAgentSend.mockRejectedValueOnce(new Error("offline"))
+    const { rerender } = render(<Page id={1} {...props} />)
+    fireEvent.change(box(), { target: { value: "hello" } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    })
+    expect(storedText(1)).toBe("hello")
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    })
+    expect(box().value).toBe("")
+    expect(storedText(1)).toBeNull()
+    rerender(<Page id={2} {...props} />)
+    rerender(<Page id={1} {...props} />)
+    expect(box().value).toBe("")
+  })
+
+  it("puts a card's message after the draft the box opened with", async () => {
+    saveMessageInputDraftV2(draftKey(1), {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "mine" }] },
+      ],
+    })
+    const props = { onClearQuote: vi.fn(), onSent: vi.fn() }
+    const { rerender } = render(<Page id={1} draft={null} {...props} />)
+    await waitFor(() => expect(box().value).toBe("mine"))
+    rerender(<Page id={1} draft={{ text: "card", n: 1 }} {...props} />)
+    expect(box().value).toBe("mine\n\ncard")
+    rerender(<Page id={2} {...props} />)
+    expect(storedText(1)).toBe("mine\n\ncard")
+  })
+
+  it("puts a card's message in the box after switching assistants too", async () => {
     const props = { onClearQuote: vi.fn(), onSent: vi.fn() }
     const { rerender } = render(<Page id={1} draft={null} {...props} />)
     rerender(<Page id={1} draft={{ text: "first card", n: 1 }} {...props} />)
-    expect(box().value).toBe("first card")
+    // In once the saved draft (none here) is back.
+    await waitFor(() => expect(box().value).toBe("first card"))
     // The page starts its count again for the next assistant.
     rerender(<Page id={2} draft={null} {...props} />)
     expect(box().value).toBe("")
     rerender(<Page id={2} draft={{ text: "second card", n: 1 }} {...props} />)
-    expect(box().value).toBe("second card")
+    await waitFor(() => expect(box().value).toBe("second card"))
   })
 
   it("does not say a message went out when sending failed", async () => {

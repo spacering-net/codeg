@@ -814,6 +814,30 @@ impl ConnectionManager {
         self.delegation_injection.get().cloned()
     }
 
+    /// [`Self::cancel`] for an explicit stop of the work a connection does:
+    /// stops its turn AND every delegated child it runs, the connection itself
+    /// staying up. A plain turn cancel leaves the children running (they are
+    /// background work — see `DelegationBroker::detach_parent_turn`); a
+    /// disconnect cascades by itself.
+    ///
+    /// Queues [`ConnectionCommand::StopWork`], whose handler in the connection
+    /// loop cascades when it runs — reaching a child the stopped turn started
+    /// while the stop waited in the queue — and cancels the children running
+    /// now right away as well.
+    pub async fn cancel_with_delegated_children(
+        &self,
+        db: &DatabaseConnection,
+        conn_id: &str,
+    ) -> Result<(), AcpError> {
+        let result = self
+            .send_cancel(db, conn_id, ConnectionCommand::StopWork)
+            .await;
+        if let Some(injection) = self.delegation_injection.get() {
+            injection.broker.cancel_children_of_parent(conn_id).await;
+        }
+        result
+    }
+
     /// Returns the shared terminal-shell setting consumed by ACP terminal
     /// runtimes. Keeping the handle shared makes saves apply immediately to
     /// connections that are already running.
@@ -2710,6 +2734,19 @@ impl ConnectionManager {
     }
 
     pub async fn cancel(&self, db: &DatabaseConnection, conn_id: &str) -> Result<(), AcpError> {
+        self.send_cancel(db, conn_id, ConnectionCommand::Cancel)
+            .await
+    }
+
+    /// Queue `command` — [`ConnectionCommand::Cancel`] or
+    /// [`ConnectionCommand::StopWork`] — and settle the row the way a cancel
+    /// does.
+    async fn send_cancel(
+        &self,
+        db: &DatabaseConnection,
+        conn_id: &str,
+        command: ConnectionCommand,
+    ) -> Result<(), AcpError> {
         let (cmd_tx, state_arc, emitter) = {
             let connections = self.connections.lock().await;
             let conn = connections
@@ -2722,7 +2759,7 @@ impl ConnectionManager {
             )
         };
         cmd_tx
-            .send(ConnectionCommand::Cancel)
+            .send(command)
             .await
             .map_err(|_| AcpError::ProcessExited)?;
 
