@@ -4479,7 +4479,16 @@ impl ConnectionManager {
         if !state.read().await.native_steering_available {
             return Err(AcpError::FeedbackDisabled);
         }
-        Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, None, Some(message_result))
+        Self::submit_feedback_native(
+            conn_id,
+            state,
+            cmd_tx,
+            emitter,
+            text,
+            None,
+            None,
+            Some(message_result),
+        )
             .await
             .map(|(_, outcome)| outcome)
     }
