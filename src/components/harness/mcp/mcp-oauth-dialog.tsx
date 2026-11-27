@@ -213,12 +213,63 @@ export function McpOAuthDialog({
   // and is cleared immediately after commit or back/close.
   const pendingPlanRef = useRef<McpPlan | null>(null)
 
+  // Keep latest `onOAuthChanged` in a ref so parent re-renders with inline
+  // callbacks never tear down the waiting subscription or abort `mcpOAuthList`.
+  const onOAuthChangedRef = useRef(onOAuthChanged)
+  useEffect(() => {
+    onOAuthChangedRef.current = onOAuthChanged
+  }, [onOAuthChanged])
+
+  // Snapshot of the route's pre-flow status & timestamp so the defense-in-depth
+  // fallback can detect a fresh authorization from `oauthSnapshot` /
+  // `existingRoute` without falsely triggering on a stale pre-reauth grant.
+  const [waitingBaseline, setWaitingBaseline] = useState<{
+    wasAuthorized: boolean
+    updatedAt: string | null
+  } | null>(null)
+
   // Inline end-to-end probe state
   const [probeRecord, setProbeRecord] = useState<McpProbeRecord | null>(null)
 
   const clearPendingPlan = useCallback(() => {
     pendingPlanRef.current = null
   }, [])
+
+  // Defense-in-depth fallback: if the callback completed before
+  // `onMcpOAuthChanged` finished subscribing (or was already absorbed by the
+  // parent's `useMcpOAuth()` store), promote the waiting dialog as soon as
+  // `oauthSnapshot` / `existingRoute` reflects the fresh `authorized` route.
+  const liveMatchedRoute = useMemo(() => {
+    if (!startFlow) return null
+    const canonicalUpstream = canonicalizeRemoteMcpUrl(upstreamUrl)
+    return (
+      oauthSnapshot?.routes.find((r) => r.route_id === startFlow.route_id) ??
+      oauthSnapshot?.routes.find(
+        (r) => canonicalizeRemoteMcpUrl(r.upstream_url) === canonicalUpstream
+      ) ??
+      (existingRoute &&
+      (existingRoute.route_id === startFlow.route_id ||
+        canonicalizeRemoteMcpUrl(existingRoute.upstream_url) ===
+          canonicalUpstream)
+        ? existingRoute
+        : null)
+    )
+  }, [startFlow, oauthSnapshot, existingRoute, upstreamUrl])
+
+  if (
+    step === "waiting" &&
+    startFlow !== null &&
+    liveMatchedRoute !== null &&
+    liveMatchedRoute.status === "authorized" &&
+    (!waitingBaseline?.wasAuthorized ||
+      liveMatchedRoute.updated_at !== waitingBaseline.updatedAt)
+  ) {
+    setRoute(liveMatchedRoute)
+    setErrorMsg(null)
+    setErrorDetail(null)
+    setPlanMode("apply")
+    setStep("authorized")
+  }
 
   // Subscribe to `mcp://oauth-changed` while waiting for browser callback.
   useEffect(() => {
@@ -276,7 +327,7 @@ export function McpOAuthDialog({
           setErrorDetail(null)
           setPlanMode("apply")
           setStep("authorized")
-          void onOAuthChanged?.()
+          void onOAuthChangedRef.current?.()
         })()
       }
     })
@@ -292,7 +343,7 @@ export function McpOAuthDialog({
       cancelled = true
       unsubscribe?.()
     }
-  }, [step, startFlow, upstreamUrl, transport, onOAuthChanged])
+  }, [step, startFlow, upstreamUrl, transport])
 
   // Clear transient plan ref on unmount.
   useEffect(() => clearPendingPlan, [clearPendingPlan])
@@ -302,6 +353,17 @@ export function McpOAuthDialog({
     setStarting(true)
     setErrorMsg(null)
     setErrorDetail(null)
+    const canonicalUpstream = canonicalizeRemoteMcpUrl(upstreamUrl)
+    const baselineRoute =
+      oauthSnapshot?.routes.find(
+        (r) => canonicalizeRemoteMcpUrl(r.upstream_url) === canonicalUpstream
+      ) ??
+      existingRoute ??
+      route
+    setWaitingBaseline({
+      wasAuthorized: baselineRoute?.status === "authorized",
+      updatedAt: baselineRoute?.updated_at ?? null,
+    })
     try {
       const scopes = parseOAuthScopesInput(scopesInput)
       const result = await mcpOAuthStart({
@@ -341,7 +403,7 @@ export function McpOAuthDialog({
       setRoute(completedRoute)
       setPlanMode("apply")
       setStep("authorized")
-      void onOAuthChanged?.()
+      void onOAuthChangedRef.current?.()
     } catch (error) {
       const failure = mcpFailureOf(error)
       setErrorMsg(t("callbackFailed"))

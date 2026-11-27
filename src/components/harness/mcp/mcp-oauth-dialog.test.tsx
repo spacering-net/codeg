@@ -431,4 +431,179 @@ describe("McpOAuthDialog", () => {
       )
     })
   })
+
+  it("advances to authorized even if parent re-renders with a new inline onOAuthChanged while mcpOAuthList is pending", async () => {
+    const model = makeModel()
+    mocks.mcpOAuthStart.mockResolvedValue({
+      flow_id: "flow-race-1",
+      route_id: "route-notion",
+      upstream_url: "https://mcp.notion.com/mcp",
+      authorization_url: "https://auth.notion.com/authorize?state=race1",
+      callback_url: "http://127.0.0.1:43210/oauth/callback",
+      expires_at: "2026-11-27T01:00:00Z",
+      registration_mode: "dynamic",
+    })
+
+    let resolveList!: (value: McpOAuthBridgeSnapshot) => void
+    mocks.mcpOAuthList.mockImplementation(
+      () =>
+        new Promise<McpOAuthBridgeSnapshot>((resolve) => {
+          resolveList = resolve
+        })
+    )
+
+    const onOAuthChanged1 = vi.fn()
+    const onOAuthChanged2 = vi.fn()
+    const { rerender } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <McpOAuthDialog
+          serverKey="notion"
+          upstreamUrl="https://mcp.notion.com/mcp"
+          transport="http"
+          availableTargets={model.agents}
+          model={model}
+          onClose={vi.fn()}
+          onOAuthChanged={onOAuthChanged1}
+        />
+      </NextIntlClientProvider>
+    )
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Authorize in browser/i })
+    )
+    await waitFor(() => {
+      expect(mocks.oauthListeners.size).toBe(1)
+    })
+
+    // Emit mcp://oauth-changed; mcpOAuthList() starts and stays pending
+    act(() => {
+      for (const listener of mocks.oauthListeners) {
+        listener({
+          route_id: "route-notion",
+          upstream_url: "https://mcp.notion.com/mcp",
+          status: "authorized",
+        })
+      }
+    })
+    await waitFor(() => {
+      expect(mocks.mcpOAuthList).toHaveBeenCalledTimes(1)
+    })
+
+    // Simulate parent re-rendering with a brand-new inline onOAuthChanged prop
+    // while `await mcpOAuthList()` is still pending
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <McpOAuthDialog
+          serverKey="notion"
+          upstreamUrl="https://mcp.notion.com/mcp"
+          transport="http"
+          availableTargets={model.agents}
+          model={model}
+          onClose={vi.fn()}
+          onOAuthChanged={onOAuthChanged2}
+        />
+      </NextIntlClientProvider>
+    )
+
+    // Now resolve mcpOAuthList() -> dialog MUST advance to authorized state
+    await act(async () => {
+      resolveList({
+        bridge_running: true,
+        bridge_base_url: "http://127.0.0.1:43210",
+        routes: [makeRoute()],
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText(/Authorization complete/i)).toBeInTheDocument()
+      expect(
+        screen.getByRole("button", { name: /Review bridge changes/i })
+      ).toBeInTheDocument()
+      expect(screen.getByLabelText(/Goose/i)).toBeInTheDocument()
+    })
+    expect(onOAuthChanged2).toHaveBeenCalledTimes(1)
+    expect(onOAuthChanged1).not.toHaveBeenCalled()
+  })
+
+  it("advances waiting dialog via oauthSnapshot / existingRoute fallback even when event was missed, without false-triggering on stale re-auth", async () => {
+    const model = makeModel()
+    mocks.mcpOAuthStart.mockResolvedValue({
+      flow_id: "flow-fallback-1",
+      route_id: "route-notion",
+      upstream_url: "https://mcp.notion.com/mcp",
+      authorization_url: "https://auth.notion.com/authorize?state=fb1",
+      callback_url: "http://127.0.0.1:43210/oauth/callback",
+      expires_at: "2026-11-27T01:00:00Z",
+      registration_mode: "dynamic",
+    })
+
+    const initialRoute = makeRoute({
+      status: "authorized",
+      updated_at: "2026-11-27T00:00:00Z",
+    })
+    const initialSnapshot: McpOAuthBridgeSnapshot = {
+      bridge_running: true,
+      bridge_base_url: "http://127.0.0.1:43210",
+      routes: [initialRoute],
+    }
+
+    const { rerender } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <McpOAuthDialog
+          serverKey="notion"
+          upstreamUrl="https://mcp.notion.com/mcp"
+          transport="http"
+          existingRoute={initialRoute}
+          oauthSnapshot={initialSnapshot}
+          availableTargets={model.agents}
+          model={model}
+          onClose={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
+
+    // Re-authorizing an already-authorized route must STAY in waiting state
+    // while `updated_at` matches the pre-flow baseline
+    fireEvent.click(
+      screen.getByRole("button", { name: /Authorize in browser/i })
+    )
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Waiting for browser callback/i)
+      ).toBeInTheDocument()
+    })
+
+    // Parent snapshot updates with a newer `updated_at` (no WS event emitted to dialog)
+    const freshRoute = makeRoute({
+      status: "authorized",
+      updated_at: "2026-11-27T00:05:00Z",
+      scopes: ["read", "write", "admin"],
+    })
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <McpOAuthDialog
+          serverKey="notion"
+          upstreamUrl="https://mcp.notion.com/mcp"
+          transport="http"
+          existingRoute={freshRoute}
+          oauthSnapshot={{
+            bridge_running: true,
+            bridge_base_url: "http://127.0.0.1:43210",
+            routes: [freshRoute],
+          }}
+          availableTargets={model.agents}
+          model={model}
+          onClose={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText(/Authorization complete/i)).toBeInTheDocument()
+      expect(screen.getByText("admin")).toBeInTheDocument()
+      expect(
+        screen.getByRole("button", { name: /Review bridge changes/i })
+      ).toBeInTheDocument()
+    })
+  })
 })

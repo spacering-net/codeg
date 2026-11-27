@@ -344,6 +344,17 @@ function McpDialogs({ model }: { model: McpModel | null }) {
   const { snapshot: oauthSnapshot, refresh: refreshOAuth } = useMcpOAuth({
     active: dialog?.kind === "oauth",
   })
+  const oauthDialogId = dialog?.kind === "oauth" ? dialog.id : null
+  const handleOAuthClose = useCallback(() => {
+    if (oauthDialogId !== null) closeDialog(slots, oauthDialogId)
+  }, [slots, oauthDialogId])
+  const handleOAuthApplied = useCallback(
+    () => reloadMcpInventory(slots).done,
+    [slots]
+  )
+  const handleOAuthChanged = useCallback(() => {
+    void refreshOAuth()
+  }, [refreshOAuth])
   if (!dialog) return null
   switch (dialog.kind) {
     case "editor":
@@ -392,9 +403,9 @@ function McpDialogs({ model }: { model: McpModel | null }) {
           model={model}
           oauthSnapshot={oauthSnapshot}
           initialMode={dialog.initialMode}
-          onClose={() => closeDialog(slots, dialog.id)}
-          onApplied={() => reloadMcpInventory(slots).done}
-          onOAuthChanged={() => void refreshOAuth()}
+          onClose={handleOAuthClose}
+          onApplied={handleOAuthApplied}
+          onOAuthChanged={handleOAuthChanged}
         />
       )
     }
