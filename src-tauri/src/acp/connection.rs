@@ -16619,12 +16619,12 @@ async fn run_conversation_loop(
                             // refusal / max_tokens / …) leaves unclaimed
                             // tool_call ids that must be tombstoned so a late
                             // host re-emit cannot mis-bind the next same-key
-                            // delegation. The turn's RUNNING children are
-                            // deliberately left alone — background work by the
+                            // delegation, and may leave a delegation mid-setup
+                            // whose task_id the turn never got (torn down).
+                            // The turn's RUNNING children are deliberately
+                            // left alone — background work by the
                             // delegate_to_agent contract, collected by the
-                            // next turn's status polls (2026-10-31: the old
-                            // cascade-cancel here killed seven children of one
-                            // coordinator on owner interrupts alone).
+                            // next turn's status polls.
                             if reason_str != "end_turn" {
                                 if let Some(inj) = delegation_injection {
                                     inj.broker.detach_parent_turn(conn_id).await;
@@ -16926,23 +16926,19 @@ async fn run_conversation_loop(
                                     // bookkeeping (tombstone unclaimed ids; a
                                     // re-emit must not mis-bind the next
                                     // same-key delegation) and leave the
-                                    // children running: they are background
-                                    // work by the delegate_to_agent contract,
-                                    // their results land in the
+                                    // acked children running: they are
+                                    // background work by the delegate_to_agent
+                                    // contract, their results land in the
                                     // completed-cache, and the next turn's
-                                    // status polls collect them. What still
-                                    // kills them: cancel_delegation per task,
-                                    // the connection teardown
-                                    // (cancel_by_parent at run_connection
-                                    // exit), the child's own terminal turn —
-                                    // and the agent CLI's own
-                                    // `notifications/cancelled` for a
-                                    // delegation call still in its setup
-                                    // window. (2026-10-31: the old
-                                    // cascade-cancel here was the single
-                                    // biggest child killer — seven children of
-                                    // one coordinator, ~1.2 h, on interrupts
-                                    // as mild as a progress question.)
+                                    // status polls collect them. A delegation
+                                    // still in its setup window is torn down
+                                    // (its task_id never reached the turn).
+                                    // What still kills running ones:
+                                    // cancel_delegation per task, an explicit
+                                    // stop of this connection's work, the
+                                    // connection teardown (cancel_by_parent
+                                    // at run_connection exit), and the child's
+                                    // own terminal turn.
                                     if let Some(inj) = delegation_injection {
                                         inj.broker.detach_parent_turn(conn_id).await;
                                         // Reclaim any parked `ask_user_question` /
@@ -17224,7 +17220,8 @@ async fn run_conversation_loop(
                 drain_permissions(perms, state, emitter).await;
                 // Cancel between prompts: same turn-scoped detach as the inner
                 // Cancel handler — tombstone the dying turn's unclaimed
-                // tool_call ids, leave delegated children running. The
+                // tool_call ids, tear down setups still in flight, leave
+                // acked delegated children running. The
                 // connection stays alive, so keep the parent's `consumed`
                 // memory (a re-emit must not mis-bind the next same-key
                 // delegation).

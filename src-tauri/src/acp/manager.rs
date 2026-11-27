@@ -814,6 +814,17 @@ impl ConnectionManager {
         self.delegation_injection.get().cloned()
     }
 
+    /// Cancel every delegated child `conn_id` still runs, the connection
+    /// itself staying up. For an explicit stop of the work a connection does:
+    /// a turn cancel alone leaves the children running (they are background
+    /// work — see `DelegationBroker::detach_parent_turn`), and a disconnect
+    /// cascades by itself. No-op without delegation installed.
+    pub async fn cancel_delegated_children(&self, conn_id: &str) {
+        if let Some(injection) = self.delegation_injection.get() {
+            injection.broker.cancel_children_of_parent(conn_id).await;
+        }
+    }
+
     /// Returns the shared terminal-shell setting consumed by ACP terminal
     /// runtimes. Keeping the handle shared makes saves apply immediately to
     /// connections that are already running.

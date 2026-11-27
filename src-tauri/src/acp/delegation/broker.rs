@@ -30,11 +30,13 @@
 //!       - a cancel — MCP-side (`notifications/cancelled` →
 //!         [`DelegationBroker::cancel_by_external_handle`]), child-side
 //!         ([`DelegationBroker::cancel_by_child_connection`]), parent-side
-//!         connection teardown ([`DelegationBroker::cancel_by_parent`]), or
-//!         the LLM's own [`DelegationBroker::cancel_task_by_id`]. A parent
-//!         TURN ending (cleanly or not) no longer cancels anything — it
-//!         detaches ([`DelegationBroker::detach_parent_turn`]) and the
-//!         children keep running.
+//!         connection teardown ([`DelegationBroker::cancel_by_parent`]) or
+//!         an explicit stop of the parent's work
+//!         ([`DelegationBroker::cancel_children_of_parent`]), or the LLM's own
+//!         [`DelegationBroker::cancel_task_by_id`]. A parent TURN ending
+//!         (cleanly or not) cancels no running task — it detaches
+//!         ([`DelegationBroker::detach_parent_turn`]) and the children keep
+//!         running.
 //!
 //! v1 is explicitly one-shot — no session reuse. The one exception is
 //! [`DelegationBroker::resume_delegation`]: an INTERRUPTED task (canceled, or
@@ -48,11 +50,15 @@
 //! task's terminal STATUS (via [`ChildStatusLookup`]); the full output is always
 //! viewable in the child's own session.
 //!
-//! Cancellation cascade: when a parent session goes away (user-initiated
-//! cancel, parent disconnect), the lifecycle subscriber calls
-//! [`DelegationBroker::cancel_by_parent`] which fans out cancel + disconnect
-//! to every running child of that parent. A normal `end_turn` does NOT cancel
-//! children — they keep running in the background (the whole point of async).
+//! Cancellation cascade: when a parent connection goes away (disconnect,
+//! session deleted), the lifecycle calls [`DelegationBroker::cancel_by_parent`]
+//! which fans out cancel + disconnect to every running child of that parent;
+//! an explicit stop of the parent's work does the same through
+//! [`DelegationBroker::cancel_children_of_parent`]. A parent TURN ending —
+//! `end_turn`, a user interrupt, or any other reason — does NOT cancel
+//! children whose task_id was handed out: they keep running in the background
+//! (the whole point of async). Only setups still in flight are torn down
+//! ([`DelegationBroker::detach_parent_turn`]).
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -369,10 +375,11 @@ struct PendingCalls {
 ///   * `cancel_by_child_connection` — a freshly-spawned child connection dying
 ///     before its first prompt is answered. Keyed by `child_connection_id`.
 ///
-/// Parent-side connection teardown (`cancel_by_parent`) is
+/// Parent-side cancels (`cancel_by_parent` / `cancel_children_of_parent`, and
+/// the setup-only flagging of `detach_parent_turn`) are
 /// covered symmetrically by the `inflight` registry: `handle_request` registers
 /// each setup at entry, and `mark_inflight_canceled_for_parent` runs in the SAME
-/// lock acquisition that drains the parked `calls`. A teardown landing
+/// lock acquisition that drains the parked `calls`. A parent cancel landing
 /// while a child is still mid-setup therefore flags the in-flight record, and
 /// `handle_request` observes the flag at its next checkpoint (or atomically at
 /// park) and tears the child down itself — it is no longer left to the child's
@@ -3539,17 +3546,49 @@ impl DelegationBroker {
     /// the caller awaits it before the connection loop accepts the next
     /// prompt, so it can't race a next-turn registration.
     ///
-    /// What still kills children: `cancel_delegation` (the per-task tool), a
-    /// parent CONNECTION teardown ([`Self::cancel_by_parent`]), the agent's own
-    /// `notifications/cancelled` for a still-in-setup delegation call
-    /// ([`Self::cancel_by_external_handle`]), and the child's own terminal
-    /// turn. A mid-setup delegation whose host never cancels its MCP call
-    /// completes into the completed-cache with its task_id unacknowledged —
-    /// wasted, but bounded (the child is one-shot) and no worse than the same
-    /// race on an `end_turn`.
+    /// A delegation still in its SETUP window is the exception: its
+    /// `delegate_to_agent` call has not answered yet, so the dying turn will
+    /// never see its task_id and nothing could ever poll or cancel it. Those
+    /// setups are flagged canceled (the same `inflight` flag a connection
+    /// teardown uses), so `start_delegation` tears their child down at its
+    /// next checkpoint instead of starting work nobody tracks — hosts that do
+    /// send `notifications/cancelled` on an interrupt reach the same end via
+    /// [`Self::cancel_by_external_handle`]. Only delegations whose ack already
+    /// went out keep running.
+    ///
+    /// What else still kills children: `cancel_delegation` (the per-task
+    /// tool), an explicit stop of the parent's work
+    /// ([`Self::cancel_children_of_parent`]), a parent CONNECTION teardown
+    /// ([`Self::cancel_by_parent`]), and the child's own terminal turn.
     pub async fn detach_parent_turn(&self, parent_connection_id: &str) {
         self.drop_tool_calls_for_parent(parent_connection_id, true)
             .await;
+        self.pending
+            .inner
+            .lock()
+            .await
+            .mark_inflight_canceled_for_parent(parent_connection_id);
+    }
+
+    /// Cancel every delegation `parent_connection_id` still runs while the
+    /// parent connection STAYS ALIVE — for an explicit stop of the parent's
+    /// work (a personal assistant stopping work it handed out), not for a
+    /// mere turn interrupt, which [`Self::detach_parent_turn`] handles.
+    ///
+    /// The fast part — tombstoning the tool_call tracker (RETAINING
+    /// `consumed`, see `drop_tool_calls_for_parent`), flagging in-flight
+    /// setups and draining the running tasks into the completed-cache as
+    /// `Canceled` so the still-alive LLM can query them — runs inline; only
+    /// the slow child teardown (meta/emit + spawner `cancel` / `disconnect`,
+    /// which can block on slow agents) is backgrounded.
+    pub async fn cancel_children_of_parent(&self, parent_connection_id: &str) {
+        let drained = self
+            .drain_for_parent_cancel(parent_connection_id, true)
+            .await;
+        let broker = self.clone();
+        tokio::spawn(async move {
+            broker.finalize_parent_cancel(drained).await;
+        });
     }
 
     /// Fast, lock-guarded part of a parent cancel: drop/tombstone this parent's
@@ -3559,7 +3598,7 @@ impl DelegationBroker {
     /// it is safe to await inline in the connection loop before the next prompt
     /// is accepted.
     ///
-    /// `keep_consumed` also governs the completed-cache: a **turn** cancel
+    /// `keep_consumed` also governs the completed-cache: a **live-parent** cancel
     /// (`true`) records each drained task as `Canceled` so the still-alive
     /// connection's LLM can still query it; a **connection teardown** (`false`)
     /// drops the parent's whole completed-cache instead — the parent is gone, so
@@ -3571,8 +3610,8 @@ impl DelegationBroker {
     ) -> Vec<(RunningTask, u64)> {
         // Also drain any tool_call ids captured ahead of an MCP round-trip that
         // never arrived — keeps the map bounded across parent reconnects.
-        // Teardown drops the whole bucket; a turn cancel keeps `consumed` so a
-        // later re-emit can't mis-bind the next delegation.
+        // Teardown drops the whole bucket; a live-parent cancel keeps
+        // `consumed` so a later re-emit can't mis-bind the next delegation.
         self.drop_tool_calls_for_parent(parent_connection_id, keep_consumed)
             .await;
         let drained = {
@@ -3590,8 +3629,8 @@ impl DelegationBroker {
                 .map(|(k, _)| k.clone())
                 .collect();
             if keep_consumed {
-                // Turn cancel: connection stays alive → keep each canceled
-                // result queryable.
+                // Live-parent cancel: connection stays alive → keep each
+                // canceled result queryable.
                 drain_and_record_canceled(&mut inner, keys, "parent canceled")
             } else {
                 // Connection teardown: just remove the running tasks and drop the
@@ -3616,9 +3655,9 @@ impl DelegationBroker {
 
     /// Slow part of a parent cancel: for each drained task, patch the parent
     /// meta, emit `DelegationCompleted`, and tear the child down. The canceled
-    /// result was already recorded into `completed` (turn cancel) by
+    /// result was already recorded into `completed` (live-parent cancel) by
     /// `drain_for_parent_cancel` under the lock, so this is pure I/O. Split out
-    /// so a turn cancel can background it without delaying the fast, turn-scoped
+    /// so a live-parent cancel can background it without delaying the fast
     /// drain.
     async fn finalize_parent_cancel(&self, drained: Vec<(RunningTask, u64)>) {
         for (task, duration_ms) in drained {
@@ -8253,6 +8292,93 @@ mod tests {
             "a post-resolution teardown must not buffer a spurious cancel"
         );
         assert_eq!(broker.pending_count().await, 0);
+    }
+
+    /// A turn detach still tears down a delegation caught in its SETUP window:
+    /// its `delegate_to_agent` call never answered the dying turn, so no
+    /// task_id reached the LLM and nothing could ever poll or cancel the child.
+    /// Only acked (running) delegations survive a turn interrupt.
+    #[tokio::test]
+    async fn turn_detach_in_spawn_window_still_tears_the_unacked_child_down() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("c-setup".into())).await;
+        mock.queue_send(Ok(99)).await; // staged but must NOT be consumed
+        let release = mock.install_spawn_gate().await;
+        let broker =
+            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup());
+        enable_delegation(&broker).await;
+
+        let driver = {
+            let broker = broker.clone();
+            tokio::spawn(async move { broker.handle_request(request(1, "pt-setup")).await })
+        };
+        loop {
+            if !mock.spawn_args.lock().await.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(broker.inflight_count().await, 1);
+
+        broker.detach_parent_turn("parent-conn").await;
+        let _ = release.send(());
+
+        match driver.await.unwrap() {
+            DelegationOutcome::Err { code, .. } => assert_eq!(code, "canceled"),
+            other => panic!("expected canceled, got {other:?}"),
+        }
+        assert_eq!(mock.disconnects.lock().await.as_slice(), &["c-setup"]);
+        assert_eq!(
+            mock.send_results.lock().await.len(),
+            1,
+            "no prompt may reach a child whose task_id the parent never got"
+        );
+        assert_eq!(broker.inflight_count().await, 0);
+    }
+
+    /// An explicit stop of the parent's work (`cancel_children_of_parent`, the
+    /// connection staying up) still cascades: the tracker is tombstoned and the
+    /// parked delegation drained synchronously, then the child is torn down in
+    /// the background and the result recorded as canceled exactly once.
+    #[tokio::test]
+    async fn cancel_children_of_parent_drains_synchronously_then_tears_down_child() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("child-1".into())).await;
+        mock.queue_send(Ok(7)).await;
+        let broker =
+            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup());
+        enable_delegation(&broker).await;
+
+        let driver = {
+            let broker = broker.clone();
+            tokio::spawn(async move { broker.handle_request(request(1, "pt-1")).await })
+        };
+        while broker.pending_count().await == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        broker
+            .register_pending_tool_call_with_key(
+                "parent-conn",
+                "tc-z".into(),
+                Some(task_key("task Z")),
+            )
+            .await;
+
+        broker.cancel_children_of_parent("parent-conn").await;
+
+        // Synchronously — no sleep.
+        assert_eq!(broker.pending_count().await, 0);
+        assert!(broker
+            .take_matching_tool_call("parent-conn", &task_key("task Z"))
+            .await
+            .is_none());
+
+        match driver.await.unwrap() {
+            DelegationOutcome::Err { code, .. } => assert_eq!(code, "canceled"),
+            other => panic!("expected canceled, got {other:?}"),
+        }
+        assert_eq!(mock.cancels.lock().await.as_slice(), &["child-1"]);
+        assert_eq!(mock.disconnects.lock().await.as_slice(), &["child-1"]);
     }
 
     // -- Item 1: parent-cancel coverage of the `handle_request` setup window --
