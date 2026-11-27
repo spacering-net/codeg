@@ -78,7 +78,7 @@ pub struct DbConversationSummary {
     pub agent_type: AgentType,
     pub status: String,
     /// Mirrors `conversation.kind` — drives sidebar visibility/grouping
-    /// (serialized as "regular" | "chat" | "loop" | "delegate" | "ask").
+    /// See `ConversationKind` for the supported values.
     pub kind: ConversationKind,
     pub model: Option<String>,
     pub git_branch: Option<String>,

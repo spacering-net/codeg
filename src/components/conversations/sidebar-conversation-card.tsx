@@ -9,6 +9,7 @@ import {
 } from "react"
 import {
   AtSign,
+  ArrowUpCircle,
   Pencil,
   Trash2,
   Circle,
@@ -30,6 +31,9 @@ import {
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
 import { useTabStore } from "@/contexts/tab-context"
+import { toast } from "sonner"
+import { acpBtwPromote } from "@/lib/api"
+import { toErrorMessage } from "@/lib/app-error"
 import { emitAttachSessionToSession } from "@/lib/session-attachment-events"
 import type { DbConversationSummary, ConversationStatus } from "@/lib/types"
 import { STATUS_ORDER } from "@/lib/types"
@@ -817,6 +821,21 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
               <Pencil className="h-4 w-4" />
               {t("rename")}
             </ContextMenuItem>
+            {/* `/btw` side questions only: the one action that is not the
+                ordinary row verbs (rename/pin/delete). The delete item below
+                already covers destroying the fork. */}
+            {conversation.kind === "btw" && (
+              <ContextMenuItem
+                onSelect={() =>
+                  void acpBtwPromote(conversation.id).catch((e) =>
+                    toast.error(toErrorMessage(e))
+                  )
+                }
+              >
+                <ArrowUpCircle className="h-4 w-4" />
+                {t("promoteBtw")}
+              </ContextMenuItem>
+            )}
             {onTogglePin && (
               <ContextMenuItem
                 onSelect={() => onTogglePin(conversation.id, !isPinned)}

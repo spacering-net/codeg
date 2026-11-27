@@ -2577,6 +2577,13 @@ pub struct AvailableCommandInfo {
     /// together with `skill`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_path: Option<String>,
+    /// A codeg-synthesized command (no agent advertised it): `/btw` today.
+    /// The composer must INTERCEPT these, not forward them — an agent that
+    /// natively advertises the same name keeps the forwarding behavior, so the
+    /// frontend distinguishes by this flag, not by the name. Left off the wire
+    /// when false, keeping every real command's payload byte-identical.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub client: bool,
 }
 
 /// Claude Code's Remote Control for a session that has it on: the session can

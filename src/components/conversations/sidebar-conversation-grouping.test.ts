@@ -17,9 +17,9 @@ import {
   RECENT_PAGE_SIZE,
   reuseSelected,
   reuseSet,
-  selectChatConversationsWithReuse,
   selectPinnedWithReuse,
   classifyRecentConversation,
+  selectUnpinnedConversationsByKind,
   selectRecentConversationsWithReuse,
   worktreeChildrenByParent,
   worktreeHeaderAlias,
@@ -120,6 +120,8 @@ describe("conversationRowTimestamp", () => {
     foldersExpanded: true,
     chatConversations: [],
     chatsExpanded: true,
+    btwConversations: [],
+    btwExpanded: true,
     recentConversations: [parent],
     showRecent: true,
     conversationExpanded: new Set([1]),
@@ -178,6 +180,8 @@ describe("conversationRowTimestamp", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       containerChildren: new Map([[10, [11]]]),
     }).filter((r): r is ConversationRow => r.kind === "conversation")
     expect(nested.map((r) => [r.conversation.id, r.depth])).toEqual([
@@ -214,6 +218,8 @@ describe("conversationRowTimestamp", () => {
       foldersExpanded: true,
       chatConversations: [chat],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
     }).filter((r): r is ConversationRow => r.kind === "conversation")
     expect(chatRows.map((r) => r.conversation.id)).toEqual([4, 3])
     expect(chatRows.map((r) => conversationRowTimestamp(r, "created"))).toEqual(
@@ -478,6 +484,8 @@ describe("buildRows", () => {
       foldersExpanded,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
     })
     const chatsIdx = rows.findIndex(
       (r) => r.kind === "section" && r.section === "chats"
@@ -599,6 +607,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
     })
     expect(rows[0]).toEqual({
       kind: "section",
@@ -631,6 +641,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
     })
     // Pinned section collapsed → header only; the always-present Folders and Chat
     // sections trail (both empty → header + hint).
@@ -664,6 +676,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [c1, c2],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
     })
     const foldersIdx = rows.findIndex(
       (r) => r.kind === "section" && r.section === "folders"
@@ -707,6 +721,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [conv(3, 99)],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       recentConversations: [conv(2, 10)],
       showRecent: true,
       sectionOrder: ["recent", "chats", "folders"],
@@ -731,6 +747,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [conv(2, 99)],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
     }
     // The explicit default order and the omitted one agree — and neither emits
     // a Recent section, since `showRecent` is off unless a caller opts in.
@@ -753,6 +771,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       recentConversations: [conv(1, 10)],
       showRecent: true,
       // Repeated entry + a missing section: "recent" is emitted once, up front,
@@ -773,6 +793,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
     })
     const chatsIdx = rows.findIndex(
       (r) => r.kind === "section" && r.section === "chats"
@@ -801,6 +823,8 @@ describe("buildRows", () => {
       foldersExpanded: false,
       chatConversations: [],
       chatsExpanded: false,
+      btwConversations: [],
+      btwExpanded: true,
     })
     expect(rows).toEqual([
       { kind: "section", section: "folders", expanded: false, count: 0 },
@@ -819,6 +843,8 @@ describe("buildRows", () => {
       foldersExpanded: false,
       chatConversations: [conv(1, 99)],
       chatsExpanded: false,
+      btwConversations: [],
+      btwExpanded: true,
     })
     expect(rows).toEqual([
       { kind: "section", section: "folders", expanded: false, count: 0 },
@@ -841,6 +867,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [conv(1, 99)],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
     })
     const foldersIdx = rows.findIndex(
       (r) => r.kind === "section" && r.section === "folders"
@@ -870,6 +898,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       conversationExpanded: new Set([1]),
       childrenByParent: new Map([[1, [childA, childB]]]),
     })
@@ -893,6 +923,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       conversationExpanded: new Set(),
       childrenByParent: new Map([[1, [childA]]]),
     })
@@ -913,6 +945,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       conversationExpanded: new Set([1]),
       childrenByParent: new Map(),
     })
@@ -935,6 +969,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       conversationExpanded: new Set([1]),
       childrenByParent: new Map([[1, []]]),
     })
@@ -958,6 +994,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       conversationExpanded: new Set([1, 100]),
       childrenByParent: new Map([
         [1, [child]],
@@ -984,6 +1022,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       conversationExpanded: new Set([1]),
       childrenByParent: new Map([[1, [child]]]),
     })
@@ -1005,6 +1045,8 @@ describe("buildRows", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       conversationExpanded: new Set([1]),
       childrenByParent: new Map([[1, []]]),
       childrenLoading: new Set([1]),
@@ -1019,6 +1061,8 @@ describe("buildRows", () => {
 
 describe("buildRows — the personal assistants", () => {
   const base = {
+    btwConversations: [],
+    btwExpanded: false,
     pinned: [],
     pinnedExpanded: true,
     orderedFolderIds: [10],
@@ -1081,6 +1125,8 @@ describe("buildRows — Recent section", () => {
     foldersExpanded: true,
     chatConversations: [] as DbConversationSummary[],
     chatsExpanded: true,
+    btwConversations: [],
+    btwExpanded: true,
   }
 
   it("emits no rows at all — not even a header — when showRecent is off", () => {
@@ -1330,6 +1376,8 @@ describe("buildRows — Show worktrees container tree", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       containerChildren: new Map([[10, [11]]]),
     })
     expect(trimChats(rows)).toEqual([
@@ -1356,6 +1404,8 @@ describe("buildRows — Show worktrees container tree", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       containerChildren: new Map([[10, [11]]]),
     })
     // Container header only — no root-group, no worktree rows.
@@ -1380,6 +1430,8 @@ describe("buildRows — Show worktrees container tree", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       containerChildren: new Map([[10, [11]]]),
       rootGroupCollapsed: new Set([10]),
     })
@@ -1406,6 +1458,8 @@ describe("buildRows — Show worktrees container tree", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       containerChildren: new Map([[10, [11]]]),
     })
     expect(trimChats(rows)).toEqual([
@@ -1433,6 +1487,8 @@ describe("buildRows — Show worktrees container tree", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       // Only repo 10 is a container; repo 20 stays a plain flat folder.
       containerChildren: new Map([[10, [11]]]),
     })
@@ -1470,7 +1526,7 @@ describe("mergeChildrenById", () => {
   })
 })
 
-describe("selectChatConversationsWithReuse", () => {
+describe("chat sidebar section selection", () => {
   it("selects only chat-kind conversations, newest-updated first, excluding pinned", () => {
     const a = conv(1, 99, { kind: "chat" })
     const b = conv(2, 99, { kind: "chat" }) // higher id → later updated_at
@@ -1479,8 +1535,9 @@ describe("selectChatConversationsWithReuse", () => {
       pinned_at: new Date(5000).toISOString(),
     })
     const folderConv = conv(4, 10)
-    const out = selectChatConversationsWithReuse(
+    const out = selectUnpinnedConversationsByKind(
       [a, b, pinnedChat, folderConv],
+      "chat",
       true,
       []
     )
@@ -1491,12 +1548,12 @@ describe("selectChatConversationsWithReuse", () => {
     const done = conv(1, 99, { kind: "chat", status: "completed" })
     const active = conv(2, 99, { kind: "chat" })
     expect(
-      selectChatConversationsWithReuse([done, active], false, []).map(
+      selectUnpinnedConversationsByKind([done, active], "chat", false, []).map(
         (c) => c.id
       )
     ).toEqual([2])
     expect(
-      selectChatConversationsWithReuse([done, active], true, [])
+      selectUnpinnedConversationsByKind([done, active], "chat", true, [])
         .map((c) => c.id)
         .sort()
     ).toEqual([1, 2])
@@ -1504,8 +1561,8 @@ describe("selectChatConversationsWithReuse", () => {
 
   it("returns the prev array when membership is referentially unchanged", () => {
     const a = conv(1, 99, { kind: "chat" })
-    const first = selectChatConversationsWithReuse([a], true, [])
-    const second = selectChatConversationsWithReuse([a], true, first)
+    const first = selectUnpinnedConversationsByKind([a], "chat", true, [])
+    const second = selectUnpinnedConversationsByKind([a], "chat", true, first)
     expect(second).toBe(first)
   })
 })
@@ -1944,6 +2001,8 @@ describe("buildRows under a tag filter (hideEmptyFolders)", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       containerChildren: args.containerChildren,
       layout: args.layout,
       hideEmptyFolders: args.hideEmptyFolders,
@@ -2074,6 +2133,100 @@ describe("buildRows under a tag filter (hideEmptyFolders)", () => {
   })
 })
 
+describe("btw sidebar section selection", () => {
+  it("takes unpinned btw rows newest-first and nothing else", () => {
+    const older = conv(1, 10, { kind: "btw", parent_id: 7 })
+    const newer = conv(2, 10, { kind: "btw", parent_id: 7 })
+    const pinned = conv(3, 10, { kind: "btw", pinned_at: newer.updated_at })
+    const done = conv(4, 10, { kind: "btw", status: "completed" })
+    const out = selectUnpinnedConversationsByKind(
+      [conv(0, 10), older, pinned, done, newer],
+      "btw",
+      false,
+      []
+    )
+    expect(out.map((c) => c.id)).toEqual([2, 1])
+  })
+
+  it("keeps completed forks when the sidebar shows completed", () => {
+    const done = conv(4, 10, { kind: "btw", status: "completed" })
+    const out = selectUnpinnedConversationsByKind([done], "btw", true, [])
+    expect(out.map((c) => c.id)).toEqual([4])
+  })
+
+  it("reuses the previous array while the set is unchanged", () => {
+    const row = conv(1, 10, { kind: "btw" })
+    const prev = selectUnpinnedConversationsByKind([row], "btw", false, [])
+    const again = selectUnpinnedConversationsByKind(
+      [row, conv(2, 10)],
+      "btw",
+      false,
+      prev
+    )
+    expect(again).toBe(prev)
+  })
+})
+
+describe("btw section", () => {
+  const fork = (id: number) =>
+    conv(id, 10, { kind: "btw", parent_id: 1, title_locked: true })
+
+  const baseArgs = (btwConversations: DbConversationSummary[]) => ({
+    pinned: [],
+    pinnedExpanded: true,
+    orderedFolderIds: [10],
+    byFolder: new Map([[10, []]]),
+    folderExpanded: { 10: true },
+    folderTotalCounts: new Map([[10, 0]]),
+    foldersExpanded: true,
+    chatConversations: [],
+    chatsExpanded: true,
+    btwConversations,
+    btwExpanded: true,
+  })
+
+  it("is absent while no side question exists", () => {
+    const rows = buildRows(baseArgs([]))
+    expect(rows.some((r) => r.kind === "section" && r.section === "btw")).toBe(
+      false
+    )
+  })
+
+  it("renders header and rows when expanded, header alone when collapsed", () => {
+    const expanded = buildRows(baseArgs([fork(3), fork(2)]))
+    const header = expanded.find(
+      (r) => r.kind === "section" && r.section === "btw"
+    )
+    expect(header).toMatchObject({ count: 2, expanded: true })
+    expect(
+      expanded
+        .filter((r): r is ConversationRow => r.kind === "conversation")
+        .map((r) => r.conversation.id)
+    ).toEqual([3, 2])
+
+    const collapsed = buildRows({
+      ...baseArgs([fork(3), fork(2)]),
+      btwExpanded: false,
+    })
+    expect(collapsed.filter((r) => r.kind === "conversation")).toEqual([])
+    expect(
+      collapsed.find((r) => r.kind === "section" && r.section === "btw")
+    ).toMatchObject({ expanded: false, count: 2 })
+  })
+
+  it("rides the shared section order between chats and recent", () => {
+    const rows = buildRows({
+      ...baseArgs([fork(2)]),
+      recentConversations: [conv(9, 10)],
+      showRecent: true,
+    })
+    const order = rows
+      .filter((r) => r.kind === "section")
+      .map((r) => (r.kind === "section" ? r.section : ""))
+    expect(order).toEqual(["folders", "chats", "btw", "recent"])
+  })
+})
+
 describe("classifyRecentConversation", () => {
   // Built from LOCAL calendar fields, like the boundaries under test, so the
   // cases hold in every time zone the suite runs in.
@@ -2141,6 +2294,8 @@ describe("buildRows Recent time grouping", () => {
     foldersExpanded: false,
     chatConversations: [],
     chatsExpanded: false,
+    btwConversations: [],
+    btwExpanded: false,
     recentExpanded: true,
     showRecent: true,
     currentTime: now,

@@ -2398,7 +2398,8 @@
       "sectionAssistants": "Assistenten",
       "timeGroupPrioritiesTooltip": "Enthält aktuell laufende Sitzungen",
       "recentGroupingModeTime": "Zu Zeitgruppierung wechseln",
-      "recentGroupingModeFlat": "Zu flacher Liste wechseln"
+      "recentGroupingModeFlat": "Zu flacher Liste wechseln",
+      "sectionBtw": "Nebenfragen"
     },
     "conversation": {
       "reloadFailed": "Konversation konnte nicht neu geladen werden: {message}",
@@ -2527,7 +2528,8 @@
       "markCompleted": "Als abgeschlossen markieren",
       "reopen": "Erneut öffnen",
       "expandSubsessions": "Unterkonversationen einblenden",
-      "collapseSubsessions": "Unterkonversationen ausblenden"
+      "collapseSubsessions": "Unterkonversationen ausblenden",
+      "promoteBtw": "In Chats übernehmen"
     },
     "moveConversation": {
       "menuLabel": "Verschieben nach",
@@ -3522,7 +3524,7 @@
           "downloadFailed": "{agent}-Download fehlgeschlagen: {message}",
           "sessionLoadResourceNotFound": "{agent}-Sitzung konnte nicht geladen werden. Neu laden, um es erneut zu versuchen, oder eine neue Konversation starten.",
           "sessionLoadUnavailable": "{agent} konnte diese Sitzung nicht wiederherstellen – sie wurde möglicherweise beendet oder der Agent wurde gestoppt. Neu laden, um es erneut zu versuchen, oder eine neue Konversation starten.",
-          "sessionLoadBusy": "Diese Sitzung ist an anderer Stelle geöffnet. Hat ein anderer {agent}-Client (App, CLI oder IDE-Erweiterung) sie offen, schließe sie dort oder beende diesen Client und lade dann neu. Hast du sie gerade verzweigt, lade in etwa einer Minute neu.",
+          "sessionLoadBusy": "Diese Sitzung ist an anderer Stelle geöffnet. Hat ein anderer {agent}-Client (App, CLI oder IDE-Erweiterung) sie offen, schließe sie dort oder beende diesen Client und lade dann neu.",
           "sessionLoadProviderMismatch": "Diese Unterhaltung wurde mit einem anderen Modellanbieter begonnen, als {agent} jetzt verwendet, und {agent} setzt eine Unterhaltung nur mit ihrem eigenen Anbieter fort. Wechsle in den Einstellungen von {agent} zurück zu diesem Anbieter und lade neu, oder beginne eine neue Unterhaltung. ({detail})",
           "sessionArchived": "Die vorherige Sitzung wurde auf {agent}-Seite archiviert. Führe {command} im Terminal aus, um sie wiederherzustellen und neu zu laden, oder starte eine neue Unterhaltung.",
           "turnFailedRefusal": "{agent} hat die Fortsetzung dieser Runde abgelehnt. Häufig deutet das auf einen Backend- oder Gateway-Fehler hin. Bitte prüfen Sie die Agent-Logs.",
@@ -3670,7 +3672,8 @@
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Fähigkeiten",
         "mentionGroupAssistant": "Assistenten",
-        "mentionManageAssistants": "Assistenten verwalten…"
+        "mentionManageAssistants": "Assistenten verwalten…",
+        "btwDescription": "Nebenfrage in einer Kopie dieser Unterhaltung stellen"
       },
       "messageQueue": {
         "addToQueue": "Zur Warteschlange",
@@ -13340,6 +13343,11 @@
     "errorsPlain": {
       "rateLimited": "SRN hat Codeg gebeten, vor einem neuen Versuch zu warten.",
       "server": "SRN hat mit einem Fehler geantwortet."
+    }
+  },
+  "errors": {
+    "btw": {
+      "unsupportedAgent": "Dieser Agent unterstützt keine Nebenfragen (Session-Fork und Resume erforderlich)."
     }
   }
 }

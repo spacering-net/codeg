@@ -95,6 +95,7 @@ import { isDesktop } from "@/lib/platform"
 import { ChromeReserve } from "@/components/layout/chrome-reserve"
 import { leftChromeReserve, rightChromeReserve } from "@/lib/window-chrome"
 import {
+  acpBtwCreate,
   acpFork,
   acpStopAsyncTask,
   createChatConversation,
@@ -113,7 +114,11 @@ import {
 } from "@/lib/queue-flush"
 import { TurnBusyError } from "@/lib/turn-busy"
 import { deliverQueuedSteer } from "@/lib/queued-steer"
-import { toErrorMessage } from "@/lib/app-error"
+import {
+  toErrorMessage,
+  toLocalizedErrorMessage,
+  type AppErrorTranslator,
+} from "@/lib/app-error"
 import { blockingPrompts } from "@/lib/blocking-prompts"
 import { notify } from "@/lib/notify"
 import {
@@ -322,6 +327,7 @@ const ConversationTabView = memo(function ConversationTabView({
   const folderId = ownFolderId ?? 0
   const {
     bindConversationTab,
+    openTab,
     setChatDraftWorkingDir,
     setTabRuntimeConversationId,
     pinTab,
@@ -1188,6 +1194,59 @@ const ConversationTabView = memo(function ConversationTabView({
     }
   }, [effectiveConversationId, groupId, setPendingCleanup, tabId])
 
+  const tBtwErrors = useTranslations("errors")
+  const handleBtw = useCallback(
+    async (question: string): Promise<boolean> => {
+      if (conn.connectionId === null || dbConversationId === null) {
+        return false
+      }
+      // The child lives in the parent's folder — taken from the row itself,
+      // not this tab's folderId, which is 0 in chat mode (the row is the
+      // truth; the tab's folder is only the fallback for a conversation that
+      // has no row yet, where the fork is refused anyway above).
+      const parentRow = useAppWorkspaceStore
+        .getState()
+        .conversations.find((c) => c.id === dbConversationId)
+      const targetFolderId = parentRow?.folder_id ?? folderId
+      if (targetFolderId === 0) return false
+      try {
+        const created = await acpBtwCreate(
+          conn.connectionId,
+          dbConversationId,
+          question
+        )
+        const opened = useAskConversationDrawerStore.getState().openExisting({
+          kind: "btw",
+          parentConversationId: dbConversationId,
+          conversationId: created.conversationId,
+          agentType: selectedAgent,
+          folderId: targetFolderId,
+          workingDir: workingDirForConnection ?? null,
+        })
+        if (!opened) {
+          openTab(targetFolderId, created.conversationId, selectedAgent)
+        }
+        return true
+      } catch (e) {
+        toast.error(
+          toLocalizedErrorMessage(
+            e,
+            tBtwErrors as unknown as AppErrorTranslator
+          )
+        )
+        return false
+      }
+    },
+    [
+      conn.connectionId,
+      dbConversationId,
+      folderId,
+      openTab,
+      selectedAgent,
+      tBtwErrors,
+      workingDirForConnection,
+    ]
+  )
   const handleSend = useCallback(
     (
       draft: PromptDraft,
@@ -2775,6 +2834,7 @@ const ConversationTabView = memo(function ConversationTabView({
       showActiveFlow={showActiveFlow}
       queue={msgQueue}
       onEnqueue={handleComposerEnqueue}
+      onBtw={handleBtw}
       onQueueReorder={mqReorder}
       onQueueEdit={handleQueueEdit}
       onQueueDelete={mqRemove}

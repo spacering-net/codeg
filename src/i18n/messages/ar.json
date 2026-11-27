@@ -2398,7 +2398,8 @@
       "sectionAssistants": "المساعدون",
       "timeGroupPrioritiesTooltip": "يتضمن الجلسات قيد التشغيل حاليًا",
       "recentGroupingModeTime": "التبديل إلى التجميع حسب الوقت",
-      "recentGroupingModeFlat": "التبديل إلى قائمة بسيطة"
+      "recentGroupingModeFlat": "التبديل إلى قائمة بسيطة",
+      "sectionBtw": "أسئلة جانبية"
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",
@@ -2527,7 +2528,8 @@
       "markCompleted": "وضع علامة كمكتمل",
       "reopen": "إعادة فتح",
       "expandSubsessions": "توسيع المحادثات الفرعية",
-      "collapseSubsessions": "طي المحادثات الفرعية"
+      "collapseSubsessions": "طي المحادثات الفرعية",
+      "promoteBtw": "ترقية إلى محادثة"
     },
     "moveConversation": {
       "menuLabel": "نقل إلى",
@@ -3522,7 +3524,7 @@
           "downloadFailed": "فشل تنزيل {agent}: {message}",
           "sessionLoadResourceNotFound": "فشل تحميل جلسة {agent}. أعد التحميل لإعادة المحاولة، أو ابدأ محادثة جديدة.",
           "sessionLoadUnavailable": "تعذّر على {agent} استعادة هذه الجلسة، فقد تكون انتهت أو توقّف الوكيل. أعد التحميل لإعادة المحاولة، أو ابدأ محادثة جديدة.",
-          "sessionLoadBusy": "هذه الجلسة مفتوحة في مكان آخر. إن كان عميل {agent} آخر (التطبيق أو واجهة سطر الأوامر أو إضافة IDE) يفتحها، فأغلقها هناك أو أنهِ ذلك العميل ثم أعد التحميل. وإن كنت قد فرّعتها للتو، فأعد التحميل بعد دقيقة تقريبًا.",
+          "sessionLoadBusy": "هذه الجلسة مفتوحة في مكان آخر. إن كان عميل {agent} آخر (التطبيق أو واجهة سطر الأوامر أو إضافة IDE) يفتحها، فأغلقها هناك أو أنهِ ذلك العميل ثم أعد التحميل.",
           "sessionLoadProviderMismatch": "بدأت هذه المحادثة بمزوّد نماذج مختلف عن الذي يستخدمه {agent} الآن، ولا يتابع {agent} المحادثة إلا على مزوّدها الأصلي. عُد إلى ذلك المزوّد في إعدادات {agent} ثم أعد التحميل، أو ابدأ محادثة جديدة. ({detail})",
           "sessionArchived": "تمت أرشفة الجلسة السابقة من جهة {agent}. شغّل {command} في الطرفية لاستعادتها وإعادة تحميلها، أو ابدأ محادثة جديدة.",
           "turnFailedRefusal": "رفض {agent} متابعة هذه الجولة. يدل ذلك غالبًا على خطأ في الخلفية أو البوابة. يرجى مراجعة سجلات الوكيل.",
@@ -3670,7 +3672,8 @@
         "mentionGroupCommit": "عمليات الإيداع",
         "mentionGroupSkill": "المهارات",
         "mentionGroupAssistant": "المساعدون",
-        "mentionManageAssistants": "إدارة المساعدين…"
+        "mentionManageAssistants": "إدارة المساعدين…",
+        "btwDescription": "اطرح سؤالاً جانبياً في نسخة من هذه المحادثة"
       },
       "messageQueue": {
         "addToQueue": "إضافة للقائمة",
@@ -13340,6 +13343,11 @@
     "errorsPlain": {
       "rateLimited": "طلب SRN من Codeg الانتظار قبل إعادة المحاولة.",
       "server": "ردّ SRN بخطأ."
+    }
+  },
+  "errors": {
+    "btw": {
+      "unsupportedAgent": "هذا الوكيل لا يدعم الأسئلة الجانبية (يتطلب تفريع الجلسة واستئنافها)."
     }
   }
 }

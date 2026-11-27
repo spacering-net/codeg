@@ -143,8 +143,8 @@ import {
   RECENT_PAGE_SIZE,
   reuseSelected,
   reuseSet,
-  selectChatConversationsWithReuse,
   selectPinnedWithReuse,
+  selectUnpinnedConversationsByKind,
   selectRecentConversationsWithReuse,
   worktreeChildrenByParent,
   worktreeHeaderAlias,
@@ -1184,6 +1184,7 @@ export function SidebarConversationList({
   const rosterDialogs = useSidebarRosterDialogs()
   const foldersExpanded = !sectionCollapsed.folders
   const chatsExpanded = !sectionCollapsed.chats
+  const btwExpanded = !sectionCollapsed.btw
   const recentExpanded = !sectionCollapsed.recent
   // Which kinds the Recent section lists (all / chats / folder sessions).
   // Persisted: it is a view preference, not a reading gesture. Hydrated from
@@ -1559,8 +1560,10 @@ export function SidebarConversationList({
   // Pinned section, and folderless chat conversations in the dedicated Chat
   // section, so exclude both here; then apply the completed filter as before.
   const folderConversations = useMemo(() => {
+    // `btw` rows carry a `folder_id` but live in their own section (they name
+    // a parent, and the folder group renders roots) — exclude like chats.
     const base = listedConversations.filter(
-      (c) => c.pinned_at == null && c.kind !== "chat"
+      (c) => c.pinned_at == null && c.kind !== "chat" && c.kind !== "btw"
     )
     if (showCompleted) return base
     return base.filter((c) => c.status !== "completed")
@@ -1570,14 +1573,26 @@ export function SidebarConversationList({
   // first, with reference reuse (so an unrelated status event doesn't rebuild it
   // and defeat the section's memo). Pinned chats live in the Pinned section.
   const chatConvsRef = useRef<DbConversationSummary[]>([])
+  const btwConvsRef = useRef<DbConversationSummary[]>([])
   /* eslint-disable react-hooks/refs -- render-time identity cache: reuses the previous value when equal so memoised children skip work */
   const chatConversations = useMemo(() => {
-    const next = selectChatConversationsWithReuse(
+    const next = selectUnpinnedConversationsByKind(
       listedConversations,
+      "chat",
       showCompleted,
       chatConvsRef.current
     )
     chatConvsRef.current = next
+    return next
+  }, [listedConversations, showCompleted])
+  const btwConversations = useMemo(() => {
+    const next = selectUnpinnedConversationsByKind(
+      listedConversations,
+      "btw",
+      showCompleted,
+      btwConvsRef.current
+    )
+    btwConvsRef.current = next
     return next
   }, [listedConversations, showCompleted])
   /* eslint-enable react-hooks/refs */
@@ -1669,13 +1684,14 @@ export function SidebarConversationList({
   // Counts the unfiltered-but-non-pinned conversations per display group, so the
   // empty-hint renderer distinguishes a truly empty folder from one whose rows
   // are merely hidden by the completed filter. Pinned conversations are excluded
-  // (they're not in this folder's bucket), matching `byFolder`. So are the
-  // assistants' conversations while they are hidden: a folder holding only
-  // those reads as empty, not as one whose sessions are all finished.
+  // (they're not in this folder's bucket), matching `byFolder`. btw rows are
+  // excluded too: they never render inside the folder list (they sit in the
+  // global btw section), so counting them would hide the empty hint for a
+  // folder that shows nothing.
   const folderTotalCounts = useMemo(() => {
     const map = new Map<number, number>()
     for (const conv of conversations) {
-      if (conv.pinned_at != null) continue
+      if (conv.pinned_at != null || conv.kind === "btw") continue
       if (!showAssistant && conv.source === "personal_agent") continue
       const groupId = displayChildToParent.get(conv.folder_id) ?? conv.folder_id
       map.set(groupId, (map.get(groupId) ?? 0) + 1)
@@ -1807,6 +1823,8 @@ export function SidebarConversationList({
         foldersExpanded,
         chatConversations,
         chatsExpanded,
+        btwConversations,
+        btwExpanded,
         recentConversations,
         recentExpanded,
         showRecent,
@@ -1836,6 +1854,8 @@ export function SidebarConversationList({
       foldersExpanded,
       chatConversations,
       chatsExpanded,
+      btwConversations,
+      btwExpanded,
       recentConversations,
       recentExpanded,
       showRecent,

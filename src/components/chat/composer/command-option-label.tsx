@@ -1,4 +1,5 @@
 import { BookOpenText } from "lucide-react"
+import { useTranslations } from "next-intl"
 
 import type { AvailableCommandInfo } from "@/lib/types"
 
@@ -30,6 +31,14 @@ export function CommandOptionLabel({
 }) {
   const hint = commandInputHint(command)
   const skillPath = skill ? command.skill_path || undefined : undefined
+  const t = useTranslations("Folder.chat.messageInput")
+  // A codeg-synthesized command ships a fixed English placeholder (the
+  // backend has no locale); the menu localizes it by name. When more client
+  // commands exist, this becomes the map it is obviously heading toward.
+  const description =
+    command.client && command.name === "btw"
+      ? t("btwDescription")
+      : command.description
   return (
     <>
       {kindColumn ? (
@@ -54,7 +63,7 @@ export function CommandOptionLabel({
         </span>
       ) : null}
       <span className="truncate text-xs text-muted-foreground">
-        {command.description}
+        {description}
       </span>
     </>
   )

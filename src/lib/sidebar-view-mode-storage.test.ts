@@ -36,8 +36,8 @@ const NAV_ITEMS_KEY = "workspace:sidebar-nav-items"
 describe("normalizeSectionOrder", () => {
   it("passes a complete order through unchanged", () => {
     expect(
-      normalizeSectionOrder(["recent", "chats", "assistants", "folders"])
-    ).toEqual(["recent", "chats", "assistants", "folders"])
+      normalizeSectionOrder(["recent", "chats", "assistants", "folders", "btw"])
+    ).toEqual(["recent", "chats", "assistants", "folders", "btw"])
   })
 
   it("puts the assistants right above the folders in a store from before them", () => {
@@ -48,22 +48,26 @@ describe("normalizeSectionOrder", () => {
       "chats",
       "assistants",
       "folders",
+      "btw",
     ])
     expect(normalizeSectionOrder(["folders", "chats", "recent"])).toEqual([
       "assistants",
       "folders",
       "chats",
       "recent",
+      "btw",
     ])
   })
 
   it("appends the other missing sections in default order", () => {
     // Forward compatibility in reverse: a store written before "Recent" existed
-    // gets it at the bottom rather than losing the section entirely.
+    // gets it at the bottom rather than losing the section entirely — and a
+    // store from before the btw section gets THAT appended in id order too.
     expect(normalizeSectionOrder(["chats", "folders"])).toEqual([
       "chats",
       "assistants",
       "folders",
+      "btw",
       "recent",
     ])
   })
@@ -71,15 +75,19 @@ describe("normalizeSectionOrder", () => {
   it("drops unknown entries and repeats", () => {
     expect(
       normalizeSectionOrder(["recent", "bogus", "recent", 7, null, "chats"])
-    ).toEqual(["recent", "chats", "assistants", "folders"])
+    ).toEqual(["recent", "chats", "assistants", "folders", "btw"])
   })
 
   it("migrates the legacy two-way strings, preserving the user's choice", () => {
+    // The pre-Recent layout, completed: the sections absent from the stored
+    // value are appended in default order, so the newer btw sits behind the
+    // older recent rather than jumping into its default slot.
     expect(normalizeSectionOrder("chats-first")).toEqual([
       "chats",
       "assistants",
       "folders",
       "recent",
+      "btw",
     ])
     expect(normalizeSectionOrder("folders-first")).toEqual(
       DEFAULT_SECTION_ORDER
@@ -132,20 +140,22 @@ describe("section-order persistence", () => {
   beforeEach(() => localStorage.clear())
 
   it("round-trips through localStorage", () => {
-    saveSectionOrder(["recent", "folders", "assistants", "chats"])
+    saveSectionOrder(["recent", "folders", "assistants", "chats", "btw"])
     expect(loadSectionOrder()).toEqual([
       "recent",
       "folders",
       "assistants",
       "chats",
+      "btw",
     ])
   })
 
-  it("defaults to Assistants → Folders → Chat → Recent with nothing stored", () => {
+  it("defaults to Assistants → Folders → Chat → Btw → Recent with nothing stored", () => {
     expect(loadSectionOrder()).toEqual([
       "assistants",
       "folders",
       "chats",
+      "btw",
       "recent",
     ])
   })
@@ -159,6 +169,7 @@ describe("section-order persistence", () => {
       "assistants",
       "folders",
       "recent",
+      "btw",
     ])
   })
 

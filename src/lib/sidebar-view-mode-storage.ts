@@ -41,6 +41,7 @@ export const SIDEBAR_SECTION_IDS = [
   "assistants",
   "folders",
   "chats",
+  "btw",
   "recent",
 ] as const
 
@@ -64,7 +65,7 @@ export type SidebarSectionKey = (typeof SIDEBAR_SECTION_KEYS)[number]
  */
 export type SidebarSectionOrder = readonly SidebarSectionId[]
 
-/** The assistants, then Folders, then Chat, then Recent. */
+/** The assistants, then Folders, then Chat, then btw and Recent. */
 export const DEFAULT_SECTION_ORDER: SidebarSectionOrder = SIDEBAR_SECTION_IDS
 
 /** Collapsed state of the top-level sidebar sections. Absent key = expanded
@@ -74,6 +75,7 @@ export interface SidebarSectionCollapsed {
   assistants?: boolean
   folders?: boolean
   chats?: boolean
+  btw?: boolean
   recent?: boolean
 }
 
@@ -133,7 +135,7 @@ function isSectionId(value: unknown): value is SidebarSectionId {
  */
 export function normalizeSectionOrder(value: unknown): SidebarSectionOrder {
   if (value === "chats-first")
-    return ["chats", "assistants", "folders", "recent"]
+    return normalizeSectionOrder(["chats", "assistants", "folders", "recent"])
   if (value === "folders-first") return DEFAULT_SECTION_ORDER
   if (!Array.isArray(value)) return DEFAULT_SECTION_ORDER
   const seen = new Set<SidebarSectionId>()

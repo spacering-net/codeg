@@ -118,6 +118,10 @@ interface ConversationShellProps {
   showActiveFlow?: boolean
   queue?: QueuedMessage[]
   onEnqueue?: (draft: PromptDraft, modeId: string | null) => void
+  /** `/btw <question>` intercept — see `MessageInputProps.onBtw`. */
+  onBtw?: (question: string) => Promise<boolean>
+  /** The session's newest `/btw` side question, for the strip under the
+   *  composer. `null` renders nothing (the common case). */
   onQueueReorder?: (items: QueuedMessage[]) => void
   onQueueEdit?: (id: string) => void
   onQueueDelete?: (id: string) => void
@@ -206,6 +210,7 @@ export function ConversationShell({
   showActiveFlow,
   queue,
   onEnqueue,
+  onBtw,
   onQueueReorder,
   onQueueEdit,
   onQueueDelete,
@@ -333,6 +338,7 @@ export function ConversationShell({
               showActiveFlow={showActiveFlow}
               queue={queue}
               onEnqueue={onEnqueue}
+              onBtw={onBtw}
               onQueueReorder={onQueueReorder}
               onQueueEdit={onQueueEdit}
               onQueueDelete={onQueueDelete}

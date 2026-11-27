@@ -458,7 +458,8 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
     // New rows prepend (most-recent-first); existing rows replace in place to
     // keep their position.
     applyConversationUpsert: (summary) => {
-      if (summary.parent_id != null) return
+      // Side questions appear in their own section despite having a parent.
+      if (summary.parent_id != null && summary.kind !== "btw") return
       // The personal agent's own sessions live on its page, never in the
       // sidebar (the backend's list leaves them out too).
       if (summary.kind === "personal") return

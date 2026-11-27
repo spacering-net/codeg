@@ -117,6 +117,7 @@ import {
 import {
   applyExpertReference,
   blankLineAfter,
+  extractBtwQuestion,
   isComposerEmpty,
   restampExpertNames,
   restampSkillPrefixes,
@@ -235,6 +236,11 @@ interface MessageInputProps {
    *  `isActive` (which still drives auto-focus/connect). */
   showActiveFlow?: boolean
   onEnqueue?: (draft: PromptDraft, modeId: string | null) => void
+  /** Takes the `/btw <question>` side-question draft (codeg's synthesized
+   *  `client` command — see `AvailableCommandInfo.client`). Resolves true when
+   *  the question was handed to the backend; false keeps the text in the
+   *  composer, so a failed creation never eats the question. */
+  onBtw?: (question: string) => Promise<boolean>
   /** Id of the queue item being edited — the stable key for (re)hydration, so
    *  switching between two items with identical display text still reloads. */
   editingItemId?: string | null
@@ -349,6 +355,7 @@ export function MessageInput({
   isActive = false,
   showActiveFlow = false,
   onEnqueue,
+  onBtw,
   editingItemId,
   editingDraftText,
   editingDraftBlocks,
@@ -1632,20 +1639,37 @@ export function MessageInput({
     historyDraftRef.current = null
   }, [clearAttachments, closeSlashMenu])
 
-  // Async steering must compare against the current draft, including images
-  // added or removed while delivery was awaiting confirmation.
+  // One `/btw` in flight at a time: the fork RPC takes seconds, and Enter
+  // pressed again in that window would fork the same prefix a second time and
+  // stack a duplicate child row behind the first.
+  const btwInFlightRef = useRef(false)
+
+  // Async sends compare against the latest draft, including attachments.
   const currentComposerRef = useRef({
     buildDraft,
     draftStorageKey: effectiveDraftStorageKey,
   })
-  // Only read after an await in the steer handler, so syncing it after commit
-  // is early enough.
   useLayoutEffect(() => {
     currentComposerRef.current = {
       buildDraft,
       draftStorageKey: effectiveDraftStorageKey,
     }
   })
+
+  const isCurrentDraft = useCallback(
+    (
+      draft: PromptDraft,
+      editor: ReturnType<RichComposerHandle["getEditor"]> | undefined
+    ) => {
+      const current = currentComposerRef.current
+      return (
+        current.draftStorageKey === effectiveDraftStorageKey &&
+        editorRef.current?.getEditor() === editor &&
+        JSON.stringify(current.buildDraft()) === JSON.stringify(draft)
+      )
+    },
+    [effectiveDraftStorageKey]
+  )
 
   const handleSend = useCallback(() => {
     // The editor stays editable while `disabled` (the agent is busy) so the user
@@ -1668,6 +1692,32 @@ export function MessageInput({
     if (isEditingQueueItem && onSaveQueueEdit) {
       onSaveQueueEdit(draft)
       resetComposer()
+      return
+    }
+
+    // Route text-only client /btw commands before the queue, even mid-turn.
+    const btwQuestion = extractBtwQuestion(draft.displayText)
+    if (
+      btwQuestion !== null &&
+      onBtw &&
+      draft.blocks.every((block) => block.type === "text") &&
+      slashCommands.some((cmd) => cmd.name === "btw" && cmd.client)
+    ) {
+      if (btwInFlightRef.current) return
+      btwInFlightRef.current = true
+      const sentEditor = editorRef.current?.getEditor()
+      void onBtw(btwQuestion)
+        .then((consumed) => {
+          if (consumed && isCurrentDraft(draft, sentEditor)) {
+            if (effectiveDraftStorageKey) {
+              clearMessageInputDraftV2(effectiveDraftStorageKey)
+            }
+            resetComposer()
+          }
+        })
+        .finally(() => {
+          btwInFlightRef.current = false
+        })
       return
     }
 
@@ -1703,6 +1753,9 @@ export function MessageInput({
     isPrompting,
     onSaveQueueEdit,
     onEnqueue,
+    onBtw,
+    slashCommands,
+    isCurrentDraft,
     onSend,
     effectiveModeId,
     showModeSelector,
@@ -1738,14 +1791,7 @@ export function MessageInput({
     // Keep the whole edited draft: appending during delivery can retain text
     // already sent, but clearing or trimming it would discard the user's edits.
     const clearSentDraft = () => {
-      const current = currentComposerRef.current
-      if (
-        current.draftStorageKey === effectiveDraftStorageKey &&
-        editorRef.current?.getEditor() === sentEditor &&
-        JSON.stringify(current.buildDraft()) === JSON.stringify(draft)
-      ) {
-        resetComposer()
-      }
+      if (isCurrentDraft(draft, sentEditor)) resetComposer()
     }
     const enqueueInstead = () => {
       if (!onEnqueue) return
@@ -1781,7 +1827,7 @@ export function MessageInput({
     onEnqueue,
     showModeSelector,
     effectiveModeId,
-    effectiveDraftStorageKey,
+    isCurrentDraft,
     resetComposer,
     steerChannel,
     t,

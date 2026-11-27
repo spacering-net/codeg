@@ -2398,7 +2398,8 @@
       "sectionAssistants": "Assistants",
       "timeGroupPrioritiesTooltip": "Includes active sessions currently running",
       "recentGroupingModeTime": "Switch to time grouping",
-      "recentGroupingModeFlat": "Switch to flat list"
+      "recentGroupingModeFlat": "Switch to flat list",
+      "sectionBtw": "Btw"
     },
     "conversation": {
       "reloadFailed": "Failed to reload conversation: {message}",
@@ -2527,7 +2528,8 @@
       "markCompleted": "Mark as completed",
       "reopen": "Reopen",
       "expandSubsessions": "Expand sub-conversations",
-      "collapseSubsessions": "Collapse sub-conversations"
+      "collapseSubsessions": "Collapse sub-conversations",
+      "promoteBtw": "Promote to chat"
     },
     "moveConversation": {
       "menuLabel": "Move to",
@@ -3522,7 +3524,7 @@
           "downloadFailed": "{agent} download failed: {message}",
           "sessionLoadResourceNotFound": "{agent} session failed to load. Reload to retry, or start a new conversation.",
           "sessionLoadUnavailable": "{agent} couldn't restore this session — it may have ended or the agent stopped. Reload to retry, or start a new conversation.",
-          "sessionLoadBusy": "This session is open elsewhere. If another {agent} client (the app, the CLI or an IDE extension) has it, close it there or quit that client, then reload. If you just forked it, reload in about a minute.",
+          "sessionLoadBusy": "This session is open elsewhere. If another {agent} client (the app, the CLI or an IDE extension) has it, close it there or quit that client, then reload.",
           "sessionLoadProviderMismatch": "This conversation was started with a different model provider than the one {agent} uses now, and {agent} only continues a conversation on its own provider. Switch back to that provider in {agent}'s settings and reload, or start a new conversation. ({detail})",
           "sessionArchived": "The previous session was archived on the {agent} side. Run {command} in a terminal to restore it and reload, or start a new conversation.",
           "turnFailedRefusal": "{agent} refused to continue this turn. This often indicates a backend or gateway error — check the agent's logs.",
@@ -3670,7 +3672,8 @@
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Skills",
         "mentionGroupAssistant": "Assistants",
-        "mentionManageAssistants": "Manage assistants…"
+        "mentionManageAssistants": "Manage assistants…",
+        "btwDescription": "Ask a side question in a copy of this conversation"
       },
       "messageQueue": {
         "addToQueue": "Queue message",
@@ -13340,6 +13343,11 @@
     "errorsPlain": {
       "rateLimited": "SRN asked Codeg to wait before trying again.",
       "server": "SRN answered with an error."
+    }
+  },
+  "errors": {
+    "btw": {
+      "unsupportedAgent": "This agent does not support side questions (session fork and resume are required)."
     }
   }
 }

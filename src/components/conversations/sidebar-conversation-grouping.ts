@@ -132,7 +132,7 @@ export function formatRelative(iso: string, now: number): string {
  * - Recent's and Chat's own rows read `updated_at`. Both sections order by
  *   last activity whatever `sortMode` says (see
  *   {@link selectRecentConversationsWithReuse} and
- *   {@link selectChatConversationsWithReuse}). A Chat row is recognised by what
+ *   {@link selectUnpinnedConversationsByKind}). A Chat row is recognised by what
  *   that bucket admits: a chat-kind conversation that is not pinned (a pinned
  *   one sits in Pinned instead).
  * - Every other row follows `sortMode`: the Folders rows, which are sorted by
@@ -281,28 +281,17 @@ export function selectPinnedWithReuse(
   return arraysShallowEqual(prev, next) ? prev : next
 }
 
-/**
- * Select the folderless "chat mode" conversations (`kind === "chat"`) for the
- * flat "Chat" sidebar section. Sorted most-recently-updated first whatever the
- * sidebar's `sortMode` says, and labelled with that same stamp (see
- * {@link conversationRowTimestamp}), with reference reuse (same motivation as
- * {@link selectPinnedWithReuse}).
- *
- * Excludes pinned conversations (they surface in the Pinned section, an explicit
- * override) and — unless `showCompleted` — completed ones, matching how
- * `folderConversations` is filtered for the folders section.
- *
- * `prev` is the array returned last call (threaded via a ref by the caller).
- */
-export function selectChatConversationsWithReuse(
+/** Select a flat sidebar section by conversation kind, most recently updated first. */
+export function selectUnpinnedConversationsByKind(
   conversations: readonly DbConversationSummary[],
+  kind: "chat" | "btw",
   showCompleted: boolean,
   prev: DbConversationSummary[]
 ): DbConversationSummary[] {
   const next: DbConversationSummary[] = []
   for (const conv of conversations) {
     if (conv.pinned_at != null) continue
-    if (conv.kind !== "chat") continue
+    if (conv.kind !== kind) continue
     if (!showCompleted && conv.status === "completed") continue
     next.push(conv)
   }
@@ -1314,7 +1303,7 @@ function pushConversationRow(
  *
  * Structure (top to bottom): the "Pinned" section (when present) is always
  * first; the "Folders", "Chat" and "Recent" sections follow in the order set by
- * `sectionOrder` (default Folders → Chat → Recent). Each section's own
+ * `sectionOrder` (default Folders → Chat → btw → Recent). Each section's own
  * presence/expansion rules are unchanged by that order:
  * - The "Pinned" section header + its conversations appear only when `pinned`
  *   is non-empty, and its rows only when `pinnedExpanded`.
@@ -1355,6 +1344,8 @@ export function buildRows(args: {
   folderTotalCounts: Map<number, number>
   foldersExpanded: boolean
   chatConversations: readonly DbConversationSummary[]
+  btwConversations: readonly DbConversationSummary[]
+  btwExpanded: boolean
   chatsExpanded: boolean
   /** The flat "Recent" bucket — every reachable conversation, folder-bound and
    *  chat alike (or just one kind, under the user's filter), most recently
@@ -1449,6 +1440,8 @@ export function buildRows(args: {
     folderTotalCounts,
     foldersExpanded,
     chatConversations,
+    btwConversations,
+    btwExpanded,
     chatsExpanded,
     recentConversations = EMPTY_CONVERSATIONS,
     recentExpanded = true,
@@ -1619,30 +1612,29 @@ export function buildRows(args: {
     if (rows.length === rowsBefore) rows.push({ kind: "folders-empty" })
   }
 
-  const pushChats = () => {
-    // The Chat section header is always present (a permanent entry point),
-    // unlike the conditional Pinned/Folders headers.
+  const pushChatSection = (
+    section: "chats" | "btw",
+    conversations: readonly DbConversationSummary[],
+    expanded: boolean
+  ) => {
+    if (section === "btw" && conversations.length === 0) return
     rows.push({
       kind: "section",
-      section: "chats",
-      expanded: chatsExpanded,
-      count: chatConversations.length,
+      section,
+      expanded,
+      count: conversations.length,
     })
-    if (chatsExpanded) {
-      if (chatConversations.length === 0) {
-        rows.push({ kind: "chats-empty" })
-      } else {
-        for (const conv of chatConversations) {
-          pushConversationRow(
-            rows,
-            conv,
-            0,
-            conversationExpanded,
-            childrenByParent,
-            childrenLoading
-          )
-        }
-      }
+    if (!expanded) return
+    if (conversations.length === 0) rows.push({ kind: "chats-empty" })
+    for (const conv of conversations) {
+      pushConversationRow(
+        rows,
+        conv,
+        0,
+        conversationExpanded,
+        childrenByParent,
+        childrenLoading
+      )
     }
   }
 
@@ -1739,7 +1731,10 @@ export function buildRows(args: {
       })
       if (assistants.expanded) rows.push({ kind: "assistants" })
     } else if (section === "folders") pushFolders()
-    else if (section === "chats") pushChats()
+    else if (section === "chats")
+      pushChatSection(section, chatConversations, chatsExpanded)
+    else if (section === "btw")
+      pushChatSection(section, btwConversations, btwExpanded)
     else if (section === "recent" && showRecent) pushRecent()
   }
 

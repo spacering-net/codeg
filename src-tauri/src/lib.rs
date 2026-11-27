@@ -2292,6 +2292,8 @@ mod tauri_app {
                 acp_commands::acp_describe_agent_options,
                 acp_commands::acp_cancel,
                 acp_commands::acp_fork,
+                crate::commands::btw::btw_create,
+                crate::commands::btw::btw_promote,
                 acp_commands::acp_stop_async_task,
                 acp_commands::acp_respond_permission,
                 acp_commands::acp_answer_question,

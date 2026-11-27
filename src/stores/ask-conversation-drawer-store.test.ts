@@ -63,6 +63,29 @@ describe("ask conversation drawer store", () => {
     ).toBe(9)
   })
 
+  it("keeps an unsent ask safe when a completed /btw fork tries to open", () => {
+    openNew()
+    const store = useAskConversationDrawerStore.getState()
+    const fork = {
+      kind: "btw" as const,
+      parentConversationId: 1,
+      conversationId: 9,
+      agentType: "claude_code" as const,
+      folderId: 3,
+      workingDir: "/repo",
+    }
+    expect(store.openExisting(fork)).toBe(false)
+    expect(store.close()).toBe(false)
+
+    store.consumeInitialSend(store.target!.contextKey)
+    expect(store.openExisting(fork)).toBe(true)
+    expect(useAskConversationDrawerStore.getState().target).toMatchObject({
+      kind: "btw",
+      conversationId: 9,
+      initialSend: null,
+    })
+  })
+
   it("closes freely once the first message has been handed over", () => {
     openNew()
     const { contextKey } = useAskConversationDrawerStore.getState().target!

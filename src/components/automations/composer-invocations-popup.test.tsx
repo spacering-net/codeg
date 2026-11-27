@@ -12,9 +12,12 @@
  * outside-press that closes the host).
  */
 import { render, screen } from "@testing-library/react"
+import { NextIntlClientProvider } from "next-intl"
 import { describe, expect, it } from "vitest"
 
 import type { AvailableCommandInfo } from "@/lib/types"
+
+import enMessages from "@/i18n/messages/en.json"
 
 import {
   ComposerInvocationsPopup,
@@ -47,10 +50,14 @@ function invocations(
 /** The shape every host uses: the popup inside the composer's chrome box. */
 function renderInHost(inv: ComposerInvocations) {
   return render(
-    <div data-testid="composer-chrome" className="relative">
-      <ComposerInvocationsPopup inv={inv} />
-      <textarea aria-label="composer" />
-    </div>
+    // A host always sits under the app's provider; the rows' labels read
+    // translations for codeg-synthesized commands (`/btw`).
+    <NextIntlClientProvider locale="en" messages={enMessages}>
+      <div data-testid="composer-chrome" className="relative">
+        <ComposerInvocationsPopup inv={inv} />
+        <textarea aria-label="composer" />
+      </div>
+    </NextIntlClientProvider>
   )
 }
 

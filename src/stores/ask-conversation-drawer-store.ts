@@ -12,10 +12,8 @@ export interface AskConversationDrawerTarget {
   /** ACP connection key of the drawer's surface — stable for as long as this
    *  target is open, and the drawer's remount key. */
   contextKey: string
-  /** An ask conversation, or a check of a message (the personal agent's "is
-   *  this right?"): which of its main conversation's lists it is on. A new
-   *  one is always an ask. */
-  kind: LinkedConversationKind
+  /** An ask, a message check, or an existing /btw fork. */
+  kind: LinkedConversationKind | "btw"
   /** The main conversation the ask belongs to (its list is where the drawer's
    *  header looks the ask's title up). */
   parentConversationId: number
@@ -47,7 +45,7 @@ interface AskConversationDrawerState {
    *  on show keeps its surface (and connection key) as it is. `false` when
    *  refused. */
   openExisting: (args: {
-    kind: LinkedConversationKind
+    kind: AskConversationDrawerTarget["kind"]
     parentConversationId: number
     conversationId: number
     agentType: AgentType
@@ -119,7 +117,10 @@ export const useAskConversationDrawerStore =
       openExisting: (args) => {
         const current = get().target
         if (current?.conversationId === args.conversationId) return true
-        if (!mayLeave()) return false
+        // A /btw fork can open in a tab, so leave the unsent ask in place.
+        if (args.kind === "btw" ? holdsUnsentMessage(get()) : !mayLeave()) {
+          return false
+        }
         release()
         set({
           discardArmed: false,

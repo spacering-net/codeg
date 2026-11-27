@@ -2398,7 +2398,8 @@
       "sectionAssistants": "Asistentes",
       "timeGroupPrioritiesTooltip": "Incluye sesiones actualmente en ejecución",
       "recentGroupingModeTime": "Cambiar a agrupación por fecha",
-      "recentGroupingModeFlat": "Cambiar a lista plana"
+      "recentGroupingModeFlat": "Cambiar a lista plana",
+      "sectionBtw": "Preguntas aparte"
     },
     "conversation": {
       "reloadFailed": "No se pudo recargar la conversación: {message}",
@@ -2527,7 +2528,8 @@
       "markCompleted": "Marcar como completada",
       "reopen": "Reabrir",
       "expandSubsessions": "Expandir subconversaciones",
-      "collapseSubsessions": "Contraer subconversaciones"
+      "collapseSubsessions": "Contraer subconversaciones",
+      "promoteBtw": "Convertir en conversación"
     },
     "moveConversation": {
       "menuLabel": "Mover a",
@@ -3522,7 +3524,7 @@
           "downloadFailed": "La descarga de {agent} falló: {message}",
           "sessionLoadResourceNotFound": "Error al cargar la sesión de {agent}. Recarga para reintentar o inicia una nueva conversación.",
           "sessionLoadUnavailable": "{agent} no pudo restaurar esta sesión; es posible que haya finalizado o que el agente se haya detenido. Recarga para reintentar o inicia una nueva conversación.",
-          "sessionLoadBusy": "Esta sesión está abierta en otro lugar. Si la tiene abierta otro cliente de {agent} (la app, la CLI o una extensión del IDE), ciérrala allí o sal de ese cliente y vuelve a cargar. Si acabas de bifurcarla, vuelve a cargar en un minuto.",
+          "sessionLoadBusy": "Esta sesión está abierta en otro lugar. Si la tiene abierta otro cliente de {agent} (la app, la CLI o una extensión del IDE), ciérrala allí o sal de ese cliente y vuelve a cargar.",
           "sessionLoadProviderMismatch": "Esta conversación se inició con un proveedor de modelos distinto del que usa ahora {agent}, y {agent} solo continúa una conversación con su propio proveedor. Vuelve a ese proveedor en la configuración de {agent} y recarga, o inicia una conversación nueva. ({detail})",
           "sessionArchived": "La sesión anterior fue archivada por {agent}. Ejecuta {command} en una terminal para restaurarla y recargarla, o inicia una conversación nueva.",
           "turnFailedRefusal": "{agent} rechazó continuar este turno. Suele indicar un error de backend o pasarela. Revisa los registros del agente.",
@@ -3670,7 +3672,8 @@
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Habilidades",
         "mentionGroupAssistant": "Asistentes",
-        "mentionManageAssistants": "Gestionar asistentes…"
+        "mentionManageAssistants": "Gestionar asistentes…",
+        "btwDescription": "Hacer una pregunta aparte en una copia de esta conversación"
       },
       "messageQueue": {
         "addToQueue": "Agregar a la cola",
@@ -13340,6 +13343,11 @@
     "errorsPlain": {
       "rateLimited": "SRN pidió a Codeg esperar antes de reintentar.",
       "server": "SRN respondió con un error."
+    }
+  },
+  "errors": {
+    "btw": {
+      "unsupportedAgent": "Este agente no admite preguntas aparte (requiere bifurcación y reanudación de sesión)."
     }
   }
 }

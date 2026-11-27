@@ -1043,10 +1043,8 @@ fn merge_antigravity_settings(
 /// every thread it starts, resumes or forks.
 const CODEX_CONFIG_ENV: &str = "CODEX_CONFIG";
 
-/// How long codex keeps a thread loaded after its last subscriber leaves, for
-/// codeg's sessions: codex's own default up to 0.163 (see
-/// [`apply_codex_env_policy`]).
-const CODEX_THREAD_UNLOAD_DELAY_SECS: u64 = 60;
+/// Unload an idle Codex thread as soon as its last subscriber leaves.
+const CODEX_THREAD_UNLOAD_DELAY_SECS: u64 = 0;
 
 /// `current` (the `CODEX_CONFIG` the agent would get) with
 /// `thread_unload_delay_secs` added, or `None` to leave it as it is: when it
@@ -1098,17 +1096,11 @@ fn apply_codex_env_policy(
     merged.retain(|(k, _)| k != key);
     merged.push((key.to_string(), "true".to_string()));
 
-    // Keep a closed thread's lock as short as codeg's fork expects. When a
-    // fork closes its parent (`close_forked_parent`), codex holds the parent
-    // until `thread_unload_delay_secs` pass, and only then can the parent's
-    // own row open it again (the `session_busy` banner says so). codex 0.164
-    // raised that default from 60 s to 30 min, so 60 is set here, through the
-    // config codex-acp hands every thread it starts, resumes or forks
-    // (`CODEX_CONFIG`); codex reads the delay per thread from 0.164 on.
-    // Measured on codex-acp 2.3.0: a sibling's `session/load` of the closed
-    // parent still met the lock 65 s after the close without this, and
-    // succeeded with it. Applies to codeg's sessions only, never to the
-    // Codex CLI or app, and merges into a `CODEX_CONFIG` the user set.
+    // session/close unsubscribes the thread, but its writer lock stays until
+    // Codex unloads it. /btw closes the copy on the original app-server and
+    // immediately resumes it on a new one. The unload delay must be set when
+    // the fork is created, so pass it via CODEX_CONFIG to codex-acp, which
+    // applies it when starting, resuming or forking a thread.
     let current = merged
         .iter()
         .rev()
@@ -1404,6 +1396,21 @@ pub enum ConnectionCommand {
         fork_point: Option<crate::acp::fork::ForkPoint>,
         reply:
             tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
+    },
+    /// The `/btw` copy fork (see `commands::btw`): `session/fork` at the tail
+    /// that answers with the forked id and LEAVES THIS SESSION ALONE — no
+    /// re-point, no sibling row, no loop exit. Handled by both the idle
+    /// dispatch and the mid-turn command select: every adapter codeg ships
+    /// accepts `session/fork` during a streaming turn (the copy takes only the
+    /// settled prefix — see `docs/btw-side-question-design.md`), so a side
+    /// question asked while the parent answers is served NOW, not queued.
+    /// Unlike [`Self::Fork`], no `turn_in_flight` gate before it: the parent's
+    /// live pointer never moves, so an in-flight turn has nothing to be
+    /// stranded by. Codex keeps the forking connection subscribed to its fork,
+    /// so the roundtrip helper also closes the forked session on this
+    /// connection (best-effort) to leave it free for the child's load.
+    ForkCopy {
+        reply: oneshot::Sender<Result<String, AcpError>>,
     },
     /// Inject a live-feedback message into the RUNNING turn over the ACP
     /// `_session/steering` extension (native push channel — see
@@ -9847,6 +9854,19 @@ async fn run_connection(
                 }
             }
 
+            // The `/btw` gate (see `SessionState::btw_supported`): a copy
+            // fork hands its child a SESSION, and only an agent that can load
+            // an existing session into a fresh connection can serve it.
+            // OpenCode's ACP mode is the live counter-example — it advertises
+            // `fork` but neither resume nor load, so its forks would strand.
+            {
+                let mut s = state.write().await;
+                s.btw_supported = supports_fork && supports_resume;
+                // The copy-fork arm runs deep in the command loop, which never
+                // saw this handshake's local — the state carries it instead.
+                s.session_close_supported = supports_close;
+            }
+
             // Emit fork support capability
             emit_with_state(
                 &state,
@@ -14192,9 +14212,8 @@ async fn handle_fork_or_exit(
     //     opening the sibling row fails with `session_busy`. Closing is
     //     `thread/unsubscribe`, which is also what codex's own TUI does to the
     //     thread it forks from. The app-server then unloads the thread, and
-    //     with it the lock, once it has gone `thread_unload_delay_secs` (60,
-    //     which codeg sets: codex 0.164 defaults to 30 min, see
-    //     `apply_codex_env_policy`) without a subscriber or a running turn.
+    //     with it the lock, when it has no subscriber or running turn and
+    //     its configured `thread_unload_delay_secs` has elapsed.
     //   * claude-agent-acp runs each session in a CLI process of its own, so
     //     an open parent is one more process per fork, still able to start a
     //     turn by itself (a background task finishing does) where nothing
@@ -14359,6 +14378,93 @@ fn close_forked_parent(cx: &ConnectionTo<Agent>, parent: &str, child: &str) {
         // Only when the connection is already going down, which ends the
         // session on the agent anyway.
         tracing::debug!("[ACP] not closing session {parent}, left by a fork: {e}");
+    }
+}
+
+/// The `/btw` copy-fork roundtrip, shared by the idle dispatch and the
+/// mid-turn command select. Protocol-only and non-destructive: it asks the
+/// agent to fork at the tail, hands the forked id back to the manager, and
+/// leaves this connection's session, state, and event stream exactly as they
+/// were — no [`ForkExitInfo`], no loop exit.
+///
+/// Mid-turn is the interesting case and it is safe by adapter construction:
+/// codex-acp forks at a settled `lastTurnId`, claude-agent-acp copies the
+/// persisted JSONL prefix, and OpenCode's ACP takes the message table's max
+/// seq — none of them refuse, and none of them copy the half-written step. The
+/// deliberate absence of a `turn_in_flight` gate in the manager is documented
+/// at [`ConnectionCommand::ForkCopy`].
+///
+/// Codex's `thread/fork` leaves the FORK subscribed to the connection that
+/// made it (see codex-acp `SessionFork.ts`). The copy closes the fork on
+/// that connection so the app-server can release its writer lock before the
+/// child resumes it. Claude's fork never enters its adapter's
+/// session map (the child's resume goes cold off the file) and OpenCode has no
+/// resume to strand, so the close is scoped to Codex.
+async fn fork_copy_roundtrip(
+    cx: &ConnectionTo<Agent>,
+    sid: &SessionId,
+    agent_type: AgentType,
+    cwd: &str,
+    mcp_servers: &[McpServer],
+    claude: &ClaudeSessionOptions,
+    supports_close: bool,
+) -> Result<String, AcpError> {
+    let (fork_response, _models_raw) = crate::acp::fork::fork_session(
+        cx, sid, agent_type, cwd, mcp_servers, claude, None,
+    )
+    .await?;
+    let forked = fork_response.session_id.0.to_string();
+    if agent_type == AgentType::Codex && supports_close && forked != sid.0.as_ref() {
+        // Finish unsubscribing before the child attempts to resume. The
+        // fork inherits the immediate unload default from CODEX_CONFIG.
+        let request = CloseSessionRequest::new(SessionId::new(forked.clone()));
+        match cx.send_request_to(Agent, request).block_task().await {
+            Ok(_) => tracing::info!("[ACP] copy fork closed {forked} on the parent"),
+            Err(e) => tracing::warn!("[ACP] copy fork's close of {forked} failed: {e}"),
+        }
+    }
+    Ok(forked)
+}
+
+/// [`fork_copy_roundtrip`] on a task the connection owns, replying on `reply`
+/// when it finishes. Awaiting the roundtrip inside either command loop would
+/// stall that loop for the whole fork RPC — mid-turn especially, the parent's
+/// event pump stops forwarding the streaming turn's tokens until the side
+/// question's fork answered. Spawned, the loop keeps selecting, and the
+/// oneshot still resolves exactly once (a spawn failure — connection already
+/// going down — replies nothing, and the sender sees a closed channel).
+#[allow(clippy::too_many_arguments)] // the same request kit fork_copy_roundtrip needs, plus the reply
+fn spawn_fork_copy(
+    cx: &ConnectionTo<Agent>,
+    sid: SessionId,
+    agent_type: AgentType,
+    cwd: &str,
+    mcp_servers: &[McpServer],
+    claude: &ClaudeSessionOptions,
+    supports_close: bool,
+    reply: oneshot::Sender<Result<String, AcpError>>,
+) {
+    let request_cx = cx.clone();
+    let cwd = cwd.to_string();
+    let mcp_servers = mcp_servers.to_vec();
+    let claude = claude.clone();
+    let task = async move {
+        let result = fork_copy_roundtrip(
+            &request_cx,
+            &sid,
+            agent_type,
+            &cwd,
+            &mcp_servers,
+            &claude,
+            supports_close,
+        )
+        .await;
+        let _ = reply.send(result);
+        // Never an error: a spawned task that fails takes the connection down.
+        Ok(())
+    };
+    if let Err(e) = cx.spawn(task) {
+        tracing::debug!("[ACP] not running copy fork: {e}");
     }
 }
 
@@ -14532,15 +14638,14 @@ fn classify_session_load_failure(
     //  * another Codex client — the Codex app, the CLI or an IDE extension —
     //    with the same session open (its lock can outlive the closed tab until
     //    that process unloads the thread);
-    //  * codeg itself, for about a minute after a fork: `session/fork`
+    //  * codeg itself, while the parent of an in-place fork unloads: `session/fork`
     //    never releases the PARENT's lock (codex-acp 1.8.0–2.1.x unsubscribe
     //    only the child, `threadUnsubscribe({threadId: response.thread.id})`,
     //    and 2.2.0 keeps the child subscribed too), so the sibling row codeg
     //    creates to keep the pre-fork history hits the lock until the forking
     //    connection lets the parent go. It closes the parent right after the
     //    step that resumes the child (`close_forked_parent`), and the
-    //    app-server unloads it `thread_unload_delay_secs` later (60, which
-    //    codeg sets for its sessions; codex 0.164's own default is 30 min).
+    //    app-server unloads it after the configured `thread_unload_delay_secs`.
     // codex-acp ≤2.0.x passes codex's raw "thread <id> already has an active
     // writer" through as a -32603 `data.details`; 2.1.0 (#564) answers -32600
     // with `data.reason: "thread_active_writer"`, which
@@ -17055,6 +17160,39 @@ async fn run_conversation_loop(
                                         "[ACP] in-turn Prompt DROPPED — the turn_in_flight gate should have rejected this"
                                     );
                                 }
+                                Some(ConnectionCommand::ForkCopy { reply }) => {
+                                    // The `/btw` case this arm exists for: a
+                                    // side question asked while this turn
+                                    // streams. Every adapter codeg ships takes
+                                    // `session/fork` mid-turn and copies only
+                                    // the settled prefix, so the answer arrives
+                                    // for the manager to bind to a child row
+                                    // while the parent keeps streaming (see
+                                    // `ConnectionCommand::ForkCopy`). Without
+                                    // this arm the command would fall into the
+                                    // swallowing `_` and drop its reply.
+                                    if !supports_fork {
+                                        let _ = reply.send(Err(AcpError::protocol(
+                                            "This agent does not support session/fork".to_string(),
+                                        )));
+                                    } else {
+                                        let cx = session.connection();
+                                        let sid = session.session_id().clone();
+                                        let claude = state.read().await.claude_session_options();
+                                        let supports_close =
+                                            state.read().await.session_close_supported;
+                                        spawn_fork_copy(
+                                            &cx,
+                                            sid,
+                                            agent_type,
+                                            cwd,
+                                            mcp_servers,
+                                            &claude,
+                                            supports_close,
+                                            reply,
+                                        );
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -17319,6 +17457,28 @@ async fn run_conversation_loop(
                         let _ = reply.send(Err(e));
                     }
                 }
+            }
+            Some(ConnectionCommand::ForkCopy { reply }) => {
+                if !supports_fork {
+                    let _ = reply.send(Err(AcpError::protocol(
+                        "This agent does not support session/fork".to_string(),
+                    )));
+                    continue;
+                }
+                let cx = session.connection();
+                let sid = session.session_id().clone();
+                let claude = state.read().await.claude_session_options();
+                let supports_close = state.read().await.session_close_supported;
+                spawn_fork_copy(
+                    &cx,
+                    sid,
+                    agent_type,
+                    cwd,
+                    mcp_servers,
+                    &claude,
+                    supports_close,
+                    reply,
+                );
             }
             Some(ConnectionCommand::Disconnect) | None => {
                 break;
@@ -21316,9 +21476,10 @@ fn is_config_option_state_command(
 fn available_command_infos(
     agent_type: AgentType,
     commands: &[agent_client_protocol::schema::v1::AvailableCommand],
+    btw_supported: bool,
 ) -> Vec<AvailableCommandInfo> {
     let mut seen = HashSet::new();
-    commands
+    let mut infos: Vec<AvailableCommandInfo> = commands
         .iter()
         .filter(|cmd| !is_config_option_state_command(agent_type, cmd.meta.as_ref()))
         .filter(|cmd| {
@@ -21343,9 +21504,36 @@ fn available_command_infos(
                 input_hint,
                 skill: skill.is_some(),
                 skill_path: skill.flatten(),
+                client: false,
             }
         })
-        .collect()
+        .collect();
+    // `/btw` is codeg's own command, synthesized into the advertised list
+    // exactly where it can be served (fork AND resume — see
+    // `SessionState::btw_supported`), so the composer's menu needs no separate
+    // capability plumbing: the command is listed or it isn't. An agent that
+    // natively advertises `btw` owns the name (its row wins, and the composer
+    // forwards to it — it intercepts on the `client` flag below, not on the
+    // name). The
+    // description is a placeholder — the frontend replaces it with localized
+    // text for this name, the same courtesy it already extends advertised
+    // labels (see `localizedMessage`).
+    if btw_supported
+        && !seen
+            .iter()
+            .any(|name| name.trim().eq_ignore_ascii_case("btw"))
+    {
+        infos.push(AvailableCommandInfo {
+            name: "btw".to_string(),
+            description: "Ask a side question in a copy-fork of this conversation".to_string(),
+            input_hint: None,
+            skill: false,
+            skill_path: None,
+            // The composer intercepts on this flag (see AvailableCommandInfo::client).
+            client: true,
+        });
+    }
+    infos
 }
 
 /// Whether an advertised command is a skill, read off JetBrains AIR's command
@@ -23503,6 +23691,7 @@ fn kiro_available_commands(notif: &KiroCommandsAvailableNotification) -> Vec<Ava
                 input_hint,
                 skill: false,
                 skill_path: None,
+                client: false,
             })
         })
         .collect();
@@ -23531,6 +23720,7 @@ fn kiro_available_commands(notif: &KiroCommandsAvailableNotification) -> Vec<Ava
             input_hint: kiro_prompt_input_hint(prompt),
             skill: false,
             skill_path: None,
+            client: false,
         })
     }));
     // The composer sends a command named `$x` as `$x`, the token codex-acp
@@ -27937,7 +28127,8 @@ async fn emit_conversation_update(
             emit_session_config_options_update(state, emitter, update.config_options).await;
         }
         SessionUpdate::AvailableCommandsUpdate(update) => {
-            let commands = available_command_infos(agent_type, &update.available_commands);
+            let btw_supported = state.read().await.btw_supported;
+            let commands = available_command_infos(agent_type, &update.available_commands, btw_supported);
             emit_with_state(state, emitter, AcpEvent::AvailableCommands { commands }).await;
         }
         SessionUpdate::UsageUpdate(update) => {
@@ -30487,7 +30678,7 @@ mod tests {
 
     #[test]
     fn claude_skill_commands_carry_the_air_skill_mark() {
-        let read = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(false));
+        let read = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(false), false);
         assert_eq!(
             skill_marks(&read),
             vec![
@@ -30513,7 +30704,7 @@ mod tests {
         assert_eq!(read[3].input_hint.as_deref(), Some("[<target>]"));
 
         // Before the read only the skill found on disk is marked.
-        let first = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(true));
+        let first = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(true), false);
         assert_eq!(
             skill_marks(&first),
             vec![
@@ -30531,12 +30722,42 @@ mod tests {
         );
     }
 
+    /// `/btw` rides the advertised-command list itself (no separate capability
+    /// event): it appears exactly when the session can serve it, and an agent
+    /// that natively advertises the name keeps its own row — the frontend
+    /// distinguishes codeg's synthesis by the `client` flag, not the name.
+    #[test]
+    fn btw_is_synthesized_into_the_command_list_only_when_supported() {
+        let cmds = claude_0991_commands(false);
+        let off = available_command_infos(AgentType::ClaudeCode, &cmds, false);
+        assert!(off.iter().all(|c| c.name != "btw"));
+
+        let on = available_command_infos(AgentType::ClaudeCode, &cmds, true);
+        let btw = on.last().expect("the synthesized command appends last");
+        assert_eq!(btw.name, "btw");
+        assert!(btw.client);
+        assert!(on[..on.len() - 1].iter().all(|c| !c.client));
+
+        let mut native: Vec<agent_client_protocol::schema::v1::AvailableCommand> =
+            serde_json::from_value(serde_json::json!([
+                { "name": "btw", "description": "a native command of some agent", "input": null }
+            ]))
+            .unwrap();
+        native.extend(cmds);
+        let read = available_command_infos(AgentType::ClaudeCode, &native, true);
+        let rows: Vec<&AvailableCommandInfo> =
+            read.iter().filter(|c| c.name == "btw").collect();
+        assert_eq!(rows.len(), 1, "no duplicate under a native name");
+        assert!(!rows[0].client, "the native row is forwarded, not intercepted");
+        assert_eq!(rows[0].description, "a native command of some agent");
+    }
+
     /// A command nothing marks goes to the frontend exactly as before the
     /// marks existed (no `skill` / `skill_path` keys), so every other agent's
     /// list and every snapshot is unchanged; a marked one adds the two keys.
     #[test]
     fn skill_marks_stay_off_the_wire_for_unmarked_commands() {
-        let read = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(false));
+        let read = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(false), false);
         assert_eq!(
             serde_json::to_value(&read[4]).unwrap(),
             serde_json::json!({
@@ -30633,7 +30854,7 @@ mod tests {
             ]))
             .unwrap();
         assert_eq!(
-            skill_marks(&available_command_infos(AgentType::ClaudeCode, &commands)),
+            skill_marks(&available_command_infos(AgentType::ClaudeCode, &commands, false)),
             vec![("deploy", true, Some("/w/.claude/skills/deploy/SKILL.md"))]
         );
     }
@@ -30654,7 +30875,7 @@ mod tests {
             ]))
             .unwrap();
         let names = |agent_type| {
-            available_command_infos(agent_type, &commands)
+            available_command_infos(agent_type, &commands, false)
                 .into_iter()
                 .map(|command| command.name)
                 .collect::<Vec<_>>()
@@ -33202,8 +33423,7 @@ mod tests {
 
     /// After a codex fork, the sibling row codeg creates to keep the pre-fork
     /// history points at the PARENT thread — whose writer the forking process
-    /// holds until codex unloads the thread, about a minute after codeg closes
-    /// it, because `session/fork` never unsubscribes the parent. Opening it in
+    /// holds until codex unloads the thread after codeg closes it. Opening it in
     /// that window must stop with a banner, never fall through to
     /// `session/new`: that rebinds the row to a fresh empty session and
     /// destroys the only pointer to the history the row exists for.
@@ -34550,16 +34770,14 @@ mod tests {
             .collect()
     }
 
-    /// codex 0.164 holds a closed thread for 30 minutes; codeg's fork closes
-    /// its parent and tells the user the parent's row opens about a minute
-    /// later, so every codex launch asks for codex's old 60 s.
+    /// /btw resumes the fork on a separate app-server immediately after close.
     #[test]
-    fn codex_env_policy_keeps_a_closed_thread_for_a_minute() {
+    fn codex_env_policy_allows_immediate_handoff_after_close() {
         let mut env = vec![("PATH".to_string(), "/usr/bin".to_string())];
         apply_codex_env_policy(AgentType::Codex, &mut env, None, None);
         assert_eq!(
             codex_config_of(&env),
-            vec![serde_json::json!({"thread_unload_delay_secs": 60})]
+            vec![serde_json::json!({"thread_unload_delay_secs": 0})]
         );
 
         for agent in [AgentType::Grok, AgentType::ClaudeCode, AgentType::OpenCode] {
@@ -34582,7 +34800,7 @@ mod tests {
             vec![serde_json::json!({
                 "hooks": {"PreToolUse": []},
                 "model": "gpt-5.5",
-                "thread_unload_delay_secs": 60,
+                "thread_unload_delay_secs": 0,
             })]
         );
 
@@ -34593,7 +34811,7 @@ mod tests {
         apply_codex_env_policy(AgentType::Codex, &mut runtime, None, Some(hooks));
         assert_eq!(
             codex_config_of(&runtime),
-            vec![serde_json::json!({"model": "gpt-6", "thread_unload_delay_secs": 60})],
+            vec![serde_json::json!({"model": "gpt-6", "thread_unload_delay_secs": 0})],
             "the runtime env's value, replaced rather than duplicated"
         );
     }
@@ -34603,7 +34821,7 @@ mod tests {
         // The user's own delay stands, and a value that is not a JSON object
         // is not codeg's to rewrite (codex-acp parses it as written).
         for value in [
-            r#"{"thread_unload_delay_secs":0}"#,
+            r#"{"thread_unload_delay_secs":15}"#,
             "not json",
             "[1,2]",
             "42",
@@ -34631,7 +34849,7 @@ mod tests {
             apply_codex_env_policy(AgentType::Codex, &mut env, None, Some(r#"{"model":"x"}"#));
             assert_eq!(
                 codex_config_of(&env),
-                vec![serde_json::json!({"thread_unload_delay_secs": 60})],
+                vec![serde_json::json!({"thread_unload_delay_secs": 0})],
                 "{blank:?}"
             );
         }

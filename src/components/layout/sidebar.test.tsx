@@ -807,7 +807,7 @@ describe("Sidebar — Section order control", () => {
     mockState.activeFolder = { id: 7, path: "/x" }
   })
 
-  // The order rows are `menuitem`s labelled "<name> — position N of 4"; the
+  // The order rows are `menuitem`s labelled "<name> — position N of 5"; the
   // move buttons inside them are labelled "<name> — Move up/down".
   const orderRowNames = () =>
     screen
@@ -815,21 +815,23 @@ describe("Sidebar — Section order control", () => {
       .map((el) => el.getAttribute("aria-label") ?? "")
       .filter((label) => label.includes("position"))
 
-  it("defaults to Assistants → Folders → Chat → Recent", async () => {
+  it("defaults to Assistants → Folders → Chat → Btw → Recent", async () => {
     const user = userEvent.setup()
     renderSidebar()
     await user.click(screen.getByRole("button", { name: "View options" }))
 
     expect(orderRowNames()).toEqual([
-      "Assistants — position 1 of 4",
-      "Folders — position 2 of 4",
-      "Chat — position 3 of 4",
-      "Recent — position 4 of 4",
+      "Assistants — position 1 of 5",
+      "Folders — position 2 of 5",
+      "Chat — position 3 of 5",
+      "Btw — position 4 of 5",
+      "Recent — position 5 of 5",
     ])
     expect(spies.listProps?.sectionOrder).toEqual([
       "assistants",
       "folders",
       "chats",
+      "btw",
       "recent",
     ])
   })
@@ -841,20 +843,22 @@ describe("Sidebar — Section order control", () => {
     await user.click(screen.getByRole("button", { name: "Recent — Move up" }))
 
     expect(orderRowNames()).toEqual([
-      "Assistants — position 1 of 4",
-      "Folders — position 2 of 4",
-      "Recent — position 3 of 4",
-      "Chat — position 4 of 4",
+      "Assistants — position 1 of 5",
+      "Folders — position 2 of 5",
+      "Chat — position 3 of 5",
+      "Recent — position 4 of 5",
+      "Btw — position 5 of 5",
     ])
     expect(spies.listProps?.sectionOrder).toEqual([
       "assistants",
       "folders",
-      "recent",
       "chats",
+      "recent",
+      "btw",
     ])
     expect(
       JSON.parse(localStorage.getItem("workspace:sidebar-section-order") ?? "")
-    ).toEqual(["assistants", "folders", "recent", "chats"])
+    ).toEqual(["assistants", "folders", "chats", "recent", "btw"])
   })
 
   it("disables the move buttons that would fall off an end", async () => {
@@ -882,7 +886,7 @@ describe("Sidebar — Section order control", () => {
     // and by the roving focus, so Alt+Arrow on the row is the ONLY keyboard
     // path — if this regresses, the control becomes mouse-only.
     const foldersRow = screen.getByRole("menuitem", {
-      name: "Folders — position 2 of 4",
+      name: "Folders — position 2 of 5",
     })
     // Focusing a menu item updates Radix's roving-focus state, so it has to run
     // inside act().
@@ -890,14 +894,15 @@ describe("Sidebar — Section order control", () => {
     await user.keyboard("{Alt>}{ArrowDown}{/Alt}")
 
     expect(orderRowNames()).toEqual([
-      "Assistants — position 1 of 4",
-      "Chat — position 2 of 4",
-      "Folders — position 3 of 4",
-      "Recent — position 4 of 4",
+      "Assistants — position 1 of 5",
+      "Chat — position 2 of 5",
+      "Folders — position 3 of 5",
+      "Btw — position 4 of 5",
+      "Recent — position 5 of 5",
     ])
     // Focus follows the row it moved, so a second press keeps going.
     expect(document.activeElement?.getAttribute("aria-label")).toBe(
-      "Folders — position 3 of 4"
+      "Folders — position 3 of 5"
     )
   })
 
@@ -908,10 +913,11 @@ describe("Sidebar — Section order control", () => {
     await user.click(screen.getByRole("button", { name: "View options" }))
 
     expect(orderRowNames()).toEqual([
-      "Chat — position 1 of 4",
-      "Assistants — position 2 of 4",
-      "Folders — position 3 of 4",
-      "Recent — position 4 of 4",
+      "Chat — position 1 of 5",
+      "Assistants — position 2 of 5",
+      "Folders — position 3 of 5",
+      "Recent — position 4 of 5",
+      "Btw — position 5 of 5",
     ])
   })
 
@@ -927,8 +933,9 @@ describe("Sidebar — Section order control", () => {
     expect(spies.listProps?.sectionOrder).toEqual([
       "assistants",
       "folders",
-      "recent",
       "chats",
+      "recent",
+      "btw",
     ])
     expect(spies.listProps?.showRecent).toBe(false)
   })

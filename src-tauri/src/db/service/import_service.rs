@@ -650,6 +650,7 @@ async fn import_one(
         assistant_snapshot: Set(None),
         bot_uid: Set(None),
         source: Set(None),
+        btw_promoted: Set(false),
         selector_state: Set(None),
     };
     conv.insert(conn).await?;
@@ -1132,6 +1133,7 @@ mod tests {
             assistant_snapshot: Set(None),
             bot_uid: Set(None),
             source: Set(None),
+            btw_promoted: Set(false),
             selector_state: Set(None),
         }
         .insert(&db.conn)
@@ -1431,6 +1433,7 @@ mod tests {
             assistant_snapshot: Set(None),
             bot_uid: Set(None),
             source: Set(None),
+            btw_promoted: Set(false),
             selector_state: Set(None),
         }
         .insert(&db.conn)

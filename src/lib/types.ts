@@ -1114,6 +1114,7 @@ export type ConversationKind =
   | "personal"
   | "ask"
   | "check"
+  | "btw"
 
 /** Mirrors Rust `FolderKind` (src-tauri/src/db/entities/folder.rs).
  *  `personal` is the personal agent's working directory: hidden everywhere,
@@ -5494,6 +5495,19 @@ export interface AvailableCommandInfo {
   /** The skill's `SKILL.md`, when the agent sent its path. A skill bundled
    *  with the agent CLI has none. */
   skill_path?: string | null
+  /** A codeg-synthesized command rather than an agent-advertised one (`/btw`
+   *  today): the composer intercepts these instead of forwarding them. An
+   *  agent that natively advertises the same name lacks this flag and keeps
+   *  its forwarding behavior. Mirrors Rust `AvailableCommandInfo::client`. */
+  client?: boolean
+}
+
+/** The `/btw` command's result (mirror of Rust `BtwCreateResult`): the side
+ *  question's new row and its connection, so the UI can open the tab and
+ *  watch the answer stream immediately. */
+export interface BtwCreateResult {
+  conversationId: number
+  connectionId: string
 }
 
 /**
@@ -5870,7 +5884,7 @@ export type AcpEvent =
        *
        * The first three mean the session is gone. `"session_busy"` does not —
        * another live holder has it open (another Codex client — the app, the
-       * CLI or an IDE extension — or, for about a minute after a fork, the
+       * CLI or an IDE extension — or, briefly after a fork, the
        * forking session, until codex unloads the parent it closed; for Kimi
        * Code, another Kimi process on the same home until it has been idle
        * for 3 s), and it clears when that one lets go.

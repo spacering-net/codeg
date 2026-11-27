@@ -20,7 +20,8 @@ pub enum ConversationStatus {
 /// flat "Chat" section; `loop` belongs to the Loop Engineering workbench and is
 /// excluded from the sidebar list entirely (no write path yet — reserved for
 /// the loop engine); `delegate` is a delegation child nested under its
-/// parent's tool-call view; `personal` is one session segment of the personal
+/// parent's tool-call view. A `btw` row is a side-question fork with a
+/// parent and its own sidebar section. `personal` is one session segment of the personal
 /// agent, which has its own page and stays out of the sidebar list too; `ask`
 /// is an "ask about this selection" conversation, nested under the
 /// conversation it was asked from (its `parent_id`) in the sidebar and listed
@@ -56,6 +57,8 @@ pub enum ConversationKind {
     Ask,
     #[sea_orm(string_value = "check")]
     Check,
+    #[sea_orm(string_value = "btw")]
+    Btw,
 }
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -118,6 +121,13 @@ pub struct Model {
     /// value from a newer build never stops an older one decoding the row.
     /// See `m20261017_000002_conversation_source`.
     pub source: Option<String>,
+    /// Set once when a `/btw` side-question fork is promoted to a normal
+    /// conversation. The row's next user prompt then carries the btw-promotion
+    /// frame once (see `acp::agent_mentions::render_btw_promotion_frame`), so
+    /// the model learns the side-question constraints are lifted; the flag
+    /// clears the moment that prompt reaches the agent. See
+    /// `m20261121_000001_conversation_btw_promoted`.
+    pub btw_promoted: bool,
     /// JSON `ConversationSelection`: this conversation's own selector state
     /// (applied mode, pending composer mode, config option values), written
     /// by the backend from the live session and replayed alone when the

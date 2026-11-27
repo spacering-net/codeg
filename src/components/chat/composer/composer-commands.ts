@@ -237,3 +237,17 @@ export function restoreBlocksIntoEditor(
   chain.focus("end").run()
   return attachments
 }
+
+/** The `/btw <question>` extraction for the composer's client-side intercept
+ *  (message-input.tsx `onBtw`). The command is codeg-synthesized — the backend
+ *  adds it to the advertised list only for agents that can serve it (see
+ *  `available_command_infos`) — so the draft reaching here is plain text: the
+ *  badge the slash menu inserts serializes back to the same `/btw` prefix.
+ *  Returns `null` for any other text, and for a bare `/btw` (no question to
+ *  fork yet): sending the slash token onward is the agent's problem, not
+ *  ours. */
+export function extractBtwQuestion(displayText: string): string | null {
+  const match = /^\/btw(?:\s+([\s\S]+))?$/.exec(displayText.trim())
+  const question = match?.[1]?.trim()
+  return question && question.length > 0 ? question : null
+}

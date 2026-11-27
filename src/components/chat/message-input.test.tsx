@@ -1125,6 +1125,166 @@ describe("MessageInput mid-turn send with no queue", () => {
   })
 })
 
+// `/btw` is codeg's own command (the backend synthesizes it into the
+// advertised list where the session can serve it): the composer forks the
+// conversation and asks there, so the text must never reach the agent.
+describe("MessageInput /btw intercept", () => {
+  const DRAFT_KEY = "canvas-draft:btw-test"
+  const BTW_CMD = { name: "btw", description: "placeholder", client: true }
+  const NATIVE_BTW = { name: "btw", description: "the agent's own" }
+
+  afterEach(() => {
+    cleanup()
+    composerHandle.current = null
+    clearMessageInputDraftV2(DRAFT_KEY)
+    vi.clearAllMocks()
+  })
+
+  function pressEnter(editor: Editor) {
+    act(() => {
+      ;(editor.view.dom as HTMLElement).dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+  }
+
+  async function mountTyped(
+    text: string,
+    props: Partial<React.ComponentProps<typeof MessageInput>>
+  ) {
+    saveMessageInputDraftV2(DRAFT_KEY, {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    })
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <MessageInput
+          onSend={vi.fn()}
+          promptCapabilities={CAPS}
+          onCancel={vi.fn()}
+          draftStorageKey={DRAFT_KEY}
+          availableCommands={[BTW_CMD]}
+          {...props}
+        />
+      </NextIntlClientProvider>
+    )
+    await waitFor(() => expect(composerHandle.current?.getText()).toBe(text), {
+      timeout: 5000,
+    })
+    const editor = composerHandle.current?.getEditor()
+    if (!editor) throw new Error("composer editor not mounted")
+    return editor
+  }
+
+  it("forks instead of sending, and clears once the fork was made", async () => {
+    const onSend = vi.fn()
+    const onBtw = vi.fn().mockResolvedValue(true)
+    const editor = await mountTyped("/btw what is this fn", { onSend, onBtw })
+
+    pressEnter(editor)
+
+    expect(onBtw).toHaveBeenCalledWith("what is this fn")
+    expect(onSend).not.toHaveBeenCalled()
+    await waitFor(() => expect(composerHandle.current?.getText()).toBe(""))
+  })
+
+  it("asks mid-turn, before the enqueue branch", async () => {
+    const onEnqueue = vi.fn()
+    const onBtw = vi.fn().mockResolvedValue(true)
+    const editor = await mountTyped("/btw side question", {
+      onBtw,
+      onEnqueue,
+      isPrompting: true,
+    })
+
+    pressEnter(editor)
+
+    expect(onBtw).toHaveBeenCalledWith("side question")
+    expect(onEnqueue).not.toHaveBeenCalled()
+  })
+
+  it("leaves a bare /btw and a native same-name command to the agent", async () => {
+    // No question to fork yet — the token behaves like any slash input (the
+    // open `/` menu accepts the highlighted row on Enter), and the fork is
+    // never made behind the user's back.
+    const onBtw = vi.fn()
+    const editor = await mountTyped("/btw", { onBtw, onSend: vi.fn() })
+    pressEnter(editor)
+    expect(onBtw).not.toHaveBeenCalled()
+    cleanup()
+
+    composerHandle.current = null
+    // A native `btw` (no `client` flag) keeps forwarding even with a question.
+    const nativeSend = vi.fn()
+    const nativeBtw = vi.fn()
+    const editor2 = await mountTyped("/btw hello", {
+      onBtw: nativeBtw,
+      onSend: nativeSend,
+      availableCommands: [NATIVE_BTW],
+    })
+    pressEnter(editor2)
+    expect(nativeBtw).not.toHaveBeenCalled()
+    expect(nativeSend).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps the question in the composer when the fork failed", async () => {
+    const editor = await mountTyped("/btw oops", {
+      onBtw: vi.fn().mockResolvedValue(false),
+    })
+
+    pressEnter(editor)
+
+    await Promise.resolve()
+    await waitFor(() =>
+      expect(composerHandle.current?.getText()).toBe("/btw oops")
+    )
+    expect(loadMessageInputDraftV2(DRAFT_KEY)).not.toBeNull()
+  })
+
+  it("makes one fork at a time while the first is still in flight", async () => {
+    // The fork RPC takes seconds and the text is only cleared once it lands,
+    // so Enter sits pressed again inside that window; a second intercept
+    // would fork the same prefix twice and stack a duplicate child row.
+    let resolveBtw: (v: boolean) => void = () => {}
+    const onBtw = vi
+      .fn()
+      .mockImplementation(() => new Promise<boolean>((r) => (resolveBtw = r)))
+    const editor = await mountTyped("/btw slow fork", { onBtw })
+
+    pressEnter(editor)
+    expect(composerHandle.current?.getText()).toBe("/btw slow fork")
+    pressEnter(editor)
+
+    expect(onBtw).toHaveBeenCalledTimes(1)
+    await act(async () => resolveBtw(true))
+    await waitFor(() => expect(composerHandle.current?.getText()).toBe(""))
+  })
+
+  it("keeps text typed while the fork is in flight", async () => {
+    // The composer still shows the submitted question while the RPC runs;
+    // text typed into it during that window is unsent and must survive the
+    // success cleanup (same guard the steer path uses).
+    let resolveBtw: (v: boolean) => void = () => {}
+    const onBtw = vi
+      .fn()
+      .mockImplementation(() => new Promise<boolean>((r) => (resolveBtw = r)))
+    const editor = await mountTyped("/btw slow fork", { onBtw })
+    pressEnter(editor)
+
+    act(() => {
+      editor.commands.insertContentAt(" /btw slow fork".length, " and more")
+    })
+    await act(async () => resolveBtw(true))
+
+    expect(composerHandle.current?.getText()).toBe("/btw slow fork and more")
+    expect(loadMessageInputDraftV2(DRAFT_KEY)).not.toBeNull()
+  })
+})
+
 // The sidebar's "add to session" drops a session mention — the same reference the
 // `@` panel's Sessions group builds — into the active tab's composer.
 describe("MessageInput session-mention attach", () => {

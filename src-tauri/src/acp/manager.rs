@@ -739,6 +739,26 @@ pub struct SpawnOutcome {
     pub reused: bool,
 }
 
+/// See [`ConnectionManager::connection_launch_context`].
+pub struct ConnectionLaunchContext {
+    pub owner_window_label: String,
+    pub working_dir: Option<std::path::PathBuf>,
+    pub btw_supported: bool,
+    /// The conversation this connection answers, once linked. Lets a caller
+    /// verify the connection it was handed really serves the conversation it
+    /// is about to fork (see `commands::btw`) — the web API takes both ids
+    /// from the client and would otherwise happily parent one conversation's
+    /// history under another's row.
+    pub conversation_id: Option<i32>,
+    /// The parent's live selector state (mode + config option values), replayed
+    /// onto the btw child connection so the side answer runs on the same model
+    /// the parent is using — the row inherits the parent's `model`, and an
+    /// answer served by the agent's default model would silently differ from
+    /// what the row and the sidebar claim.
+    pub preferred_mode_id: Option<String>,
+    pub preferred_config_values: std::collections::BTreeMap<String, String>,
+}
+
 impl Default for ConnectionManager {
     fn default() -> Self {
         Self::new()
@@ -1734,7 +1754,7 @@ impl ConnectionManager {
         conversation_id: Option<i32>,
         delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
         client_message_id: Option<String>,
-        internal_suffix: Vec<PromptInputBlock>,
+        mut internal_suffix: Vec<PromptInputBlock>,
         reply_token: Option<String>,
         receipt: Option<crate::acp::prompt_receipt::PromptReceipt>,
         // An edited message's rewind, done in the same step as its admission
@@ -2284,6 +2304,37 @@ impl ConnectionManager {
                 None
             };
 
+        // The btw-promotion frame (see the `btw_promoted` column): the first
+        // user prompt after upgrading an existing `/btw` or promoting it
+        // carries the current side-session instructions. The flag
+        // clears ONLY after the prompt reaches the connection loop, so every
+        // failure path below (gate refusal, closed channel, exited process)
+        // leaves the notice pending for the next prompt rather than
+        // swallowing it. The residual edge is smaller than it reads: Ok from
+        // the helper means the command is queued, and an agent that rejects
+        // the request afterwards loses the notice for that one retry — the
+        // message visibly failed, so the user is resending anyway, and the
+        // row's ordinary conversation context (it is a normal conversation
+        // again after promote) outgrows the stale instruction line by line.
+        let btw_promotion_pending = match conversation_id_for_status {
+            Some(cid) if conversation_service::has_btw_promotion_pending(&db.conn, cid)
+                .await
+                .unwrap_or(false) =>
+            {
+                Some(cid)
+            }
+            _ => None,
+        };
+        if btw_promotion_pending.is_some() {
+            internal_suffix.push(PromptInputBlock::Text {
+                text: crate::acp::agent_mentions::render_btw_boundary_frame(),
+            });
+        }
+        // Bound conversation id of a row that owes the promotion frame, kept
+        // separate from `conversation_id_for_status` so the clear below cannot
+        // fire for a row that was never offered the notice.
+        let cid_for_clear = btw_promotion_pending;
+
         // We hold `_prompt_guard` here, so call the lock-free inner helper —
         // re-entering `send_prompt` would try to acquire the same mutex and
         // deadlock. The helper reserves channel capacity FIRST and only then
@@ -2308,6 +2359,16 @@ impl ConnectionManager {
             .await
         {
             Ok(()) => {
+                if let Some(cid) = cid_for_clear {
+                    // The notice rode the prompt that just landed; a
+                    // two-per-prompt repeat would be worse than the one this
+                    // clear can't fully prevent (crash between send and clear
+                    // re-sends it once — wording is written idempotent).
+                    if let Err(e) = conversation_service::clear_btw_promotion(&db.conn, cid).await
+                    {
+                        tracing::warn!("[btw] promotion frame sent but flag not cleared: {e}");
+                    }
+                }
                 // The prompt reached the agent: surface it to the chat-channel
                 // "user message" event feed. Notification-only — never gates the
                 // send result.
@@ -3122,6 +3183,65 @@ impl ConnectionManager {
         }
     }
 
+    /// The `/btw` copy fork (see `commands::btw`): fork at the tail, return the
+    /// forked session id, change nothing else. The connection keeps serving
+    /// its own conversation — there is no re-point, no sibling row, no title
+    /// lock, no loop restart — so this takes none of [`fork_session`]'s
+    /// machinery apart from the per-connection `prompt_lock` (serializing
+    /// against a concurrent in-place fork or prompt ENQUEUE; the copy reads
+    /// only the settled prefix, which a racing in-flight turn grows, exactly
+    /// the drift `/btw` accepts and documents) and, deliberately, NOT the
+    /// `turn_in_flight` gate: a mid-turn copy is the feature, every adapter
+    /// codeg ships accepts it (see `ConnectionCommand::ForkCopy`), and a
+    /// dropped caller here has written nothing anywhere, so the cancellation
+    /// shield `fork_session` needs has nothing to shield.
+    pub async fn fork_copy_session(&self, conn_id: &str) -> Result<String, AcpError> {
+        let cmd_tx = {
+            let connections = self.connections.lock().await;
+            let conn = connections
+                .get(conn_id)
+                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+            conn.cmd_tx.clone()
+        };
+        // No conversation-row requirement (contrast [`fork_session`]): the
+        // copy reads only the AGENT's session, so a resumed-but-never-prompted
+        // connection forks fine. The caller owns all row bookkeeping.
+        let prompt_lock = self.clone_prompt_lock(conn_id).await?;
+        let _prompt_guard = prompt_lock.lock_owned().await;
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        cmd_tx
+            .send(ConnectionCommand::ForkCopy { reply: reply_tx })
+            .await
+            .map_err(|_| AcpError::ProcessExited)?;
+        reply_rx
+            .await
+            .map_err(|_| AcpError::protocol("ForkCopy reply channel closed".to_string()))?
+    }
+
+    /// The launch facts a SIBLING connection needs to sit beside an existing
+    /// one — everything the delegation spawner reads off the parent connection
+    /// (spawner.rs `spawn`), exposed for in-process callers that are not the
+    /// broker (`commands::btw`). `btw_supported` rides along so a
+    /// client-forced `/btw` against an agent that cannot serve it is refused
+    /// server-side, not just absent from the menu.
+    pub async fn connection_launch_context(
+        &self,
+        conn_id: &str,
+    ) -> Option<ConnectionLaunchContext> {
+        let conns = self.connections.lock().await;
+        let parent = conns.get(conn_id)?;
+        let state = parent.state.read().await;
+        let selection = super::selection::selection_snapshot(&state);
+        Some(ConnectionLaunchContext {
+            owner_window_label: parent.owner_window_label.clone(),
+            working_dir: state.working_dir.clone(),
+            btw_supported: state.btw_supported,
+            conversation_id: state.conversation_id.or(state.selection_conversation_id),
+            preferred_mode_id: selection.mode_id,
+            preferred_config_values: selection.config_values,
+        })
+    }
+
     /// Persist the two-row fork layout: re-point the current row at S2 under a
     /// locked `[Fork]` title prefix, and INSERT a sibling row preserving the
     /// pre-fork (S1) history at `PendingReview`, which inherits the original's
@@ -3249,7 +3369,7 @@ impl ConnectionManager {
                     // which the sibling is not, so it degrades to a root
                     // `Regular`.
                     let (sibling_kind, sibling_parent_id) = match current.kind {
-                        ConversationKind::Delegate => (ConversationKind::Regular, None),
+                        ConversationKind::Delegate | ConversationKind::Btw => (ConversationKind::Regular, None),
                         ConversationKind::Ask => (ConversationKind::Ask, current.parent_id),
                         ConversationKind::Check => (ConversationKind::Check, current.parent_id),
                         ref kind => (kind.clone(), None),
@@ -3359,6 +3479,7 @@ impl ConnectionManager {
                         assistant_snapshot: Set(None),
                         bot_uid: Set(None),
                         source: Set(source),
+                        btw_promoted: Set(false),
                         selector_state: Set(inherited_selection.clone()),
                     };
                     let inserted = sibling.insert(txn).await?;
