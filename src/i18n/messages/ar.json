@@ -64,8 +64,22 @@
       "browser": "استخدام المتصفح",
       "computer_use": "استخدام الحاسوب",
       "quick_messages": "رسائل سريعة",
-      "logs": "سجلات التشغيل"
+      "logs": "سجلات التشغيل",
+      "plugins": "الإضافات"
     }
+  },
+  "HostPlugins": {
+    "title": "الإضافات",
+    "import": "استيراد ملف البيان",
+    "fileTooLarge": "يتجاوز حجم ملف بيان الإضافة 64 كيبيبايت.",
+    "empty": "لا توجد إضافات مثبتة.",
+    "loading": "جارٍ التحميل…",
+    "unsupported": "حدّث مضيف Codeg المتصل لإدارة الإضافات.",
+    "retry": "إعادة المحاولة",
+    "enable": "تفعيل {name}",
+    "remove": "إزالة {name}",
+    "choosePanel": "لوحة الإضافة",
+    "noTurns": "لا توجد جولات مسجلة في مساحة العمل هذه."
   },
   "AppearanceSettings": {
     "sectionTitle": "مظهر السمة",

@@ -64,8 +64,22 @@
       "browser": "Utilisation du navigateur",
       "computer_use": "Utilisation de l'ordinateur",
       "quick_messages": "Messages rapides",
-      "logs": "Journaux d'exécution"
+      "logs": "Journaux d'exécution",
+      "plugins": "Extensions"
     }
+  },
+  "HostPlugins": {
+    "title": "Extensions",
+    "import": "Importer un manifeste",
+    "fileTooLarge": "Le manifeste de l’extension dépasse 64 Kio.",
+    "empty": "Aucune extension installée.",
+    "loading": "Chargement…",
+    "unsupported": "Mettez à jour l’hôte Codeg connecté pour gérer les extensions.",
+    "retry": "Réessayer",
+    "enable": "Activer {name}",
+    "remove": "Supprimer {name}",
+    "choosePanel": "Panneau de l’extension",
+    "noTurns": "Aucun tour enregistré dans cet espace de travail."
   },
   "AppearanceSettings": {
     "sectionTitle": "Apparence du thème",
