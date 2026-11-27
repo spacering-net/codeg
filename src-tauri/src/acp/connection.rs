@@ -3264,6 +3264,7 @@ pub async fn spawn_agent_connection(
                 .await;
         }
 
+        let failed = result.is_err();
         if let Err(e) = result {
             let code = e.code().map(String::from);
             emit_with_state(
@@ -3305,6 +3306,8 @@ pub async fn spawn_agent_connection(
             },
         )
         .await;
+        let session = state_clone.read().await;
+        crate::host_plugins::lifecycle::observe_agent_close(&emitter_clone, &session, failed);
                 // Connection loop ended; `block_on` returns and `_cleanup`
                 // (bound at the top of the thread body) drops next, removing
                 // the manager map entry — same as on a panic unwind.
@@ -8537,6 +8540,7 @@ struct CompanionFeatureFlags {
     /// `submit_result`: per-spawn too, for the root of a `codeg-cli` run given
     /// `--output-schema`.
     result: bool,
+    plugin_tools: bool,
     /// `create_automation`, gated by the chat-authoring setting.
     automations: bool,
     /// `create_work_task`, gated by the chat-authoring setting.
@@ -8587,6 +8591,9 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     if flags.result {
         features.push("result");
     }
+    if flags.plugin_tools {
+        features.push("plugin_tools");
+    }
     if flags.automations {
         features.push("automations");
     }
@@ -8635,7 +8642,7 @@ struct CompanionInjection {
 
 /// The tool groups a launch carries whatever the settings say, for who
 /// launched it. Named fields, as in [`CompanionFeatureFlags`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Default)]
 struct LaunchGroups {
     /// `task_progress` / `task_complete`: a task-engine launch.
     tasks: bool,
@@ -8645,6 +8652,7 @@ struct LaunchGroups {
     /// delegation or board-authoring ones: it hands work out only through its
     /// own dispatch tool, which the runtime (not this connection) owns.
     personal_agent: bool,
+    plugin_tools: Option<crate::host_plugins::model_tools::ModelToolOffers>,
 }
 
 async fn inject_codeg_mcp(
@@ -8734,6 +8742,7 @@ where
         sessions: injection.sessions.is_enabled().await,
         tasks: groups.tasks,
         result: groups.result,
+        plugin_tools: groups.plugin_tools.is_some(),
         automations: authoring.automations_enabled && !groups.personal_agent,
         taskboard: authoring.work_tasks_enabled && !groups.personal_agent,
         personal_agent: groups.personal_agent,
@@ -8779,13 +8788,14 @@ where
     let token = uuid::Uuid::new_v4().to_string();
     injection
         .tokens
-        .register(
+        .register_with_plugin_tools(
             token.clone(),
             crate::acp::delegation::listener::TokenEntry {
                 parent_connection_id: parent_connection_id.to_string(),
                 working_dir: working_dir.to_path_buf(),
                 agent_hosts_tools: !host_tools.hosts_channels(),
             },
+            groups.plugin_tools,
         )
         .await;
     let mut server = McpServerStdio::new("codeg-mcp", binary_path.clone());
@@ -9783,6 +9793,9 @@ async fn run_connection(
                             tasks: s.owner_window_label == "work_task",
                             result: s.cli_output_schema.is_some(),
                             personal_agent: s.personal_agent,
+                            plugin_tools: emitter.host_plugins().as_ref().and_then(
+                                crate::host_plugins::model_tools::ModelToolOffers::new,
+                            ),
                         }
                     };
                     inject_codeg_mcp(
@@ -48897,9 +48910,8 @@ mod tests {
             "cli-root",
             std::path::Path::new("/tmp"),
             LaunchGroups {
-                tasks: false,
                 result: true,
-                personal_agent: false,
+                ..Default::default()
             },
             HostToolsPolicy::Agent,
             || Some(PathBuf::from("/opt/codeg/codeg-mcp")),
@@ -49134,6 +49146,7 @@ mod tests {
                 sessions: true,
                 tasks: true,
                 result: true,
+                plugin_tools: true,
                 automations: true,
                 taskboard: true,
                 personal_agent: true,
@@ -49144,7 +49157,7 @@ mod tests {
                 computer_clipboard: true,
             }),
             Some(
-                "delegation,feedback,ask,sessions,tasks,result,automations,taskboard,\
+                "delegation,feedback,ask,sessions,tasks,result,plugin_tools,automations,taskboard,\
                  personal_agent,browser,browser_eval,computer,computer_launch,computer_clipboard"
                     .to_string()
             )
