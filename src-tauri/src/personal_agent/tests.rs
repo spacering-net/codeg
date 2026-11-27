@@ -5701,8 +5701,8 @@ async fn a_dispatch_stopped_while_its_agent_starts_is_stopped_where_it_runs_now(
         .unwrap();
     assert!(primary.stop_dispatch_for_test(&read).await);
     assert!(
-        matches!(rx.try_recv(), Ok(ConnectionCommand::Cancel)),
-        "the turn on the connection it has now is stopped"
+        matches!(rx.try_recv(), Ok(ConnectionCommand::StopWork)),
+        "the turn on the connection it has now is stopped, its sub-agents with it"
     );
     // And a launch that checks now does not send the work.
     assert!(primary.was_stopped(d).await);
@@ -17190,7 +17190,7 @@ fn next_prompt(
 fn cancel_sent(rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>) -> bool {
     loop {
         match rx.try_recv() {
-            Ok(ConnectionCommand::Cancel) => return true,
+            Ok(ConnectionCommand::Cancel | ConnectionCommand::StopWork) => return true,
             Ok(_) => continue,
             Err(_) => return false,
         }

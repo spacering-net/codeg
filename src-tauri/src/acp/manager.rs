@@ -820,28 +820,20 @@ impl ConnectionManager {
     /// background work — see `DelegationBroker::detach_parent_turn`); a
     /// disconnect cascades by itself.
     ///
-    /// The stop is armed on the broker BEFORE the cancel is queued, so the
-    /// connection loop cascades when it actually handles it — reaching a child
-    /// the stopped turn started while the cancel waited in the queue — and the
-    /// children running now are canceled right away as well.
+    /// Queues [`ConnectionCommand::StopWork`], whose handler in the connection
+    /// loop cascades when it runs — reaching a child the stopped turn started
+    /// while the stop waited in the queue — and cancels the children running
+    /// now right away as well.
     pub async fn cancel_with_delegated_children(
         &self,
         db: &DatabaseConnection,
         conn_id: &str,
     ) -> Result<(), AcpError> {
-        let broker = self
-            .delegation_injection
-            .get()
-            .map(|injection| injection.broker.clone());
-        if let Some(broker) = &broker {
-            broker.arm_children_cancel(conn_id).await;
-        }
-        let result = self.cancel(db, conn_id).await;
-        if let Some(broker) = &broker {
-            if result.is_err() {
-                broker.disarm_children_cancel(conn_id).await;
-            }
-            broker.cancel_children_of_parent(conn_id).await;
+        let result = self
+            .send_cancel(db, conn_id, ConnectionCommand::StopWork)
+            .await;
+        if let Some(injection) = self.delegation_injection.get() {
+            injection.broker.cancel_children_of_parent(conn_id).await;
         }
         result
     }
@@ -2742,6 +2734,19 @@ impl ConnectionManager {
     }
 
     pub async fn cancel(&self, db: &DatabaseConnection, conn_id: &str) -> Result<(), AcpError> {
+        self.send_cancel(db, conn_id, ConnectionCommand::Cancel)
+            .await
+    }
+
+    /// Queue `command` — [`ConnectionCommand::Cancel`] or
+    /// [`ConnectionCommand::StopWork`] — and settle the row the way a cancel
+    /// does.
+    async fn send_cancel(
+        &self,
+        db: &DatabaseConnection,
+        conn_id: &str,
+        command: ConnectionCommand,
+    ) -> Result<(), AcpError> {
         let (cmd_tx, state_arc, emitter) = {
             let connections = self.connections.lock().await;
             let conn = connections
@@ -2754,7 +2759,7 @@ impl ConnectionManager {
             )
         };
         cmd_tx
-            .send(ConnectionCommand::Cancel)
+            .send(command)
             .await
             .map_err(|_| AcpError::ProcessExited)?;
 

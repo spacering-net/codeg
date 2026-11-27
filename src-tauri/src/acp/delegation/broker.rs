@@ -389,13 +389,6 @@ struct PendingCalls {
 /// `handle_request` drains both buffers at park.
 #[derive(Default)]
 struct PendingInner {
-    /// Parents with an explicit stop of their work queued
-    /// ([`DelegationBroker::arm_children_cancel`]): the connection loop's next
-    /// `detach_parent_turn` — run when it actually handles that stop — cascades
-    /// instead of detaching, catching a child the stopped turn started after
-    /// the immediate cascade. Cleared by that detach, by a disarm, or by the
-    /// connection teardown.
-    stop_requested: HashSet<String>,
     /// Tasks running in the background after their `Running` ack, keyed by
     /// broker `call_id` (= `task_id`). A terminal event migrates an entry from
     /// here into `completed` under THIS lock (atomic `running` → `completed`
@@ -3567,23 +3560,7 @@ impl DelegationBroker {
     /// tool), an explicit stop of the parent's work
     /// ([`Self::cancel_children_of_parent`]), a parent CONNECTION teardown
     /// ([`Self::cancel_by_parent`]), and the child's own terminal turn.
-    ///
-    /// A stop armed by [`Self::arm_children_cancel`] turns this detach into
-    /// the full [`Self::cancel_children_of_parent`] cascade: the loop runs it
-    /// when it handles that stop, so it also reaches a child the stopped turn
-    /// started while the stop was still queued.
     pub async fn detach_parent_turn(&self, parent_connection_id: &str) {
-        let stop_requested = self
-            .pending
-            .inner
-            .lock()
-            .await
-            .stop_requested
-            .remove(parent_connection_id);
-        if stop_requested {
-            self.cancel_children_of_parent(parent_connection_id).await;
-            return;
-        }
         self.drop_tool_calls_for_parent(parent_connection_id, true)
             .await;
         self.pending
@@ -3593,33 +3570,12 @@ impl DelegationBroker {
             .mark_inflight_canceled_for_parent(parent_connection_id);
     }
 
-    /// Arm an explicit stop of `parent_connection_id`'s work ahead of queueing
-    /// its turn cancel: the connection loop's next [`Self::detach_parent_turn`]
-    /// then cascades to every child instead of detaching. Pair with
-    /// [`Self::disarm_children_cancel`] when the cancel could not be queued.
-    pub async fn arm_children_cancel(&self, parent_connection_id: &str) {
-        self.pending
-            .inner
-            .lock()
-            .await
-            .stop_requested
-            .insert(parent_connection_id.to_string());
-    }
-
-    /// Withdraw a stop armed by [`Self::arm_children_cancel`].
-    pub async fn disarm_children_cancel(&self, parent_connection_id: &str) {
-        self.pending
-            .inner
-            .lock()
-            .await
-            .stop_requested
-            .remove(parent_connection_id);
-    }
-
     /// Cancel every delegation `parent_connection_id` still runs while the
     /// parent connection STAYS ALIVE — for an explicit stop of the parent's
-    /// work (a personal assistant stopping work it handed out), not for a
-    /// mere turn interrupt, which [`Self::detach_parent_turn`] handles.
+    /// work (`ConnectionCommand::StopWork`, sent by
+    /// `ConnectionManager::cancel_with_delegated_children` — a personal
+    /// assistant stopping work it handed out, a chat channel's `/cancel`), not
+    /// for a mere turn interrupt, which [`Self::detach_parent_turn`] handles.
     ///
     /// The fast part — tombstoning the tool_call tracker (RETAINING
     /// `consumed`, see `drop_tool_calls_for_parent`), flagging in-flight
@@ -3692,7 +3648,6 @@ impl DelegationBroker {
                     })
                     .collect();
                 inner.drop_completed_for_parent(parent_connection_id);
-                inner.stop_requested.remove(parent_connection_id);
                 drained
             }
         };
@@ -8435,75 +8390,6 @@ mod tests {
         .expect("background child teardown");
         assert_eq!(mock.cancels.lock().await.as_slice(), &["child-1"]);
         assert_eq!(mock.disconnects.lock().await.as_slice(), &["child-1"]);
-    }
-
-    /// An explicit stop armed before its cancel was queued makes the loop's
-    /// detach cascade: a child the stopped turn started after the immediate
-    /// cascade (here: one running when the detach lands) is still canceled,
-    /// and the arm is single-use — the next detach only detaches again.
-    #[tokio::test]
-    async fn armed_stop_turns_the_next_detach_into_a_cascade_once() {
-        let mock = Arc::new(MockSpawner::new());
-        mock.queue_spawn(Ok("child-1".into())).await;
-        mock.queue_send(Ok(7)).await;
-        mock.queue_spawn(Ok("child-2".into())).await;
-        mock.queue_send(Ok(8)).await;
-        let broker =
-            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup());
-        enable_delegation(&broker).await;
-
-        broker.arm_children_cancel("parent-conn").await;
-        let driver = {
-            let broker = broker.clone();
-            tokio::spawn(async move { broker.handle_request(request(1, "pt-1")).await })
-        };
-        while broker.pending_count().await == 0 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-
-        broker.detach_parent_turn("parent-conn").await;
-        assert_eq!(broker.pending_count().await, 0, "the armed detach cascades");
-        match driver.await.unwrap() {
-            DelegationOutcome::Err { code, .. } => assert_eq!(code, "canceled"),
-            other => panic!("expected canceled, got {other:?}"),
-        }
-
-        // Spent: a later interrupt detaches without canceling.
-        let driver = {
-            let broker = broker.clone();
-            tokio::spawn(async move { broker.handle_request(request(2, "pt-2")).await })
-        };
-        while broker.pending_count().await == 0 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        broker.detach_parent_turn("parent-conn").await;
-        assert_eq!(broker.pending_count().await, 1, "a plain detach keeps it running");
-        driver.abort();
-    }
-
-    /// A disarmed stop leaves the next detach a plain detach.
-    #[tokio::test]
-    async fn disarmed_stop_leaves_the_detach_plain() {
-        let mock = Arc::new(MockSpawner::new());
-        mock.queue_spawn(Ok("child-1".into())).await;
-        mock.queue_send(Ok(7)).await;
-        let broker =
-            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup());
-        enable_delegation(&broker).await;
-
-        broker.arm_children_cancel("parent-conn").await;
-        broker.disarm_children_cancel("parent-conn").await;
-        let driver = {
-            let broker = broker.clone();
-            tokio::spawn(async move { broker.handle_request(request(1, "pt-1")).await })
-        };
-        while broker.pending_count().await == 0 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        broker.detach_parent_turn("parent-conn").await;
-        assert_eq!(broker.pending_count().await, 1);
-        assert!(mock.cancels.lock().await.is_empty());
-        driver.abort();
     }
 
     // -- Item 1: parent-cancel coverage of the `handle_request` setup window --

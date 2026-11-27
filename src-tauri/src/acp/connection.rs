@@ -1382,6 +1382,14 @@ pub enum ConnectionCommand {
         reply: Option<tokio::sync::oneshot::Sender<bool>>,
     },
     Cancel,
+    /// [`Self::Cancel`] for an explicit stop of the work this connection does
+    /// (`ConnectionManager::cancel_with_delegated_children`): the turn is
+    /// cancelled the same way, and when the loop handles it the turn's
+    /// delegated children are cancelled too instead of being left running.
+    /// Carried on the command itself so each queued stop cascades at the
+    /// moment its own handler runs — also reaching a child the stopped turn
+    /// started while the stop waited in the queue.
+    StopWork,
     RespondPermission {
         request_id: String,
         option_id: String,
@@ -16869,7 +16877,12 @@ async fn run_conversation_loop(
                                         send_stop_async_task_request(&cx, &sid, &task_id).await,
                                     );
                                 }
-                                Some(ConnectionCommand::Cancel) => {
+                                Some(
+                                    command @ (ConnectionCommand::Cancel
+                                    | ConnectionCommand::StopWork),
+                                ) => {
+                                    let stop_work =
+                                        matches!(command, ConnectionCommand::StopWork);
                                     // Send CancelNotification to agent to stop the current turn
                                     let _ = cx.send_notification_to(
                                         Agent,
@@ -16938,9 +16951,16 @@ async fn run_conversation_loop(
                                     // stop of this connection's work, the
                                     // connection teardown (cancel_by_parent
                                     // at run_connection exit), and the child's
-                                    // own terminal turn.
+                                    // own terminal turn. An explicit stop
+                                    // (`StopWork`) cancels them all here.
                                     if let Some(inj) = delegation_injection {
-                                        inj.broker.detach_parent_turn(conn_id).await;
+                                        if stop_work {
+                                            inj.broker
+                                                .cancel_children_of_parent(conn_id)
+                                                .await;
+                                        } else {
+                                            inj.broker.detach_parent_turn(conn_id).await;
+                                        }
                                         // Reclaim any parked `ask_user_question` /
                                         // Grok `exit_plan_mode` approval owned by this
                                         // connection. Unlike `perms` (drained inline
@@ -17188,7 +17208,8 @@ async fn run_conversation_loop(
                     crate::acp::rewind::send_rewind_request(&cx, &sid, &cursor_id).await,
                 );
             }
-            Some(ConnectionCommand::Cancel) => {
+            Some(command @ (ConnectionCommand::Cancel | ConnectionCommand::StopWork)) => {
+                let stop_work = matches!(command, ConnectionCommand::StopWork);
                 let cx = session.connection();
                 let sid = session.session_id().clone();
                 let _ = cx.send_notification_to(Agent, CancelNotification::new(sid.clone()));
@@ -17224,9 +17245,14 @@ async fn run_conversation_loop(
                 // acked delegated children running. The
                 // connection stays alive, so keep the parent's `consumed`
                 // memory (a re-emit must not mis-bind the next same-key
-                // delegation).
+                // delegation). An explicit stop (`StopWork`) cancels the
+                // children instead.
                 if let Some(inj) = delegation_injection {
-                    inj.broker.detach_parent_turn(conn_id).await;
+                    if stop_work {
+                        inj.broker.cancel_children_of_parent(conn_id).await;
+                    } else {
+                        inj.broker.detach_parent_turn(conn_id).await;
+                    }
                 }
                 if closed_agent_turn {
                     cancel_grok_agent_turn_asks(delegation_injection, conn_id).await;
