@@ -443,6 +443,11 @@ pub fn adopt_legacy_avatar_cache(data_dir: &Path) -> Option<PathBuf> {
         return None;
     }
     let legacy = workdir.join("avatars");
+    // A real folder only: a link's target is not this cache's to move or
+    // empty.
+    if !std::fs::symlink_metadata(&legacy).ok()?.is_dir() {
+        return None;
+    }
     for entry in std::fs::read_dir(&legacy).ok()? {
         let entry = entry.ok()?;
         if !entry.file_type().ok()?.is_file()
@@ -452,14 +457,16 @@ pub fn adopt_legacy_avatar_cache(data_dir: &Path) -> Option<PathBuf> {
         }
     }
     let target = avatars_dir(data_dir);
-    std::fs::create_dir_all(target.parent()?).ok()?;
+    if let Some(parent) = target.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     // None of this cache kept yet: the whole folder goes over, in one step
     // where it can (not across volumes).
     if !target.exists() && std::fs::rename(&legacy, &target).is_ok() {
         return Some(target);
     }
-    // Kept already, or the folder would not go over whole: picture by
-    // picture. The page draws these again on every start, so one that will
+    // Kept already, or the folder would not go over whole (another volume,
+    // or no cache folder to be had): picture by picture. The page draws these again on every start, so one that will
     // not move only has to stop blocking the directory.
     let _ = std::fs::create_dir_all(&target);
     for entry in std::fs::read_dir(&legacy).ok()? {
@@ -4630,6 +4637,40 @@ mod tests {
             std::fs::read(avatars_dir(data).join("4-tray.png")).unwrap(),
             b"tray"
         );
+        assert!(ensure_initialized(&dir, AppLocale::En).await.unwrap());
+    }
+
+    /// A linked `avatars` is not this cache: what it points at is left
+    /// alone, link and all.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_face_folder_is_left_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("data");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("3.png"), b"mine").unwrap();
+        std::fs::create_dir_all(default_workdir(&data)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, default_workdir(&data).join("avatars")).unwrap();
+        std::fs::create_dir_all(avatars_dir(&data)).unwrap();
+        std::fs::write(avatars_dir(&data).join("3.png"), b"new").unwrap();
+        assert!(adopt_legacy_avatar_cache(&data).is_none());
+        assert_eq!(std::fs::read(elsewhere.join("3.png")).unwrap(), b"mine");
+        assert!(default_workdir(&data).join("avatars").exists());
+    }
+
+    /// No cache folder to be had (a file where it would go): the old
+    /// pictures are dropped all the same, and the directory can be made.
+    #[tokio::test]
+    async fn a_face_cache_with_nowhere_to_go_is_dropped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path();
+        let dir = default_workdir(data);
+        std::fs::create_dir_all(dir.join("avatars")).unwrap();
+        std::fs::write(dir.join("avatars").join("3.png"), b"png").unwrap();
+        std::fs::write(data.join("cache"), b"").unwrap();
+        assert!(adopt_legacy_avatar_cache(data).is_some());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         assert!(ensure_initialized(&dir, AppLocale::En).await.unwrap());
     }
 
