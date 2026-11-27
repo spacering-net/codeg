@@ -4432,8 +4432,7 @@
         "retryUnavailable": "沒有可重發的訊息。",
         "toggleDetails": "展開/收合詳情",
         "dismiss": "忽略",
-        "moreIncidents": "另 {count} 條",
-        "openStripTitle": "開啟"
+        "moreIncidents": "另 {count} 條"
       },
       "backgroundTasks": {
         "settledFallback": "背景任務已結束（{status}）",
@@ -4480,11 +4479,6 @@
       "proposedPlan": {
         "title": "計劃提案",
         "planning": "規劃中…"
-      },
-      "btw": {
-        "stripAnswering": "正在回答…",
-        "stripAnswered": "已回答",
-        "stripStopped": "已中斷"
       }
     },
     "diffPreview": {

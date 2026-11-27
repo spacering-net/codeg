@@ -4432,8 +4432,7 @@
         "retryUnavailable": "Keine vorherige Nachricht zum erneuten Senden.",
         "toggleDetails": "Details umschalten",
         "dismiss": "Schließen",
-        "moreIncidents": "+{count} weitere",
-        "openStripTitle": "Öffnen"
+        "moreIncidents": "+{count} weitere"
       },
       "backgroundTasks": {
         "settledFallback": "Hintergrundaufgabe beendet ({status})",
@@ -4480,11 +4479,6 @@
       "proposedPlan": {
         "title": "Vorgeschlagener Plan",
         "planning": "Wird geplant…"
-      },
-      "btw": {
-        "stripAnswering": "antwortet…",
-        "stripAnswered": "beantwortet",
-        "stripStopped": "Abgebrochen"
       }
     },
     "diffPreview": {

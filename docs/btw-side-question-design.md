@@ -70,22 +70,8 @@ compensation.
 
 ### The panel
 
-The fork is a real conversation, so phase 1 does not build a custom transcript
-renderer:
-
-- A `btw` strip (new `info` tone on the composer's status-strip family,
-  `composer-status-strips.tsx`) lives under the composer while the parent has
-  a side question: question text plus state — `answering` / `answered` /
-  `stopped` — read straight off the child row's status, so a cancelled side
-  question never claims an answer it did not give, and X hides the strip for
-  this panel view (the row itself is unaffected). The strip derives entirely
-  from the workspace conversation store, so upsert and delete events keep it
-  honest across clients with no separate state.
-- Clicking the strip's title opens the fork in an ordinary conversation tab.
-  The view already streams, already routes permissions, and already needs no
-  new states; no breadcrumb — the strip is the parent's link back.
-- Wanting the answer beside the parent is what the existing tab split (right-
-  click a tab → Split Right / Split Down) is for; nothing btw-specific.
+Sending a side question opens the fork in an ordinary conversation tab. To
+view it beside the parent, use the tab's Split Right or Split Down action.
 
 ### The sidebar `btw` group
 

@@ -4432,8 +4432,7 @@
         "retryUnavailable": "No previous message to resend.",
         "toggleDetails": "Toggle details",
         "dismiss": "Dismiss",
-        "moreIncidents": "+{count} more",
-        "openStripTitle": "Open"
+        "moreIncidents": "+{count} more"
       },
       "backgroundTasks": {
         "settledFallback": "Background task finished ({status})",
@@ -4480,11 +4479,6 @@
       "proposedPlan": {
         "title": "Proposed plan",
         "planning": "Planning…"
-      },
-      "btw": {
-        "stripAnswering": "answering…",
-        "stripAnswered": "answered",
-        "stripStopped": "stopped"
       }
     },
     "diffPreview": {

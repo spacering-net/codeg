@@ -4432,8 +4432,7 @@
         "retryUnavailable": "没有可重发的消息。",
         "toggleDetails": "展开/收起详情",
         "dismiss": "忽略",
-        "moreIncidents": "另 {count} 条",
-        "openStripTitle": "打开"
+        "moreIncidents": "另 {count} 条"
       },
       "backgroundTasks": {
         "settledFallback": "后台任务已结束（{status}）",
@@ -4480,11 +4479,6 @@
       "proposedPlan": {
         "title": "计划提案",
         "planning": "规划中…"
-      },
-      "btw": {
-        "stripAnswering": "正在回答…",
-        "stripAnswered": "已回答",
-        "stripStopped": "已中断"
       }
     },
     "diffPreview": {

@@ -4432,8 +4432,7 @@
         "retryUnavailable": "再送信できるメッセージがありません。",
         "toggleDetails": "詳細の切り替え",
         "dismiss": "閉じる",
-        "moreIncidents": "他 {count} 件",
-        "openStripTitle": "開く"
+        "moreIncidents": "他 {count} 件"
       },
       "backgroundTasks": {
         "settledFallback": "バックグラウンドタスクが終了しました（{status}）",
@@ -4480,11 +4479,6 @@
       "proposedPlan": {
         "title": "提案された計画",
         "planning": "計画中…"
-      },
-      "btw": {
-        "stripAnswering": "回答中…",
-        "stripAnswered": "回答済み",
-        "stripStopped": "中断済み"
       }
     },
     "diffPreview": {

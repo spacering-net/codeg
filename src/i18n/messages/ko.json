@@ -4432,8 +4432,7 @@
         "retryUnavailable": "다시 보낼 메시지가 없습니다.",
         "toggleDetails": "세부 정보 전환",
         "dismiss": "닫기",
-        "moreIncidents": "외 {count}건",
-        "openStripTitle": "열기"
+        "moreIncidents": "외 {count}건"
       },
       "backgroundTasks": {
         "settledFallback": "백그라운드 작업이 종료되었습니다 ({status})",
@@ -4480,11 +4479,6 @@
       "proposedPlan": {
         "title": "제안된 계획",
         "planning": "계획 중…"
-      },
-      "btw": {
-        "stripAnswering": "답변 중…",
-        "stripAnswered": "답변 완료",
-        "stripStopped": "중단됨"
       }
     },
     "diffPreview": {
