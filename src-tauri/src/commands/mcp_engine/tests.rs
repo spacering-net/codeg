@@ -3504,7 +3504,9 @@ async fn inventory_lists_registered_custom_agents_and_the_settings_gate() {
         sandbox
             .dir
             .path()
-            .join("custom-agents/mcp-inventory-on/mcp.json")
+            .join("custom-agents")
+            .join("mcp-inventory-on")
+            .join("mcp.json")
             .display()
             .to_string()
     );
