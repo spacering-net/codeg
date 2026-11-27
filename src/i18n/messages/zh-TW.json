@@ -11877,8 +11877,8 @@
       },
       "workspace": {
         "empty": "目前沒有在跑的工作",
-        "open": "開啟",
-        "emptyHint": "派出去的工作在執行時，這裡即時顯示它的工作階段。",
+        "viewSession": "查看工作階段",
+        "emptyHint": "派出去的工作在執行時，會顯示在這裡。",
         "whose": "{name} 的工作區"
       },
       "notifyOn": "已開啟",

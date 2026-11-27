@@ -11877,8 +11877,8 @@
       },
       "workspace": {
         "empty": "Rien en cours pour le moment",
-        "open": "Ouvrir",
-        "emptyHint": "Pendant que le travail confié s'exécute, sa session s'affiche ici en direct.",
+        "viewSession": "Voir la session",
+        "emptyHint": "Pendant que le travail confié s'exécute, il s'affiche ici.",
         "whose": "Espace de travail de {name}"
       },
       "notifyOn": "activé",

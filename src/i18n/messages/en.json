@@ -11877,8 +11877,8 @@
       },
       "workspace": {
         "empty": "Nothing running right now",
-        "open": "Open",
-        "emptyHint": "While work it handed out runs, its session shows here live.",
+        "viewSession": "View session",
+        "emptyHint": "While work it handed out runs, it shows here.",
         "whose": "{name}'s workspace"
       },
       "notifyOn": "on",

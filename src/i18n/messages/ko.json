@@ -11877,8 +11877,8 @@
       },
       "workspace": {
         "empty": "지금 실행 중인 것 없음",
-        "open": "열기",
-        "emptyHint": "맡긴 작업이 실행되는 동안 그 세션이 여기에 실시간으로 표시됩니다.",
+        "viewSession": "세션 보기",
+        "emptyHint": "맡긴 작업이 실행되는 동안 여기에 표시됩니다.",
         "whose": "{name}의 작업 공간"
       },
       "notifyOn": "켜짐",

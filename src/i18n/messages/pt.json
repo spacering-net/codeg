@@ -11877,8 +11877,8 @@
       },
       "workspace": {
         "empty": "Nada em execução agora",
-        "open": "Abrir",
-        "emptyHint": "Enquanto o trabalho delegado corre, a sua sessão aparece aqui em direto.",
+        "viewSession": "Ver sessão",
+        "emptyHint": "Enquanto o trabalho delegado corre, aparece aqui.",
         "whose": "Espaço de trabalho de {name}"
       },
       "notifyOn": "ativado",

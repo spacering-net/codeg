@@ -11877,8 +11877,8 @@
       },
       "workspace": {
         "empty": "现在没有在跑的活",
-        "open": "打开",
-        "emptyHint": "派出去的活在跑时，这里实时显示它的会话。",
+        "viewSession": "查看会话",
+        "emptyHint": "派出去的活在跑时，会显示在这里。",
         "whose": "{name} 的工作区"
       },
       "notifyOn": "已开启",

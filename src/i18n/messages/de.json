@@ -11877,8 +11877,8 @@
       },
       "workspace": {
         "empty": "Gerade läuft nichts",
-        "open": "Öffnen",
-        "emptyHint": "Solange delegierte Arbeit läuft, wird ihre Sitzung hier live angezeigt.",
+        "viewSession": "Sitzung ansehen",
+        "emptyHint": "Solange delegierte Arbeit läuft, wird sie hier angezeigt.",
         "whose": "Arbeitsbereich von {name}"
       },
       "notifyOn": "an",
