@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react"
-import { useTranslations } from "next-intl"
+import { useLocale, useTranslations } from "next-intl"
 import { isImeCompositionKey } from "@/lib/ime-composition"
 import { Button } from "@/components/ui/button"
 import {
@@ -128,6 +128,7 @@ import {
 } from "@/components/chat/composer/composer-sizing"
 import {
   buildKnownInvocations,
+  commandInvocationToken,
   commandToReference,
   diskSkillTrigger,
   skillMarkedCommands,
@@ -152,6 +153,20 @@ import { ComposerAddMenu } from "@/components/chat/composer/composer-add-menu"
 import { ComposerImageThumbnails } from "@/components/chat/composer/composer-image-thumbnails"
 import { useComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
 import { useComposerShortcuts } from "@/components/chat/composer/use-composer-shortcuts"
+import { HostPluginSlot } from "@/components/host-plugin-slot"
+import {
+  buildPluginSlashCommandInput,
+  hostPluginSessionScopeKey,
+  isCurrentReadyHostTransport,
+  matchPluginSlashCommandText,
+  parsePluginSlashCommandOutput,
+  selectPluginSlashCommands,
+  useHostPlugins,
+  type HostPluginSessionContext,
+  type PluginComposerInsertResult,
+  type ResolvedPluginSlashCommand,
+} from "@/lib/host-plugins"
+import type { Transport } from "@/lib/transport"
 
 /**
  * Payload pushed into the composer from outside (e.g. a welcome-page quick
@@ -291,6 +306,11 @@ interface MessageInputProps {
    * component knows the action row that separates them.
    */
   tall?: boolean
+  /** Workspace + session isolation context for `composer` host plugin surfaces.
+   *  Omitted on standalone/non-session composers so no plugin catalog is queried. */
+  pluginContext?: HostPluginSessionContext | null
+  /** Gate host plugin catalog subscription while a keep-alive composer is hidden. */
+  pluginSlotEnabled?: boolean
 }
 
 // Non-image files attach as inline file badges in the editor (like `@`-file
@@ -311,6 +331,69 @@ interface MessageInputProps {
  *  `handleSend`), under one id: pressing Enter into the hold again updates the
  *  toast on screen instead of stacking another copy of it. */
 const HELD_WHILE_RESPONDING_TOAST = "composer-held-while-responding"
+
+interface PluginSlashCommandFeedback {
+  kind: "success" | "error"
+  generation: number
+  scopeKey: string
+  transport: Transport
+  pluginId: string
+  commandName: string
+  method: string
+  scope: ResolvedPluginSlashCommand["scope"]
+  text: string
+}
+
+interface ActivePluginSlashRun {
+  id: number
+  generation: number
+  scopeKey: string
+  transport: Transport
+  pluginId: string
+  commandName: string
+  method: string
+  scope: ResolvedPluginSlashCommand["scope"]
+}
+
+function editorHasAnyReference(editor: Editor): boolean {
+  let found = false
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === "reference") {
+      found = true
+      return false
+    }
+    return true
+  })
+  return found
+}
+
+function editorStartsWithReference(editor: Editor): boolean {
+  let decided = false
+  let startsWithRef = false
+  editor.state.doc.descendants((node) => {
+    if (decided) return false
+    if (node.type.name === "reference") {
+      decided = true
+      startsWithRef = true
+      return false
+    }
+    if (node.isText && node.text && node.text.trim().length > 0) {
+      decided = true
+      startsWithRef = false
+      return false
+    }
+    return true
+  })
+  return startsWithRef
+}
+
+function readLeadingSlashDraftText(editor: Editor | null): string | null {
+  if (!editor || editor.isDestroyed || editorStartsWithReference(editor)) {
+    return null
+  }
+  const text = serializeDocToText(editor.state.doc)
+  return text.trimStart().startsWith("/") ? text : null
+}
 
 function SelectorLoadingChip({ label }: { label: string }) {
   return (
@@ -363,13 +446,40 @@ export function MessageInput({
   onInjectConsumed,
   getSentHistory,
   tall = false,
+  pluginContext = null,
+  pluginSlotEnabled = true,
 }: MessageInputProps) {
+  const locale = useLocale()
   const t = useTranslations("Folder.chat.messageInput")
   const tQueue = useTranslations("Folder.chat.messageQueue")
   // Kept as a separate binding from `t` so its call sites — exclusively
   // upload / attachment toasts — read as a single coherent group when
   // scanning the file. Same namespace, no extra runtime cost.
   const tAttach = useTranslations("Folder.chat.messageInput")
+  const pluginSlashEnabled = Boolean(pluginContext && pluginSlotEnabled)
+  const { data: hostPlugins, transport: pluginTransport } =
+    useHostPlugins(pluginSlashEnabled)
+  const pluginSlashCommands = useMemo(
+    () =>
+      pluginSlashEnabled && pluginTransport
+        ? selectPluginSlashCommands(hostPlugins, pluginContext, locale)
+        : [],
+    [pluginSlashEnabled, pluginTransport, hostPlugins, pluginContext, locale]
+  )
+  const pluginSlashCommandNames = useMemo(
+    () => new Set(pluginSlashCommands.map((cmd) => cmd.name)),
+    [pluginSlashCommands]
+  )
+  const effectiveAgentCommands = useMemo(() => {
+    const base = availableCommands ?? []
+    if (pluginSlashCommandNames.size === 0 || base.length === 0) return base
+    return base.filter((cmd) => {
+      const token = commandInvocationToken(cmd.name)
+      return !(
+        token.startsWith("/") && pluginSlashCommandNames.has(token.slice(1))
+      )
+    })
+  }, [availableCommands, pluginSlashCommandNames])
   // Skills read from disk feed the menu only for an agent that does not
   // advertise them itself: Codex under `$` (its native command set is very
   // small), Antigravity and OpenCode under `/` beside their commands (their
@@ -387,13 +497,18 @@ export function MessageInput({
     defaultPath ?? null
   )
   const skillPrefix = agentType === "codex" ? "$" : "/"
-  // Exactly what the `/`·`$` menu below can offer. Seeding or pasting text turns
-  // a bare `/cmd`·`$skill` token into a badge only when it is on this list, so
-  // prose the agent has no command for stays prose.
+  // Exactly what the `/`·`$` menu below can offer as invocation badges.
+  // Plugin slash commands intentionally stay plain text (never badged), and
+  // any agent command shadowed by an enabled in-scope plugin command is omitted
+  // so pasting `/name` stays plain text.
   const knownInvocations = useMemo(
     () =>
-      buildKnownInvocations(availableCommands, availableSkills, skillPrefix),
-    [availableCommands, availableSkills, skillPrefix]
+      buildKnownInvocations(
+        effectiveAgentCommands,
+        availableSkills,
+        skillPrefix
+      ),
+    [effectiveAgentCommands, availableSkills, skillPrefix]
   )
   // The hydration effects below read the list through this ref inside their
   // deferred frame, never from their dependency array. `buildKnownInvocations`
@@ -446,13 +561,19 @@ export function MessageInput({
   // The editor owns the content now; this mirror of its empty state drives the
   // send button and `hasSendableContent`.
   const [composerEmpty, setComposerEmpty] = useState(true)
+  // Leading plain-text `/` draft snapshot (null for all non-slash or
+  // reference-prefixed drafts so ordinary typing triggers zero extra updates).
+  const [leadingSlashDraftText, setLeadingSlashDraftText] = useState<
+    string | null
+  >(null)
   // Flips true once the RichComposer's async (immediatelyRender:false) editor has
   // mounted, so the hydration effect can use the imperative handle.
   const [composerReady, setComposerReady] = useState(false)
 
   const syncComposerEmpty = useCallback(() => {
-    const ed = editorRef.current?.getEditor()
+    const ed = editorRef.current?.getEditor() ?? null
     setComposerEmpty(ed ? isComposerEmpty(ed) : true)
+    setLeadingSlashDraftText(readLeadingSlashDraftText(ed))
   }, [])
 
   // What this composer holds that its saved draft may not show yet — typing
@@ -654,6 +775,7 @@ export function MessageInput({
       }
       const editor = ed.getEditor()
       setComposerEmpty(editor ? isComposerEmpty(editor) : true)
+      setLeadingSlashDraftText(readLeadingSlashDraftText(editor ?? null))
     })
     return () => cancelAnimationFrame(raf)
   }, [
@@ -724,6 +846,7 @@ export function MessageInput({
           editorRef.current?.setText(editingDraftText)
         }
         setComposerEmpty(editor ? isComposerEmpty(editor) : true)
+        setLeadingSlashDraftText(readLeadingSlashDraftText(editor ?? null))
         editorRef.current?.focus()
       })
       return () => cancelAnimationFrame(raf)
@@ -764,6 +887,7 @@ export function MessageInput({
             { append: true }
           )
           setComposerEmpty(isComposerEmpty(editor))
+          setLeadingSlashDraftText(readLeadingSlashDraftText(editor))
         }
       } else if (handle) {
         if (payload.mode === "append") {
@@ -803,6 +927,9 @@ export function MessageInput({
           handle.focus()
         }
         setComposerEmpty(false)
+        setLeadingSlashDraftText(
+          readLeadingSlashDraftText(handle.getEditor() ?? null)
+        )
       }
       onInjectConsumed?.()
     })
@@ -997,52 +1124,93 @@ export function MessageInput({
   // Antigravity after its commands on `/`.
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
-  // The trigger char (`/` for agent commands, `$` for Codex skills) and the
-  // typed filter token, both derived from the editor caret by
-  // `detectSlashTrigger` rather than from a raw string offset.
+  // The trigger char (`/` for commands, `$` for Codex skills) and the typed
+  // filter token, both derived from the editor caret by `detectSlashTrigger`
+  // rather than from a raw string offset.
   const [slashTriggerChar, setSlashTriggerChar] = useState<"/" | "$" | null>(
     null
   )
   const [slashFilter, setSlashFilter] = useState("")
-  const slashCommands = useMemo(
-    () => availableCommands ?? [],
-    [availableCommands]
-  )
-  // Read off the full list, not the filtered one, so typing never moves the
-  // rows' icon column in or out.
+  // True only when `/` starts a plain-text draft (no preceding text, no
+  // reference badges, no attachments, not editing a queue item) — the exact
+  // precondition for plugin slash commands.
+  const [slashAtDraftStart, setSlashAtDraftStart] = useState(false)
+  const slashCommands = effectiveAgentCommands
+  // Read off the full agent command list, not the filtered one, so typing never
+  // moves the rows' icon column in or out.
   const skillCommandNames = useMemo(
     () => skillMarkedCommands(slashCommands),
     [slashCommands]
   )
+  const filteredPluginSlashCommands = useMemo(() => {
+    if (
+      !slashMenuOpen ||
+      slashTriggerChar !== "/" ||
+      !slashAtDraftStart ||
+      isEditingQueueItem ||
+      attachments.length > 0 ||
+      hasUploadingImage ||
+      pluginSlashCommands.length === 0
+    ) {
+      return []
+    }
+    return rankByTextMatch(
+      slashFilter,
+      pluginSlashCommands,
+      (cmd) => cmd.name,
+      (cmd) => cmd.description
+    )
+  }, [
+    slashMenuOpen,
+    slashTriggerChar,
+    slashAtDraftStart,
+    isEditingQueueItem,
+    attachments.length,
+    hasUploadingImage,
+    pluginSlashCommands,
+    slashFilter,
+  ])
   const filteredSlashCommands = useMemo(() => {
     if (!slashMenuOpen || slashCommands.length === 0) return []
     if (slashTriggerChar !== "/") return []
     return rankByTextMatch(slashFilter, slashCommands, (cmd) => cmd.name)
   }, [slashMenuOpen, slashCommands, slashTriggerChar, slashFilter])
+  const skillExcludedCommands = useMemo(
+    () =>
+      pluginSlashCommands.length === 0
+        ? slashCommands
+        : [
+            ...slashCommands,
+            ...pluginSlashCommands.map((cmd) => ({ name: cmd.name })),
+          ],
+    [slashCommands, pluginSlashCommands]
+  )
   const filteredSlashSkills = useMemo(() => {
     // Disk skills are listed only under the trigger their agent invokes them by.
     if (!skillTrigger || slashTriggerChar !== skillTrigger) return []
     if (!slashMenuOpen || availableSkills.length === 0) return []
     return rankByTextMatch(
       slashFilter,
-      skillsForMenu(availableSkills, slashCommands, skillTrigger),
+      skillsForMenu(availableSkills, skillExcludedCommands, skillTrigger),
       (skill) => skill.name,
       (skill) => skill.id
     )
   }, [
     slashMenuOpen,
     availableSkills,
-    slashCommands,
+    skillExcludedCommands,
     skillTrigger,
     slashTriggerChar,
     slashFilter,
   ])
   const slashAutocompleteCount =
-    filteredSlashCommands.length + filteredSlashSkills.length
+    filteredPluginSlashCommands.length +
+    filteredSlashCommands.length +
+    filteredSlashSkills.length
   // `/` is fed by the agent's own command list, which only exists once the
   // connection is up — so while it is being established the panel shows a
   // loading row rather than nothing at all. Disk skills (Codex's `$` list,
-  // Antigravity's `/` rows) never wait on a connection.
+  // Antigravity's `/` rows) and host plugin commands never wait on a connection.
   const slashLoading =
     slashMenuOpen &&
     slashTriggerChar === "/" &&
@@ -1104,6 +1272,7 @@ export function MessageInput({
     const close = () => {
       setSlashMenuOpen(false)
       setSlashTriggerChar(null)
+      setSlashAtDraftStart(false)
     }
     if (!editor) return close()
     const { selection } = editor.state
@@ -1121,28 +1290,51 @@ export function MessageInput({
     const match = before.match(regex)
     if (!match) return close()
     const trigger = match[2] as "/" | "$"
+    const tokenLen = match[2].length + match[3].length
+    const isAtDraftStart =
+      trigger === "/" &&
+      !isEditingQueueItem &&
+      attachments.length === 0 &&
+      !hasUploadingImage &&
+      !editorHasAnyReference(editor) &&
+      editor.state.doc
+        .textBetween(0, $from.pos - tokenLen, "\n", composerLeafText)
+        .trim() === ""
+    const hasPluginSlashSource =
+      isAtDraftStart && pluginSlashCommands.length > 0
     // Only a commands-only `/` is gated here. Its source is the agent's own
-    // command list, which exists only once the connection is up — so an empty
-    // list means "nothing to show" unless the connection is still coming, where
-    // the panel opens on a loading row instead. A trigger that also lists disk
-    // skills (Codex's `$`, Antigravity's and OpenCode's `/`) is deliberately
-    // ungated: `useAgentSkills` reports an in-flight scan as an empty list, so
-    // closing on empty would strand a trigger typed before the scan lands. Left
-    // open, the panel simply stays hidden until the skills arrive and then fills
-    // itself in — no second keystroke needed.
+    // command list (plus eligible plugin commands at the start of a plain-text
+    // draft) — so an empty list means "nothing to show" unless the connection
+    // is still coming, where the panel opens on a loading row instead. A
+    // trigger that also lists disk skills (Codex's `$`, Antigravity's and
+    // OpenCode's `/`) is deliberately ungated: `useAgentSkills` reports an
+    // in-flight scan as an empty list, so closing on empty would strand a
+    // trigger typed before the scan lands. Left open, the panel simply stays
+    // hidden until the skills arrive and then fills itself in — no second
+    // keystroke needed.
     if (
       trigger === "/" &&
       skillTrigger !== "/" &&
       slashCommands.length === 0 &&
+      !hasPluginSlashSource &&
       !commandsLoading
     ) {
       return close()
     }
     setSlashTriggerChar(trigger)
     setSlashFilter(match[3])
+    setSlashAtDraftStart(isAtDraftStart)
     setSlashSelectedIndex(0)
     setSlashMenuOpen(true)
-  }, [slashCommands.length, commandsLoading, skillTrigger])
+  }, [
+    slashCommands.length,
+    pluginSlashCommands.length,
+    isEditingQueueItem,
+    attachments.length,
+    hasUploadingImage,
+    commandsLoading,
+    skillTrigger,
+  ])
 
   useEffect(() => {
     detectSlashTriggerRef.current = detectSlashTrigger
@@ -1167,6 +1359,7 @@ export function MessageInput({
   const closeSlashMenu = useCallback(() => {
     setSlashMenuOpen(false)
     setSlashTriggerChar(null)
+    setSlashAtDraftStart(false)
   }, [])
 
   // Replace the live `/`-or-`$` token immediately before the caret with
@@ -1216,6 +1409,41 @@ export function MessageInput({
       replaceTriggerWithReference(commandToReference(cmd))
     },
     [replaceTriggerWithReference]
+  )
+
+  // Plugin slash commands insert literal plain text (`/${name} `) rather than
+  // an agent command reference badge, keeping the draft plain-text eligible.
+  const handlePluginSlashSelect = useCallback(
+    (cmd: ResolvedPluginSlashCommand) => {
+      const editor = editorRef.current?.getEditor()
+      if (!editor) return
+      const { $from } = editor.state.selection
+      const before = $from.parent.textBetween(
+        0,
+        $from.parentOffset,
+        undefined,
+        " "
+      )
+      const match = before.match(/(^|\s)(\/)(\S*)$/)
+      const charAfter =
+        $from.parentOffset < $from.parent.content.size
+          ? $from.parent.textBetween(
+              $from.parentOffset,
+              $from.parentOffset + 1,
+              undefined,
+              " "
+            )
+          : ""
+      const suffix = charAfter && /\s/.test(charAfter) ? "" : " "
+      let chain = editor.chain().focus()
+      if (match) {
+        const tokenLen = match[2].length + match[3].length
+        chain = chain.deleteRange({ from: $from.pos - tokenLen, to: $from.pos })
+      }
+      chain.insertContent(textToInlineContent(`/${cmd.name}${suffix}`)).run()
+      closeSlashMenu()
+    },
+    [closeSlashMenu]
   )
 
   // Codex uses `$<id>`, other agents `/<id>` — matching the trigger prefix.
@@ -1626,6 +1854,7 @@ export function MessageInput({
   const resetComposer = useCallback(() => {
     editorRef.current?.clear()
     setComposerEmpty(true)
+    setLeadingSlashDraftText(null)
     clearAttachments()
     closeSlashMenu()
     historyIndexRef.current = null
@@ -1647,7 +1876,405 @@ export function MessageInput({
     }
   })
 
+  const [steering, setSteering] = useState(false)
+  const currentPluginScopeKey = pluginContext
+    ? hostPluginSessionScopeKey(pluginContext)
+    : null
+
+  // Once-invalid generation + active run/feedback binding: any change to scope,
+  // visibility (`pluginSlotEnabled`), transport identity, or withdrawal of the
+  // matched contribution permanently bumps `generation` and clears both run and
+  // feedback — preventing ABA races when a keep-alive tab hides/re-shows or
+  // switches away and back to the same scope while an older RPC is in flight.
+  const [pluginSlashState, setPluginSlashState] = useState<{
+    generation: number
+    scopeKey: string | null
+    enabled: boolean
+    transport: Transport | null
+    activeRun: ActivePluginSlashRun | null
+    feedback: PluginSlashCommandFeedback | null
+  }>(() => ({
+    generation: 0,
+    scopeKey: currentPluginScopeKey,
+    enabled: pluginSlashEnabled,
+    transport: pluginTransport,
+    activeRun: null,
+    feedback: null,
+  }))
+
+  const hasMatchingPluginCommand = (
+    target: Pick<
+      ActivePluginSlashRun,
+      "pluginId" | "commandName" | "method" | "scope"
+    >
+  ) =>
+    pluginSlashCommands.some(
+      (cmd) =>
+        cmd.pluginId === target.pluginId &&
+        cmd.name === target.commandName &&
+        cmd.method === target.method &&
+        cmd.scope === target.scope
+    )
+
+  const slashBindingChanged =
+    pluginSlashState.scopeKey !== currentPluginScopeKey ||
+    pluginSlashState.enabled !== pluginSlashEnabled ||
+    pluginSlashState.transport !== pluginTransport
+  const activeRunWithdrawn =
+    pluginSlashState.activeRun !== null &&
+    !hasMatchingPluginCommand(pluginSlashState.activeRun)
+  const feedbackWithdrawn =
+    pluginSlashState.feedback !== null &&
+    !hasMatchingPluginCommand(pluginSlashState.feedback)
+
+  if (slashBindingChanged || activeRunWithdrawn || feedbackWithdrawn) {
+    const invalidateGeneration = slashBindingChanged || activeRunWithdrawn
+    setPluginSlashState({
+      generation: invalidateGeneration
+        ? pluginSlashState.generation + 1
+        : pluginSlashState.generation,
+      scopeKey: currentPluginScopeKey,
+      enabled: pluginSlashEnabled,
+      transport: pluginTransport,
+      activeRun: invalidateGeneration ? null : pluginSlashState.activeRun,
+      feedback:
+        slashBindingChanged || feedbackWithdrawn
+          ? null
+          : pluginSlashState.feedback,
+    })
+  }
+
+  const activePluginSlashRunRef = useRef<ActivePluginSlashRun | null>(null)
+  const pluginSlashRunSeqRef = useRef(0)
+
+  const pluginSlashLiveRef = useRef({
+    unmounted: false,
+    generation: pluginSlashState.generation,
+    pluginContext,
+    pluginSlotEnabled,
+    pluginTransport,
+    pluginSlashCommands,
+    effectiveDraftStorageKey,
+    isEditingQueueItem,
+    isPrompting,
+    steering,
+    attachmentsCount: attachments.length,
+    hasUploadingImage,
+  })
+  useLayoutEffect(() => {
+    pluginSlashLiveRef.current = {
+      unmounted: false,
+      generation: pluginSlashState.generation,
+      pluginContext,
+      pluginSlotEnabled,
+      pluginTransport,
+      pluginSlashCommands,
+      effectiveDraftStorageKey,
+      isEditingQueueItem,
+      isPrompting,
+      steering,
+      attachmentsCount: attachments.length,
+      hasUploadingImage,
+    }
+    if (
+      activePluginSlashRunRef.current !== null &&
+      activePluginSlashRunRef.current.generation !== pluginSlashState.generation
+    ) {
+      activePluginSlashRunRef.current = null
+    }
+  })
+
+  useEffect(() => {
+    return () => {
+      pluginSlashLiveRef.current.unmounted = true
+      activePluginSlashRunRef.current = null
+    }
+  }, [])
+
+  const isCurrentPluginCommandRunning =
+    pluginSlashState.activeRun !== null &&
+    !slashBindingChanged &&
+    !activeRunWithdrawn
+
+  const visiblePluginCommandFeedback =
+    pluginSlashState.feedback !== null &&
+    !slashBindingChanged &&
+    !feedbackWithdrawn
+      ? pluginSlashState.feedback
+      : null
+
+  const activeMatchedPluginCommand = useMemo(
+    () =>
+      leadingSlashDraftText && pluginSlashCommands.length > 0
+        ? matchPluginSlashCommandText(
+            leadingSlashDraftText,
+            pluginSlashCommands
+          )
+        : null,
+    [leadingSlashDraftText, pluginSlashCommands]
+  )
+
+  const inspectPluginSlashCommand = useCallback(() => {
+    const live = pluginSlashLiveRef.current
+    if (
+      live.unmounted ||
+      !live.pluginSlotEnabled ||
+      !live.pluginContext ||
+      !live.pluginTransport ||
+      live.pluginSlashCommands.length === 0
+    ) {
+      return null
+    }
+    const editor = editorRef.current?.getEditor()
+    if (!editor || editor.isDestroyed) return null
+    if (editorStartsWithReference(editor)) return null
+    const rawText = serializeDocToText(editor.state.doc)
+    const matched = matchPluginSlashCommandText(
+      rawText,
+      live.pluginSlashCommands
+    )
+    if (!matched) return null
+    return {
+      ...matched,
+      rawText,
+      hasReferences: editorHasAnyReference(editor),
+    }
+  }, [])
+
+  const executePluginSlashCommand = useCallback(
+    async (matched: {
+      command: ResolvedPluginSlashCommand
+      args: string
+      rawText: string
+      hasReferences: boolean
+    }) => {
+      const live = pluginSlashLiveRef.current
+      const activeContext = live.pluginContext
+      const activeTransport = live.pluginTransport
+      if (
+        live.unmounted ||
+        !live.pluginSlotEnabled ||
+        !activeContext ||
+        !activeTransport ||
+        !isCurrentReadyHostTransport(activeTransport)
+      ) {
+        return
+      }
+
+      const sentScopeKey = hostPluginSessionScopeKey(activeContext)
+      const sentGeneration = live.generation
+      const { command } = matched
+
+      const showScopedError = (text: string) => {
+        setPluginSlashState((prev) =>
+          prev.generation === sentGeneration
+            ? {
+                ...prev,
+                feedback: {
+                  kind: "error",
+                  generation: sentGeneration,
+                  scopeKey: sentScopeKey,
+                  transport: activeTransport,
+                  pluginId: command.pluginId,
+                  commandName: command.name,
+                  method: command.method,
+                  scope: command.scope,
+                  text,
+                },
+              }
+            : prev
+        )
+      }
+
+      // Guard against duplicate triggers while a run is already active for the
+      // current generation, scope, transport, and still-enabled command.
+      const existingRun = activePluginSlashRunRef.current
+      if (
+        existingRun &&
+        existingRun.generation === sentGeneration &&
+        existingRun.scopeKey === sentScopeKey &&
+        existingRun.transport === activeTransport &&
+        live.pluginSlashCommands.some(
+          (cmd) =>
+            cmd.pluginId === existingRun.pluginId &&
+            cmd.name === existingRun.commandName &&
+            cmd.method === existingRun.method &&
+            cmd.scope === existingRun.scope
+        )
+      ) {
+        return
+      }
+
+      if (live.isEditingQueueItem) {
+        showScopedError(
+          t("pluginSlashCommandNotInQueueEdit", { name: command.name })
+        )
+        return
+      }
+      if (live.isPrompting || live.steering) {
+        showScopedError(
+          t("pluginSlashCommandWhileResponding", { name: command.name })
+        )
+        return
+      }
+      if (
+        live.hasUploadingImage ||
+        live.attachmentsCount > 0 ||
+        matched.hasReferences
+      ) {
+        showScopedError(
+          t("pluginSlashCommandPlainTextOnly", { name: command.name })
+        )
+        return
+      }
+
+      const built = buildPluginSlashCommandInput(
+        command,
+        matched.args,
+        activeContext
+      )
+      if (!built.ok) {
+        if (built.reason === "argsTooLong") {
+          showScopedError(
+            t("pluginSlashCommandArgsTooLong", { name: command.name })
+          )
+        }
+        return
+      }
+
+      const sentEditor = editorRef.current?.getEditor()
+      if (!sentEditor || sentEditor.isDestroyed) return
+      const sentDraftKey = live.effectiveDraftStorageKey
+      const sentRawText = matched.rawText
+      const runId = ++pluginSlashRunSeqRef.current
+      const run: ActivePluginSlashRun = {
+        id: runId,
+        generation: sentGeneration,
+        scopeKey: sentScopeKey,
+        transport: activeTransport,
+        pluginId: command.pluginId,
+        commandName: command.name,
+        method: command.method,
+        scope: command.scope,
+      }
+      activePluginSlashRunRef.current = run
+      setPluginSlashState((prev) =>
+        prev.generation === sentGeneration
+          ? { ...prev, activeRun: run, feedback: null }
+          : prev
+      )
+
+      const isRunStillCurrent = () => {
+        const current = pluginSlashLiveRef.current
+        const activeRun = activePluginSlashRunRef.current
+        return (
+          !current.unmounted &&
+          activeRun !== null &&
+          activeRun.id === runId &&
+          activeRun.generation === sentGeneration &&
+          current.generation === sentGeneration &&
+          current.pluginSlotEnabled &&
+          current.pluginContext !== null &&
+          hostPluginSessionScopeKey(current.pluginContext) === sentScopeKey &&
+          current.pluginTransport === activeTransport &&
+          isCurrentReadyHostTransport(activeTransport) &&
+          current.pluginSlashCommands.some(
+            (item) =>
+              item.pluginId === command.pluginId &&
+              item.name === command.name &&
+              item.method === command.method &&
+              item.scope === command.scope
+          )
+        )
+      }
+
+      try {
+        const raw = await activeTransport.call<unknown>("host_plugins_call", {
+          pluginId: command.pluginId,
+          method: command.method,
+          input: built.input,
+        })
+        if (!isRunStillCurrent()) return
+
+        const parsed = parsePluginSlashCommandOutput(raw)
+        if (!parsed.ok) {
+          showScopedError(
+            t("pluginSlashCommandInvalidResponse", { name: command.name })
+          )
+          return
+        }
+
+        const current = pluginSlashLiveRef.current
+        const liveEditor = editorRef.current?.getEditor()
+        const draftUnchanged =
+          liveEditor === sentEditor &&
+          !liveEditor.isDestroyed &&
+          current.effectiveDraftStorageKey === sentDraftKey &&
+          !current.isEditingQueueItem &&
+          current.attachmentsCount === 0 &&
+          !current.hasUploadingImage &&
+          !editorHasAnyReference(liveEditor) &&
+          serializeDocToText(liveEditor.state.doc) === sentRawText
+
+        if (draftUnchanged) {
+          if (sentDraftKey) {
+            clearMessageInputDraftV2(sentDraftKey)
+          }
+          resetComposer()
+        }
+
+        if (parsed.message !== null) {
+          setPluginSlashState((prev) =>
+            prev.generation === sentGeneration && prev.activeRun?.id === runId
+              ? {
+                  ...prev,
+                  feedback: {
+                    kind: "success",
+                    generation: sentGeneration,
+                    scopeKey: sentScopeKey,
+                    transport: activeTransport,
+                    pluginId: command.pluginId,
+                    commandName: command.name,
+                    method: command.method,
+                    scope: command.scope,
+                    text: parsed.message!,
+                  },
+                }
+              : prev
+          )
+        }
+      } catch (err) {
+        if (!isRunStillCurrent()) return
+        const detail = toErrorMessage(err)
+        showScopedError(
+          detail
+            ? t("pluginSlashCommandFailedWithReason", {
+                name: command.name,
+                message: detail,
+              })
+            : t("pluginSlashCommandFailed", { name: command.name })
+        )
+      } finally {
+        if (activePluginSlashRunRef.current?.id === runId) {
+          activePluginSlashRunRef.current = null
+        }
+        setPluginSlashState((prev) =>
+          prev.activeRun?.id === runId ? { ...prev, activeRun: null } : prev
+        )
+      }
+    },
+    [resetComposer, t]
+  )
+
   const handleSend = useCallback(() => {
+    // Intercept matching plain-text plugin slash commands BEFORE agent send,
+    // queue, queue-edit, or disabled gates so they never accidentally leak to
+    // the agent/queue and still run locally when no agent is connected.
+    const matchedPluginCmd = inspectPluginSlashCommand()
+    if (matchedPluginCmd) {
+      void executePluginSlashCommand(matchedPluginCmd)
+      return
+    }
     // The editor stays editable while `disabled` (the agent is busy) so the user
     // can keep typing, but a plain send is blocked — only enqueue / queue-edit
     // save go through. Mirrors the legacy textarea's keydown guard.
@@ -1694,6 +2321,8 @@ export function MessageInput({
     }
     resetComposer()
   }, [
+    inspectPluginSlashCommand,
+    executePluginSlashCommand,
     disabled,
     hasUploadingImage,
     tAttach,
@@ -1725,8 +2354,38 @@ export function MessageInput({
   // so an attachment on a pull session goes to the queue whole. Unsettled
   // uploads are gated here exactly like `handleSend` (no server-side uri to
   // hydrate from yet), since the enqueue fallback below bypasses its gate.
-  const [steering, setSteering] = useState(false)
   const handleSteerClick = useCallback(async () => {
+    const matchedPluginCmd = inspectPluginSlashCommand()
+    if (matchedPluginCmd) {
+      const live = pluginSlashLiveRef.current
+      if (live.pluginContext && live.pluginTransport) {
+        const sentScopeKey = hostPluginSessionScopeKey(live.pluginContext)
+        const sentGeneration = live.generation
+        const activeTransport = live.pluginTransport
+        const { command } = matchedPluginCmd
+        setPluginSlashState((prev) =>
+          prev.generation === sentGeneration
+            ? {
+                ...prev,
+                feedback: {
+                  kind: "error",
+                  generation: sentGeneration,
+                  scopeKey: sentScopeKey,
+                  transport: activeTransport,
+                  pluginId: command.pluginId,
+                  commandName: command.name,
+                  method: command.method,
+                  scope: command.scope,
+                  text: t("pluginSlashCommandCannotSteer", {
+                    name: command.name,
+                  }),
+                },
+              }
+            : prev
+        )
+      }
+      return
+    }
     if (!onSteer || steering) return
     if (hasUploadingImage) {
       toast.error(tAttach("attachUploadInProgress"))
@@ -1773,6 +2432,7 @@ export function MessageInput({
       setSteering(false)
     }
   }, [
+    inspectPluginSlashCommand,
     onSteer,
     steering,
     hasUploadingImage,
@@ -1819,13 +2479,26 @@ export function MessageInput({
         return true
       }
       if (event.key === "Enter" || event.key === "Tab") {
-        // The merged list is [commands, skills].
-        if (slashSelectedIndex < filteredSlashCommands.length) {
-          handleSlashSelect(filteredSlashCommands[slashSelectedIndex])
+        // The merged list is [plugin commands, agent commands, skills].
+        if (slashSelectedIndex < filteredPluginSlashCommands.length) {
+          handlePluginSlashSelect(
+            filteredPluginSlashCommands[slashSelectedIndex]
+          )
+        } else if (
+          slashSelectedIndex <
+          filteredPluginSlashCommands.length + filteredSlashCommands.length
+        ) {
+          handleSlashSelect(
+            filteredSlashCommands[
+              slashSelectedIndex - filteredPluginSlashCommands.length
+            ]
+          )
         } else {
           const skill =
             filteredSlashSkills[
-              slashSelectedIndex - filteredSlashCommands.length
+              slashSelectedIndex -
+                filteredPluginSlashCommands.length -
+                filteredSlashCommands.length
             ]
           if (skill) handleSkillAutocompleteSelect(skill)
         }
@@ -1837,8 +2510,10 @@ export function MessageInput({
       slashMenuVisible,
       slashAutocompleteCount,
       slashSelectedIndex,
+      filteredPluginSlashCommands,
       filteredSlashCommands,
       filteredSlashSkills,
+      handlePluginSlashSelect,
       handleSlashSelect,
       handleSkillAutocompleteSelect,
       closeSlashMenu,
@@ -1912,6 +2587,60 @@ export function MessageInput({
     ed.setText(offeredSuggestion)
     ed.focus()
   }, [offeredSuggestion])
+
+  const pluginInsertGuardRef = useRef({
+    pluginContext,
+    pluginSlotEnabled,
+    effectiveDraftStorageKey,
+    isEditingQueueItem,
+    flushDraftSave,
+  })
+  useLayoutEffect(() => {
+    pluginInsertGuardRef.current = {
+      pluginContext,
+      pluginSlotEnabled,
+      effectiveDraftStorageKey,
+      isEditingQueueItem,
+      flushDraftSave,
+    }
+  })
+
+  // Controlled plain-text insertion for `composer` plugin surfaces: writes
+  // literal inline text (with `\n` → hardBreak, never hydrating badges/HTML)
+  // at ProseMirror's live caret/selection without stealing modal focus or
+  // auto-sending, then flushes the standard debounced draft persistence.
+  const handlePluginComposerInsertText = useCallback(
+    (text: string, expectedScopeKey: string): PluginComposerInsertResult => {
+      const guard = pluginInsertGuardRef.current
+      if (
+        !guard.pluginSlotEnabled ||
+        !guard.pluginContext ||
+        hostPluginSessionScopeKey(guard.pluginContext) !== expectedScopeKey
+      ) {
+        throw new Error("Plugin composer surface is no longer active")
+      }
+      const editor = editorRef.current?.getEditor()
+      if (!editor || editor.isDestroyed) {
+        throw new Error("Composer is unavailable")
+      }
+      const applied = editor.commands.insertContent(textToInlineContent(text))
+      if (!applied) {
+        throw new Error("Failed to insert text into composer")
+      }
+      if (!guard.isEditingQueueItem && guard.effectiveDraftStorageKey) {
+        guard.flushDraftSave()
+      }
+      return { inserted: true, length: text.length }
+    },
+    []
+  )
+
+  const canSubmitPluginCommandOffline =
+    activeMatchedPluginCommand !== null &&
+    Boolean(pluginTransport) &&
+    !isPrompting &&
+    !isEditingQueueItem &&
+    !steering
 
   const actionButtons = isEditingQueueItem ? (
     <div className="flex items-center gap-1">
@@ -2027,7 +2756,10 @@ export function MessageInput({
       )}
       <Button
         onClick={handleSend}
-        disabled={disabled || !hasSendableContent}
+        disabled={
+          isCurrentPluginCommandRunning ||
+          (!canSubmitPluginCommandOffline && (disabled || !hasSendableContent))
+        }
         size="icon"
         className="h-8 w-8"
         title={t("send")}
@@ -2069,11 +2801,13 @@ export function MessageInput({
                 <SelectorLoadingChip label={t("slashLoading")} />
               </div>
             )}
-            {filteredSlashCommands.map((cmd, i) => (
+            {filteredPluginSlashCommands.map((cmd, i) => (
               <button
-                key={`cmd-${cmd.name}`}
+                key={`plugin-cmd-${cmd.key}`}
                 type="button"
                 data-slash-row=""
+                data-plugin-slash-command={cmd.name}
+                data-plugin-id={cmd.pluginId}
                 className={cn(
                   "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm",
                   i === slashSelectedIndex
@@ -2082,18 +2816,65 @@ export function MessageInput({
                 )}
                 onMouseDown={(e) => {
                   e.preventDefault()
-                  handleSlashSelect(cmd)
+                  handlePluginSlashSelect(cmd)
                 }}
               >
-                <CommandOptionLabel
-                  command={cmd}
-                  skill={skillCommandNames.has(cmd.name)}
-                  kindColumn={skillCommandNames.size > 0}
-                />
+                {skillCommandNames.size > 0 ? (
+                  <span
+                    className="flex size-4 shrink-0 items-center justify-center"
+                    data-command-kind="plugin"
+                  />
+                ) : null}
+                <span className="shrink-0 font-mono text-primary">
+                  /{cmd.name}
+                </span>
+                {cmd.argumentHint ? (
+                  <span
+                    className="max-w-[40%] shrink-0 truncate font-mono text-xs text-muted-foreground/80"
+                    title={cmd.argumentHint}
+                  >
+                    {cmd.argumentHint}
+                  </span>
+                ) : null}
+                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                  {cmd.description}
+                </span>
+                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  {cmd.pluginName}
+                </span>
               </button>
             ))}
+            {filteredSlashCommands.map((cmd, i) => {
+              const absoluteIndex = filteredPluginSlashCommands.length + i
+              return (
+                <button
+                  key={`cmd-${cmd.name}`}
+                  type="button"
+                  data-slash-row=""
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm",
+                    absoluteIndex === slashSelectedIndex
+                      ? "bg-accent text-accent-foreground"
+                      : "hover:bg-muted"
+                  )}
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    handleSlashSelect(cmd)
+                  }}
+                >
+                  <CommandOptionLabel
+                    command={cmd}
+                    skill={skillCommandNames.has(cmd.name)}
+                    kindColumn={skillCommandNames.size > 0}
+                  />
+                </button>
+              )
+            })}
             {filteredSlashSkills.map((skill, i) => {
-              const absoluteIndex = filteredSlashCommands.length + i
+              const absoluteIndex =
+                filteredPluginSlashCommands.length +
+                filteredSlashCommands.length +
+                i
               return (
                 <button
                   key={`skill-${skill.scope}-${skill.id}`}
@@ -2124,6 +2905,42 @@ export function MessageInput({
               )
             })}
           </div>
+        </div>
+      )}
+      {visiblePluginCommandFeedback && (
+        <div
+          role={
+            visiblePluginCommandFeedback.kind === "error" ? "alert" : "status"
+          }
+          aria-live="polite"
+          data-slot="plugin-slash-command-feedback"
+          data-feedback-kind={visiblePluginCommandFeedback.kind}
+          data-plugin-id={visiblePluginCommandFeedback.pluginId}
+          className={cn(
+            "mb-1.5 flex items-start gap-2 rounded-lg border px-3 py-1.5 text-xs",
+            visiblePluginCommandFeedback.kind === "error"
+              ? "border-destructive/30 bg-destructive/5 text-destructive"
+              : "border-border/60 bg-muted/40 text-foreground"
+          )}
+        >
+          <span className="shrink-0 font-mono text-[0.7rem] text-muted-foreground">
+            /{visiblePluginCommandFeedback.commandName}
+          </span>
+          <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+            {visiblePluginCommandFeedback.text}
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              setPluginSlashState((prev) =>
+                prev.feedback ? { ...prev, feedback: null } : prev
+              )
+            }
+            aria-label={t("pluginSlashCommandDismiss")}
+            className="shrink-0 rounded p-0.5 text-muted-foreground/70 hover:text-foreground"
+          >
+            <X className="size-3.5" aria-hidden="true" />
+          </button>
         </div>
       )}
       {/* Attached, this group clips the composer and the folder/branch row
@@ -2258,6 +3075,14 @@ export function MessageInput({
                           : null
                       }
                       onChange={handleSessionSettingChange}
+                    />
+                  )}
+                  {pluginContext && (
+                    <HostPluginSlot
+                      slot="composer"
+                      sessionContext={pluginContext}
+                      enabled={pluginSlotEnabled}
+                      onComposerInsertText={handlePluginComposerInsertText}
                     />
                   )}
                 </div>
