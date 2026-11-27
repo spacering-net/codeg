@@ -10537,7 +10537,7 @@
           "standard": "Standard",
           "ask_more": "Frag mich öfter",
           "custom": "Benutzerdefiniert",
-          "standardHint": "Alles läuft von selbst und wird dir auf einer Karte gemeldet.",
+          "standardHint": "Das meiste läuft von selbst und wird dir auf einer Karte gemeldet; PRs mergen, Issues schließen, auf einer Forge kommentieren und fehlgeschlagene Checks oder Konflikte eines beobachteten PRs beheben fragt dich zuerst.",
           "ask_moreHint": "Nachfassen und Wiederholungen, das Wiederholen von Arbeit, die ein Neustart unterbrochen hat, Nachrichten an andere Assistenten, Änderungen, um die du im Gespräch bittest, und Zuweisungen, die Code ändern, kommen erst als Karte zu dir; Fragen und Plan-Freigaben der Sitzungen gehen an dich.",
           "customHint": "Einige der Punkte unten hast du selbst eingestellt.",
           "confirmTitle": "Zu „{level}“ wechseln?",

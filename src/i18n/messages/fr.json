@@ -10537,7 +10537,7 @@
           "standard": "Standard",
           "ask_more": "Me consulter plus souvent",
           "custom": "Personnalisé",
-          "standardHint": "Tout s'exécute seul et vous est signalé sur une carte.",
+          "standardHint": "La plupart des choses s'exécutent seules et vous sont signalées sur une carte ; fusionner des PR, fermer des issues, commenter sur une forge et corriger les vérifications échouées ou conflits d'une PR surveillée vous sont d'abord demandés.",
           "ask_moreHint": "Les suites et relances, la relance du travail interrompu par un redémarrage, les messages aux autres assistants, les changements demandés dans la conversation et les tâches qui modifient du code te parviennent d'abord sous forme de carte ; les questions et validations de plan des sessions te reviennent.",
           "customHint": "Certains des éléments ci-dessous sont réglés à votre façon.",
           "confirmTitle": "Passer à « {level} » ?",

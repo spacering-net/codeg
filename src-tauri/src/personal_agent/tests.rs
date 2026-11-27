@@ -13255,6 +13255,14 @@ mod against_a_forge {
             .id
     }
 
+    /// The owner lets the assistants act on the forge and fix watched pull
+    /// requests by themselves; by default each is put to them first.
+    async fn acts_on_its_own(engine: &Arc<PersonalAgentEngine>) {
+        for (k, v) in [("forge_comment", "auto"), ("issue_close", "auto"), ("pr_merge", "auto"), ("ci_failure", "fix"), ("pr_conflict", "auto")] {
+            set_pref(engine, k, json!(v)).await;
+        }
+    }
+
     async fn in_data_dir<F: std::future::Future<Output = ()>>(tmp: &tempfile::TempDir, f: impl FnOnce() -> F) {
         let data = tmp.path().join("data");
         std::fs::create_dir_all(&data).unwrap();
@@ -13271,6 +13279,7 @@ mod against_a_forge {
         let state_ref = &state;
         in_data_dir(&tmp, || async move {
             let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(engine_ref).await;
             // At once, with a card holding the full text and its link.
             let out = call_tool(engine_ref, "forge_comment", json!({ "project_id": project, "number": 7, "kind": "pr", "body": "Fixed in abc." })).await;
             assert!(out.ok, "{}", out.text);
@@ -13317,7 +13326,7 @@ mod against_a_forge {
         let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
         in_data_dir(&tmp, || async move {
             let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
-            set_pref(engine_ref, "forge_comment", json!("ask")).await;
+            // Nothing set: a comment is put to the owner first.
             let out = call_tool(engine_ref, "forge_comment", json!({ "project_id": project, "number": 3, "kind": "issue", "body": "On it." })).await;
             assert!(out.ok && out.data["state"] == "awaiting_owner", "{}", out.text);
             assert_eq!(state_ref.lock().unwrap().posts, 0, "nothing posted yet");
@@ -13333,6 +13342,7 @@ mod against_a_forge {
             assert_eq!(data_of(&last_card(engine_ref, "forge").await)["state"], "done");
 
             // Closing an issue: at once; one closed meanwhile is not closed again.
+            set_pref(engine_ref, "issue_close", json!("auto")).await;
             let out = call_tool(engine_ref, "issue_close", json!({ "project_id": project, "number": 3 })).await;
             assert!(out.ok, "{}", out.text);
             assert_eq!(state_ref.lock().unwrap().closes, 1);
@@ -13418,6 +13428,7 @@ mod against_a_forge {
         let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
         in_data_dir(&tmp, || async move {
             let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(engine_ref).await;
             let remote = crate::commands::forge::folder_forge_remote_core(&engine_ref.db, project).await.unwrap().unwrap();
             let coder = role_assistant(engine_ref, "Coder", true).await;
             let delivery = json!({
@@ -13489,7 +13500,7 @@ mod against_a_forge {
         let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
         in_data_dir(&tmp, || async move {
             let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
-            set_pref(engine_ref, "pr_merge", json!("ask")).await;
+            // Nothing set: a merge is put to the owner first.
             let out = call_tool(engine_ref, "pr_merge", json!({ "project_id": project, "number": 9, "method": "squash" })).await;
             assert!(out.ok && out.data["state"] == "awaiting_owner", "{}", out.text);
             let card = last_card(engine_ref, "forge").await;
@@ -13512,6 +13523,7 @@ mod against_a_forge {
         let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
         in_data_dir(&tmp, || async move {
             let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(engine_ref).await;
             state_ref.lock().unwrap().comment_mode = Some("lost");
             let out = call_tool(engine_ref, "forge_comment", json!({ "project_id": project, "number": 7, "kind": "pr", "body": "Cut off." })).await;
             assert_eq!(out.data["state"], "unknown", "{}", out.text);
@@ -13537,6 +13549,7 @@ mod against_a_forge {
         let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
         in_data_dir(&tmp, || async move {
             let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(engine_ref).await;
             // 150 checks, one page read: not the whole answer.
             state_ref.lock().unwrap().checks_total = Some(150);
             let out = call_tool(engine_ref, "pr_merge", json!({ "project_id": project, "number": 5 })).await;
@@ -13625,6 +13638,7 @@ mod against_a_forge {
         let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
         in_data_dir(&tmp, || async move {
             let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(primary_ref).await;
             let worker = host_ref.engine_for(Some(w)).await.unwrap();
             let coder = role_assistant(primary_ref, "Coder", true).await;
             // The first scan marks where it starts.
@@ -13799,6 +13813,7 @@ mod against_a_forge {
         let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
         in_data_dir(&tmp, || async move {
             let a = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(engine_ref).await;
             // A second checkout of the same repository.
             let dir = tmp_ref.path().join("app2");
             std::fs::create_dir_all(&dir).unwrap();
@@ -14001,6 +14016,7 @@ mod against_a_forge {
         let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
         in_data_dir(&tmp, || async move {
             let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(primary_ref).await;
             let worker = host_ref.engine_for(Some(w)).await.unwrap();
             // The worker works with it: its read starts the fixing round.
             let coder = role_assistant(&worker, "Coder", true).await;
@@ -14142,6 +14158,7 @@ mod against_a_forge {
         let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
         in_data_dir(&tmp, || async move {
             let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(primary_ref).await;
             let coder = role_assistant(primary_ref, "Coder", true).await;
             host_ref.board_tick().await;
             // A plan's code step, carried out by a board task that delivered
@@ -14263,6 +14280,7 @@ mod against_a_forge {
         let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
         in_data_dir(&tmp, || async move {
             let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(primary_ref).await;
             let coder = role_assistant(primary_ref, "Coder", true).await;
             host_ref.board_tick().await;
             let task = delivered(primary_ref, project, "Fix login", 7).await;
@@ -14355,7 +14373,7 @@ mod against_a_forge {
             host_ref.board_tick().await;
             let watch = wsvc::of_tasks(&primary_ref.db.conn, &[task.id]).await.unwrap().remove(&task.id).unwrap();
             read_now(primary_ref, watch.id).await;
-            set_pref(primary_ref, "ci_failure", json!("ask")).await;
+            // Nothing set: a red head is put to the owner first.
             state_ref.lock().unwrap().checks = vec![failed("build")];
             read_now(primary_ref, watch.id).await;
             assert!(rounds_of(primary_ref).await.is_empty());
@@ -14377,8 +14395,7 @@ mod against_a_forge {
             read_now(primary_ref, watch.id).await;
             assert_eq!(rounds_of(primary_ref).await.len(), 1);
             assert_eq!(data_of(&last_card(primary_ref, "pr").await)["fix"]["state"], "told");
-            // Asked about a head that moved on: nothing is started.
-            set_pref(primary_ref, "pr_conflict", json!("ask")).await;
+            // Asked (by default) about a head that moved on: nothing is started.
             state_ref.lock().unwrap().head = "h3".into();
             state_ref.lock().unwrap().conflict = true;
             read_now(primary_ref, watch.id).await;
@@ -14401,6 +14418,7 @@ mod against_a_forge {
         let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
         in_data_dir(&tmp, || async move {
             let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(primary_ref).await;
             host_ref.board_tick().await;
             // The owner's own pull request: no acceptance, its green head.
             let task = delivered(primary_ref, project, "Docs", 7).await;

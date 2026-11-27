@@ -10537,7 +10537,7 @@
           "standard": "Padrão",
           "ask_more": "Perguntar mais vezes",
           "custom": "Personalizado",
-          "standardHint": "Tudo roda sozinho e avisa você em um cartão.",
+          "standardHint": "Quase tudo roda sozinho e avisa você em um cartão; mesclar PRs, fechar issues, comentar numa forja e corrigir verificações com falha ou conflitos de um PR acompanhado perguntam a você primeiro.",
           "ask_moreHint": "Continuações e novas tentativas, a nova tentativa de trabalho interrompido por um reinício, mensagens para outros assistentes, mudanças que você pede na conversa e delegações que alteram código chegam primeiro como cartão; as perguntas e aprovações de plano das sessões vêm para você.",
           "customHint": "Alguns dos itens abaixo estão do seu jeito.",
           "confirmTitle": "Mudar para “{level}”?",

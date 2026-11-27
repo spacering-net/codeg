@@ -10537,7 +10537,7 @@
           "standard": "Estándar",
           "ask_more": "Pregúntame más",
           "custom": "Personalizado",
-          "standardHint": "Todo se hace solo y te lo cuentan en una tarjeta.",
+          "standardHint": "Casi todo se hace solo y te lo cuentan en una tarjeta; fusionar PR, cerrar issues, comentar en una forja y arreglar las comprobaciones fallidas o conflictos de una PR vigilada te lo preguntan primero.",
           "ask_moreHint": "Los seguimientos y reintentos, el reintento del trabajo interrumpido por un reinicio, los mensajes a otros asistentes, los cambios que pides en la conversación y los encargos que cambian código te llegan primero como tarjeta; las preguntas y aprobaciones de plan de las sesiones te llegan a ti.",
           "customHint": "Algunos de los elementos de abajo están ajustados a tu manera.",
           "confirmTitle": "¿Cambiar a «{level}»?",

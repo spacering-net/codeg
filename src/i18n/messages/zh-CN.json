@@ -10536,7 +10536,7 @@
           "standard": "标准",
           "ask_more": "多问我",
           "custom": "自定义",
-          "standardHint": "一切自动，做了都出卡告诉你。",
+          "standardHint": "大多自动，做了出卡告诉你；合并 PR、关 issue、在 forge 上评论、修看护 PR 的检查失败或冲突，都先问你。",
           "ask_moreHint": "续作与重试、中断后的重试、给别的助手发消息、对话里的改动、改代码的派活，都先出卡，你点了才做；执行会话的提问和计划审批一律转给你。",
           "customHint": "下面有几项是你自己调过的。",
           "confirmTitle": "切到「{level}」？",

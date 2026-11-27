@@ -10536,7 +10536,7 @@
           "standard": "Standard",
           "ask_more": "Ask me more",
           "custom": "Custom",
-          "standardHint": "Everything runs on its own and tells you on a card.",
+          "standardHint": "Most things run on their own and tell you on a card; merging pull requests, closing issues, comments on a forge, and fixing a watched PR's failed checks or conflicts ask you first.",
           "ask_moreHint": "Follow-ups and retries, retrying work a restart interrupted, messages to other assistants, changes you ask for in chat and code-changing dispatches go to you as a card first; the sessions' questions and plan approvals come to you.",
           "customHint": "Some of the items below are set your own way.",
           "confirmTitle": "Switch to “{level}”?",

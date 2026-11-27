@@ -10537,7 +10537,7 @@
           "standard": "標準",
           "ask_more": "多問我",
           "custom": "自訂",
-          "standardHint": "一切自動，做了都出卡告訴你。",
+          "standardHint": "大多自動，做了出卡片告訴你；合併 PR、關 issue、在 forge 上留言、修看護 PR 的檢查失敗或衝突，都先問你。",
           "ask_moreHint": "續作與重試、中斷後的重試、傳訊息給其他助理、對話裡的變更、會改程式碼的派工，都先出卡片，你點了才做；執行工作階段的提問和計畫審批一律轉給你。",
           "customHint": "下面有幾項是你自己調過的。",
           "confirmTitle": "切換到「{level}」？",
