@@ -2945,8 +2945,17 @@ impl PersonalAgentEngine {
         }
         if let Some(did) = s.dispatch_id {
             if let Ok(Some(d)) = svc::get_dispatch(&self.db.conn, did).await {
-                if !self.stop_dispatch(&d).await {
-                    return Err(format!("dispatch #{did} is past stopping"));
+                use super::stop::{StopOutcome, StoppedBy};
+                match self.stop_dispatch_as(&d, StoppedBy::Owner, Default::default()).await? {
+                    StopOutcome::Stopped { .. } | StopOutcome::AlreadyStopped { .. } => {}
+                    StopOutcome::BoardRefused => {
+                        return Err(format!(
+                            "dispatch #{did}'s task cannot be canceled on the board now (merging, or done)"
+                        ))
+                    }
+                    StopOutcome::PastStopping { .. } | StopOutcome::Changed => {
+                        return Err(format!("dispatch #{did} is past stopping"))
+                    }
                 }
             }
         }
@@ -2962,7 +2971,14 @@ impl PersonalAgentEngine {
             if !moved.is_empty() {
                 self.refresh_lines(mid, "stopped").await;
                 if let Ok(Some(m)) = msvc::get_message(&self.db.conn, mid).await {
-                    self.drop_waiting(&m).await;
+                    self.drop_waiting(
+                        &m,
+                        crate::db::service::personal_agent_service::Closing::new(
+                            crate::db::service::personal_agent_service::Closer::Codeg,
+                            "plan_canceled",
+                        ),
+                    )
+                    .await;
                 }
             }
         }

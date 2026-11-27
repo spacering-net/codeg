@@ -29,7 +29,7 @@ use serde_json::{json, Value};
 use super::engine::PersonalAgentEngine;
 use crate::db::entities::personal_agent::{self as agent_entity};
 use crate::db::entities::personal_agent_dispatch::{
-    self as dispatch_entity, DispatchMode, DispatchState,
+    self as dispatch_entity, DispatchState,
 };
 use crate::db::entities::personal_agent_event as event_entity;
 use crate::db::entities::personal_agent_item::ItemStatus;
@@ -826,6 +826,8 @@ impl PersonalAgentEngine {
         if let (Some(line), Some(turn)) = (sender_line.as_object_mut(), turn) {
             line.insert("turn".into(), turn);
         }
+        // What the turn wrote before it reaches the page first.
+        self.push_reply_now().await;
         let (ledger, ledger_notice, sent_batch_id) = match &auth {
             MessageAuth::Ledgered { batch_id, .. } => (
                 Some(LedgerSlot::in_batch(*batch_id, key.clone(), super::ledger::fresh_op_id())),
@@ -1330,7 +1332,7 @@ impl PersonalAgentEngine {
             tracing::info!("[personal_agent] stopping the turn: {e}");
         }
         if let Some(b) = batch {
-            self.stop_scope(StopScope::Batch(b), true).await;
+            self.stop_scope(StopScope::Batch(b), true).await?;
         }
         Ok(())
     }
@@ -1341,8 +1343,7 @@ impl PersonalAgentEngine {
         if let Err(e) = self.cancel_turn().await {
             tracing::info!("[personal_agent] stopping the turn: {e}");
         }
-        self.stop_scope(StopScope::All, turn).await;
-        Ok(())
+        self.stop_scope(StopScope::All, turn).await
     }
 
     /// Stop, here, what was set going for input `logical` — the [Also stop
@@ -1360,13 +1361,12 @@ impl PersonalAgentEngine {
             }
         }
         self.stop_scope(StopScope::Input(logical.to_string()), false)
-            .await;
-        Ok(())
+            .await
     }
 
     /// Stop what `scope` covers; when anything besides the turn was
     /// stopped, or could not be, the card says what.
-    async fn stop_scope(self: &Arc<Self>, scope: StopScope, turn: bool) {
+    async fn stop_scope(self: &Arc<Self>, scope: StopScope, turn: bool) -> Result<(), String> {
         let bot = self.bot().await;
         let dispatches: Vec<dispatch_entity::Model> = match &scope {
             // Made by the turn, or continued by it.
@@ -1384,9 +1384,19 @@ impl PersonalAgentEngine {
                 .collect(),
         };
         let mut stopped_work = Vec::new();
+        // One whose stop could not be written goes on running: said, once
+        // the rest are stopped — never taken for stopped.
+        let mut failed = Vec::new();
         for d in dispatches.into_iter().filter(|d| d.bot_id == Some(bot)) {
-            if self.stop_dispatch(&d).await {
-                stopped_work.push(json!({ "id": d.id, "title": d.title }));
+            match self
+                .stop_dispatch_as(&d, super::stop::StoppedBy::Owner, Default::default())
+                .await
+            {
+                Ok(super::stop::StopOutcome::Stopped { .. }) => {
+                    stopped_work.push(json!({ "id": d.id, "title": d.title }));
+                }
+                Ok(_) => {}
+                Err(e) => failed.push(format!("dispatch #{}: {e}", d.id)),
             }
         }
         let messages: Vec<message_entity::Model> = match &scope {
@@ -1417,7 +1427,8 @@ impl PersonalAgentEngine {
                     .unwrap_or(false)
             {
                 self.refresh_lines(m.id, "stopped").await;
-                self.drop_waiting(&m).await;
+                self.drop_waiting(&m, svc::Closing::new(svc::Closer::Owner, "withdrawn"))
+                    .await;
                 stopped_messages
                     .push(json!({ "id": m.id, "to": face, "excerpt": first_line(&m.body, 120) }));
                 self.emit_for(m.to_bot_id, PersonalAgentChange::Status);
@@ -1426,8 +1437,13 @@ impl PersonalAgentEngine {
                     .push(json!({ "id": m.id, "to": face, "excerpt": first_line(&m.body, 120) }));
             }
         }
+        let outcome = if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("could not stop {}", failed.join("; ")))
+        };
         if stopped_work.is_empty() && stopped_messages.is_empty() && handled.is_empty() {
-            return;
+            return outcome;
         }
         let mut row = NewRow::new(TimelineKind::Notice, "Stopped");
         row.segment_id = self.state.lock().await.connection_segment;
@@ -1462,10 +1478,12 @@ impl PersonalAgentEngine {
             self.emit_rows(vec![svc::to_row(card)]);
         }
         self.emit(PersonalAgentChange::Status);
+        outcome
     }
 
-    /// A stopped message's sender no longer waits for its answer.
-    pub(super) async fn drop_waiting(&self, m: &message_entity::Model) {
+    /// A stopped message's sender no longer waits for its answer (settled
+    /// so: the owner took it back, or its plan was canceled).
+    pub(super) async fn drop_waiting(&self, m: &message_entity::Model, closing: svc::Closing) {
         let Some(line) = msvc::lines_of_message(&self.db.conn, m.id)
             .await
             .unwrap_or_default()
@@ -1483,6 +1501,7 @@ impl PersonalAgentEngine {
                 ItemWrite {
                     status: Some(ItemStatus::Dropped),
                     waits_for: Some(None),
+                    closing: Some(closing),
                     ..Default::default()
                 },
             )
@@ -1491,77 +1510,37 @@ impl PersonalAgentEngine {
         }
     }
 
-    /// The owner's [Stop] on one piece of work's card (8.5): just that one
-    /// (4.10). False when it is past stopping.
-    pub async fn stop_one(&self, id: i32) -> Result<bool, String> {
+    /// [Stop] on one piece of work (8.5): just that one (4.10), by `by` —
+    /// the owner on its card (with what the card read, `expect`), the
+    /// assistant with `dispatch_stop`.
+    pub async fn stop_one(
+        &self,
+        id: i32,
+        by: super::stop::StoppedBy,
+        expect: super::stop::StopExpect,
+    ) -> Result<super::stop::StopOutcome, String> {
         let d = svc::get_dispatch_of(&self.db.conn, self.bot().await, id)
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("no dispatch #{id} of this assistant"))?;
-        Ok(self.stop_dispatch(&d).await)
+        self.stop_dispatch_as(&d, by, expect).await
     }
 
-    /// Stop one dispatch where it is: a task through the board, a
-    /// conversation by stopping its turn. False when it is past stopping
-    /// (done, merging). What it reports afterwards updates its card and
-    /// wakes nobody.
+    /// Stop one dispatch as the owner's conversation [Stop] does: whether
+    /// it was stopped now (a failure is logged, not stopped: nothing else
+    /// may cancel it in the stop's place).
     pub(super) async fn stop_dispatch(&self, d: &dispatch_entity::Model) -> bool {
-        if !LIVE.contains(&d.state) {
-            return false;
-        }
-        // A task already on the board stops there first: one past stopping
-        // (done, merging) is left as it is.
-        if d.mode == DispatchMode::Task {
-            if let Some(task_id) = d.work_task_id {
-                let Some(board) = crate::work_task::engine() else {
-                    return false;
-                };
-                if board.cancel(task_id, None).await.is_err() {
-                    return false;
-                }
+        match self
+            .stop_dispatch_as(d, super::stop::StoppedBy::Owner, Default::default())
+            .await
+        {
+            Ok(super::stop::StopOutcome::Stopped { .. }) => true,
+            Ok(_) => false,
+            Err(e) => {
+                tracing::warn!("[personal_agent] dispatch #{} not stopped: {e}", d.id);
+                false
             }
         }
-        let updated = svc::update_dispatch(
-            &self.db.conn,
-            d.id,
-            Some(LIVE),
-            svc::DispatchWrite {
-                state: Some(DispatchState::Canceled),
-                error: Some(Some(super::dispatch::STOPPED_NOTE.into())),
-                ..Default::default()
-            },
-        )
-        .await
-        .ok()
-        .flatten();
-        let Some(updated) = updated else {
-            return false;
-        };
-        // What it runs on, as it is now — not as it was read: a launch
-        // still under way attaches it after this and, finding the dispatch
-        // stopped, does not start (`start_*_dispatch`).
-        match d.mode {
-            DispatchMode::Task => {
-                if let (None, Some(task_id)) = (d.work_task_id, updated.work_task_id) {
-                    if let Some(board) = crate::work_task::engine() {
-                        let _ = board.cancel(task_id, None).await;
-                    }
-                }
-            }
-            _ => {
-                if let Some(conn) = updated.connection_id.as_deref() {
-                    let _ = self.manager.cancel(&self.db.conn, conn).await;
-                }
-            }
-        }
-        self.record_progress(
-            &updated,
-            None,
-            Some(super::dispatch::STOPPED_NOTE.into()),
-            "stopped",
-        )
-        .await;
-        true
     }
 
     /// The owner's answer on a stop card: `stop:<message id>` stops that

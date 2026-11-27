@@ -957,6 +957,8 @@ pub(crate) const KIMI_EXIT_PLAN_MODE_TOOL: &str = "ExitPlanMode";
 /// `tool.result` carries `isError: true` in `wire.jsonl`, and an approved plan
 /// would show as an error. Read off the wording of the result instead, which
 /// 2.5.3 through 2.6.2 share; any other text keeps the status Kimi sent.
+/// From 2.8.0 an approved plan is recorded with `isError: false` by Kimi
+/// itself; a dismissed review still carries `isError: true`.
 pub(crate) fn kimi_plan_review_kept_ok(output: &str) -> bool {
     const OK_PREFIXES: &[&str] = &[
         "Exited plan mode.",

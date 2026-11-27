@@ -218,6 +218,9 @@ pub struct SendParams {
     /// The button on the quoted card the message comes from.
     #[serde(default)]
     pub card: Option<crate::personal_agent::card_acts::CardClick>,
+    /// The assistant's question the message answers.
+    #[serde(default)]
+    pub answers_item: Option<i32>,
 }
 
 pub async fn personal_agent_send(
@@ -230,6 +233,7 @@ pub async fn personal_agent_send(
             params.blocks,
             params.reply_to,
             params.card,
+            params.answers_item,
         )
         .await?,
     ))
@@ -311,12 +315,18 @@ pub struct ItemActParams {
     /// `snooze`: until when.
     #[serde(default)]
     pub until: Option<String>,
+    /// `panel` (the default) or `card`.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// The matter's `updated_at` as the button read it.
+    #[serde(default)]
+    pub expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub async fn personal_agent_item_act(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<ItemActParams>,
-) -> Result<Json<crate::models::personal_agent::ItemInfo>, AppCommandError> {
+) -> Result<Json<crate::models::personal_agent::ItemActResult>, AppCommandError> {
     Ok(Json(
         pa::personal_agent_item_act_core(
             &state.db,
@@ -324,8 +334,29 @@ pub async fn personal_agent_item_act(
             params.item_id,
             params.act,
             params.until,
+            params.from,
+            params.expect_updated_at,
         )
         .await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemUndoParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub item_id: i32,
+    pub undo: i32,
+}
+
+pub async fn personal_agent_item_undo(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ItemUndoParams>,
+) -> Result<Json<crate::models::personal_agent::ItemInfo>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_item_undo_core(&state.db, params.bot_id, params.item_id, params.undo)
+            .await?,
     ))
 }
 
@@ -466,13 +497,28 @@ pub struct DispatchStopParams {
     #[serde(default)]
     pub bot_id: Option<i32>,
     pub dispatch_id: i32,
+    /// What the card read: the dispatch's version, its task's run and
+    /// version.
+    #[serde(default)]
+    pub expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub expect_run_seq: Option<i32>,
+    #[serde(default)]
+    pub expect_task_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub async fn personal_agent_dispatch_stop(
     Json(params): Json<DispatchStopParams>,
-) -> Result<Json<bool>, AppCommandError> {
+) -> Result<Json<crate::personal_agent::stop::StopReply>, AppCommandError> {
     Ok(Json(
-        pa::personal_agent_dispatch_stop_core(params.bot_id, params.dispatch_id).await?,
+        pa::personal_agent_dispatch_stop_core(
+            params.bot_id,
+            params.dispatch_id,
+            params.expect_updated_at,
+            params.expect_run_seq,
+            params.expect_task_updated_at,
+        )
+        .await?,
     ))
 }
 
@@ -841,6 +887,10 @@ pub struct NoticeActParams {
     /// handed to the assistant).
     #[serde(default)]
     pub text: Option<String>,
+    /// A reminder card's answer from a matter's row: the matter's
+    /// `updated_at` as the row read it.
+    #[serde(default)]
+    pub expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub async fn personal_agent_notice_act(
@@ -852,6 +902,7 @@ pub async fn personal_agent_notice_act(
             params.notice_id,
             params.action,
             params.text,
+            params.expect_updated_at,
         )
         .await?,
     ))

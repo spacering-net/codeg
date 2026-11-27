@@ -16,11 +16,13 @@ import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import type { TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { peerOf } from "./exchange-row"
 import {
   excerptOf,
   INSET_HOVER,
   INSET_SURFACE,
   str,
+  useBotName,
   usePageScope,
 } from "./shared"
 
@@ -41,22 +43,28 @@ export function useQuoteAuthor(): (row: TimelineRow) => string {
 /** One line of what a row says. */
 export function useQuoteExcerpt(): (row: TimelineRow) => string {
   const t = useTranslations("PersonalAgent.quote")
+  const { dispatchById } = usePersonalAgent()
   return (row) => {
     switch (row.kind) {
+      // News of work: the work it is of, by its title (P6.3 4).
       case "result": {
-        const title = str(row.data, "title")
-        const excerpt = str(row.data, "excerpt")
-        return excerptOf(
-          [title, excerpt ?? (title ? null : row.body)]
-            .filter(Boolean)
-            .join(" — ")
-        )
+        const info =
+          row.dispatch_id != null ? dispatchById.get(row.dispatch_id) : null
+        const title = info?.title ?? str(row.data, "title")
+        return excerptOf(title ?? row.body)
       }
       case "dispatch":
         return t("dispatch", { title: excerptOf(row.body) })
       case "owner": {
         const text = excerptOf(row.body)
         return text || t("attachment")
+      }
+      // A reminder card: what it reminds of, not codeg's English line.
+      case "notice": {
+        const summary = str(row.data, "summary")
+        if (str(row.data, "notice") === "reminder" && summary)
+          return t("reminder", { summary: excerptOf(summary) })
+        return excerptOf(row.body) || t("noText")
       }
       default:
         return excerptOf(row.body) || t("noText")
@@ -95,7 +103,9 @@ export function QuoteBar({
   tone?: "muted" | "light"
 }) {
   const t = useTranslations("PersonalAgent.quote")
+  const tx = useTranslations("PersonalAgent.exchange")
   const { jumpTo } = usePageScope()
+  const botName = useBotName()
   const row = useQuotedRow(targetId)
   const author = useQuoteAuthor()
   const excerpt = useQuoteExcerpt()
@@ -137,12 +147,28 @@ export function QuoteBar({
         onClick={() => jumpTo(row.id)}
         title={t("jump")}
       >
-        <span className="block truncate font-medium text-foreground/85">
-          {author(row)}
-        </span>
-        <span className="block truncate text-muted-foreground">
-          {excerpt(row)}
-        </span>
+        {row.kind === "exchange" ? (
+          // A message between assistants is its line, as the list draws
+          // it: who it went to or came from, never its words.
+          <span
+            className="block truncate py-0.5 text-foreground/85"
+            data-pa-quote-exchange
+          >
+            {tx(
+              str(row.data, "direction") === "out" ? "sentToName" : "fromName",
+              { name: botName(peerOf(row)) }
+            )}
+          </span>
+        ) : (
+          <>
+            <span className="block truncate font-medium text-foreground/85">
+              {author(row)}
+            </span>
+            <span className="block truncate text-muted-foreground">
+              {excerpt(row)}
+            </span>
+          </>
+        )}
       </button>
       {onDismiss ? <DismissButton onDismiss={onDismiss} /> : null}
     </div>

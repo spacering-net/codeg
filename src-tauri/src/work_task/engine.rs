@@ -1078,12 +1078,45 @@ impl TaskEngine {
         task_id: i32,
         reason: Option<String>,
     ) -> Result<(), String> {
-        let won = work_task_service::cancel(&self.db.conn, task_id, reason.as_deref())
+        let run_seq = {
+            let txn = sea_orm::TransactionTrait::begin(&self.db.conn)
+                .await
+                .map_err(|e| e.to_string())?;
+            let run = work_task_service::cancel_in(
+                &txn,
+                task_id,
+                work_task_service::CANCELABLE,
+                None,
+                None,
+                "user",
+                reason.as_deref(),
+                None,
+            )
             .await
             .map_err(|e| e.to_string())?;
-        if !won {
-            return Err("task cannot be canceled in its current state".to_string());
-        }
+            match run {
+                Some(run) => {
+                    txn.commit().await.map_err(|e| e.to_string())?;
+                    run
+                }
+                None => {
+                    let _ = txn.rollback().await;
+                    return Err("task cannot be canceled in its current state".to_string());
+                }
+            }
+        };
+        self.teardown_canceled(task_id, run_seq).await;
+        Ok(())
+    }
+
+    /// What is left running of task `task_id`'s run `run_seq` once its
+    /// cancel is written: its setup child, its compaction, its background
+    /// wait, its connection, its conversation — this run's only. A run the
+    /// owner queued again meanwhile (`run_seq` + 1, started while this waited
+    /// for the task's lock) keeps its own. Each step finds nothing to do the
+    /// second time: a crash between the cancel and this leaves nothing to
+    /// tear down either, the processes having gone with codeg.
+    pub async fn teardown_canceled(self: &Arc<Self>, task_id: i32, run_seq: i32) {
         self.emit_upsert(task_id);
 
         // Stop a running init command / pre-prompt compaction BEFORE waiting on
@@ -1092,10 +1125,8 @@ impl TaskEngine {
         // very compaction turn — we are trying to stop. The run_seq we just
         // canceled scopes both to this generation (cancel does not bump it, so
         // the row still carries it).
-        if let Ok(task) = work_task_service::get_model(&self.db.conn, task_id).await {
-            self.kill_setup_child(task_id, task.run_seq).await;
-            self.abort_compaction(task_id, task.run_seq).await;
-        }
+        self.kill_setup_child(task_id, run_seq).await;
+        self.abort_compaction(task_id, run_seq).await;
 
         // Serialize the teardown with a possibly in-flight launch: the launch
         // holds the task lock across spawn → prompt, and its status gates
@@ -1110,7 +1141,7 @@ impl TaskEngine {
                 .lock()
                 .await
                 .iter()
-                .find(|(_, (tid, _))| *tid == task_id)
+                .find(|(_, (tid, seq))| *tid == task_id && *seq == run_seq)
                 .map(|(c, _)| c.clone())
         };
         if let Some(conn_id) = conn_id {
@@ -1145,11 +1176,23 @@ impl TaskEngine {
             self.forget_delegation_children_of(&conn_id).await;
             let _ = self.manager.disconnect(&conn_id).await;
         }
-        self.awaiting.lock().await.remove(&task_id);
+        // The outstanding requests are kept by task, not by run: cleared only
+        // when no run of the task holds a connection any more — a run queued
+        // again meanwhile keeps its own (the rule `retire_connection` keeps).
+        {
+            let index = self.index.lock().await;
+            if !index.values().any(|(tid, _)| *tid == task_id) {
+                self.awaiting.lock().await.remove(&task_id);
+            }
+        }
 
-        // Converge a stranded InProgress conversation.
+        // Converge a stranded InProgress conversation — this run's only.
         let task = work_task_service::get_model(&self.db.conn, task_id).await.ok();
-        if let Some(conv_id) = task.as_ref().and_then(|t| t.conversation_id) {
+        if let Some(conv_id) = task
+            .as_ref()
+            .filter(|t| t.run_seq == run_seq)
+            .and_then(|t| t.conversation_id)
+        {
             if self.conversation_status(conv_id).await == Some(ConversationStatus::InProgress) {
                 self.cancel_conversation(conv_id).await;
             }
@@ -1158,7 +1201,6 @@ impl TaskEngine {
         if let Some(folder_id) = task.map(|t| t.folder_id) {
             self.pump_folder(folder_id).await;
         }
-        Ok(())
     }
 
     // ── scheduler ───────────────────────────────────────────────────────────

@@ -208,6 +208,8 @@ pub struct BrokerSessionRequest {
     /// [`crate::acp::session_info::MAX_SESSION_MESSAGES`] by the resolver.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_messages: Option<u32>,
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 /// Rename the calling conversation or one of its direct delegation children.
@@ -1234,6 +1236,7 @@ mod tests {
             token: "tok".into(),
             session_id: 42,
             max_messages: Some(20),
+            refresh: false,
         });
         write_frame(&mut a, &msg).await.unwrap();
         let got: BrokerMessage = read_frame(&mut b).await.unwrap();

@@ -27,6 +27,7 @@ vi.mock("@/components/chat/composer/rich-composer", () => ({
       onChange?: (text: string) => void
       onSubmit?: () => void
       onReady?: () => void
+      disabled?: boolean
     },
     ref
   ) {
@@ -46,6 +47,7 @@ vi.mock("@/components/chat/composer/rich-composer", () => ({
         aria-label={props.ariaLabel}
         placeholder={props.placeholder}
         data-class={props.className}
+        disabled={props.disabled}
         value={text}
         onChange={(e) => {
           setText(e.target.value)
@@ -85,13 +87,21 @@ vi.mock("@/components/chat/composer/use-composer-mention-labels", () => ({
 vi.mock("@/components/chat/composer/use-composer-chrome-focus", () => ({
   useComposerChromeFocus: () => ({}),
 }))
+// The quote's bar reads the page's rows; what it shows is tested there.
+vi.mock("./quote-bar", () => ({
+  QuoteBar: ({ targetId }: { targetId: number }) => (
+    <div data-quote={targetId} />
+  ),
+}))
 vi.mock("@/hooks/use-shortcut-settings", () => ({
   useShortcutSettings: () => ({ shortcuts: {} }),
 }))
 
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
+
 import { PersonalAgentComposer } from "./composer"
 
-const agent = { workdir: "/tmp/pa" } as PersonalAgentInfo
+const agent = { id: 7, workdir: "/tmp/pa" } as PersonalAgentInfo
 
 function status(turn: PersonalAgentStatus["turn"]): PersonalAgentStatus {
   return { engine: "here", turn } as PersonalAgentStatus
@@ -130,11 +140,165 @@ function draw(
 beforeEach(() => {
   api.personalAgentSend.mockReset()
   api.personalAgentSend.mockResolvedValue({ id: 9 })
+  usePersonalAgentUi.setState({
+    pendingAnswer: {},
+    answerSending: {},
+    composerSending: {},
+  })
 })
 
 afterEach(cleanup)
 
 describe("PersonalAgentComposer", () => {
+  it("answers one of the assistant's questions, and keeps the words when it no longer can be", async () => {
+    const onClearAnswer = vi.fn()
+    usePersonalAgentUi.getState().setPendingAnswer({
+      bot: 7,
+      itemId: 12,
+      summary: "Move the release to Friday?",
+    })
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <PersonalAgentComposer
+          agent={agent}
+          agentName="Aide"
+          status={status(null)}
+          quoting={null}
+          answering={{ itemId: 12, summary: "Move the release to Friday?" }}
+          onClearQuote={() => {}}
+          onClearAnswer={onClearAnswer}
+        />
+      </NextIntlClientProvider>
+    )
+    expect(screen.getByText("Answer: Move the release to Friday?")).toBeTruthy()
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Message to your personal agent" }),
+      { target: { value: "Yes" } }
+    )
+    // The question changed meanwhile: refused in the owner's words, the bar
+    // gone, what was typed still there.
+    api.personalAgentSend.mockRejectedValueOnce({
+      code: "invalid_input",
+      message: "the question changed meanwhile: the message was not sent",
+      i18n_key: "matterErrors.answerChanged",
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    })
+    expect(api.personalAgentSend).toHaveBeenCalledWith(
+      "Yes",
+      [],
+      null,
+      null,
+      null,
+      12
+    )
+    expect(usePersonalAgentUi.getState().pendingAnswer[7]).toBeUndefined()
+    expect(usePersonalAgentUi.getState().answerSending[7]).toBeUndefined()
+    expect(
+      (
+        screen.getByRole("textbox", {
+          name: "Message to your personal agent",
+        }) as HTMLTextAreaElement
+      ).value
+    ).toBe("Yes")
+  })
+
+  it("locks the box while it sends, and clears exactly what went", async () => {
+    let done: (v: unknown) => void = () => {}
+    api.personalAgentSend.mockReturnValueOnce(
+      new Promise((resolve) => {
+        done = resolve
+      })
+    )
+    const onQuoteSent = vi.fn()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <PersonalAgentComposer
+          agent={agent}
+          agentName="Aide"
+          status={status(null)}
+          quoting={40}
+          onClearQuote={() => {}}
+          onQuoteSent={onQuoteSent}
+        />
+      </NextIntlClientProvider>
+    )
+    const box = screen.getByRole("textbox", {
+      name: "Message to your personal agent",
+    }) as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: "on it" } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    })
+    expect(box.disabled).toBe(true)
+    expect(usePersonalAgentUi.getState().composerSending[7]).toBe(true)
+    await act(async () => {
+      done({ id: 9 })
+    })
+    expect(box.disabled).toBe(false)
+    expect(box.value).toBe("")
+    expect(onQuoteSent).toHaveBeenCalledWith(40)
+    expect(usePersonalAgentUi.getState().composerSending[7]).toBeUndefined()
+  })
+
+  it("settles an answer that went even when the box is gone, and gives the bar back after a failure", async () => {
+    usePersonalAgentUi
+      .getState()
+      .setPendingAnswer({ bot: 7, itemId: 12, summary: "Friday?" })
+    let done: (v: unknown) => void = () => {}
+    api.personalAgentSend.mockReturnValueOnce(
+      new Promise((resolve) => {
+        done = resolve
+      })
+    )
+    const drawAnswering = () =>
+      render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <PersonalAgentComposer
+            agent={agent}
+            agentName="Aide"
+            status={status(null)}
+            quoting={null}
+            answering={{ itemId: 12, summary: "Friday?" }}
+            onClearQuote={() => {}}
+          />
+        </NextIntlClientProvider>
+      )
+    const { unmount } = drawAnswering()
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Message to your personal agent" }),
+      { target: { value: "Yes" } }
+    )
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    })
+    expect(usePersonalAgentUi.getState().answerSending[7]?.itemId).toBe(12)
+    // The owner switched assistants: the box is gone before the send lands.
+    unmount()
+    await act(async () => {
+      done({ id: 9 })
+    })
+    expect(usePersonalAgentUi.getState().pendingAnswer[7]).toBeUndefined()
+    expect(usePersonalAgentUi.getState().answerSending[7]).toBeUndefined()
+
+    // A failure that may be tried again: the bar comes back if it went.
+    api.personalAgentSend.mockRejectedValueOnce(new Error("offline"))
+    drawAnswering()
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Message to your personal agent" }),
+      { target: { value: "Yes" } }
+    )
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    })
+    expect(usePersonalAgentUi.getState().pendingAnswer[7]).toEqual({
+      bot: 7,
+      itemId: 12,
+      summary: "Friday?",
+    })
+  })
+
   it("keeps the send button while the agent works, with nothing to stop there", () => {
     draw(RUNNING)
     expect(screen.queryByRole("button", { name: /stop/i })).toBeNull()
@@ -155,6 +319,8 @@ describe("PersonalAgentComposer", () => {
     expect(api.personalAgentSend).toHaveBeenCalledWith(
       "one more thing",
       [],
+      null,
+      null,
       null,
       null
     )

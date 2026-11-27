@@ -1677,9 +1677,10 @@ impl PersonalAgentEngine {
             ("session", "open") | ("uncommitted", "open") => Ok(("opened".into(), json!({}))),
             ("idle", "close") => {
                 let item = id_of("item_id").ok_or("the card names no matter")?;
-                self.settle_item(item, "drop", None)
+                self.settle_item_from(item, "drop", None, super::reminders::OpSource::RuleCard)
                     .await
                     .map(|_| ("closed".into(), json!({ "item_id": item })))
+                    .map_err(String::from)
             }
             ("behind", "rebase") => self.rebase_behind(&facts).await,
             ("undo", "ask_first") => self
@@ -1838,7 +1839,7 @@ impl PersonalAgentEngine {
 
     /// Whether a conversation's dispatch has a session to go on in: a live
     /// connection, or one its conversation can resume.
-    async fn resumable(&self, d: &dispatch_entity::Model) -> bool {
+    pub(super) async fn resumable(&self, d: &dispatch_entity::Model) -> bool {
         let Some(conversation) = d.conversation_id else {
             return false;
         };

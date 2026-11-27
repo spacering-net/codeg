@@ -18,6 +18,7 @@ import {
   type ConnectionState,
   type ConnectionStoreApi,
 } from "@/contexts/acp-connections-context"
+import { EMPTY_ATTENTION_INDEX } from "@/lib/conversation-attention"
 import type { AsyncTaskRecord } from "@/lib/types"
 import { LiveRunsChip, type LiveRunsList } from "./live-runs-chip"
 
@@ -67,6 +68,8 @@ function store(
     getActiveKey: () => null,
     subscribeKey: () => () => {},
     subscribeActiveKey: () => () => {},
+    getAttention: () => EMPTY_ATTENTION_INDEX,
+    subscribeAttention: () => () => {},
   }
 }
 

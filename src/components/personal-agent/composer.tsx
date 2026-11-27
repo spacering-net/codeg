@@ -55,8 +55,9 @@ import { useReducedMotion } from "@/hooks/use-chat-motion"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { useBotId } from "@/contexts/personal-agent-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { personalAgentSend } from "@/lib/api"
-import { toErrorMessage } from "@/lib/app-error"
+import { extractAppCommandError } from "@/lib/app-error"
 import type {
   PersonalAgentInfo,
   PersonalAgentStatus,
@@ -65,6 +66,8 @@ import type {
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { AnswerBar, type AnsweringQuestion } from "./answer-bar"
+import { useMatterError } from "./matter-text"
 import { QuoteBar } from "./quote-bar"
 
 /** What the agent is assumed to accept: the engine sends the blocks as
@@ -105,24 +108,39 @@ interface ComposerProps {
   status: PersonalAgentStatus
   /** The row the next message quotes. */
   quoting: number | null
+  /** The assistant's question the next message answers (never with a
+   *  quote). */
+  answering?: AnsweringQuestion | null
   /** Text to put in the box (a card's message the owner edits first); a
    *  new `n` puts it in again. */
   draft?: { text: string; n: number } | null
   onClearQuote: () => void
+  /** A message quoting `rowId` went out: its quote goes, if the page still
+   *  has it. */
+  onQuoteSent?: (rowId: number) => void
+  onClearAnswer?: () => void
   /** A message went out. */
   onSent?: () => void
 }
+
+/** Each send's own number, for the window's life: what it settles is its
+ *  own, never a later send's. */
+let lastRequest = 0
 
 export function PersonalAgentComposer({
   agent,
   agentName,
   status,
   quoting,
+  answering = null,
   draft,
   onClearQuote,
+  onQuoteSent,
+  onClearAnswer,
   onSent,
 }: ComposerProps) {
   const t = useTranslations("PersonalAgent.composer")
+  const errorText = useMatterError()
   const tInput = useTranslations("Folder.chat.messageInput")
   const { shortcuts } = useShortcutSettings()
   const reduced = useReducedMotion()
@@ -157,6 +175,8 @@ export function PersonalAgentComposer({
   const attach = useComposerAttachments({
     editorRef,
     containerRef,
+    // Nothing added while it sends: the box is locked until it returns.
+    disabled: status.engine !== "here" || sending,
     promptCapabilities: ASSUMED_PROMPT_CAPABILITIES,
     defaultPath: agent.workdir,
     logLabel: "PersonalAgentComposer",
@@ -195,7 +215,7 @@ export function PersonalAgentComposer({
   const [wrapped, setWrapped] = useState(false)
   // The editor mounts after the first render (`onReady`).
   const [editorReady, setEditorReady] = useState(false)
-  const open = wrapped || quoting != null || hasImages
+  const open = wrapped || quoting != null || answering != null || hasImages
 
   // The box is one assistant's (the page keys it by them): a send that
   // lands once it is gone — the owner switched assistants meanwhile — leaves
@@ -208,35 +228,107 @@ export function PersonalAgentComposer({
     }
   }, [])
 
+  // While it sends, the box is locked — the text, the attachments, a card's
+  // "put in the box" — so what it clears on return is exactly what went:
+  // the page reads whether this assistant's box is sending.
+  const bot = agent.id
+  useEffect(() => {
+    if (!sending) return
+    const ui = usePersonalAgentUi.getState()
+    ui.setComposerSending(bot, true)
+    return () => ui.setComposerSending(bot, false)
+  }, [bot, sending])
+  // The quote as the page has it now: one picked while a send is out is not
+  // to be undone by that send's failure.
+  const quotingNow = useRef(quoting)
+  useEffect(() => {
+    quotingNow.current = quoting
+  }, [quoting])
+  // Back to the line once it is unlocked, when it had the focus.
+  const refocus = useRef(false)
+  useEffect(() => {
+    if (sending || !refocus.current) return
+    refocus.current = false
+    editorRef.current?.focus()
+  }, [sending])
+
   const send = async () => {
     if (!canSend || !editorRef.current) return
-    if (attach.hasUploadingImage) {
+    if (attach.hasUploadingImage || attach.intakePending) {
       toast.message(t("waitForUpload"))
       return
     }
     const body = editorRef.current.getText()
     const blocks = [...embeddedBlocks(), ...attach.imagePromptBlocks()]
+    // What this send settles, taken now — not read again from the page
+    // when it returns.
+    const sentAnswer = answering
+    const sentQuote = answering ? null : quoting
+    const requestId = ++lastRequest
+    const ui = usePersonalAgentUi.getState()
+    if (sentAnswer) {
+      ui.setAnswerSending(bot, { itemId: sentAnswer.itemId, requestId })
+    }
+    refocus.current =
+      containerRef.current?.contains(document.activeElement) ?? false
     setSending(true)
     try {
-      await personalAgentSend(body, blocks, quoting, botId)
+      await personalAgentSend(
+        body,
+        blocks,
+        sentQuote,
+        botId,
+        null,
+        sentAnswer?.itemId ?? null
+      )
+      // The answer's bar goes even when the box is gone meanwhile (the
+      // owner switched assistants): it is this assistant's, and answered.
+      ui.clearAnswerSending(bot, requestId)
+      if (sentAnswer) ui.clearPendingAnswer(bot, sentAnswer.itemId)
       if (!mounted.current) return
       editorRef.current?.clear()
       attach.clearAttachments()
       setText("")
       setWrapped(false)
-      onClearQuote()
+      if (sentQuote != null) onQuoteSent?.(sentQuote)
       onSent?.()
     } catch (e) {
-      toast.error(toErrorMessage(e))
+      ui.clearAnswerSending(bot, requestId)
+      // What was typed stays; a question that can no longer be answered
+      // takes its bar with it, so the next send is a plain message. One
+      // that failed otherwise gets its bar back, should it have gone
+      // meanwhile — unless something else was picked since (another
+      // question, or a quote, which takes the bar's place), or the box is
+      // gone (the owner moved on; what this box saw is not the page's now).
+      const key = extractAppCommandError(e)?.i18n_key
+      if (sentAnswer) {
+        if (
+          key === "matterErrors.answerChanged" ||
+          key === "matterErrors.answerQueued"
+        ) {
+          ui.clearPendingAnswer(bot, sentAnswer.itemId)
+        } else if (
+          mounted.current &&
+          !usePersonalAgentUi.getState().pendingAnswer[bot] &&
+          quotingNow.current == null
+        ) {
+          ui.setPendingAnswer({ bot, ...sentAnswer })
+        }
+      }
+      toast.error(errorText(e))
     } finally {
       setSending(false)
     }
   }
 
-  // Quoting focuses the line, ready to type the reply.
+  // Quoting focuses the line, ready to type the reply; answering too.
   useEffect(() => {
     if (quoting != null) editorRef.current?.focus()
   }, [quoting])
+  const answeringId = answering?.itemId ?? null
+  useEffect(() => {
+    if (answeringId != null) editorRef.current?.focus()
+  }, [answeringId])
 
   // A card's message to edit first: after what is already typed, never in
   // place of it.
@@ -399,7 +491,7 @@ export function PersonalAgentComposer({
               <div className="flex" style={{ gridArea: "plus" }}>
                 <ComposerAddMenu
                   attachOnly
-                  disabled={readOnly}
+                  disabled={readOnly || sending}
                   attachments={attach}
                   // `border-0`: the button's transparent border would clip
                   // the fill a pixel short of the send button's on each side.
@@ -409,7 +501,17 @@ export function PersonalAgentComposer({
                   )}
                 />
               </div>
-              {quoting != null ? (
+              {answering ? (
+                <div className="pb-1.5" style={{ gridArea: "quote" }}>
+                  <AnswerBar
+                    question={answering}
+                    onDismiss={() => {
+                      onClearAnswer?.()
+                      editorRef.current?.focus()
+                    }}
+                  />
+                </div>
+              ) : quoting != null ? (
                 <div className="pb-1.5" style={{ gridArea: "quote" }}>
                   <QuoteBar
                     targetId={quoting}
@@ -429,6 +531,7 @@ export function PersonalAgentComposer({
                   <ComposerImageThumbnails
                     attachments={attach.imageAttachments}
                     onRemove={attach.removeAttachment}
+                    disabled={sending}
                   />
                 </div>
               ) : null}
@@ -438,7 +541,7 @@ export function PersonalAgentComposer({
                   defaultText=""
                   placeholder={placeholder}
                   ariaLabel={t("ariaLabel")}
-                  disabled={readOnly}
+                  disabled={readOnly || sending}
                   referenceSearch={referenceSearch}
                   mentionUiLabels={uiLabels}
                   tabLabels={groupLabels}

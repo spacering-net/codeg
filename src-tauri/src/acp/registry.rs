@@ -467,7 +467,7 @@ pub const PI_MIN_RUNTIME_VERSION: &str = "0.81.0";
 /// for when the installed copy's own package.json cannot be read. A runtime
 /// resolved to this value is marked unconfirmed (`codex_runtime`), so it never
 /// counts as the version a catalog was checked against. Move it with the pin.
-pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.171.0";
+pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.172.0";
 
 /// The npm package the built-in Claude Code entry runs — and the name the
 /// adapter reports as `agentInfo.name` at `initialize`, which is its
@@ -3790,9 +3790,55 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   * #1711 ends a sub-agent MCP request's wait when Claude Code
             //     gives up on it; only `acp`-transport MCP servers go through
             //     that bridge, and codeg declares none.
+            //
+            // 0.113.0 (2026-11-26) keeps every dependency of 0.112.0 (ACP SDK
+            // 2.12.0, Claude Agent SDK 0.3.331, so Claude Code 2.1.331) and
+            // `engines.node` ">=22".
+            //   * #1523 **starts Remote Control with the session** when
+            //     Claude Code's `initialize` reports
+            //     `remote_control_auto_enable` (`remoteControlAtStartup` in the
+            //     settings, else the policy default, else a rollout the user
+            //     may never have chosen): right after the setup response of a
+            //     new, loaded, resumed or forked session, and after a restart
+            //     of its query, holding prompts back until it answers. The
+            //     answer is a `notice`, not the `/remote-control` reply chunk
+            //     codeg reads: info "Remote Control connected" (the session
+            //     URL in the description) or warning "Could not start Remote
+            //     Control". Taken as-is, codeg only toasted it: no strip, no
+            //     link or QR code, no off button, and the sweeps took the CLI
+            //     with the remote session in it once the tab closed.
+            //     `connection::remote_control_notice` now reads both into
+            //     `AcpEvent::RemoteControl` — the strip appears and the
+            //     "connected" toast is dropped; the failure keeps its toast —
+            //     at all three notice seams, the `session/load` drain
+            //     included, since the notice comes after the load's response
+            //     while that drain can still read. Marked `at_startup`: nobody
+            //     handed the session over, so unlike the user's own
+            //     `/remote-control` it does not keep the connection from the
+            //     idle sweeps or a move (`manager::teardown_blocker`,
+            //     `isConnectionBusy`) — with the setting on, every Claude
+            //     session, delegations and assistants' too, would otherwise
+            //     never be reaped. A `/remote-control` the user sends hands it
+            //     over (its reply clears the mark), and a restarted query that
+            //     connects again keeps a handed-over session handed over.
+            //     While the start runs a `/remote-control` is refused ("Try
+            //     again in a moment"), as during another one. Read from the
+            //     adapter's source: Remote Control needs a claude.ai account.
+            //   * #1716 serves `/plugin` (aliases `/plugins`, `/marketplace`)
+            //     itself: it runs `claude plugin …` / `claude plugin
+            //     marketplace …` without a shell, then `reloadPlugins`, and
+            //     answers in one reply chunk without a model turn, like
+            //     `/mcp`. It reaches codeg's `/` menu through
+            //     `available_commands_update` with nothing to change. A
+            //     plugin a codeg Harness install put in place and `/plugin`
+            //     then removes or disables is what the listing's host checks
+            //     already report, as for the same command typed in a terminal.
+            //   * #1639 (a Monitor or Workflow call whose task joins the live
+            //     background set after its result) is in the ACP v2 core;
+            //     codeg speaks v1.
             distribution: AgentDistribution::Npx {
-                version: "0.112.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.112.0",
+                version: "0.113.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.113.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -5409,9 +5455,58 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // client declaring `session.cursors` (and to every v2 client), a
             // `session/fork` `cursorId` is new and optional, and the
             // `thread/status/changed` suppression only covers a running rewind.
+            //
+            // 2.12.1 (2026-11-26) is #800 alone: `@openai/codex` ^0.171.0 →
+            // **^0.172.0** (a fresh install resolves 0.172.0) and the app-server
+            // bindings regenerated from it. The bundled `dist/index.js` is 2.12.0's
+            // byte for byte bar the version and that range; ACP SDK stays ~2.9.1
+            // and `engines` is still absent. codex 0.172.0's bundled catalog is
+            // 0.171.0's (same 14 models, same JSON), so the offline snapshot
+            // stands; `CODEX_NESTED_VERSION_FALLBACK` moves. Under codeg's exact
+            // `clientCapabilities` (`sessionRewind` included) the forty live
+            // scenarios replay as on 2.12.0 — timing, request order, the model
+            // prompt's hashes and the version only.
+            //
+            // (ooo) **Spend limits by scope** (codex #62329). A provider's
+            // `api_key_spend_limit_exceeded` / `project_spend_limit_exceeded` /
+            // `organization_spend_limit_exceeded` (HTTP 429 or a streamed
+            // `response.failed`) now ends the turn as
+            // `apiKeySpendLimitExceeded` / `projectSpendLimitExceeded` /
+            // `organizationSpendLimitExceeded`, titled "Your API key|project|
+            // organization has reached its spend limit.", never retried. 0.171
+            // gave the project and organization ones `usageLimitExceeded`
+            // ("Quota exceeded. …"), which the adapter files as
+            // `quota_exhausted` — a `limit` with no actions. Its error table has
+            // no entry for the new values, so measured live they arrive as
+            // `provider_error`: category `service` with a Retry that can only
+            // fail again. `connection::reclassify_codex_spend_limit` puts the
+            // three titles back among the limits without Retry; the rollout's
+            // `task_complete.error` carries the new title and snake-case code,
+            // and a reload draws the title as before.
+            //
+            // (ppp) **Lazy stdio MCP startup** (#62366, now on by default). When
+            // a thread republishes its MCP servers with a tool catalog the
+            // process has already cached, an optional stdio server is no longer
+            // started until its first tool call. Measured with a stdio stand-in
+            // passed as `codeg-mcp` on `session/new`: a new session still starts
+            // it eagerly; after a rewind's thread reload 2.12.0 spawned a fresh
+            // process at once, while 2.12.1 spawns none until the next call to
+            // one of its tools. codeg-mcp holds no state between calls, so
+            // nothing depends on when it starts.
+            //
+            // (qqq) Inert otherwise. #62348 persists a child agent's queued final
+            // reply as the addressed `response_item.agent_message` when the
+            // parent turn is interrupted, the shape `parsers::codex` already
+            // folds into the child's capsule. `ModelInfo.available_access_programs`
+            // gains an optional `daybreak_availability` (no bundled model sets
+            // it, and codeg's own fields and overrides never do — only a native
+            // provider catalog can carry one through, as codex itself would
+            // read it); `[permissions.<profile>.credentials]`,
+            // per-tool app `approvals_reviewer`, Bedrock Runtime login and the
+            // realtime items are keys and methods codeg does not write or call.
             distribution: AgentDistribution::Npx {
-                version: "2.12.0",
-                package: "@agentclientprotocol/codex-acp@2.12.0",
+                version: "2.12.1",
+                package: "@agentclientprotocol/codex-acp@2.12.1",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -6424,7 +6519,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // Two behaviours around a Stop, the same in 2.171.0, 2.177.0, 2.177.1,
             // 2.179.0, 2.179.2, 2.179.3, 2.180.0, 2.181.0, 2.182.0, 2.183.0,
-            // 2.184.0, 2.185.0 and 2.186.0, need codeg's help.
+            // 2.184.0, 2.185.0, 2.186.0 and 2.187.0, need codeg's help.
             // CodeBuddy answers a `session/prompt` that starts within 500 ms of a
             // `session/cancel` it took mid-turn with `cancelled`, without running
             // the prompt or keeping it in its history, so codeg holds the first
@@ -6766,9 +6861,40 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // the background summary request, 12.1 s. 2.186.0 loads a 2.185.0
             // session on `default-model`, and an install without optional
             // dependencies still runs whole turns.
+            //
+            // 2.187.0 adds a block at the top of `bin/codebuddy` that maps a
+            // branded environment prefix onto `CODEBUDDY_*` when a
+            // `customization.json` declares one; the npm package ships none, so
+            // it does nothing, and `--acp` still runs
+            // `dist/codebuddy-headless.js`. The inlined ACP SDK is the same
+            // 1.9.0 code split across shared modules, with the same 32 MiB line
+            // limit; a copy of the SDK's v2 API now rides along, loaded only by
+            // the new `_codebuddy.ai/conversations/fork` request, which codeg
+            // does not send. `package.json` changes its version and the
+            // sandbox-cli pins (5.13.0-beta.14 to 5.14.0-beta.1). `initialize`
+            // and `session/new` answer as 2.186.0 does (`protocolVersion: 1`),
+            // the models (default `default-model`), modes, `thought_level`,
+            // `sandbox` and `multitask` keep their values, no `sessionUpdate`
+            // kind or `session/*` method came or went, and the command list
+            // drops `model:text-to-video` and `model:image-to-video`. The Read
+            // tool-hint line, the compaction divider (on `/compact` and on
+            // automatic compaction), the `<cb_summary>` boundary record and its
+            // `session/load` replay are byte for byte as in 2.186.0, and the
+            // recorded turns and their transcripts match 2.186.0 apart from
+            // usage numbers and timing. The barrier still answers a prompt sent
+            // within 500 ms of a cancelled answer `cancelled` (one sent 600 ms
+            // after ran), and after a Stop that caught a permission request the
+            // next prompt still answers `cancelled` with `finishReason:
+            // "stop"`. A stdio server handed over on `session/new` is started
+            // and its tool reaches the model, and one named `codeg-mcp` still
+            // asks once per call, for `DeferExecuteTool`. Of three Stops during
+            // a sub-agent, the cancelled prompt was answered after 79 ms, 39 ms
+            // and, behind the background summary request, 12.1 s. 2.187.0 loads
+            // a 2.186.0 session on `default-model`, and an install without
+            // optional dependencies still runs whole turns.
             distribution: AgentDistribution::Npx {
-                version: "2.186.0",
-                package: "@tencent-ai/codebuddy-code@2.186.0",
+                version: "2.187.0",
+                package: "@tencent-ai/codebuddy-code@2.187.0",
                 cmd: "codebuddy",
                 args: &["--acp"],
                 env: &[],
@@ -7543,9 +7669,41 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // and 2.7.3 loads and resumes a session 2.7.2 wrote with the same
             // replay. An approved or dismissed plan review still settles
             // `ExitPlanMode` `failed` with `isError`, so the workaround stays.
+            //
+            // 2.8.0 is a minor release, and the mandated check passes verbatim:
+            // `acpMcpServersToConfigRecord` still gives an entry without `type`
+            // `{transport: "stdio", …, environment_id: "local"}`, and the "does
+            // not declare a runtime identity" throw is still absent.
+            // `engines.node` (`>=22.19.0`), `bin` and the postinstall are
+            // unchanged, but `ws`, `qrcode` and `chokidar` are bundled into
+            // `dist/main.mjs` again, so an install fetches only the optional
+            // clipboard package and the 2.3.0 note about needing the
+            // dependencies installed no longer applies. 367 of 4320 modules
+            // changed; the only `packages/acp-server` one awaits disposal at
+            // shutdown. A live A/B against a fresh 2.7.3 matched on
+            // `initialize` (`protocolVersion: 1`), `session/new` (the model,
+            // thinking and mode values for all four block shapes, the 14 slash
+            // commands), text, MCP (`mcp__probe__echo` reached the server),
+            // question, Edit, Skill, deny-rule and provider-error turns, a turn
+            // cancelled mid-tool, the session-lock texts and codes, the
+            // missing-model behaviour described under 2.7.3 and the
+            // `wire.jsonl` record types, and 2.8.0 loads and resumes a session
+            // 2.7.3 wrote. An approved plan review now settles `ExitPlanMode`
+            // `completed`; a dismissed one still settles `failed` with
+            // `isError`, so the workaround stays. In `default` mode a Bash
+            // command Kimi proves read-only (`echo`, `ls`) runs without a
+            // permission request, while `touch` still asks. A stdio server
+            // handed over on `session/new` that answers within its startup
+            // timeout (30 s) now reaches the model on the first turn, which
+            // waits for it; one that fails its first start still does not. A
+            // lock recorded under another hostname is taken over, and the old
+            // holder's next prompt answers `session.stale`. `wire.jsonl` adds
+            // `turn.ended.continuation` and `tool.call.argsRaw`, and resuming an
+            // older session appends `tool_update_pending` reminders; the parser
+            // reads none of them.
             distribution: AgentDistribution::Npx {
-                version: "2.7.3",
-                package: "@moonshot-ai/kimi-code@2.7.3",
+                version: "2.8.0",
+                package: "@moonshot-ai/kimi-code@2.8.0",
                 cmd: "kimi",
                 args: &["acp"],
                 env: &[],
@@ -8541,9 +8699,24 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // cannot is skipped for the next Node the bridge finds. Not
             // measured: whether the official CLI starts a forwarded stdio MCP
             // server; the bridge still forwards `mcpServers` unchanged.
+            //
+            // Bridge 0.94.0 (2026-11-25) changes `package.json` only in its
+            // version. Installed fresh on 2026-11-26, 0.93.1 and 0.94.0 resolve
+            // the same dependencies (ACP SDK 1.9.0), and `dist/cli.js` is
+            // byte-identical. Against the stand-in backend given codeg's env
+            // and capabilities, the same scenarios as for 0.93.1 (the
+            // background sub-agent prompt included) give all three channels
+            // the same frames as 0.93.1 apart from ids and timings. The one
+            // addition is an opt-in `session.defaultThoughtLevel` in the
+            // bridge's own `~/.config/zcode-acp/config.json`, which codeg does
+            // not write: when set, a new session advertises that level and,
+            // once created, gets `session/setThoughtLevel` if the model offers
+            // it (a level the model lacks is only warned about on stderr);
+            // codeg's saved thought, replayed after the mode gate, still lands
+            // over it. Its settings routes are remote-only and unused by codeg.
             distribution: AgentDistribution::Npx {
-                version: "0.93.1",
-                package: "zcode-acp-server@0.93.1",
+                version: "0.94.0",
+                package: "zcode-acp-server@0.94.0",
                 cmd: "zcode-acp-server",
                 args: &["server"],
                 env: &[],
@@ -9203,26 +9376,49 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // lazy-load gate and the config-dir resolution read the same in the
             // bundle; the session-level frames were not re-run live on 1.1.91.
             //
-            // Held at 1.1.91 (1.1.96 audited on 2026-11-23): from 1.1.94 a
-            // sub-agent the model starts without setting `run_in_background`
-            // runs in the background ("Changed the default Subagent execution
-            // strategy to run in the background"; the Agent tool's `executeLocal`
-            // gains `void 0===this.params.run_in_background`, and its
-            // description now tells the model to leave agents in the
-            // background unless its very next step needs the result). The
-            // prompt then ends at the launch, and the sub-agent's result and
-            // the reply Qoder writes after it arrive once the prompt has been
-            // answered. codeg follows only Claude Code's out-of-turn activity
+            // 1.1.98 follows 1.1.92 to 1.1.97, which codeg skipped (audited
+            // 2026-11-26). From 1.1.94 a sub-agent the model starts without
+            // setting `run_in_background` runs in the background ("Changed the
+            // default Subagent execution strategy to run in the background";
+            // the Agent tool's `executeLocal` gains `void
+            // 0===this.params.run_in_background`, and its description tells
+            // the model to leave agents in the background unless its very next
+            // step needs the result). The prompt then ends at the launch, and
+            // when the sub-agent finishes Qoder runs the turn that reports its
+            // result by itself, streaming it as ordinary `session/update`s with
+            // no prompt pending (read in the 1.1.91 and 1.1.98 bundles; the
+            // ACP layer that does it is token-identical between them, so the
+            // 1.1.81 note above that such turns send no frame no longer holds).
+            // codeg follows only Claude Code's out-of-turn activity
             // (`acp::background_watch`) and the frontend drops every other
             // agent's out-of-turn deltas, so that reply would show only after
-            // the conversation is reopened; on 1.1.91 that happens only when
-            // the model asks for a background agent itself. Read in the bundle
-            // and the changelog, not run live: without a Qoder login no
-            // session opens, even under `--fake-responses`. Everything else
-            // 1.1.92 to 1.1.96 change reads the same or stays away from codeg
-            // (the ACP agent's 65 members are unchanged; `initialize`, the
-            // "Authentication required" and "Not logged in" refusals and the
-            // `server/discover` MCP probe match live).
+            // the conversation is reopened. codeg therefore launches Qoder with
+            // `QODER_ENABLE_AGENT_SESSIONS=0`, the one input of that default:
+            // `function uE(){return"0"!==process.env[ese]}` with `ese =
+            // fo("ENABLE_AGENT_SESSIONS")` gates the background branch in
+            // `executeLocal`, and no settings key, CLI option or ACP capability
+            // feeds it. With it every sub-agent runs in the foreground and
+            // reports in the same prompt, and the model is no longer offered
+            // `run_in_background` or `name` (the tool description says agent
+            // sessions are disabled and all agents run synchronously);
+            // `/subtask`, background forks and named teammates go with it. That
+            // is stricter than 1.1.91, where an agent the model asked to run in
+            // the background did, but such a reply also showed only on reopen
+            // there. 1.1.91 already reads the variable the same way. A user who
+            // wants background agents back sets `QODER_ENABLE_AGENT_SESSIONS=1`
+            // in the agent's env settings (`merge_agent_env`). Launched as codeg
+            // launches it, 1.1.98 answers `initialize` like 1.1.91
+            // (`protocolVersion: 1`), refuses `session/new` and `session/list`
+            // with the same "Authentication required" (and "Not logged in"
+            // under `--fake-responses`), still probes stdio MCP servers with
+            // `server/discover`, and logs `lazy=false`, with the variable set or
+            // not; the ACP agent's 65 members, its update kinds and the
+            // config-dir resolution read the same in the bundle. 1.1.97 parks a
+            // stdio MCP server that fails to connect until its config changes
+            // (HTTP servers retry with a 30 s to 300 s backoff); the rest of
+            // 1.1.97 and 1.1.98 (model-switch hooks, `-p` and CodeMode
+            // background fixes, TUI fixes) stays away from codeg. Without a
+            // Qoder login no session opens, so no sub-agent was run live.
             //
             // `QODER_EXPOSE_TOKEN_USAGE` turns OFF qoder's own token-count
             // redaction, and without it every qoder session reports zero tokens
@@ -9246,8 +9442,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `m1A` in 1.1.73, `Or` / `_1A` in 1.1.74, `Lr` / `xGA` in 1.1.75,
             // `xr` / `K4A` in 1.1.81, `Ii` / `POA` in 1.1.83, `ki` / `ROA` in
             // 1.1.84, `Ri` / `QJA` in 1.1.86, `wi` / `bJA` in 1.1.87, `yi` /
-            // `w9A` in 1.1.88, `yi` / `k9A` in 1.1.89 and `xo` / `vtn` in
-            // 1.1.91 (the minified names
+            // `w9A` in 1.1.88, `yi` / `k9A` in 1.1.89, `xo` / `vtn` in
+            // 1.1.91 and `fo` / `ijt` in 1.1.98 (the minified names
             // change every build), so grepping the bundle for
             // the full literal returns nothing — grep the bare suffix instead,
             // the same trap `parsers::qoder` documents for the config-dir vars.
@@ -9256,12 +9452,16 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `runtime_env` override it, so a user who wants the redaction back
             // sets `QODER_EXPOSE_TOKEN_USAGE=0` in the agent's env settings.
             distribution: AgentDistribution::Npx {
-                version: "1.1.91",
-                package: "@qoder-ai/qodercli@1.1.91",
+                version: "1.1.98",
+                package: "@qoder-ai/qodercli@1.1.98",
                 cmd: "qoder",
                 // The launch adds `--settings` after these (see 1.1.84 above).
                 args: &["--acp"],
-                env: &[("QODER_EXPOSE_TOKEN_USAGE", "1")],
+                env: &[
+                    ("QODER_EXPOSE_TOKEN_USAGE", "1"),
+                    // Sub-agents in the foreground (see 1.1.98 above).
+                    ("QODER_ENABLE_AGENT_SESSIONS", "0"),
+                ],
                 // package.json declares `engines.node: ">=20.0.0"`.
                 node_required: Some("20.0.0"),
             },
@@ -10470,8 +10670,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.112.0",
-            "@agentclientprotocol/claude-agent-acp@0.112.0",
+            "0.113.0",
+            "@agentclientprotocol/claude-agent-acp@0.113.0",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -10498,22 +10698,22 @@ mod tests {
         );
         assert_npx_version(
             AgentType::CodeBuddy,
-            "2.186.0",
-            "@tencent-ai/codebuddy-code@2.186.0",
+            "2.187.0",
+            "@tencent-ai/codebuddy-code@2.187.0",
             Some("22.0.0"),
         );
         // Kimi Code must never land on 0.37.0–0.38.0: every session in that
         // range dies on the codeg-mcp stdio entry (see the registry entry).
         assert_npx_version(
             AgentType::KimiCode,
-            "2.7.3",
-            "@moonshot-ai/kimi-code@2.7.3",
+            "2.8.0",
+            "@moonshot-ai/kimi-code@2.8.0",
             Some("22.19.0"),
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.12.0",
-            "@agentclientprotocol/codex-acp@2.12.0",
+            "2.12.1",
+            "@agentclientprotocol/codex-acp@2.12.1",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.35", "pi-acp@0.0.35", Some("22.0.0"));
@@ -10531,8 +10731,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Qoder,
-            "1.1.91",
-            "@qoder-ai/qodercli@1.1.91",
+            "1.1.98",
+            "@qoder-ai/qodercli@1.1.98",
             Some("20.0.0"),
         );
         assert_npx_version(
@@ -10597,6 +10797,23 @@ mod tests {
                 assert!(
                     env.contains(&("QODER_EXPOSE_TOKEN_USAGE", "1")),
                     "qoder must launch with token redaction off, got {env:?}"
+                );
+            }
+            other => panic!("expected npx distribution for Qoder, got {other:?}"),
+        }
+    }
+
+    // From 1.1.94 qoder runs model-started sub-agents in the background and
+    // streams the reply out of turn, where codeg drops it; this env keeps them
+    // in the foreground so the reply lands in the prompt that started them.
+    #[test]
+    fn qoder_launches_with_sub_agents_in_the_foreground() {
+        let meta = get_agent_meta(AgentType::Qoder);
+        match meta.distribution {
+            AgentDistribution::Npx { env, .. } => {
+                assert!(
+                    env.contains(&("QODER_ENABLE_AGENT_SESSIONS", "0")),
+                    "qoder must launch with background agent sessions off, got {env:?}"
                 );
             }
             other => panic!("expected npx distribution for Qoder, got {other:?}"),

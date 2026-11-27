@@ -7,9 +7,12 @@ import {
   drawnRowIds,
   listRowsOf,
   isUnseen,
+  itemRowIds,
   newLineIndex,
+  partEntries,
   type MessageItem,
 } from "./message-items"
+import { textsIn, turnTexts } from "./turn-texts"
 
 function row(
   id: number,
@@ -36,6 +39,14 @@ function row(
   }
 }
 
+/** What a part of a turn draws of its texts, as the page would from rows
+ *  alone. */
+function saidText(i: Extract<MessageItem, { kind: "said" }>): string {
+  return textsIn(turnTexts(i.reply, undefined, i.part.lines), i.part)
+    .map((t) => t.text)
+    .join(" / ")
+}
+
 function shape(items: MessageItem[]): string[] {
   return items.map((i) => {
     switch (i.kind) {
@@ -54,7 +65,7 @@ function shape(items: MessageItem[]): string[] {
       case "mirror":
         return `mirror:${i.row.id}`
       case "said":
-        return `said:${i.row.id}(${i.text})`
+        return `said:${i.row.id}(${saidText(i)})`
     }
   })
 }
@@ -131,7 +142,8 @@ describe("lines between assistants", () => {
     expect(drawnRowIds(items).has(3)).toBe(true)
     expect(newLineIndex(items, 3)).toBe(3)
     const reply = items[4] as Extract<MessageItem, { kind: "reply" }>
-    expect(reply.saidNs).toEqual([1])
+    // The reply draws its own part only: what came after the line.
+    expect(reply.part.lo).toBe(3)
     expect(reply.gap).toBe("side")
 
     // While the turn runs it is the same: the text, the line, the bubble —
@@ -143,8 +155,8 @@ describe("lines between assistants", () => {
     ])
     expect(shape(running)).toEqual(shape(items))
     expect(
-      (running[4] as Extract<MessageItem, { kind: "reply" }>).saidNs
-    ).toEqual([1])
+      (running[4] as Extract<MessageItem, { kind: "reply" }>).part.lo
+    ).toBe(3)
   })
 
   it("draws the text once for a run of lines, and a new text before the next", () => {
@@ -166,9 +178,6 @@ describe("lines between assistants", () => {
       "exchange:5",
       "reply:2[]",
     ])
-    expect(
-      (items[5] as Extract<MessageItem, { kind: "reply" }>).saidNs
-    ).toEqual([1, 5])
   })
 
   it("puts a message sent after the last word under the reply", () => {
@@ -185,7 +194,7 @@ describe("lines between assistants", () => {
     expect(shape(items)).toEqual(["time", "owner:1", "reply:2[]", "exchange:3"])
     const reply = items[2] as Extract<MessageItem, { kind: "reply" }>
     // The body is not drawn twice, and closes its run over the line.
-    expect(reply.saidNs).toEqual([])
+    expect(reply.part.hi).toBe(2)
     expect(reply.tail).toBe(true)
   })
 
@@ -631,10 +640,10 @@ describe("result cards a reply reported (A1)", () => {
   })
 })
 
-describe("work handed out and reported in the same reply", () => {
-  // The scenario: the owner asks to have something checked and told; the
-  // turn dispatches the check (8), waits for it, and its reply (7) reports
-  // the news (9). Pill and card are one piece of work: the card draws it.
+describe("pills make way for their work's news (P6.3 5)", () => {
+  // The owner asks to have something checked; the turn dispatches the check
+  // (8); its news (9) comes later — reported in this reply, another, or
+  // none. Pill and news are one piece of work: the news draws it.
   const owner = row(5, "owner", { batch_id: 1, status: "answered" })
   const reply = (covers: number[] | undefined, state = "done") =>
     row(7, "reply", {
@@ -668,67 +677,93 @@ describe("work handed out and reported in the same reply", () => {
       { kind: "event" }
     >
 
-  it("draws the work once: its card, with the pill's criteria", () => {
+  it("draws the work once: its news, with the pill's criteria", () => {
     const items = buildMessageItems([owner, reply([9]), pill(), news()])
-    expect(replyItem(items).reported).toEqual([8])
+    expect(replyItem(items).pills).toEqual([])
     const card = eventItem(items)
     expect(card.covered).toBe(true)
-    expect(card.pill?.id).toBe(8)
-    // A jump to the pill lands on the card that draws it.
+    expect(card.pills.map((p) => p.id)).toEqual([8])
+    // A jump to the pill lands on the news that draws it.
     const ids = items.map((i) =>
       i.kind === "time" ? [] : [...drawnRowIds([i])]
     )
     expect(ids.find((l) => l.includes(8))).toEqual([9, 8])
   })
 
-  it("keeps the pill when the news was reported by another reply", () => {
+  it("makes way whoever reported the news, or none did", () => {
     const later = row(10, "reply", {
       batch_id: 2,
       body: "Not accepted.",
       data: { state: "done", covers: [9] },
     })
-    const items = buildMessageItems([owner, reply([]), pill(), news(), later])
-    expect(replyItem(items).reported).toEqual([])
-    expect(eventItem(items).pill).toBeNull()
-    expect(eventItem(items).covered).toBe(true)
-  })
-
-  it("keeps the pill while the reply runs or when it did not finish", () => {
-    for (const r of [
-      reply(undefined, "running"),
-      reply([9], "interrupted"),
-      reply([9], "canceled"),
+    for (const rows of [
+      [owner, reply([]), pill(), news(), later],
+      [owner, reply(undefined, "running"), pill(), news()],
+      [owner, reply([9], "canceled"), pill(), news()],
     ]) {
-      const items = buildMessageItems([owner, r, pill(), news()])
-      expect(replyItem(items).reported ?? []).toEqual([])
-      expect(eventItem(items).pill).toBeNull()
+      const items = buildMessageItems(rows)
+      expect(replyItem(items).pills).toEqual([])
+      expect(eventItem(items).pills.map((p) => p.id)).toEqual([8])
     }
   })
 
-  it("keeps a pill that says more than the card", () => {
+  it("keeps the newest pill of work under way", () => {
+    // Run again since its news (a follow-up queued, the board, a retry).
+    const items = buildMessageItems(
+      [owner, reply([9]), pill(), news()],
+      new Set([1])
+    )
+    expect(replyItem(items).pills.map((p) => p.id)).toEqual([8])
+    expect(eventItem(items).pills).toEqual([])
+    // A follow-up's pill after the news: it stays, the first makes way.
+    const follow = row(12, "dispatch", {
+      batch_id: 3,
+      dispatch_id: 1,
+      data: { mode: "session", followup: true },
+    })
+    const going = buildMessageItems(
+      [owner, reply([9]), pill(), news(), follow],
+      new Set([1])
+    )
+    expect(eventItem(going).pills.map((p) => p.id)).toEqual([8])
+    expect(drawnRowIds(going).has(12)).toBe(true)
+    const pills = going.flatMap((i) =>
+      i.kind === "reply" ? i.pills.map((p) => p.id) : []
+    )
+    expect(pills).toEqual([12])
+  })
+
+  it("keeps a pill that says more than the news, or never went out", () => {
     for (const p of [
       pill({ data: { mode: "session", check_for: 3, check_round: 1 } }),
       pill({
         data: { mode: "task", pr_fix: { label: "#12", cause: "checks", n: 1 } },
       }),
       pill({ data: { mode: "session", failed: true } }),
-      pill({ data: { mode: "session", followup: true } }),
     ]) {
       const items = buildMessageItems([owner, reply([9]), p, news()])
-      expect(replyItem(items).reported ?? []).toEqual([])
-      expect(eventItem(items).pill).toBeNull()
+      expect(eventItem(items).pills).toEqual([])
     }
   })
 
-  it("keeps the pill of other work, and news of other work alone", () => {
+  it("keeps a pill of other work, and a follow-up's after the news", () => {
     const other = row(11, "result", { dispatch_id: 2 })
-    const items = buildMessageItems([owner, reply([11]), pill(), news(), other])
-    expect(replyItem(items).reported).toEqual([])
-    expect(eventItem(items).pill).toBeNull()
-    expect(eventItem(items, 11).pill).toBeNull()
+    const items = buildMessageItems([owner, reply([11]), pill(), other])
+    expect(replyItem(items).pills.map((p) => p.id)).toEqual([8])
+    expect(eventItem(items, 11).pills).toEqual([])
+    const follow = row(12, "dispatch", {
+      batch_id: 3,
+      dispatch_id: 1,
+      data: { mode: "session", followup: true },
+    })
+    const after = buildMessageItems([owner, reply([9]), pill(), news(), follow])
+    expect(eventItem(after).pills.map((p) => p.id)).toEqual([8])
+    expect(
+      after.some((i) => i.kind === "reply" && i.pills.some((p) => p.id === 12))
+    ).toBe(true)
   })
 
-  it("lets the newer of two reported news of the work draw it", () => {
+  it("lets the latest news of the work draw it", () => {
     const items = buildMessageItems([
       owner,
       reply([9, 12]),
@@ -736,9 +771,31 @@ describe("work handed out and reported in the same reply", () => {
       news(9, { data: { state: "review" } }),
       news(12),
     ])
-    expect(replyItem(items).reported).toEqual([8])
-    expect(eventItem(items, 9).pill).toBeNull()
-    expect(eventItem(items, 12).pill?.id).toBe(8)
+    expect(eventItem(items, 9).pills).toEqual([])
+    expect(eventItem(items, 12).pills.map((p) => p.id)).toEqual([8])
+  })
+
+  it("leaves no empty bubble for a turn whose only pill made way", () => {
+    // A follow-up no turn wrote (an automatic retry while idle), then its
+    // news: nothing is left of the follow-up's own item.
+    const lone = row(12, "dispatch", {
+      dispatch_id: 1,
+      data: { mode: "session", followup: true },
+    })
+    const items = buildMessageItems([lone, news(13)])
+    expect(shape(items)).toEqual(["time", "event:13"])
+    // A turn with no reply whose pill made way keeps its question, as the
+    // same item: drawn at what is left.
+    const asked = row(15, "question", { batch_id: 4 })
+    const p = row(14, "dispatch", { batch_id: 4, dispatch_id: 1 })
+    const kept = buildMessageItems([p, asked, news(16)])
+    const item = kept.find((i) => i.kind === "reply") as Extract<
+      MessageItem,
+      { kind: "reply" }
+    >
+    expect(item.key).toBe("r14")
+    expect(item.anchor.id).toBe(15)
+    expect(itemRowIds(item)).toEqual([15])
   })
 })
 
@@ -848,5 +905,484 @@ describe("the acceptance chain on its work's head (A4)", () => {
     expect(at).toBeGreaterThanOrEqual(0)
     const item = items[at].kind === "time" ? items[at + 1] : items[at]
     expect(item.kind === "event" && item.row.id).toBe(20)
+  })
+})
+
+describe("a turn cut into parts by the lines it wrote (P6)", () => {
+  const at = (m: number) => `2026-11-25T10:${String(m).padStart(2, "0")}:00Z`
+  /** A line of turn `batch` at step `n`, after the run `said`. */
+  const line = (
+    id: number,
+    n: number | null,
+    said: [number, string] | null = null,
+    patch: Partial<TimelineRow> = {}
+  ) =>
+    row(id, "exchange", {
+      batch_id: 44,
+      ref_id: `m${id}`,
+      data: {
+        direction: "out",
+        peer: { id: 2, name: "Dev" },
+        ...(n == null
+          ? {}
+          : {
+              turn: {
+                n,
+                said: said ? { n: said[0], text: said[1] } : null,
+              },
+            }),
+      },
+      ...patch,
+    })
+  const pill = (
+    id: number,
+    n: number,
+    said: [number, string] | null = null,
+    work = id
+  ) =>
+    row(id, "dispatch", {
+      batch_id: 44,
+      dispatch_id: work,
+      body: `Work ${work}`,
+      data: {
+        mode: "chat",
+        turn: { n, said: said ? { n: said[0], text: said[1] } : null },
+      },
+    })
+  /** The turn's reply: running, or settled on its run `last`. */
+  const reply = (
+    texts: [number, string][] | null,
+    last: number | null,
+    patch: Partial<TimelineRow> = {}
+  ) => {
+    const runs = texts?.map(([n, text]) => ({ n, text }))
+    const body =
+      last != null ? (texts?.find(([n]) => n === last)?.[1] ?? "") : ""
+    return row(40, "reply", {
+      batch_id: 44,
+      body,
+      data:
+        last == null
+          ? { state: "running", ...(runs ? { texts: runs, ver: 9 } : {}) }
+          : {
+              state: "done",
+              last_text_n: last,
+              ...(runs ? { texts: runs } : {}),
+            },
+      ...patch,
+    })
+  }
+  const owner = row(39, "owner", { batch_id: 44, status: "answered" })
+  const ofKind = <K extends MessageItem["kind"]>(
+    items: MessageItem[],
+    kind: K
+  ) =>
+    items.filter((i) => i.kind === kind) as Extract<MessageItem, { kind: K }>[]
+
+  it("draws the stretch of #145–#150: each piece of work once, the turn in its parts", () => {
+    const rows = [
+      row(144, "owner", {
+        batch_id: 43,
+        status: "answered",
+        created_at: at(0),
+      }),
+      row(145, "reply", {
+        batch_id: 43,
+        body: "已启动 codeg-ios 的审查。",
+        data: { state: "done", last_text_n: 5 },
+        created_at: at(0),
+      }),
+      row(147, "dispatch", {
+        batch_id: 43,
+        dispatch_id: 15,
+        body: "审查 codeg-ios",
+        data: { mode: "session", done_when: "列出问题" },
+        created_at: at(0),
+      }),
+      row(148, "result", {
+        dispatch_id: 15,
+        reply_to: 145,
+        data: { state: "completed", title: "审查 codeg-ios", excerpt: "…" },
+        created_at: at(2),
+      }),
+      row(149, "reply", {
+        batch_id: 44,
+        reply_to: 148,
+        body: "审查完了：两处要改。",
+        data: { state: "done", last_text_n: 7, covers: [148] },
+        created_at: at(2),
+      }),
+      line(150, 6, [2, "登记的目录是空的…"], { created_at: at(3) }),
+    ]
+    const items = buildMessageItems(rows)
+    expect(shape(items)).toEqual([
+      "time",
+      "owner:144",
+      "reply:145[147]",
+      "event:148",
+      "said:150(登记的目录是空的…)",
+      "exchange:150",
+      "reply:149[]",
+    ])
+    // #145 draws no pill: its work's news (#148) draws it, reported.
+    const [first, second] = ofKind(items, "reply")
+    expect(first.pills).toEqual([])
+    const [news] = ofKind(items, "event")
+    expect(news.covered).toBe(true)
+    expect(news.pills.map((p) => p.id)).toEqual([147])
+    // The turn's quote is on its first part, and left out: what it quotes
+    // (#148) is right above the turn.
+    const [said] = ofKind(items, "said")
+    expect([said.quote, said.quotesPrevious]).toEqual([true, true])
+    expect(second.quote).toBe(false)
+  })
+
+  it("cuts a turn with talk between two messages into three", () => {
+    const texts: [number, string][] = [
+      [1, "Asking Dev."],
+      [3, "Now Review."],
+      [5, "Both asked."],
+    ]
+    const rows = [
+      owner,
+      reply(texts, 5),
+      line(41, 2, [1, "Asking Dev."]),
+      line(42, 4, [3, "Now Review."]),
+    ]
+    expect(shape(buildMessageItems(rows))).toEqual([
+      "time",
+      "owner:39",
+      "said:41(Asking Dev.)",
+      "exchange:41",
+      "said:42(Now Review.)",
+      "exchange:42",
+      "reply:40[]",
+    ])
+    // While it runs: the same parts, the last the reply's.
+    const running = buildMessageItems([
+      owner,
+      reply(texts, null),
+      rows[2],
+      rows[3],
+    ])
+    expect(shape(running)).toEqual(shape(buildMessageItems(rows)))
+  })
+
+  it("joins two messages sent one after the other into one line", () => {
+    const items = buildMessageItems([
+      owner,
+      reply(
+        [
+          [1, "Asking both."],
+          [4, "Done."],
+        ],
+        4
+      ),
+      line(41, 2, [1, "Asking both."]),
+      line(42, 3, [1, "Asking both."]),
+    ])
+    expect(shape(items)).toEqual([
+      "time",
+      "owner:39",
+      "said:41(Asking both.)",
+      "exchange:41,42",
+      "reply:40[]",
+    ])
+  })
+
+  it("draws no bubble before a message the turn opened with", () => {
+    const items = buildMessageItems([
+      owner,
+      reply([[2, "Sent it."]], 2),
+      line(41, 1),
+    ])
+    expect(shape(items)).toEqual([
+      "time",
+      "owner:39",
+      "exchange:41",
+      "reply:40[]",
+    ])
+    // Running, nothing written yet after it: no bubble either (the reply
+    // item draws nothing while it has no text).
+    const running = buildMessageItems([owner, reply(null, null), line(41, 1)])
+    expect(shape(running)).toEqual([
+      "time",
+      "owner:39",
+      "exchange:41",
+      "reply:40[]",
+    ])
+  })
+
+  it("puts a message sent after the conclusion under the reply", () => {
+    const items = buildMessageItems([
+      owner,
+      reply([[1, "Told Dev."]], 1),
+      line(41, 2, [1, "Told Dev."]),
+    ])
+    expect(shape(items)).toEqual([
+      "time",
+      "owner:39",
+      "reply:40[]",
+      "exchange:41",
+    ])
+  })
+
+  it("draws a silent turn's lines on their own, and nothing it said", () => {
+    const items = buildMessageItems([
+      owner,
+      reply([[1, "Checking."]], null, {
+        data: { state: "silent", texts: [{ n: 1, text: "Checking." }] },
+      }),
+      line(41, 2, [1, "Checking."]),
+    ])
+    expect(shape(items)).toEqual(["time", "owner:39", "exchange:41"])
+  })
+
+  it("puts work handed out before a message in the part above the line", () => {
+    const items = buildMessageItems([
+      owner,
+      reply(
+        [
+          [1, "Handing it out."],
+          [4, "Dev has it too."],
+        ],
+        4
+      ),
+      pill(41, 2, [1, "Handing it out."]),
+      line(42, 3, [1, "Handing it out."]),
+    ])
+    expect(shape(items)).toEqual([
+      "time",
+      "owner:39",
+      "said:42(Handing it out.)",
+      "exchange:42",
+      "reply:40[41]",
+    ])
+    const [said] = ofKind(items, "said")
+    expect(said.pills.map((p) => p.id)).toEqual([41])
+    expect(ofKind(items, "reply")[0].pills).toEqual([])
+    expect(itemRowIds(said)).toEqual([41])
+  })
+
+  it("keeps A / X / P in order, running and settled, the reply where A is", () => {
+    const rows = (settled: boolean) => [
+      owner,
+      reply([[1, "A: the plan."]], settled ? 1 : null),
+      line(41, 2, [1, "A: the plan."]),
+      // Handed out at the same step as the message (tools side by side):
+      // after it, by which was written first.
+      pill(42, 2, [1, "A: the plan."]),
+    ]
+    const running = buildMessageItems(rows(false))
+    expect(shape(running)).toEqual([
+      "time",
+      "owner:39",
+      "said:41(A: the plan.)",
+      "exchange:41",
+      "reply:40[42]",
+    ])
+    expect(ofKind(running, "reply")[0].pills.map((p) => p.id)).toEqual([42])
+    const settled = buildMessageItems(rows(true))
+    expect(shape(settled)).toEqual([
+      "time",
+      "owner:39",
+      "reply:40[42]",
+      "exchange:41",
+      "said:41()",
+    ])
+    const [r] = ofKind(settled, "reply")
+    const [s] = ofKind(settled, "said")
+    // A jump to the reply lands on A; the work is the last part's.
+    expect(itemRowIds(r)).toContain(40)
+    expect(r.pills).toEqual([])
+    expect([s.key, s.pills.map((p) => p.id)]).toEqual(["sa41", [42]])
+  })
+
+  it('keeps a group\'s "N more" with its pills as they move to another part', () => {
+    const pills = [41, 42, 43, 44].map((id) =>
+      pill(id, 2, [1, "Four at once."])
+    )
+    const before = buildMessageItems([
+      owner,
+      reply([[1, "Four at once."]], null),
+      ...pills,
+    ])
+    const after = buildMessageItems([
+      owner,
+      reply([[1, "Four at once."]], null),
+      ...pills,
+      line(45, 3, [1, "Four at once."]),
+    ])
+    const [r] = ofKind(before, "reply")
+    const [said] = ofKind(after, "said")
+    expect(said.pills.map((p) => p.id)).toEqual([41, 42, 43, 44])
+    // One group, by its first pill, in either part.
+    const groups = (i: typeof r | typeof said) =>
+      partEntries([{ n: 1, text: "Four at once." }], i.partPills, i.pills).map(
+        (e) => (e.kind === "pills" ? `p${e.group}` : "t")
+      )
+    expect(groups(r)).toEqual(["t", "p41"])
+    expect(groups(said)).toEqual(["t", "p41"])
+  })
+
+  it("keeps a part whose pills made way, empty, so the lines round it stay apart", () => {
+    const rows = [
+      owner,
+      reply(null, null),
+      line(41, 1),
+      pill(42, 2, null, 7),
+      line(43, 3),
+    ]
+    const going = buildMessageItems(rows)
+    const done = buildMessageItems([
+      ...rows,
+      row(50, "result", { dispatch_id: 7, data: { state: "completed" } }),
+    ])
+    for (const items of [going, done]) {
+      expect(ofKind(items, "exchange").map((x) => x.key)).toEqual([
+        "x41",
+        "x43",
+      ])
+    }
+    expect(ofKind(going, "said")[0].shown).toBe(true)
+    const [empty] = ofKind(done, "said")
+    expect([empty.key, empty.shown, empty.pills]).toEqual(["s43", false, []])
+    // Run again: its pill back where it was.
+    const again = buildMessageItems(
+      [
+        ...rows,
+        row(50, "result", { dispatch_id: 7, data: { state: "completed" } }),
+      ],
+      new Set([7])
+    )
+    expect(ofKind(again, "said")[0].pills.map((p) => p.id)).toEqual([42])
+  })
+
+  it("puts the turn's quote on its first part drawn", () => {
+    // P handed out, then X; the conclusion quotes an older message.
+    const old = row(30, "owner", { status: "answered" })
+    const rows = [
+      old,
+      owner,
+      reply([[3, "Done."]], 3, { reply_to: 30 }),
+      pill(41, 1, null, 7),
+      line(42, 2),
+    ]
+    const going = buildMessageItems(rows)
+    const [said] = ofKind(going, "said")
+    expect([said.quote, said.quotesPrevious]).toEqual([true, false])
+    expect(ofKind(going, "reply")[0].quote).toBe(false)
+    // P's news came: its part draws nothing, the reply the quote.
+    const done = buildMessageItems([
+      ...rows,
+      row(50, "result", { dispatch_id: 7, data: { state: "completed" } }),
+    ])
+    expect(ofKind(done, "said")[0].quote).toBe(false)
+    const [r] = ofKind(done, "reply")
+    expect([r.quote, r.quotesPrevious]).toEqual([true, false])
+  })
+
+  it("puts the new-messages line over the whole turn", () => {
+    const items = buildMessageItems([
+      owner,
+      reply(
+        [
+          [1, "Asking."],
+          [3, "Asked."],
+        ],
+        3
+      ),
+      line(41, 2, [1, "Asking."]),
+    ])
+    const at = newLineIndex(items, 40)
+    expect(items[at]).toMatchObject({ kind: "said" })
+    // Five minutes and more between its two messages: a time line between
+    // them; and the message that woke the turn joined its first line.
+    const woke = row(38, "exchange", {
+      batch_id: 12,
+      data: { direction: "in", peer: { id: 2, name: "Dev" } },
+      created_at: "2026-11-04T10:00:00Z",
+    })
+    const far = buildMessageItems([
+      woke,
+      reply(null, 5, {
+        body: "Both done.",
+        data: { state: "done", last_text_n: 5 },
+        created_at: "2026-11-04T10:00:01Z",
+      }),
+      line(41, 1, null, { created_at: "2026-11-04T10:00:02Z" }),
+      line(42, 3, null, { created_at: "2026-11-04T10:09:00Z" }),
+    ])
+    expect(shape(far)).toEqual([
+      "time",
+      "exchange:38,41",
+      "time",
+      "exchange:42",
+      "reply:40[]",
+    ])
+    expect(newLineIndex(far, 40)).toBe(0)
+  })
+
+  it("lands every row a jump can reach on one item only", () => {
+    const fixtures: TimelineRow[][] = [
+      [
+        owner,
+        reply(
+          [
+            [1, "A."],
+            [4, "C."],
+          ],
+          4
+        ),
+        pill(41, 2, [1, "A."]),
+        line(42, 3, [1, "A."]),
+        pill(43, 5, [4, "C."], 41),
+        row(50, "result", { dispatch_id: 41, data: { state: "completed" } }),
+      ],
+      [
+        owner,
+        reply([[1, "A."]], 1),
+        line(42, 2, [1, "A."]),
+        pill(43, 3, [1, "A."]),
+        pill(44, 3, [1, "A."]),
+        row(50, "result", { dispatch_id: 43, data: { state: "completed" } }),
+      ],
+    ]
+    for (const rows of fixtures) {
+      const seen = new Map<number, string>()
+      for (const item of buildMessageItems(rows, new Set([44]))) {
+        for (const id of itemRowIds(item)) {
+          expect(seen.get(id), `row ${id} in ${item.key}`).toBeUndefined()
+          seen.set(id, "key" in item ? item.key : "")
+        }
+      }
+    }
+  })
+})
+
+describe("partEntries", () => {
+  const p = (id: number, n: number | null) =>
+    row(id, "dispatch", {
+      dispatch_id: id,
+      data: n == null ? {} : { turn: { n, said: null } },
+    })
+  it("draws runs and the work between them in the order they came", () => {
+    // A, then P handed out, then C: A, P, C — not A, C, P.
+    const order = partEntries(
+      [
+        { n: 1, text: "A" },
+        { n: 3, text: "C" },
+      ],
+      [p(10, 2), p(11, 4), p(12, 4), p(13, null)],
+      [p(10, 2), p(12, 4), p(13, null)]
+    ).map((e) =>
+      e.kind === "text" ? e.run.text : `${e.group}:${e.rows.map((r) => r.id)}`
+    )
+    // The second group keyed by its first pill, though that one made way.
+    expect(order).toEqual(["A", "10:10", "C", "11:12,13"])
+    // A group whose pills all made way: nothing.
+    expect(
+      partEntries([{ n: 1, text: "A" }], [p(10, 2)], []).map((e) => e.kind)
+    ).toEqual(["text"])
   })
 })

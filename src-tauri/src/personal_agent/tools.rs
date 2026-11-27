@@ -54,6 +54,15 @@ impl ToolOutcome {
             data: Value::Null,
         }
     }
+
+    /// Refused, with what the structure says of it.
+    pub fn refused_with(text: impl Into<String>, data: Value) -> Self {
+        Self {
+            ok: false,
+            text: text.into(),
+            data,
+        }
+    }
 }
 
 fn int(args: &Value, key: &str) -> Option<i64> {
@@ -114,6 +123,21 @@ pub async fn call(parent_connection_id: &str, tool: &str, args: Value) -> ToolOu
         );
     };
     answer(&engine, tool, args).await
+}
+
+/// A row's data as the assistant reads it back: a reply's earlier runs
+/// (`texts`) and the run a line was written after (`turn.said`) taken out —
+/// what it said on the way, which its conclusion may have put right. The
+/// conclusion is the row's text; where a line went in its turn (`turn.n`)
+/// stays.
+pub(super) fn without_process_talk(mut data: Value) -> Value {
+    if let Some(map) = data.as_object_mut() {
+        map.remove("texts");
+        if let Some(turn) = map.get_mut("turn").and_then(Value::as_object_mut) {
+            turn.remove("said");
+        }
+    }
+    data
 }
 
 /// A card's data as an assistant reads it: every field about an executor
@@ -321,6 +345,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 .map(|ms| std::time::Duration::from_millis(ms.max(0) as u64));
             engine.dispatch_wait(id, wait).await
         }
+        "dispatch_stop" => engine.dispatch_stop_call(&args).await,
         "acceptance_decide" => engine.acceptance_decide_call(&args).await,
         "prefs_update" => engine.prefs_update_call(&args).await,
         "bot_create" => engine.bot_create_call(&args).await,
@@ -661,6 +686,12 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                                 summary,
                                 on_done: on_done.map(Some),
                                 time: time.clone(),
+                                closing: match status {
+                                    Some(ItemStatus::Done) => Some(svc::Closing::new(svc::Closer::Agent, "done")),
+                                    Some(ItemStatus::Dropped) => Some(svc::Closing::new(svc::Closer::Agent, "dropped")),
+                                    _ => None,
+                                },
+                                answer: None,
                             },
                             card,
                             None,
@@ -753,6 +784,15 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                         (None, Some(_)) => Some(WaitsFor::Time),
                         (w, _) => w,
                     };
+                    // A question comes from the reply that asks it; any other
+                    // matter from what the owner wrote.
+                    let origin = match kind {
+                        ItemKind::Question => match engine.turn_reply_row().await {
+                            Some(r) => Some(r),
+                            None => engine.turn_owner_row().await,
+                        },
+                        _ => engine.turn_owner_row().await,
+                    };
                     match svc::create_item_timed(
                         &db.conn,
                         bot,
@@ -762,7 +802,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                         waits_for,
                         summary,
                         on_done,
-                        engine.turn_owner_row().await,
+                        origin,
                         time,
                     )
                     .await
@@ -815,7 +855,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     "kind": row.kind,
                     "at": row.created_at,
                     "text": body,
-                    "data": row.data.map(without_executors),
+                    "data": row.data.map(without_executors).map(without_process_talk),
                 }));
             }
             let mut text = if lines.is_empty() {

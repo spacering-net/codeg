@@ -7,6 +7,7 @@ import {
   StaticConnectionStoreProvider,
   type ConnectionStoreApi,
 } from "@/contexts/acp-connections-context"
+import { EMPTY_ATTENTION_INDEX } from "@/lib/conversation-attention"
 import {
   StaticDelegationProvider,
   type DelegationContextValue,
@@ -31,6 +32,8 @@ const STORE: ConnectionStoreApi = {
   getActiveKey: () => null,
   subscribeKey: () => () => {},
   subscribeActiveKey: () => () => {},
+  getAttention: () => EMPTY_ATTENTION_INDEX,
+  subscribeAttention: () => () => {},
 }
 const DELEGATION: DelegationContextValue = {
   findByParentToolUseId: () => undefined,

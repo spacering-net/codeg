@@ -31,8 +31,13 @@ import type {
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 const api = vi.hoisted(() => ({
-  personalAgentItemAct: vi.fn(async () => ({})),
+  personalAgentItemAct: vi.fn(async () => ({
+    item: null,
+    undo: null,
+    withdrawn: null,
+  })),
   personalAgentNoticeAct: vi.fn(async () => ({})),
+  personalAgentItemUndo: vi.fn(async () => ({})),
   personalAgentBots: vi.fn(),
   personalAgentToday: vi.fn(),
 }))
@@ -41,7 +46,11 @@ vi.mock("@/lib/platform", () => ({
   subscribe: () => Promise.resolve(() => {}),
   onTransportReconnect: () => () => {},
 }))
-const toasts = vi.hoisted(() => ({ error: vi.fn(), message: vi.fn() }))
+const toasts = vi.hoisted(() => ({
+  error: vi.fn(),
+  message: vi.fn(),
+  success: vi.fn(),
+}))
 vi.mock("sonner", () => ({ toast: toasts }))
 const tasksView = vi.hoisted(() => ({
   tasks: [] as unknown[],
@@ -76,6 +85,7 @@ import {
 
 import { ActivityList } from "./aux-parts/activity/activity-tab"
 import { BriefRows } from "./today-section"
+import { clearSettling } from "./aux-parts/activity/act-settle"
 
 function row(
   patch: Partial<TodayRow> & Pick<TodayRow, "key" | "kind">
@@ -282,6 +292,7 @@ function draw(
 }
 
 beforeEach(() => {
+  clearSettling()
   __resetRosterForTests()
   api.personalAgentBots.mockResolvedValue([
     entry(1, "Nova", "primary"),
@@ -738,6 +749,106 @@ describe("the activity's list", () => {
     expect(ui.work?.conversationId).toBe(40)
   })
 
+  it("says what an act did, with [Undo] that takes it back (C1)", async () => {
+    api.personalAgentItemAct.mockResolvedValueOnce({
+      item: matter({ id: 4, summary: "Stretch", status: "done" }),
+      undo: 55,
+      withdrawn: null,
+    } as never)
+    const r = row({
+      key: "reminder:4",
+      kind: "reminder",
+      bot_id: 1,
+      item_id: 4,
+      row_id: 8,
+      title: "Stretch",
+    })
+    draw(
+      activityOf(today(), {
+        needs: [
+          thing(r, {
+            thing: "item:4",
+            item: matter({ id: 4, summary: "Stretch", origin_timeline_id: 3 }),
+          }),
+        ],
+      })
+    )
+    const el = document.querySelector('[data-key="reminder:4"]') as HTMLElement
+    fireEvent.click(within(el).getByRole("button", { name: "Done" }))
+    await waitFor(() => expect(toasts.success).toHaveBeenCalled())
+    const calls = toasts.success.mock.calls
+    const [text, opts] = calls[calls.length - 1] as [
+      string,
+      { action?: { label: string; onClick: () => void } },
+    ]
+    expect(text).toBe("Done: Stretch")
+    expect(opts.action?.label).toBe("Undo")
+    opts.action!.onClick()
+    await waitFor(() =>
+      expect(api.personalAgentItemUndo).toHaveBeenCalledWith(1, 4, 55)
+    )
+  })
+
+  it("lists a matter settled today with who did it, and [Undo] while it can be", async () => {
+    const at = "2026-11-11T09:05:00Z"
+    draw(
+      activityOf(today(), {
+        done: [
+          thing(
+            row({
+              key: "matter_closed:9",
+              kind: "matter_closed",
+              bot_id: 1,
+              item_id: 9,
+              row_id: 12,
+              title: "Pay rent",
+              at,
+              state: "reminder",
+              closed_by: "owner",
+              closed_how: "done",
+              matter_undo: 77,
+            })
+          ),
+          thing(
+            row({
+              key: "matter_closed:10",
+              kind: "matter_closed",
+              bot_id: 1,
+              item_id: 10,
+              title: "Waiting for Dev's answer: review it",
+              written: "review it",
+              direction: "out",
+              at,
+              state: "message",
+              closed_by: "codeg",
+              closed_how: "replied",
+              peer: { id: 2, name: "Dev", avatar: null, gone: false },
+            })
+          ),
+        ],
+      })
+    )
+    const time = new Date(at).toLocaleTimeString("en", {
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+    const mine = document.querySelector(
+      '[data-pa-activity-row="matter_closed:9"]'
+    ) as HTMLElement
+    expect(mine.textContent).toContain(`You did it · ${time}`)
+    const replied = document.querySelector(
+      '[data-pa-activity-row="matter_closed:10"]'
+    ) as HTMLElement
+    expect(replied.textContent).toContain(`Dev replied · ${time}`)
+    expect(within(replied).getByText("review it")).toBeTruthy()
+    expect(within(replied).queryByRole("button", { name: "Undo" })).toBeNull()
+    fireEvent.click(within(mine).getByRole("button", { name: "Undo" }))
+    await waitFor(() =>
+      expect(api.personalAgentItemUndo).toHaveBeenCalledWith(1, 9, 77)
+    )
+    await waitFor(() => expect(toasts.success).toHaveBeenCalledWith("Undone"))
+  })
+
   it("settles a reminder on its row, its matter folded in", async () => {
     const r = row({
       key: "reminder:4",
@@ -760,11 +871,18 @@ describe("the activity's list", () => {
     const el = document.querySelector('[data-key="reminder:4"]') as HTMLElement
     fireEvent.click(within(el).getByRole("button", { name: "Done" }))
     await waitFor(() =>
-      expect(api.personalAgentItemAct).toHaveBeenCalledWith(1, 4, "done")
+      expect(api.personalAgentItemAct).toHaveBeenCalledWith(
+        1,
+        4,
+        "done",
+        undefined,
+        "panel",
+        "2026-11-11T07:30:00Z"
+      )
     )
     await waitFor(() => expect(feed.refresh).toHaveBeenCalled())
-    // Its [Later] too: the matter's whole menu (its own tests elsewhere).
-    expect(within(el).getByRole("button", { name: "Later" })).toBeTruthy()
+    // Its [Put off] too: the matter's whole menu (its own tests elsewhere).
+    expect(within(el).getByRole("button", { name: "Put off" })).toBeTruthy()
     // The row opens the message it came from; its card unfolded.
     fireEvent.click(within(el).getAllByRole("button")[0])
     expect(usePersonalAgentUi.getState().pendingJump).toEqual({
@@ -866,7 +984,9 @@ describe("the activity's list", () => {
       })
     )
     const el = document.querySelector('[data-pa-activity-row="item:6"]')!
-    expect(el.textContent).toContain("follow-up · Waiting for Dev to handle it")
+    // Who has it and how long — not its kind's name.
+    expect(el.textContent).toContain("Dev is following up · ")
+    expect(el.textContent).not.toContain("follow-up")
   })
 
   it("takes back a change made for the owner, once", async () => {
@@ -1200,9 +1320,20 @@ describe("the activity's list", () => {
     const ui = usePersonalAgentUi.getState()
     expect(ui.viewBot).toBe(2)
     expect(ui.pendingJump).toBeNull()
-    fireEvent.click(within(card).getByRole("button", { name: "Done" }))
+    // Set aside with no time: a time can be set, or it is not needed.
+    expect(
+      within(card).getByRole("button", { name: "Set a time" })
+    ).toBeTruthy()
+    fireEvent.click(within(card).getByRole("button", { name: "Not needed" }))
     await waitFor(() =>
-      expect(api.personalAgentItemAct).toHaveBeenCalledWith(2, 4, "done")
+      expect(api.personalAgentItemAct).toHaveBeenCalledWith(
+        2,
+        4,
+        "drop",
+        undefined,
+        "panel",
+        "2026-11-11T07:30:00Z"
+      )
     )
   })
 
@@ -1298,8 +1429,11 @@ describe("the activity's list", () => {
       </NextIntlClientProvider>
     )
     await waitFor(() => expect(scroll).toHaveBeenCalled())
-    expect(usePersonalAgentUi.getState().activityOpen["routine:5"]).toBe(true)
-    expect(document.querySelector("[data-pa-routine-facts]")).toBeTruthy()
+    // Nothing to unfold: its row says it all.
+    expect(document.querySelector('[data-pa-routine="5"]')).toBeTruthy()
+    expect(usePersonalAgentUi.getState().activityOpen["routine:5"]).toBe(
+      undefined
+    )
     expect(toasts.message).not.toHaveBeenCalled()
     // One not in a list read since: deleted, its group's head shown.
     act(() => usePersonalAgentUi.getState().showRoutines(99))

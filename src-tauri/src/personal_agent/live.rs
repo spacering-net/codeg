@@ -156,6 +156,13 @@ impl LiveHub {
         self.lock().slots.entry(bot).or_default().flash = Some((face, until));
     }
 
+    /// No face shown for `bot` any more.
+    fn clear_flash(&self, bot: i32) {
+        if let Some(slot) = self.lock().slots.get_mut(&bot) {
+            slot.flash = None;
+        }
+    }
+
     fn flash_of(&self, bot: i32) -> Option<(FaceState, DateTime<Utc>)> {
         self.lock().slots.get(&bot).and_then(|s| s.flash)
     }
@@ -578,8 +585,11 @@ pub(super) fn finish(
         None => engine.as_ref().and_then(|e| e.work_activity.clone()),
         Some((_, None)) => None,
     };
+    // A turn running now is newer than any face shown for one just ended:
+    // a message sent again within the few seconds of the last turn's face
+    // moves it as the new turn goes, not held smiling over it.
     let flash_now = flash
-        .filter(|(_, until)| *until > now)
+        .filter(|(_, until)| *until > now && turn.is_none())
         .map(|(face, until)| FaceFlash { face, until });
     let face = if needs.is_some() {
         FaceState::Waiting
@@ -820,6 +830,15 @@ impl PersonalAgentEngine {
             let bot = self.bot().await;
             host.live.flash(bot, face);
             host.touch(bot);
+        }
+    }
+
+    /// A turn of this assistant begins: the face shown for the last one is
+    /// over (so it does not come back should this one end with none — a
+    /// stop the owner asked for).
+    pub(super) async fn end_face_flash(&self) {
+        if let Some(host) = self.host_ref() {
+            host.live.clear_flash(self.bot().await);
         }
     }
 
@@ -1087,10 +1106,40 @@ impl PersonalAgentEngine {
         item_id: i32,
         act: &str,
         until: Option<&str>,
-    ) -> Result<crate::db::entities::personal_agent_item::Model, String> {
+    ) -> Result<crate::db::entities::personal_agent_item::Model, super::refusal::Refusal> {
+        self.settle_item_from(item_id, act, until, super::reminders::OpSource::Panel)
+            .await
+            .map(|a| a.item)
+    }
+
+    /// [`Self::settle_item`], from where the owner did it (`source`), with
+    /// what takes it back.
+    pub async fn settle_item_from(
+        &self,
+        item_id: i32,
+        act: &str,
+        until: Option<&str>,
+        source: super::reminders::OpSource,
+    ) -> Result<super::reminders::ItemActed, super::refusal::Refusal> {
+        self.settle_item_seen(item_id, act, until, source, None).await
+    }
+
+    /// [`Self::settle_item_from`], from a button that read the matter at
+    /// `seen` (its `updated_at`): refused when it was written since.
+    pub async fn settle_item_seen(
+        &self,
+        item_id: i32,
+        act: &str,
+        until: Option<&str>,
+        source: super::reminders::OpSource,
+        seen: Option<DateTime<Utc>>,
+    ) -> Result<super::reminders::ItemActed, super::refusal::Refusal> {
         let (tz, mornings) = self.owner_day().await;
-        let op = super::reminders::ItemOp::parse(act, until, tz, super::clock::now(), mornings)?;
-        self.item_op(item_id, op).await
+        let op = super::reminders::ItemOp::parse(act, until, tz, super::clock::now(), mornings)
+            .map_err(|e| {
+                super::refusal::Refusal::new(super::refusal::keys::BAD_TIME, e)
+            })?;
+        self.item_op_seen(item_id, op, source, seen).await
     }
 }
 

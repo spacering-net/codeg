@@ -1664,50 +1664,33 @@ const PendingReply = memo(function PendingReply() {
   )
 })
 
-type LiveStatsMessage = ComponentProps<typeof LiveTurnStats>["message"]
-
-interface LiveActivityContent {
-  /** The running turn, `null` when none runs. */
-  message: LiveStatsMessage
-  runs: LiveRunsList
-}
-
 /**
  * The live activity row above the composer: the running turn's figures and the
- * "N running" chip. While it shows (`show`) it draws what is live — so a turn
- * that ends with work still running leaves the chip alone on the row. While it
- * slides away it keeps its last content, so that leaves with the row instead
- * of blanking it first. Mounted only while the row is, so a new turn starts
- * from its own.
+ * "N running" chip — what is live, so a turn that ends with work still running
+ * leaves the chip alone on the row. Mounted only while the row is, so a new
+ * turn starts from its own.
  */
-function HeldLiveActivityBar({
-  show,
+function LiveActivityBar({
   message,
   runs,
   onStopAsyncTask,
   agentName,
-}: LiveActivityContent & {
-  show: boolean
+}: {
+  /** The running turn, `null` when none runs. */
+  message: ComponentProps<typeof LiveTurnStats>["message"]
+  runs: LiveRunsList
   onStopAsyncTask?: (taskId: string) => Promise<boolean>
   agentName?: string
 }) {
-  const [held, setHeld] = useState<LiveActivityContent>(() => ({
-    message,
-    runs,
-  }))
-  if (show && (held.message !== message || held.runs !== runs)) {
-    setHeld({ message, runs })
-  }
-  const shown = show ? { message, runs } : held
-  if (!shown.message && shown.runs.count === 0) return <div className="h-8" />
+  if (!message && runs.count === 0) return <div className="h-8" />
   return (
     <LiveTurnStats
-      message={shown.message}
+      message={message}
       trailing={
-        shown.runs.count > 0 ? (
+        runs.count > 0 ? (
           <LiveRunsChip
-            runs={shown.runs}
-            interactive={show}
+            runs={runs}
+            interactive
             onStopAsyncTask={onStopAsyncTask}
             agentName={agentName}
           />
@@ -2611,14 +2594,16 @@ export function MessageListView({
   )
   const activityShown = turnLive || liveRunList.count > 0
   // Slides in over the composer as a turn starts or work starts running past
-  // one, and out once neither is left, so the transcript above eases up and
-  // back instead of jumping. Drawn under the loading and load-error states
-  // too: what runs is the connection's, not the transcript's, and its stop
-  // must not wait on the history loading.
+  // one, so the transcript above eases up instead of jumping. Goes at once
+  // when neither is left, in the same commit the composer turns idle: a slide
+  // shut is drawn and timed on the main thread, so whatever stalls that thread
+  // as a turn ends left the row and its figures up over a composer that had
+  // already finished. Drawn under the loading and load-error states too:
+  // what runs is the connection's, not the transcript's, and its stop must not
+  // wait on the history loading.
   const activityRow = (
-    <SlideSlot className="shrink-0" show={activityShown}>
-      <HeldLiveActivityBar
-        show={activityShown}
+    <SlideSlot className="shrink-0" show={activityShown} closeAtOnce>
+      <LiveActivityBar
         message={turnLive ? liveMessage : null}
         runs={liveRunList}
         onStopAsyncTask={liveRuns?.onStopAsyncTask}

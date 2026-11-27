@@ -476,6 +476,10 @@ pub fn build_router_with_srn(
             post(handlers::personal_agent::personal_agent_item_act),
         )
         .route(
+            "/personal_agent_item_undo",
+            post(handlers::personal_agent::personal_agent_item_undo),
+        )
+        .route(
             "/personal_agent_presence",
             post(handlers::personal_agent::personal_agent_presence),
         )

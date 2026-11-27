@@ -116,6 +116,11 @@ pub struct PrFacts {
 pub struct TaskFacts {
     pub task_id: i32,
     pub status: WorkTaskStatus,
+    /// Its run (the board counts one up as it is queued), and its version:
+    /// what a card's [Stop] read, so a stale one does not stop a run that
+    /// began since.
+    pub run_seq: i32,
+    pub updated_at: DateTime<Utc>,
     /// The project the task belongs to.
     pub folder_id: i32,
     pub branch: Option<String>,

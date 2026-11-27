@@ -22,7 +22,7 @@ import { useTranslations } from "next-intl"
 import { Plug } from "lucide-react"
 import { toast } from "sonner"
 
-import { SettingCard, SettingRow } from "@/components/shared/setting-card"
+import { AgentPanelCard } from "@/components/settings/agent-panel-layout"
 import { Switch } from "@/components/ui/switch"
 import {
   acpListCustomAgents,
@@ -87,21 +87,19 @@ export function CustomAgentMcpToggle({
   if (!info) return null
 
   return (
-    <SettingCard>
-      <SettingRow
-        icon={Plug}
-        title={t("customAgentMcpLabel")}
-        description={t("customAgentMcpHint")}
-        htmlFor={MCP_SWITCH_ID}
-        control={
-          <Switch
-            id={MCP_SWITCH_ID}
-            checked={info.supportsMcp}
-            disabled={saving}
-            onCheckedChange={(v) => void handleToggle(v)}
-          />
-        }
-      />
-    </SettingCard>
+    <AgentPanelCard
+      icon={Plug}
+      title={t("customAgentMcpLabel")}
+      description={t("customAgentMcpHint")}
+      htmlFor={MCP_SWITCH_ID}
+      control={
+        <Switch
+          id={MCP_SWITCH_ID}
+          checked={info.supportsMcp}
+          disabled={saving}
+          onCheckedChange={(v) => void handleToggle(v)}
+        />
+      }
+    />
   )
 }

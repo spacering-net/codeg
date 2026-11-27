@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils"
 
 import { useActivityTranslate } from "./activity-text"
 import { dueWhen, humanDuration, repeatText } from "./due-text"
+import { useMatterError, useWorded } from "./matter-text"
 import type { MessageItem } from "./message-items"
 import { MessageRow } from "./message-row"
 import { OutcomeLine, type OutcomeTone } from "./outcome-line"
@@ -70,22 +71,31 @@ export function ReminderCard({ item }: { item: NoticeItem }) {
   const t = useTranslations("PersonalAgent.reminder")
   const tn = useTranslations("PersonalAgent.notice")
   const tw = useActivityTranslate()
+  const worded = useWorded()
+  const errorText = useMatterError()
   const locale = useLocale()
   const botId = useBotId()
-  const { readOnly } = usePageScope()
+  const { readOnly, agentName } = usePageScope()
   const row = item.row
   const data = row.data
   const noticeId = Number(row.ref_id)
   const state = str(data, "state") ?? "open"
   const act = str(data, "at_due") === "act"
   const summary = str(data, "summary") ?? ""
-  const itemId = num(data, "item_id")
   const dueAt = str(data, "due_at")
   const late = num(data, "late_secs") ?? 0
   const missed = num(data, "missed") ?? 0
   const repeat = repeatOf(data?.repeat)
   const until = str(data, "until")
-  const error = str(data, "error")
+  // What went wrong last time, in the owner's language when the card keeps
+  // the words' key (an older card has only codeg's English).
+  const errorKey = str(data, "error_key")
+  const errorParams =
+    data?.error_params && typeof data.error_params === "object"
+      ? (data.error_params as Record<string, string>)
+      : undefined
+  const error =
+    (errorKey ? worded(errorKey, errorParams) : null) ?? str(data, "error")
   const [busy, setBusy] = useState<NoticeAction | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   // The time the words are about; a card's own time does not move.
@@ -98,7 +108,7 @@ export function ReminderCard({ item }: { item: NoticeItem }) {
     try {
       await personalAgentNoticeAct(noticeId, action, botId, text)
     } catch (e) {
-      setFailed(e instanceof Error ? e.message : String(e))
+      setFailed(errorText(e))
     } finally {
       setBusy(null)
     }
@@ -219,15 +229,12 @@ export function ReminderCard({ item }: { item: NoticeItem }) {
               variant="ghost"
               disabled={disabled}
               onClick={() =>
-                void answer(
-                  "hand_over",
-                  t("handOverText", { id: itemId ?? "", summary })
-                )
+                void answer("hand_over", t("handOverText", { summary }))
               }
               data-pa-reminder-act="hand-over"
             >
               {spin("hand_over")}
-              {t("handOver")}
+              {t("handOver", { name: agentName })}
             </Button>
           </SheetActions>
         ) : null}

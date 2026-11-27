@@ -15,6 +15,11 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  AgentPanelCard,
+  AgentPanelGroup,
+  AgentPanelSaveBar,
+} from "@/components/settings/agent-panel-layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -273,18 +278,14 @@ export function QoderConfigPanel({
   const busy = saving || savingToken
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-      <div>
-        <label className="text-xs font-medium">{t("configManagement")}</label>
-        <p className="mt-1 text-2xs text-muted-foreground">
-          {t("qoder.configDescription")}
-        </p>
-      </div>
-
+    <AgentPanelGroup
+      title={t("configManagement")}
+      description={t("qoder.configDescription")}
+    >
       {/* ---- Account ---- */}
-      <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-2xs font-medium">{t("qoder.authTitle")}</span>
+      <AgentPanelCard
+        title={t("qoder.authTitle")}
+        control={
           <div className="flex items-center gap-1.5">
             <span
               className={cn(
@@ -333,10 +334,10 @@ export function QoderConfigPanel({
               />
             </Button>
           </div>
-        </div>
-
+        }
+      >
         {authState === "ok" && auth?.email && auth.email !== auth.username ? (
-          <p className="text-3xs text-muted-foreground">{auth.email}</p>
+          <p className="text-2xs text-muted-foreground">{auth.email}</p>
         ) : null}
 
         {authState === "loggedOut" ? (
@@ -402,19 +403,19 @@ export function QoderConfigPanel({
               )}
             </Button>
           </div>
-          <p className="text-3xs text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             {t("qoder.tokenHint")}
           </p>
         </div>
 
         {authMethod ? (
-          <p className="text-3xs text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             {t("qoder.authMethodLabel")}:{" "}
             <code className="font-mono">{authMethod}</code>
           </p>
         ) : null}
 
-        <div className="flex justify-end">
+        <AgentPanelSaveBar>
           <Button
             className="h-7 gap-1.5 px-2.5 text-xs"
             disabled={busy}
@@ -429,62 +430,64 @@ export function QoderConfigPanel({
             )}
             {t("qoder.saveToken")}
           </Button>
-        </div>
-      </div>
+        </AgentPanelSaveBar>
+      </AgentPanelCard>
 
       {/* ---- Advanced: raw settings.json ---- */}
-      <div className="space-y-2">
-        <button
-          className="flex items-center gap-1 text-2xs text-muted-foreground hover:text-foreground"
-          onClick={() => setAdvancedOpen((v) => !v)}
-          type="button"
-        >
+      <AgentPanelCard>
+        <div className="space-y-2">
+          <button
+            className="flex items-center gap-1 text-2xs text-muted-foreground hover:text-foreground"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            type="button"
+          >
+            {advancedOpen ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+            {t("qoder.advancedToggle")}
+          </button>
           {advancedOpen ? (
-            <ChevronDown className="h-3 w-3" />
-          ) : (
-            <ChevronRight className="h-3 w-3" />
-          )}
-          {t("qoder.advancedToggle")}
-        </button>
-        {advancedOpen ? (
-          <div className="space-y-1.5">
-            <p className="text-3xs text-muted-foreground">
-              {t("qoder.advancedHint")}
-            </p>
-            {agent.config_file_path ? (
-              <code className="block overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-3xs whitespace-nowrap text-muted-foreground">
-                {agent.config_file_path}
-              </code>
-            ) : null}
-            <Textarea
-              className="min-h-40 font-mono text-2xs"
-              onChange={(e) => {
-                rawDirty.current = true
-                setRawConfig(e.target.value)
-              }}
-              spellCheck={false}
-              value={rawConfig}
-            />
-            <div className="flex justify-end">
-              <Button
-                className="h-7 gap-1.5 px-2.5 text-xs"
-                disabled={savingRaw || !rawConfig.trim()}
-                onClick={() => void saveRaw()}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                {savingRaw ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Save className="h-3.5 w-3.5" />
-                )}
-                {t("qoder.saveRawConfig")}
-              </Button>
+            <div className="space-y-1.5">
+              <p className="text-2xs text-muted-foreground">
+                {t("qoder.advancedHint")}
+              </p>
+              {agent.config_file_path ? (
+                <code className="block overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-3xs whitespace-nowrap text-muted-foreground">
+                  {agent.config_file_path}
+                </code>
+              ) : null}
+              <Textarea
+                className="min-h-40 font-mono text-2xs"
+                onChange={(e) => {
+                  rawDirty.current = true
+                  setRawConfig(e.target.value)
+                }}
+                spellCheck={false}
+                value={rawConfig}
+              />
+              <div className="flex justify-end">
+                <Button
+                  className="h-7 gap-1.5 px-2.5 text-xs"
+                  disabled={savingRaw || !rawConfig.trim()}
+                  onClick={() => void saveRaw()}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  {savingRaw ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
+                  {t("qoder.saveRawConfig")}
+                </Button>
+              </div>
             </div>
-          </div>
-        ) : null}
-      </div>
-    </div>
+          ) : null}
+        </div>
+      </AgentPanelCard>
+    </AgentPanelGroup>
   )
 }

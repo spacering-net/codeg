@@ -12940,6 +12940,19 @@ pub async fn acp_cancel(
     db: State<'_, AppDatabase>,
     manager: State<'_, ConnectionManager>,
 ) -> Result<(), AcpError> {
+    // A personal agent's handed-out work: the owner stopping it (D2),
+    // through to its end even if this call is dropped.
+    let conn = connection_id.clone();
+    let stopped = crate::commands::personal_agent::on_own_task(async move {
+        crate::personal_agent::stop::note_owner_cancel(&conn)
+            .await
+            .map_err(crate::app_error::AppCommandError::task_execution_failed)
+    })
+    .await
+    .map_err(|e| AcpError::protocol(e.message))?;
+    if stopped {
+        return Ok(());
+    }
     manager.cancel(&db.conn, &connection_id).await
 }
 

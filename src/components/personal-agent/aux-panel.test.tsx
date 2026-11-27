@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import type {
+  BotLive,
   DispatchInfo,
   ItemInfo,
   PersonalAgentSnapshot,
@@ -29,7 +30,7 @@ const api = vi.hoisted(() => ({
   personalAgentStats: vi.fn(),
   personalAgentResumeAutoCompact: vi.fn(),
   personalAgentItemAct: vi.fn(async () => ({})),
-  personalAgentDispatchStop: vi.fn(async () => true),
+  personalAgentDispatchStop: vi.fn(async () => ({ outcome: "past_stopping" })),
   personalAgentOutputs: vi.fn(),
   personalAgentOutputRead: vi.fn(),
   personalAgentRosterAct: vi.fn(async () => {}),
@@ -123,11 +124,15 @@ vi.mock("@/components/token-usage/charts", () => ({
   RankedBars: () => <div data-chart="ranked" />,
 }))
 
-import { __resetRosterForTests } from "@/stores/personal-agent-roster-store"
+import {
+  __resetRosterForTests,
+  usePersonalAgentRoster,
+} from "@/stores/personal-agent-roster-store"
 import { __resetThumbsForTests } from "./aux-parts/output/use-thumb"
 
 import { PersonalAgentAuxPanel } from "./aux-panel"
 import { PageScopeContext, type PageScope } from "./shared"
+import { clearSettling } from "./aux-parts/activity/act-settle"
 
 function dispatch(patch: Partial<DispatchInfo>): DispatchInfo {
   return {
@@ -162,6 +167,12 @@ function dispatch(patch: Partial<DispatchInfo>): DispatchInfo {
     answered_for_you: 0,
     ...patch,
   }
+}
+
+/** What a button says it will do, as a screen reader reads it. */
+function hintOf(el: HTMLElement): string {
+  const id = el.getAttribute("aria-describedby")
+  return (id && document.getElementById(id)?.textContent) || ""
 }
 
 function item(patch: Partial<ItemInfo>): ItemInfo {
@@ -311,6 +322,7 @@ function draw({
 const FIRST_UI_STATE = usePersonalAgentUi.getState()
 
 beforeEach(() => {
+  clearSettling()
   pa.snapshot = snapshot()
   pa.rows = []
   __resetRosterForTests()
@@ -384,6 +396,8 @@ describe("the panel", () => {
     expect(face.getAttribute("aria-label")).toBe("Nova")
     expect(face.style.width).toBe("4rem")
     expect(face.hasAttribute("data-bot-look")).toBe(true)
+    // The whole head is where it follows the pointer.
+    expect(head.hasAttribute("data-pa-face-host")).toBe(true)
     expect(
       within(head).getByRole("heading", { name: "Nova", level: 2 })
     ).toBeTruthy()
@@ -418,6 +432,56 @@ describe("the panel", () => {
       auxTab: "stats",
       auxOpen: true,
     })
+  })
+
+  it("keeps its face at rest while the assistant replies and once it has — only waiting, stuck or asleep shows", async () => {
+    draw()
+    // Live pushes land on the roster once it has been read.
+    await waitFor(() =>
+      expect(usePersonalAgentRoster.getState().entries).not.toBeNull()
+    )
+    const look = () =>
+      document
+        .querySelector("[data-pa-aux-head] [data-slot='bot-avatar']")
+        ?.getAttribute("data-bot-look")
+    expect(look()).toBe("idle")
+    const now = Date.now()
+    let n = 0
+    const push = (patch: Partial<BotLive>) =>
+      act(() =>
+        usePersonalAgentRoster.getState().applyLive({
+          bot_id: 1,
+          work: "done",
+          attention: "none",
+          needs: null,
+          unread: 0,
+          activity: null,
+          activity_known: true,
+          work_on_hand: [],
+          awaiting: [],
+          face: "idle",
+          flash: null,
+          connected: true,
+          last_line: null,
+          last_activity_at: new Date(now).toISOString(),
+          updated_at: new Date(now + ++n).toISOString(),
+          expires_at: new Date(now + 30_000).toISOString(),
+          ...patch,
+        })
+      )
+    // Thinking, writing, then done or failed: no motion of a reply here.
+    push({ work: "busy", face: "thinking" })
+    expect(look()).toBe("idle")
+    push({ work: "busy", face: "working" })
+    expect(look()).toBe("idle")
+    const until = new Date(now + 8000).toISOString()
+    push({ flash: { face: "done", until } })
+    expect(look()).toBe("idle")
+    push({ flash: { face: "failed", until } })
+    expect(look()).toBe("idle")
+    // Waiting on its owner is not a reply's: it shows.
+    push({ face: "waiting" })
+    expect(look()).toBe("waiting")
   })
 
   it("renames the assistant in place: Enter or leaving the field saves it, Escape takes it back and goes no further", async () => {
@@ -770,7 +834,7 @@ describe("the activity", () => {
     expect(usePersonalAgentUi.getState().activityOpen["item:12"]).toBe(true)
   })
 
-  it("settles a matter on its row, at its own assistant: done, put off, later, dropped", async () => {
+  it("settles a matter on its row by whose move it is: answer, put off, not needed (C1)", async () => {
     show({
       needs: [
         matter(
@@ -779,6 +843,7 @@ describe("the activity", () => {
             kind: "question",
             waits_for: "owner",
             summary: "Which branch?",
+            origin_timeline_id: 40,
           }),
           2
         ),
@@ -799,41 +864,115 @@ describe("the activity", () => {
     const question = container.querySelector<HTMLElement>(
       '[data-pa-activity-row="item:11"]'
     )!
-    // [Later] is a menu: a set time, or none — sent to the assistant whose
-    // matter it is, another one's on the primary's page.
+    // The owner's move: [Answer] first; [Put off] a menu of set times only
+    // — sent to the assistant whose matter it is, another one's on the
+    // primary's page.
     await userEvent.click(
-      within(question).getByRole("button", { name: "Later" })
+      within(question).getByRole("button", { name: "Put off" })
     )
+    expect(screen.queryByRole("menuitem", { name: "No set time" })).toBeNull()
     await userEvent.click(
       await screen.findByRole("menuitem", { name: "In 1 hour" })
     )
-    expect(api.personalAgentItemAct).toHaveBeenCalledWith(2, 11, "snooze", "1h")
-    await waitFor(() =>
-      expect(
-        within(question)
-          .getByRole("button", { name: "Later" })
-          .hasAttribute("disabled")
-      ).toBe(false)
+    expect(api.personalAgentItemAct).toHaveBeenCalledWith(
+      2,
+      11,
+      "snooze",
+      "1h",
+      "panel",
+      "2026-11-04T10:00:00Z"
     )
-    await userEvent.click(
-      within(question).getByRole("button", { name: "Later" })
-    )
-    await userEvent.click(
-      await screen.findByRole("menuitem", { name: "No set time" })
-    )
-    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(2, 11, "later")
-    const done = within(question).getByRole("button", { name: "Done" })
-    await waitFor(() => expect(done.hasAttribute("disabled")).toBe(false))
-    fireEvent.click(done)
-    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(2, 11, "done")
     await waitFor(() => expect(feed.refresh).toHaveBeenCalled())
-    // One already waiting on time has no "later".
+    const notNeeded = within(question).getByRole("button", {
+      name: "Not needed",
+    })
+    await waitFor(() => expect(notNeeded.hasAttribute("disabled")).toBe(false))
+    expect(hintOf(notNeeded)).toMatch(/^No answer needed; .+ is told$/)
+    fireEvent.click(notNeeded)
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(
+      2,
+      11,
+      "drop",
+      undefined,
+      "panel",
+      "2026-11-04T10:00:00Z"
+    )
+    // [Answer]: its assistant's conversation at the reply that asked, the
+    // box set to answer it.
+    const answer = within(question).getByRole("button", { name: "Answer" })
+    await waitFor(() => expect(answer.hasAttribute("disabled")).toBe(false))
+    fireEvent.click(answer)
+    const ui = usePersonalAgentUi.getState()
+    expect(ui.pendingAnswer[2]).toEqual({
+      bot: 2,
+      itemId: 11,
+      summary: "Which branch?",
+    })
+    expect(ui.pendingJump).toEqual({ bot: 2, row: 40 })
+    // Set aside with no time: a time can be set — no "done", no "put off".
     const reminder = container.querySelector<HTMLElement>(
       '[data-pa-activity-row="item:15"]'
     )!
-    expect(within(reminder).queryByRole("button", { name: "Later" })).toBeNull()
-    fireEvent.click(within(reminder).getByRole("button", { name: "Drop" }))
-    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(1, 15, "drop")
+    expect(
+      within(reminder).queryByRole("button", { name: "Put off" })
+    ).toBeNull()
+    expect(within(reminder).queryByRole("button", { name: "Done" })).toBeNull()
+    expect(
+      within(reminder).getByRole("button", { name: "Set a time" })
+    ).toBeTruthy()
+    expect(reminder.textContent).toContain("Set aside · no time set")
+    fireEvent.click(
+      within(reminder).getByRole("button", { name: "Not needed" })
+    )
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(
+      1,
+      15,
+      "drop",
+      undefined,
+      "panel",
+      "2026-11-04T10:00:00Z"
+    )
+  })
+
+  it("has only “not needed” for what waits on someone else, and says on whom", async () => {
+    show({
+      watching: [
+        matter(
+          item({
+            id: 41,
+            kind: "message",
+            status: "waiting",
+            waits_for: "agent",
+            summary: "Waiting for Dev's answer: review the login fix",
+            written: "review the login fix",
+            direction: "out",
+            peer: { id: 2, name: "Dev", avatar: null, gone: false },
+            created_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+          })
+        ),
+      ],
+    })
+    const { container } = draw()
+    const row = await waitFor(
+      () =>
+        container.querySelector<HTMLElement>(
+          '[data-pa-activity-row="item:41"]'
+        )!
+    )
+    // Its title is what was written; who it waits on, on its line.
+    expect(within(row).getByText("review the login fix")).toBeTruthy()
+    expect(row.textContent).toMatch(/waits for Dev's reply · 3 min/)
+    // (What a button says it will do is read out, not shown.)
+    const shown = row.cloneNode(true) as HTMLElement
+    shown.querySelectorAll(".sr-only").forEach((e) => e.remove())
+    expect(shown.textContent).not.toMatch(/message/i)
+    const buttons = within(row)
+      .getAllByRole("button")
+      .filter((b) => b.hasAttribute("data-pa-item-act"))
+    expect(buttons.map((b) => b.textContent)).toEqual(["Not needed"])
+    expect(hintOf(buttons[0]!)).toMatch(
+      /^Takes the message back; if that is too late, .+ stops waiting for Dev's reply$/
+    )
   })
 
   it("says what brings a reminder on a mention up, and puts it off no time (6.8)", async () => {
@@ -861,15 +1000,22 @@ describe("the activity", () => {
     await screen.findByText("Update the Homebrew formula first")
     expect(
       screen.getByText(
-        /^When you mention “release”, “发版” · 1 of 3 times · until /
+        /^When you mention “release”, “发版”, .+ reminds you · 1 of 3 times · until /
       )
     ).toBeTruthy()
     const row = container.querySelector<HTMLElement>(
       '[data-pa-activity-row="item:31"]'
     )!
-    expect(within(row).queryByRole("button", { name: "Later" })).toBeNull()
-    fireEvent.click(within(row).getByRole("button", { name: "Drop" }))
-    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(1, 31, "drop")
+    expect(within(row).queryByRole("button", { name: "Put off" })).toBeNull()
+    fireEvent.click(within(row).getByRole("button", { name: "Stop reminding" }))
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(
+      1,
+      31,
+      "drop",
+      undefined,
+      "panel",
+      "2026-11-04T10:00:00Z"
+    )
   })
 
   it("says when a matter is due and how it comes back; what is done once a reminder is, unfolded", async () => {
@@ -905,8 +1051,10 @@ describe("the activity", () => {
     })
     draw()
     await screen.findByText("Stand-up notes")
-    expect(screen.getByText(/^Due .+ · Every weekday 09:00$/)).toBeTruthy()
-    expect(screen.getByText(/^Reminded · due /)).toBeTruthy()
+    expect(
+      screen.getByText(/ reminds you: Every weekday 09:00 · next .+$/)
+    ).toBeTruthy()
+    expect(screen.getByText(/ reminds you · due .+, 1 h ago$/)).toBeTruthy()
     const row = screen
       .getByText("Stand-up notes")
       .closest<HTMLElement>("[data-pa-activity-row]")!
@@ -914,15 +1062,34 @@ describe("the activity", () => {
     expect(row.querySelector("[data-pa-item-on-done]")!.textContent).toContain(
       "Post them in #team"
     )
-    await userEvent.click(within(row).getByRole("button", { name: "Later" }))
+    // Coming up and repeating: skip this time, or stop it.
+    fireEvent.click(within(row).getByRole("button", { name: "Skip this time" }))
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.any(Number),
+      "skip",
+      undefined,
+      "panel",
+      expect.any(String)
+    )
+    expect(
+      within(row).getByRole("button", { name: "Stop reminding" })
+    ).toBeTruthy()
+    // Come due: done, or put off.
+    const due = screen
+      .getByText("Call the bank")
+      .closest<HTMLElement>("[data-pa-activity-row]")!
+    await userEvent.click(within(due).getByRole("button", { name: "Put off" }))
     await userEvent.click(
       await screen.findByRole("menuitem", { name: "Tomorrow morning" })
     )
     expect(api.personalAgentItemAct).toHaveBeenCalledWith(
       1,
-      21,
+      23,
       "snooze",
-      "tomorrow"
+      "tomorrow",
+      "panel",
+      "2026-11-04T10:00:00Z"
     )
   })
 
@@ -930,6 +1097,8 @@ describe("the activity", () => {
     const facts = {
       task_id: 7,
       status: "review" as const,
+      run_seq: 1,
+      updated_at: "2026-11-04T10:00:00Z",
       folder_id: 2,
       branch: "pa/fix-login",
       base_branch: "main",
@@ -1012,7 +1181,12 @@ describe("the activity", () => {
     )
     expect(within(review).queryByRole("button", { name: "Done" })).toBeNull()
     fireEvent.click(within(review).getByRole("button", { name: "Stop" }))
-    expect(api.personalAgentDispatchStop).toHaveBeenCalledWith(2, 1)
+    // With what the row read: the work's version and its task's run.
+    expect(api.personalAgentDispatchStop).toHaveBeenCalledWith(
+      2,
+      1,
+      expect.objectContaining({ runSeq: 1 })
+    )
     // What happens once handed-out work is done is its assistant's to know,
     // not said here (B5).
     fireEvent.click(
@@ -1027,8 +1201,15 @@ describe("the activity", () => {
       "PR opened · codeg is not watching it"
     )
     expect(within(pr).queryByRole("button", { name: "Stop" })).toBeNull()
-    fireEvent.click(within(pr).getByRole("button", { name: "Done" }))
-    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(1, 12, "done")
+    fireEvent.click(within(pr).getByRole("button", { name: "Merged" }))
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(
+      1,
+      12,
+      "done",
+      undefined,
+      "panel",
+      "2026-11-04T10:00:00Z"
+    )
   })
 
   it("has the bell to be told at the panel's top, nothing of it at the activity's end", async () => {
@@ -1057,6 +1238,8 @@ describe("the activity", () => {
 describe("an activity card of a task", () => {
   it("says where it stands once, its › in its head, [Stop] with its buttons, its details at its foot", async () => {
     const task = {
+      run_seq: 1,
+      updated_at: "2026-11-04T10:00:00Z",
       task_id: 14,
       status: "review" as const,
       folder_id: 2,
@@ -1735,7 +1918,7 @@ describe("the stats tab's data", () => {
     window.localStorage.removeItem("codeg:personal-agent:stats-days")
   })
 
-  it("keeps the dashboard's colours for an assistant with no face", async () => {
+  it("takes a text avatar's colour as a face's — the nearest one for an old colour", async () => {
     usePersonalAgentUi.setState({ auxTab: "stats" })
     api.personalAgentStats.mockResolvedValue({
       days: [],
@@ -1743,7 +1926,35 @@ describe("the stats tab's data", () => {
       usage: [],
       tokens_synced_at: null,
     } satisfies PersonalAgentStats)
+    // The fixture's emoji is in the collaboration settings' violet.
     draw()
+    await screen.findByText("Last 14 days")
+    const viz = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>(".tu-viz")
+      expect(el).toBeTruthy()
+      return el!
+    })
+    expect(viz.getAttribute("data-pa-face")).toBe("purple")
+    expect(viz.style.getPropertyValue("--tu-accent")).toBe("var(--pa-body)")
+  })
+
+  it("keeps the dashboard's colours for an assistant with a picture", async () => {
+    usePersonalAgentUi.setState({ auxTab: "stats" })
+    api.personalAgentStats.mockResolvedValue({
+      days: [],
+      agents: [],
+      usage: [],
+      tokens_synced_at: null,
+    } satisfies PersonalAgentStats)
+    const pictured: PersonalAgentSnapshot = {
+      ...snapshot(),
+      agent: {
+        ...snapshot().agent!,
+        avatar: { kind: "image", data_url: "data:image/png;base64,AA" },
+      },
+    }
+    pa.snapshot = pictured
+    draw({ snap: pictured })
     await screen.findByText("Last 14 days")
     const viz = await waitFor(() => {
       const el = document.querySelector<HTMLElement>(".tu-viz")

@@ -3,7 +3,9 @@
 /**
  * Claude Code's Remote Control, pinned above the transcript in
  * `conversation-shell` while it is on (claude-agent-acp 0.93.0's
- * `/remote-control`).
+ * `/remote-control`, or 0.113.0's start with the session when Claude Code
+ * asks for it — `at_startup`, which raises no toast of its own, so this strip
+ * is where the user learns of it).
  *
  * The adapter answers the command itself and nothing of the exchange reaches
  * the transcript, so the reply that carries the session's link is gone once
@@ -11,7 +13,8 @@
  * the remote session lives: it reads the connection's `remoteControl`, which
  * the snapshot carries and which goes with the agent CLI. It sits with the
  * async-task strip because both are the state of something running right now,
- * and both keep the connection out of the idle sweeps.
+ * and both keep the connection out of the idle sweeps (Remote Control only
+ * once the user's own `/remote-control` handed the session over).
  *
  * The QR code is how the link reaches a phone, as on Claude Code's own Remote
  * Control screen. Turning it off sends `/remote-control off`, exactly what the

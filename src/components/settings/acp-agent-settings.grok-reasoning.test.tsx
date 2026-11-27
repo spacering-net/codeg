@@ -152,7 +152,9 @@ describe("AcpAgentSettings — Grok custom model reasoning-effort levels", () =>
     })
     expect(screen.queryByText(/^No levels declared\./)).toBeNull()
     expect(
-      screen.getByText(/reasoning_efforts`\. Each level is sent/)
+      screen.getByText(
+        /Sent to your endpoint as-is, so pick only levels it accepts/
+      )
     ).toBeInTheDocument()
 
     await user.click(screen.getByRole("button", { name: "Save Grok Config" }))

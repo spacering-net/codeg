@@ -19,6 +19,7 @@ import {
   type AttachSessionToSessionDetail,
 } from "@/lib/session-attachment-events"
 import type { DbConversationSummary } from "@/lib/types"
+import type { BlockingPromptKind } from "@/lib/blocking-prompts"
 import enMessages from "@/i18n/messages/en.json"
 import {
   resetAssistantsStore,
@@ -392,6 +393,150 @@ describe("SidebarConversationCard running badge", () => {
     expect(turning?.tagName).toBe("SPAN")
     expect(turning?.querySelector("svg")).not.toBeNull()
     expect(badge.querySelector("svg.animate-spin")).toBeNull()
+  })
+})
+
+describe("SidebarConversationCard awaiting-answer mark", () => {
+  function renderCard(c: DbConversationSummary, awaiting?: BlockingPromptKind) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={false}
+        timeLabel="5m"
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+        awaiting={awaiting ?? null}
+      />
+    )
+  }
+
+  // 行上的等待标记与状态点共用同一个 title，取带图标的那一个。
+  function markOf(view: ReturnType<typeof renderCard>, label: string) {
+    const mark = view.getAllByTitle(label).find((el) => el.querySelector("svg"))
+    expect(mark).toBeDefined()
+    return mark as HTMLElement
+  }
+
+  // 只算真正看得见的文本：sr-only 里的原因不算行上的可见文案。
+  function visibleText(el: HTMLElement): string {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+    let text = ""
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.parentElement?.closest(".sr-only")) text += node.textContent
+    }
+    return text.trim()
+  }
+
+  it("names which decision is pending, without a running spinner", () => {
+    // The blocked session is ALSO in_progress, so the row would otherwise spin
+    // its amber "running" badge and say nothing about why nothing moves.
+    const view = renderCard({ ...conv(1), status: "in_progress" }, "question")
+    expect(markOf(view, "Needs your answer")).toBeTruthy()
+    expect(view.queryByTitle("Running")).toBeNull()
+  })
+
+  it("marks all three waits with one bare Hand, reason only in title and sr-only", () => {
+    for (const [kind, label] of [
+      ["permission", "Needs your permission"],
+      ["question", "Needs your answer"],
+      ["plan", "Needs your approval"],
+    ] as const) {
+      const view = renderCard({ ...conv(2), status: "in_progress" }, kind)
+      const mark = markOf(view, label)
+      // 原因仍然可读：悬停有 title，读屏有 sr-only。
+      expect(mark.getAttribute("title")).toBe(label)
+      expect(mark.querySelector(".sr-only")?.textContent).toBe(label)
+      // 但行上不再有可见文案——图标之外什么都不写。
+      expect(visibleText(mark)).toBe("")
+      const icons = mark.querySelectorAll("svg")
+      expect(icons).toHaveLength(1)
+      const glyph = icons[0].getAttribute("class") ?? ""
+      // 三种等待共用同一个 Hand，不再按种类换图形。
+      expect(glyph.split(/\s+/)).toContain("lucide-hand")
+      expect(glyph).toContain("h-3.5")
+      expect(glyph).toContain("w-3.5")
+      // 静态、无外圈：不转、不呼吸，也没有 ring / outline。
+      expect(mark.querySelector("[class*='animate-']")).toBeNull()
+      expect(glyph).not.toMatch(/ring|outline/)
+      view.unmount()
+    }
+  })
+
+  it("sits in the same slot shell as the cancelled mark", () => {
+    const awaitingView = renderCard(
+      { ...conv(3), status: "in_progress" },
+      "permission"
+    )
+    const cancelView = renderCard({ ...conv(4), status: "cancelled" })
+    const awaitingMark = markOf(awaitingView, "Needs your permission")
+    const cancelMark = cancelView.getByTitle("Cancelled")
+    // 共用同一个容器类名，图标于是落在与 XCircle 完全相同的 x 上。
+    expect(awaitingMark.className).toBe(cancelMark.className)
+    expect(awaitingMark.className).toContain(
+      "relative inline-flex shrink-0 items-center justify-center"
+    )
+    // 没有为此额外加 gap / padding / 占位。
+    expect(awaitingMark.className).not.toMatch(/(^|\s)(gap|p|px|py|pl|pr|w)-/)
+  })
+
+  it("yields the right slot to the quick actions on hover, like the cancel mark", () => {
+    // 上一轮为了图标不被快捷按钮挤得横移，等待提示在悬停时保留；现在它与
+    // 取消 / 运行两种状态槽位一致：根行悬停就换成快捷操作。
+    const awaitingView = renderCard(
+      { ...conv(3), status: "in_progress" },
+      "permission"
+    )
+    const awaitingSlot = markOf(
+      awaitingView,
+      "Needs your permission"
+    ).parentElement!
+    const cancelView = renderCard({ ...conv(4), status: "cancelled" })
+    const cancelSlot = cancelView.getByTitle("Cancelled").parentElement!
+    expect(awaitingSlot.className).toContain("group-hover:hidden")
+    expect(awaitingSlot.className).toBe(cancelSlot.className)
+  })
+
+  it("stays put on a sub-session, which has no quick actions to swap in", () => {
+    const child: DbConversationSummary = {
+      ...conv(6),
+      kind: "delegate",
+      parent_id: 1,
+      status: "in_progress",
+    }
+    const view = renderCard(child, "question")
+    const slot = markOf(view, "Needs your answer").parentElement!
+    expect(slot.className).not.toContain("group-hover:hidden")
+  })
+
+  it("marks the status dot as well as the slot", () => {
+    // The dot is what the user sees on a row they are scrolling past; the slot
+    // is what explains it once they look. Both carry the mark.
+    const { container } = renderCard(
+      { ...conv(3), status: "in_progress" },
+      "plan"
+    )
+    const dot = container.querySelector("[data-attention]")
+    expect(dot?.getAttribute("data-attention")).toBe("plan")
+  })
+
+  it("leaves a healthy running session exactly as it was", () => {
+    const { getByTitle, container } = renderCard({
+      ...conv(4),
+      status: "in_progress",
+    })
+    expect(getByTitle("Running")).toBeTruthy()
+    expect(container.querySelector("[data-attention]")).toBeNull()
+  })
+
+  it("outranks a cancelled status, which says nothing useful here", () => {
+    // A cancelled row that is somehow still blocked on a prompt: the actionable
+    // state wins the one slot the row has.
+    const view = renderCard({ ...conv(5), status: "cancelled" }, "permission")
+    expect(markOf(view, "Needs your permission")).toBeTruthy()
+    expect(view.queryByTitle("Cancelled")).toBeNull()
   })
 })
 

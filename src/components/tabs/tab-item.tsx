@@ -12,6 +12,7 @@ import {
 } from "@/lib/drag-selection-guard"
 import type { ConversationStatus } from "@/lib/types"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
+import { useAwaitingAnswer } from "@/hooks/use-conversation-attention"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -120,7 +121,14 @@ export const TabItem = memo(function TabItem({
   onTouchSortingEnd,
 }: TabItemProps) {
   const t = useTranslations("Folder.tabs")
+  // 等待原因复用侧栏已翻译好的三种说法，不新增文案。
+  const tSidebar = useTranslations("Folder.sidebar")
   const itemRef = useRef<HTMLDivElement>(null)
+  // Read off the same conversation-keyed index as the sidebar, so the tab and
+  // its row agree (a delegated sub-agent's prompt marks both). The value is a
+  // primitive: a prompt raised elsewhere re-renders only the tab it concerns.
+  // A draft has no conversation row yet, so there is nothing to mark.
+  const awaiting = useAwaitingAnswer(tab.conversationId)
 
   const resolvedFolderName = folderName ?? String(tab.folderId)
   const tooltip = folderBranch
@@ -328,6 +336,12 @@ export const TabItem = memo(function TabItem({
           >
             <ConversationStatusDot
               status={tab.status as ConversationStatus | undefined}
+              attention={awaiting}
+              // 悬停可读到"在等什么"：静态紫色点本身说明不了原因，标签标题上
+              // 的 folder / branch / title 组合也不会替它解释。
+              title={
+                awaiting ? tSidebar(`statusAwaiting.${awaiting}`) : undefined
+              }
             />
             <span
               className={cn(

@@ -536,7 +536,71 @@ impl PersonalAgentEngine {
         {
             if !self.round_still_current(&r).await {
                 self.go_stale(&r).await;
+                continue;
             }
+            self.heal_round(&r).await;
+        }
+    }
+
+    /// What a crash may leave of round `r` between two of its writes: a
+    /// check that ended (stopped, say) with the round still checking —
+    /// nothing else moves it on now — is settled as its end would have; a
+    /// round put to the owner with no card yet gets the card (the one made
+    /// before the round was told of it, when there is one).
+    async fn heal_round(&self, r: &round_entity::Model) {
+        if r.state == VerificationState::Checking {
+            let Some(check_id) = r.check_dispatch_id else {
+                return;
+            };
+            let Ok(Some(check)) = svc::get_dispatch(&self.db.conn, check_id).await else {
+                return;
+            };
+            // Ended a while ago (its own news has had its turn): nothing
+            // else will settle it now.
+            let ended_a_while = check
+                .finished_at
+                .is_some_and(|f| chrono::Utc::now() - f > chrono::Duration::seconds(30));
+            if !super::dispatch::LIVE_STATES.contains(&check.state) && ended_a_while {
+                self.check_settled(&check, r.clone(), check.error.clone(), "boot").await;
+            }
+            return;
+        }
+        if r.state != VerificationState::Asked || r.notice_id.is_some() {
+            return;
+        }
+        let _one = self.accept_lock.lock().await;
+        let Ok(Some(r)) = vsvc::get(&self.db.conn, r.id).await else {
+            return;
+        };
+        if r.state != VerificationState::Asked || r.notice_id.is_some() {
+            return;
+        }
+        let made = {
+            use crate::db::entities::personal_agent_notice as notice_entity;
+            use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+            notice_entity::Entity::find()
+                .filter(notice_entity::Column::Kind.eq(NoticeKind::Acceptance))
+                .filter(notice_entity::Column::SubjectKey.eq(format!("acceptance:{}", r.id)))
+                .one(&self.db.conn)
+                .await
+                .ok()
+                .flatten()
+        };
+        if let Some(n) = made {
+            let _ = vsvc::write_round(
+                &self.db.conn,
+                r.id,
+                RoundWrite {
+                    notice_id: Some(Some(n.id)),
+                    ..Default::default()
+                },
+            )
+            .await;
+            return;
+        }
+        if let Ok(Some(d)) = svc::get_dispatch(&self.db.conn, r.dispatch_id).await {
+            drop(_one);
+            self.raise_acceptance_card(&r, &d, NoticeState::Open).await;
         }
     }
 
@@ -1039,6 +1103,40 @@ impl PersonalAgentEngine {
                 .ok(),
             None => None,
         };
+        // The owner stopped the check: the call is theirs, not a check that
+        // failed for the assistant to look at again (4.10) — on their
+        // acceptance card, nobody woken. The worktree having moved is the
+        // void case below as for any check.
+        let owner_stopped = matches!(
+            super::stop::stopped_by_of(check),
+            Some(super::stop::StoppedBy::Owner | super::stop::StoppedBy::OwnerInSession)
+        );
+        if owner_stopped && now.as_deref() == Some(round.fingerprint.as_str()) {
+            let report = CheckReport {
+                verdict: CheckVerdict::Unverified,
+                evidence: "the check did not finish: you stopped it".into(),
+            };
+            let moved = vsvc::move_round(
+                &self.db.conn,
+                round.id,
+                &[VerificationState::Checking],
+                VerificationState::Asked,
+                None,
+                RoundWrite {
+                    check_verdict: Some(Some(report.verdict)),
+                    check_evidence: Some(Some(report.evidence.clone())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .ok()
+            .flatten();
+            self.post_check_card(check, &round, Some(&report), cause).await;
+            if let Some(r) = moved {
+                self.raise_acceptance_card(&r, &d, NoticeState::Open).await;
+            }
+            return;
+        }
         if now.as_deref() != Some(round.fingerprint.as_str()) {
             // It read a version that is not there any more.
             let moved = vsvc::move_round(
@@ -1133,6 +1231,8 @@ impl PersonalAgentEngine {
         };
         let mut card = NewRow::new(TimelineKind::Result, body);
         card.dispatch_id = Some(check.id);
+        // Stopped: who stopped it, as every stop card says it.
+        let stopped = super::stop::stopped_by_of(check);
         card.data = Some(json!({
             "mode": check.mode,
             "state": check.state,
@@ -1149,6 +1249,8 @@ impl PersonalAgentEngine {
             "check_round": round.round,
             "verdict": report.map(|r| r.verdict),
             "evidence": report.map(|r| r.evidence.clone()),
+            "stopped_by": stopped.as_ref().map(|b| b.key()),
+            "reason": stopped.as_ref().and_then(|b| b.reason()),
         }));
         card
     }

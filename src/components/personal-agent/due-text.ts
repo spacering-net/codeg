@@ -65,6 +65,39 @@ export function dueWhen(
   return t("due.dayTime", { day: date, time })
 }
 
+/** A due time as it reads inside a sentence — `at 15:00`, `tomorrow at
+ *  15:00`, `on Thu at 15:00`, `on Nov 20 at 15:00` (a weekday and a date
+ *  have their own forms) — for "{name} reminds
+ *  you {when}"; {@link dueWhen} is the label form. Empty for a time that
+ *  does not parse. */
+export function dueWhenInSentence(
+  t: Translate,
+  iso: string,
+  now: number,
+  locale: string
+): string {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return ""
+  const time = clockOf(at, locale)
+  const days = Math.round((startOfDay(at.getTime()) - startOfDay(now)) / DAY_MS)
+  if (days === 0) return t("due.inSentence.today", { time })
+  if (days === 1) return t("due.inSentence.tomorrow", { time })
+  if (days === -1) return t("due.inSentence.yesterday", { time })
+  if (Math.abs(days) <= 6) {
+    const day = at.toLocaleDateString(locale, { weekday: "short" })
+    return t("due.inSentence.day", { day, time })
+  }
+  // A date reads apart from a weekday in some languages ("le 10 déc.").
+  const date = at.toLocaleDateString(locale, {
+    month: "short",
+    day: "numeric",
+    ...(at.getFullYear() !== new Date(now).getFullYear()
+      ? { year: "numeric" }
+      : {}),
+  })
+  return t("due.inSentence.date", { date, time })
+}
+
 /** `5 min`, `2 h`, `2 h 30 min`, `3 days` — how long, in seconds. */
 export function humanDuration(t: Translate, secs: number): string {
   const minutes = Math.max(1, Math.round(secs / 60))
