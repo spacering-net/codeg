@@ -46,6 +46,8 @@ import {
 } from "@/components/ui/context-menu"
 import { cn, copyTextFromMenu } from "@/lib/utils"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
+import { useIsCoarsePointer } from "@/hooks/use-is-coarse-pointer"
+import { useHistorySwipe } from "@/hooks/use-history-swipe"
 import { imageFilesFromClipboardApi } from "@/lib/clipboard-images"
 import { toErrorMessage } from "@/lib/app-error"
 import { isNoActiveTurnRejection } from "@/lib/turn-busy"
@@ -60,6 +62,7 @@ import type {
   AgentSkillItem,
   AgentType,
   AvailableCommandInfo,
+  DbConversationSummary,
   PromptCapabilitiesInfo,
   PromptDraft,
   PromptInputBlock,
@@ -71,6 +74,7 @@ import {
   ATTACH_PAGE_TO_SESSION_EVENT,
   ATTACH_SESSION_TO_SESSION_EVENT,
   APPEND_TEXT_TO_SESSION_EVENT,
+  takePendingSessionAttachment,
   type AttachFileToSessionDetail,
   type AttachPageToSessionDetail,
   type AttachSessionToSessionDetail,
@@ -365,6 +369,7 @@ export function MessageInput({
   tall = false,
 }: MessageInputProps) {
   const t = useTranslations("Folder.chat.messageInput")
+  const isCoarsePointer = useIsCoarsePointer()
   const tQueue = useTranslations("Folder.chat.messageQueue")
   // Kept as a separate binding from `t` so its call sites — exclusively
   // upload / attachment toasts — read as a single coherent group when
@@ -857,14 +862,15 @@ export function MessageInput({
     detectSlashTriggerRef.current?.()
   }, [syncComposerEmpty, scheduleDraftSave])
 
-  // Arrow-key prompt history. RichComposer only calls this from the document
-  // edge, so the caret keeps moving line by line inside a multi-line entry. A
-  // step lands on the edge it travelled FROM — the top for older, the bottom
-  // for newer — so pressing the same key again keeps going. Editing ends the
-  // navigation (see `handleComposerChange`); re-entry always starts at the
-  // newest prompt. Returns true to consume the key.
+  // Arrow-key / swipe prompt history. RichComposer only calls this from the
+  // document edge, so the caret keeps moving line by line inside a multi-line
+  // entry; on touch devices the send row routes horizontal swipes here too
+  // (`useHistorySwipe`). A step lands on the edge it travelled FROM — the top
+  // for older, the bottom for newer — so pressing the same key again keeps
+  // going. Editing ends the navigation (see `handleComposerChange`); re-entry
+  // always starts at the newest prompt. Returns true to consume the key.
   const handleHistoryKeyDown = useCallback(
-    (direction: HistoryDirection): boolean => {
+    (direction: HistoryDirection, opts?: { focus?: boolean }): boolean => {
       // Queue-edit mode owns the composer's content: recalling a chat prompt
       // would replace the queued message being edited.
       if (isEditingQueueItem) return false
@@ -905,15 +911,31 @@ export function MessageInput({
         historyDraftRef.current = null
       }
       // Land on the edge we travelled from, so the SAME key keeps stepping.
-      editorRef.current
-        ?.getEditor()
-        ?.commands.focus(direction === "older" ? "start" : "end")
+      // Swipes pass focus: false — a mobile recall is a browse gesture, and
+      // stealing focus would pop the soft keyboard over every swipe.
+      if (opts?.focus !== false) {
+        editorRef.current
+          ?.getEditor()
+          ?.commands.focus(direction === "older" ? "start" : "end")
+      }
       applyingHistoryRef.current = false
       historyIndexRef.current = step.index
       return true
     },
     [flushDraftSave, getSentHistory, isEditingQueueItem]
   )
+
+  // Mobile counterpart of the Arrow keys: a horizontal swipe across the send
+  // row steps through sent prompts (left = older, right = newer). The
+  // handlers are only spread when the device has a coarse pointer, so a
+  // desktop mouse drag can never recall a prompt.
+  const handleHistorySwipe = useCallback(
+    (direction: HistoryDirection) => {
+      handleHistoryKeyDown(direction, { focus: false })
+    },
+    [handleHistoryKeyDown]
+  )
+  const historySwipe = useHistorySwipe({ onSwipe: handleHistorySwipe })
 
   const handleComposerReady = useCallback(() => {
     setComposerReady(true)
@@ -1429,21 +1451,17 @@ export function MessageInput({
     }
   }, [attach, attachmentTabId])
 
-  // Sidebar "add to session": drop a session mention badge — the very same
-  // reference the `@` panel's Sessions group inserts — at the caret. Deduped by
-  // uri like the file badges, so repeated menu clicks can't stack the same
+  // Sidebar "add to session" and the queued "At in new conversation" handoff
+  // both land here: drop a session mention badge — the very same reference the
+  // `@` panel's Sessions group inserts — at the caret. Deduped by uri like the
+  // file badges, so repeated menu clicks can't stack the same
   // `codeg://session/<id>` twice; the focus still lands in the composer either
   // way so the user sees where the badge went.
-  useEffect(() => {
-    if (!attachmentTabId) return
-
-    const handleAttachSession = (event: Event) => {
-      const customEvent = event as CustomEvent<AttachSessionToSessionDetail>
-      if (!customEvent.detail) return
-      if (customEvent.detail.tabId !== attachmentTabId) return
+  const insertSessionMention = useCallback(
+    (conversation: DbConversationSummary) => {
       const editor = editorRef.current?.getEditor()
       if (!editor) return
-      const { reference } = sessionToSuggestion(customEvent.detail.conversation)
+      const { reference } = sessionToSuggestion(conversation)
       if (
         reference.uri &&
         editorHasReference(editor, "session", reference.uri)
@@ -1452,6 +1470,23 @@ export function MessageInput({
         return
       }
       editor.chain().focus().insertReference(reference).insertContent(" ").run()
+    },
+    []
+  )
+
+  useEffect(() => {
+    if (!attachmentTabId) return
+
+    const handleAttachSession = (event: Event) => {
+      const customEvent = event as CustomEvent<AttachSessionToSessionDetail>
+      if (!customEvent.detail) return
+      if (customEvent.detail.tabId !== attachmentTabId) return
+      // Drain any queued mention for this tab first: it was left here because
+      // the emitter fired before this composer mounted (see
+      // queuePendingSessionAttachment), and honoring queue + live event would
+      // insert the badge twice.
+      takePendingSessionAttachment(attachmentTabId)
+      insertSessionMention(customEvent.detail.conversation)
     }
 
     window.addEventListener(
@@ -1464,7 +1499,23 @@ export function MessageInput({
         handleAttachSession
       )
     }
-  }, [attachmentTabId])
+  }, [attachmentTabId, insertSessionMention])
+
+  // Drains the "At in new conversation" handoff: the emitter queued the mention
+  // and emitted before this composer existed. Keyed on `composerReady` so it
+  // waits for the async editor, and declared after the draft-hydration effect
+  // so hydration can't clobber the badge. The rAF defers the insert out of the
+  // effect's render phase — insertReference flushes the reference NodeView
+  // synchronously, matching the injectContent effect below.
+  useEffect(() => {
+    if (!attachmentTabId || !composerReady) return
+    const pending = takePendingSessionAttachment(attachmentTabId)
+    if (!pending) return
+    const raf = requestAnimationFrame(() => {
+      insertSessionMention(pending)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [attachmentTabId, composerReady, insertSessionMention])
 
   // Built-in browser "send to chat": an element the person picked, a
   // screenshot, the console. The block is page content — the backend already
@@ -2236,7 +2287,15 @@ export function MessageInput({
                 // (see above); RichComposer explains the basis.
                 className={cn("grow", editableMinHeight)}
               />
-              <div className="flex shrink-0 items-end justify-between gap-1 px-2 pb-2">
+              <div
+                className={cn(
+                  "flex shrink-0 items-end justify-between gap-1 px-2 pb-2",
+                  // Claim the horizontal axis for the history swipe while
+                  // vertical scrolling stays native.
+                  isCoarsePointer && "touch-pan-y"
+                )}
+                {...(isCoarsePointer ? historySwipe.handlers : {})}
+              >
                 <div className="flex min-w-0 items-end gap-1">
                   <ComposerAddMenu
                     disabled={disabled}

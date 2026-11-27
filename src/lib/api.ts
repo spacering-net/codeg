@@ -4853,11 +4853,11 @@ export async function reorderFolderCommands(
   return getTransport().call("reorder_folder_commands", { folderId, ids })
 }
 
-export async function bootstrapFolderCommandsFromPackageJson(
+export async function syncFolderCommandsFromPackageJson(
   folderId: number,
   folderPath: string
 ): Promise<FolderCommand[]> {
-  return getTransport().call("bootstrap_folder_commands_from_package_json", {
+  return getTransport().call("sync_folder_commands_from_package_json", {
     folderId,
     folderPath,
     includeLocal: true,
@@ -5471,6 +5471,21 @@ export function isEmptyAttachmentError(err: unknown): boolean {
   )
 }
 
+// Fallback error when an upload's HTTP failure body is not JSON — typically
+// an intermediary's HTML error page (reverse proxy) or an empty axum
+// body-limit rejection. 413 is worth translating explicitly: the upload was
+// dropped for size before reaching the handler, and that is the detail the
+// user needs to see instead of a bare status code.
+function syntheticHttpError(status: number): { code: string; message: string } {
+  if (status === 413) {
+    return {
+      code: "upload_too_large",
+      message: "HTTP 413: request body exceeds the server-side size limit",
+    }
+  }
+  return { code: "network_error", message: `HTTP ${status}` }
+}
+
 // Upload a single attachment to the server.
 //
 // Web mode: streams the file via multipart/form-data to the same origin the
@@ -5541,10 +5556,7 @@ export async function uploadAttachment(
     throw new Error("Unauthorized")
   }
   if (!res.ok) {
-    const err = await res.json().catch(() => ({
-      code: "network_error",
-      message: `HTTP ${res.status}`,
-    }))
+    const err = await res.json().catch(() => syntheticHttpError(res.status))
     throw err
   }
   return res.json()
@@ -5643,10 +5655,7 @@ async function workspaceFileFetch(
     throw new Error("Unauthorized")
   }
   if (!res.ok) {
-    const err = await res.json().catch(() => ({
-      code: "network_error",
-      message: `HTTP ${res.status}`,
-    }))
+    const err = await res.json().catch(() => syntheticHttpError(res.status))
     throw err
   }
   return res
@@ -5723,10 +5732,7 @@ export async function uploadWorkspaceFile(
         try {
           err = JSON.parse(xhr.responseText) as unknown
         } catch {
-          err = {
-            code: "network_error",
-            message: `HTTP ${xhr.status}`,
-          }
+          err = syntheticHttpError(xhr.status)
         }
         reject(err)
         return
@@ -7154,7 +7160,7 @@ export async function uploadBackupWeb(
         try {
           err = JSON.parse(xhr.responseText) as unknown
         } catch {
-          err = { code: "network_error", message: `HTTP ${xhr.status}` }
+          err = syntheticHttpError(xhr.status)
         }
         reject(err)
         return

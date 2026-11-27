@@ -29,7 +29,7 @@ import {
 // the remote server — `api.readFileBase64` would route through the remote
 // transport and try to read the local path on the wrong machine.
 import { readFileBase64 as readLocalFileBase64 } from "@/lib/tauri"
-import { extractAppCommandError } from "@/lib/app-error"
+import { extractAppCommandError, toErrorMessage } from "@/lib/app-error"
 import { readPageHandoffBlock } from "@/lib/browser/page-handoff-block"
 import { usePageHandoffName } from "@/lib/browser/use-page-handoff-name"
 import {
@@ -99,6 +99,21 @@ import {
 
 /** Console prefix, so a log line still names the surface it came from. */
 type LogLabel = string
+
+/**
+ * Deduplicated, human-readable reasons for a batch of failed uploads — the
+ * `reason` param of the `attachUploadFailed` toast. The same server rejection
+ * usually repeats across files, so collapsing duplicates keeps one line per
+ * distinct cause.
+ */
+function uploadFailureReasonSummary(failed: { reason: unknown }[]): string {
+  const reasons: string[] = []
+  for (const f of failed) {
+    const message = toErrorMessage(f.reason)
+    if (message && !reasons.includes(message)) reasons.push(message)
+  }
+  return reasons.join("; ")
+}
 
 export interface ComposerAttachmentsOptions {
   /** The editor the inline badges are inserted into. */
@@ -510,6 +525,7 @@ export function useComposerAttachments({
         toast.error(
           tAttach("attachUploadFailed", {
             names: failed.map((r) => r.name).join(", "),
+            reason: uploadFailureReasonSummary(failed),
           })
         )
       }
@@ -685,6 +701,7 @@ export function useComposerAttachments({
         toast.error(
           tAttach("attachUploadFailed", {
             names: failed.map((r) => r.name).join(", "),
+            reason: uploadFailureReasonSummary(failed),
           })
         )
       }
@@ -887,6 +904,7 @@ export function useComposerAttachments({
         toast.error(
           tAttach("attachUploadFailed", {
             names: failed.map((f) => f.name).join(", "),
+            reason: uploadFailureReasonSummary(failed),
           })
         )
       }

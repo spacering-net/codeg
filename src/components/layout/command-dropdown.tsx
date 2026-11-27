@@ -15,9 +15,9 @@ import {
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useTerminalContext } from "@/contexts/terminal-context"
 import {
-  bootstrapFolderCommandsFromPackageJson,
   listFolderCommands,
   runLocalCommand,
+  syncFolderCommandsFromPackageJson,
   terminalStop,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
@@ -36,6 +36,7 @@ import {
   useCommandTerminalLinkStore,
 } from "@/stores/command-terminal-link-store"
 import { cn } from "@/lib/utils"
+import { useLongPressAction } from "@/hooks/use-long-press-action"
 import { CommandManageDialog } from "./command-manage-dialog"
 
 function getSelectedCommandId(folderId: number): number | null {
@@ -55,6 +56,59 @@ function setSelectedCommandId(folderId: number, cmdId: number) {
   }
 }
 
+interface CommandMenuItemProps {
+  cmd: FolderCommand
+  isActive: boolean
+  onSelect: () => void
+  onRun: () => void
+}
+
+/**
+ * One row of the command menu. Short press keeps the long-standing behavior —
+ * select the command (the pill next to the trigger then exposes run/stop);
+ * a long press skips straight to running the command, which also selects it
+ * (`runCommand` → `selectCommand`), so the pill follows the launched command.
+ */
+function CommandMenuItem({
+  cmd,
+  isActive,
+  onSelect,
+  onRun,
+}: CommandMenuItemProps) {
+  const { handlers } = useLongPressAction({
+    onPress: onSelect,
+    onLongPress: onRun,
+  })
+  const t = useTranslations("Folder.commandDropdown")
+  return (
+    <DropdownMenuItem
+      {...handlers}
+      className={`flex items-center justify-between gap-4 ${
+        isActive ? "bg-accent/60" : ""
+      }`}
+    >
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className="truncate">{cmd.name}</span>
+        {isLocalCommand(cmd) ? (
+          <Monitor
+            className="h-3 w-3 shrink-0 text-muted-foreground"
+            aria-label={t("localCommand")}
+          />
+        ) : null}
+        {isGlobalCommandId(cmd.id) ? (
+          <Globe
+            className="h-3 w-3 shrink-0 text-muted-foreground"
+            aria-label={t("globalCommand")}
+          />
+        ) : null}
+      </span>
+      <span className="text-xs text-muted-foreground font-mono truncate max-w-32">
+        {cmd.command}
+      </span>
+    </DropdownMenuItem>
+  )
+}
+
 export function CommandDropdown() {
   const t = useTranslations("Folder.commandDropdown")
   const { activeFolder: folder } = useActiveFolder()
@@ -67,7 +121,9 @@ export function CommandDropdown() {
   // Shown in every folder, after the folder's own (see `global-commands`).
   const [globalCommands, setGlobalCommands] = useState<FolderCommand[]>([])
   const [manageOpen, setManageOpen] = useState(false)
-  const [bootstrapping, setBootstrapping] = useState(false)
+  // Controlled so a long-press run can close the menu programmatically.
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const [selectedCommandId, setSelectedCommandIdState] = useState<
     number | null
   >(null)
@@ -154,25 +210,19 @@ export function CommandDropdown() {
     let ignore = false
     const loadCommands = async () => {
       try {
-        setBootstrapping(false)
-        const data = await listFolderCommands(folderId)
-        if (ignore) return
-
-        if (data.length > 0 || !folderPath) {
-          setCommands(data)
-          return
-        }
-
-        setBootstrapping(true)
-        const bootstrapped = await bootstrapFolderCommandsFromPackageJson(
+        setSyncing(true)
+        // Add-only sync on every open: package.json scripts that have no
+        // saved command with the same name are appended; existing commands
+        // (edited, reordered, or removed from package.json) are untouched.
+        const data = await syncFolderCommandsFromPackageJson(
           folderId,
           folderPath
         )
-        if (!ignore) setCommands(bootstrapped)
+        if (!ignore) setCommands(data)
       } catch (err) {
         console.error("Failed to load commands:", err)
       } finally {
-        if (!ignore) setBootstrapping(false)
+        if (!ignore) setSyncing(false)
       }
     }
 
@@ -332,10 +382,10 @@ export function CommandDropdown() {
           size="sm"
           className="h-6 rounded-full px-2 text-xs gap-1 hover:text-foreground/80"
           onClick={() => setManageOpen(true)}
-          disabled={bootstrapping}
+          disabled={syncing}
         >
           <Plus className="h-3 w-3" />
-          {bootstrapping ? t("loading") : t("addCommand")}
+          {syncing ? t("loading") : t("addCommand")}
         </Button>
       ) : (
         // Has commands → one cohesive control: [name ▼ | run/stop]. The whole
@@ -346,7 +396,7 @@ export function CommandDropdown() {
         // `--muted`, so a `bg-muted`/`bg-accent` hover would be invisible against
         // it in light mode.
         <div className="group/cmd flex items-center rounded-full text-xs transition-colors hover:bg-foreground/10">
-          <DropdownMenu>
+          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
@@ -358,32 +408,16 @@ export function CommandDropdown() {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-56">
               {allCommands.map((cmd) => (
-                <DropdownMenuItem
+                <CommandMenuItem
                   key={cmd.id}
-                  onClick={() => handleSelectCommand(cmd)}
-                  className={`flex items-center justify-between gap-4 ${
-                    cmd.id === activeCmd?.id ? "bg-accent/60" : ""
-                  }`}
-                >
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate">{cmd.name}</span>
-                    {isLocalCommand(cmd) ? (
-                      <Monitor
-                        className="h-3 w-3 shrink-0 text-muted-foreground"
-                        aria-label={t("localCommand")}
-                      />
-                    ) : null}
-                    {isGlobalCommandId(cmd.id) ? (
-                      <Globe
-                        className="h-3 w-3 shrink-0 text-muted-foreground"
-                        aria-label={t("globalCommand")}
-                      />
-                    ) : null}
-                  </span>
-                  <span className="text-xs text-muted-foreground font-mono truncate max-w-32">
-                    {cmd.command}
-                  </span>
-                </DropdownMenuItem>
+                  cmd={cmd}
+                  isActive={cmd.id === activeCmd?.id}
+                  onSelect={() => handleSelectCommand(cmd)}
+                  onRun={() => {
+                    setMenuOpen(false)
+                    void runCommand(cmd)
+                  }}
+                />
               ))}
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setManageOpen(true)}>

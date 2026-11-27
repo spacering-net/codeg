@@ -207,14 +207,15 @@ export interface RichComposerProps {
    * selection already sits at the document's first (`"older"`) or last
    * (`"newer"`) position — so the caret keeps moving line by line inside a
    * multi-line entry, and only a press at an edge switches prompts. Return true
-   * to consume the key.
+   * to consume the key. `opts.focus: false` (touch swipes) skips the refocus
+   * the keyboard path uses to land the caret on the travelled edge.
    *
    * Optional on purpose: the task and automation composers pass no handler and
    * keep the editor's default Arrow behaviour.
    */
   onHistoryKeyDown?: (
     direction: HistoryDirection,
-    event: KeyboardEvent
+    opts?: { focus?: boolean }
   ) => boolean
   /**
    * Called on paste before the editor handles it. Return true when the paste was
@@ -493,10 +494,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
                 ? selection.from === Selection.atStart(doc).from
                 : selection.to === Selection.atEnd(doc).to)
             if (atBoundary) {
-              return onHistoryKeyDownRef.current(
-                older ? "older" : "newer",
-                event
-              )
+              return onHistoryKeyDownRef.current(older ? "older" : "newer")
             }
           }
           // Paste without formatting: Ctrl/⌘+Shift+V routes to the host, which
