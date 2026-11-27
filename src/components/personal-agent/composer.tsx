@@ -368,6 +368,7 @@ export function PersonalAgentComposer({
     // that is what the send drops; a box opened again meanwhile restores it,
     // locked until then.
     writeDraft()
+    const sentDraft = JSON.stringify(loadMessageInputDraftV2(draftKey))
     const blocks = [...embeddedBlocks(), ...attach.imagePromptBlocks()]
     // What this send settles, taken now — not read again from the page
     // when it returns.
@@ -396,9 +397,12 @@ export function PersonalAgentComposer({
       ui.clearAnswerSending(bot, requestId)
       if (sentAnswer) ui.clearPendingAnswer(bot, sentAnswer.itemId)
       if (!mounted.current) {
-        // Gone, the box saved what it held — what went (it was locked) —
-        // and a box opened for the assistant since is locked too.
-        clearMessageInputDraftV2(draftKey)
+        // Gone, the box saved what it held — what went (it was locked), and
+        // a box opened for the assistant since is locked too. Unless it was
+        // written over since (from another window).
+        if (JSON.stringify(loadMessageInputDraftV2(draftKey)) === sentDraft) {
+          clearMessageInputDraftV2(draftKey)
+        }
         return
       }
       editorRef.current?.clear()
