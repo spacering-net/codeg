@@ -275,12 +275,18 @@ export function PersonalAgentComposer({
   const noteDraft = useCallback(() => {
     const ed = editorRef.current
     if (!ed) return
+    // While this assistant's send is out the box is locked, so nothing here
+    // is an edit — only the restore or the clear after it. The stored draft
+    // has to stay exactly what went: the send compares against it to drop
+    // it, and a restore's round-trip (an empty paragraph left by a stripped
+    // badge reserializes differently) would keep the sent text alive.
+    if (outgoing.has(draftKey)) return
     pendingDraft.current = ed.isEmpty()
       ? null
       : stripEmbeddedReferences(ed.getJSON())
     if (draftTimer.current != null) window.clearTimeout(draftTimer.current)
     draftTimer.current = window.setTimeout(writeDraft, DRAFT_SAVE_MS)
-  }, [writeDraft])
+  }, [draftKey, writeDraft])
   useEffect(() => writeDraft, [writeDraft])
 
   // The saved draft goes back in once the editor is there — before a card's
