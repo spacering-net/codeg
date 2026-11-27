@@ -60,6 +60,19 @@ fn refused(message: String) -> AppCommandError {
     AppCommandError::invalid_input(message)
 }
 
+/// Run the owner's act `work` on a task of its own and wait for it: a
+/// caller that goes away midway — in server mode a closed tab drops its
+/// request — does not cut it short between two of its writes (a message
+/// recorded but not handed over, a card pressed but not answered, a stop
+/// booked but its work still running).
+pub(crate) async fn on_own_task<T: Send + 'static>(
+    work: impl std::future::Future<Output = Result<T, AppCommandError>> + Send + 'static,
+) -> Result<T, AppCommandError> {
+    tokio::spawn(work)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?
+}
+
 /// A refusal the page words in the owner's language when it can.
 fn refusal(r: crate::personal_agent::refusal::Refusal) -> AppCommandError {
     let err = AppCommandError::invalid_input(r.message);
@@ -180,17 +193,17 @@ pub async fn personal_agent_items_core(
     Ok(out)
 }
 
-async fn item_peer(
+async fn message_source(
     db: &AppDatabase,
     i: &crate::db::entities::personal_agent_item::Model,
-) -> Option<serde_json::Value> {
-    crate::personal_agent::today::item_peer(db, i).await
+) -> crate::personal_agent::today::MessageSource {
+    crate::personal_agent::today::message_source(db, i).await
 }
 
 fn item_info(
     i: crate::db::entities::personal_agent_item::Model,
     dispatch_state: Option<DispatchState>,
-    peer: Option<serde_json::Value>,
+    source: crate::personal_agent::today::MessageSource,
 ) -> ItemInfo {
     ItemInfo {
         id: i.id,
@@ -215,7 +228,9 @@ fn item_info(
         closed_how: i.closed_how,
         answer_row_id: i.answer_row_id,
         answer_state: i.answer_state,
-        peer,
+        peer: source.peer,
+        written: source.written,
+        direction: source.direction,
     }
 }
 
@@ -335,7 +350,10 @@ pub(crate) async fn dispatch_infos(
                 .map(|c| c.folder_id),
             None => None,
         };
+        let stopped = crate::personal_agent::stop::stopped_by_of(&d);
         out.push(DispatchInfo {
+            stopped_by: stopped.as_ref().map(|b| b.key()),
+            stop_reason: stopped.as_ref().and_then(|b| b.reason()).map(str::to_string),
             id: d.id,
             mode: d.mode,
             work: crate::personal_agent::dispatch::work_of(&d),
@@ -694,6 +712,7 @@ pub async fn personal_agent_turn_steps_core(
 /// waits with no time), or snoozed `until` — `15m`, `1h`, `tomorrow`
 /// (morning) or a time (6.1). Handed-out work ends with the work itself.
 /// The panel's act comes with what takes it back (`undo`).
+#[allow(clippy::too_many_arguments)]
 pub async fn personal_agent_item_act_core(
     db: &AppDatabase,
     bot_id: Option<i32>,
@@ -701,17 +720,22 @@ pub async fn personal_agent_item_act_core(
     act: String,
     until: Option<String>,
     from: Option<String>,
+    expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<ItemActResult, AppCommandError> {
     let engine = engine(bot_id).await?;
-    let acted = engine
-        .settle_item_from(
-            item_id,
-            &act,
-            until.as_deref(),
-            crate::personal_agent::reminders::OpSource::from_page(from.as_deref()),
-        )
-        .await
-        .map_err(refusal)?;
+    let acted = on_own_task(async move {
+        engine
+            .settle_item_seen(
+                item_id,
+                &act,
+                until.as_deref(),
+                crate::personal_agent::reminders::OpSource::from_page(from.as_deref()),
+                expect_updated_at,
+            )
+            .await
+            .map_err(refusal)
+    })
+    .await?;
     Ok(ItemActResult {
         item: item_info_now(db, acted.item).await?,
         undo: acted.undo,
@@ -729,7 +753,8 @@ pub async fn personal_agent_item_undo_core(
     undo: i32,
 ) -> Result<ItemInfo, AppCommandError> {
     let engine = engine(bot_id).await?;
-    let item = engine.undo_item(item_id, undo).await.map_err(refusal)?;
+    let item =
+        on_own_task(async move { engine.undo_item(item_id, undo).await.map_err(refusal) }).await?;
     item_info_now(db, item).await
 }
 
@@ -742,8 +767,8 @@ async fn item_info_now(
         Some(id) => svc::get_dispatch(&db.conn, id).await?.map(|d| d.state),
         None => None,
     };
-    let peer = item_peer(db, &item).await;
-    Ok(item_info(item, dispatch_state, peer))
+    let source = message_source(db, &item).await;
+    Ok(item_info(item, dispatch_state, source))
 }
 
 /// One codeg window's beat (6.2, 1.12): whether it has the focus, and how
@@ -869,8 +894,8 @@ async fn activity_in(
             }
         }
         item_bots.insert(i.id, i.bot_id.unwrap_or(bot));
-        let peer = item_peer(db, &i).await;
-        items.push(item_info(i, dispatch.map(|d| d.state), peer));
+        let source = message_source(db, &i).await;
+        items.push(item_info(i, dispatch.map(|d| d.state), source));
     }
     let routines = crate::personal_agent::routines::routines_of(db, Some(bot))
         .await
@@ -1123,12 +1148,32 @@ pub async fn personal_agent_history_rebuild_core(
 
 /// The owner's [Stop] on a task card (8.5, 4.10): this one piece of work,
 /// where it runs. False when it is past stopping (done, merging).
+/// The owner's [Stop] on a piece of work's card (5.7), with what the card
+/// read: the dispatch's version, and its board task's run and version. A
+/// card that read it before it changed (another window followed it up
+/// meanwhile) is told `changed`, and nothing is stopped.
 pub async fn personal_agent_dispatch_stop_core(
     bot_id: Option<i32>,
     dispatch_id: i32,
-) -> Result<bool, AppCommandError> {
+    expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    expect_run_seq: Option<i32>,
+    expect_task_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<crate::personal_agent::stop::StopReply, AppCommandError> {
+    use crate::personal_agent::stop::{StopExpect, StopReply, StoppedBy};
     let engine = engine(bot_id).await?;
-    engine.stop_one(dispatch_id).await.map_err(refused)
+    let expect = StopExpect {
+        updated_at: expect_updated_at,
+        run_seq: expect_run_seq,
+        task_updated_at: expect_task_updated_at,
+    };
+    on_own_task(async move {
+        engine
+            .stop_one(dispatch_id, StoppedBy::Owner, expect)
+            .await
+            .map(|o| StopReply::from(&o))
+            .map_err(refused)
+    })
+    .await
 }
 
 /// What the owner's answer on a question card came to (7.3.1).
@@ -1270,15 +1315,21 @@ pub async fn personal_agent_send_core(
         if blocks.is_some_and(|b| !b.is_empty()) {
             return Err(refused("a button's message carries no attachments".to_string()));
         }
-        return engine
-            .send_card_reply(text, row_id, card)
-            .await
-            .map_err(refused);
+        return on_own_task(async move {
+            engine
+                .send_card_reply(text, row_id, card)
+                .await
+                .map_err(refused)
+        })
+        .await;
     }
-    engine
-        .send_from_page(text, blocks.unwrap_or_default(), reply_to, answers_item)
-        .await
-        .map_err(refusal)
+    on_own_task(async move {
+        engine
+            .send_from_page(text, blocks.unwrap_or_default(), reply_to, answers_item)
+            .await
+            .map_err(refusal)
+    })
+    .await
 }
 
 /// The owner pressed a button on one of the assistant's cards that acts
@@ -1411,7 +1462,8 @@ pub async fn personal_agent_resend_core(
     bot_id: Option<i32>,
     row_id: i32,
 ) -> Result<TimelineRow, AppCommandError> {
-    engine(bot_id).await?.resend(row_id).await.map_err(refused)
+    let engine = engine(bot_id).await?;
+    on_own_task(async move { engine.resend(row_id).await.map_err(refused) }).await
 }
 
 /// The owner has seen the page up to row `up_to`. Not an act of the agent's,
@@ -1513,12 +1565,16 @@ pub async fn personal_agent_notice_act_core(
     notice_id: i32,
     action: String,
     text: Option<String>,
+    expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<TimelineRow, AppCommandError> {
-    engine(bot_id)
-        .await?
-        .act_on_notice_worded(notice_id, &action, text)
-        .await
-        .map_err(refusal)
+    let engine = engine(bot_id).await?;
+    on_own_task(async move {
+        engine
+            .act_on_notice_seen(notice_id, &action, text, expect_updated_at)
+            .await
+            .map_err(refusal)
+    })
+    .await
 }
 
 pub async fn personal_agent_answer_question_core(
@@ -1723,17 +1779,20 @@ pub async fn personal_agent_choice_answer_core(
     project_id: Option<i32>,
     answers: Option<Vec<crate::personal_agent::meet::ChoicePick>>,
 ) -> Result<TimelineRow, AppCommandError> {
-    engine(bot_id)
-        .await?
-        .answer_choice(
-            notice_id,
-            key.as_deref(),
-            text.as_deref(),
-            project_id,
-            answers.as_deref(),
-        )
-        .await
-        .map_err(refused)
+    let engine = engine(bot_id).await?;
+    on_own_task(async move {
+        engine
+            .answer_choice(
+                notice_id,
+                key.as_deref(),
+                text.as_deref(),
+                project_id,
+                answers.as_deref(),
+            )
+            .await
+            .map_err(refused)
+    })
+    .await
 }
 
 /// The projects the assistants may keep an eye on (`prefs.projects`, 5.4):
@@ -1817,8 +1876,9 @@ pub async fn personal_agent_item_act(
     act: String,
     until: Option<String>,
     from: Option<String>,
+    expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<ItemActResult, AppCommandError> {
-    personal_agent_item_act_core(&db, bot_id, item_id, act, until, from).await
+    personal_agent_item_act_core(&db, bot_id, item_id, act, until, from, expect_updated_at).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1956,8 +2016,18 @@ pub async fn personal_agent_avatar_png(
 pub async fn personal_agent_dispatch_stop(
     bot_id: Option<i32>,
     dispatch_id: i32,
-) -> Result<bool, AppCommandError> {
-    personal_agent_dispatch_stop_core(bot_id, dispatch_id).await
+    expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    expect_run_seq: Option<i32>,
+    expect_task_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<crate::personal_agent::stop::StopReply, AppCommandError> {
+    personal_agent_dispatch_stop_core(
+        bot_id,
+        dispatch_id,
+        expect_updated_at,
+        expect_run_seq,
+        expect_task_updated_at,
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -2261,8 +2331,9 @@ pub async fn personal_agent_notice_act(
     notice_id: i32,
     action: String,
     text: Option<String>,
+    expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<TimelineRow, AppCommandError> {
-    personal_agent_notice_act_core(bot_id, notice_id, action, text).await
+    personal_agent_notice_act_core(bot_id, notice_id, action, text, expect_updated_at).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -2425,4 +2496,36 @@ pub async fn personal_agent_starter(
     notice_id: i32,
 ) -> Result<TimelineRow, AppCommandError> {
     personal_agent_starter_core(bot_id, notice_id).await
+}
+
+#[cfg(test)]
+mod own_task_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// The owner's act runs to its end though its caller went away midway
+    /// (a closed tab drops its request).
+    #[tokio::test]
+    async fn an_act_on_its_own_task_ends_though_its_caller_went_away() {
+        let (go, wait) = tokio::sync::oneshot::channel::<()>();
+        let done = Arc::new(AtomicBool::new(false));
+        let d = done.clone();
+        let call = on_own_task(async move {
+            let _ = wait.await;
+            d.store(true, Ordering::SeqCst);
+            Ok::<_, AppCommandError>(())
+        });
+        // The caller gives up before the act is through.
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(20), call)
+            .await
+            .is_err());
+        go.send(()).unwrap();
+        for _ in 0..200 {
+            if done.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(done.load(Ordering::SeqCst), "it ran to its end");
+    }
 }

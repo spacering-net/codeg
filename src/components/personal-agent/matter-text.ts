@@ -14,7 +14,7 @@ import { extractAppCommandError } from "@/lib/app-error"
 import type { ItemInfo } from "@/lib/types"
 
 import { useActivityTranslate } from "./activity-text"
-import { dueWhen, humanDuration } from "./due-text"
+import { dueWhen, dueWhenInSentence, humanDuration } from "./due-text"
 
 /** How long since `iso`, in a few words: "just now", "3 min", "2 h". */
 export function useWaited(): (iso: string, now: number) => string {
@@ -27,11 +27,29 @@ export function useWaited(): (iso: string, now: number) => string {
   }
 }
 
+/** How long since `iso` as a length of time — "1 min" at the least, never
+ *  "just now" — for a sentence that says it waited that long ("waiting
+ *  {wait}", "已等 {wait}"). */
+export function useWaitedFor(): (iso: string, now: number) => string {
+  const tw = useActivityTranslate()
+  return (iso, now) => {
+    const secs = Math.max(0, (now - Date.parse(iso)) / 1000)
+    return humanDuration(tw, Number.isFinite(secs) ? secs : 0)
+  }
+}
+
 /** A time as a row says it, against now. */
 export function useWhen(): (iso: string) => string {
   const tw = useActivityTranslate()
   const locale = useLocale()
   return (iso) => dueWhen(tw, iso, Date.now(), locale)
+}
+
+/** A due time as it reads inside a sentence ("reminds you at 15:00"). */
+export function useWhenInSentence(): (iso: string) => string {
+  const tw = useActivityTranslate()
+  const locale = useLocale()
+  return (iso) => dueWhenInSentence(tw, iso, Date.now(), locale)
 }
 
 /** The words of a key under `PersonalAgent` with the data the backend gave
@@ -77,21 +95,25 @@ export function useMatterError(): (e: unknown) => string {
   }
 }
 
-/** A message's matter, as codeg writes it: who it waits on, and what was
- *  written. */
-const WAITING_ANSWER = /^Waiting for (.+?)'s answer: ([\s\S]*)$/
-
-/** What a message's matter says was written: its summary without codeg's
- *  "waiting for …'s answer" (said on the row's line instead). */
-export function messageText(item: ItemInfo): string {
-  const m = WAITING_ANSWER.exec(item.summary)
-  return m ? m[2]!.trim() : item.summary
+/** What a message's matter says was written, as the backend reads it off
+ *  the message's line (`written`), and whether it was written to this
+ *  assistant (`in`) rather than by it; `null` when the read carries no
+ *  line (shown as its summary). */
+export function messageWords(m: {
+  written?: string | null
+  direction?: "in" | "out" | null
+}): { text: string; toMe: boolean } | null {
+  if (m.written == null) return null
+  return { text: m.written, toMe: m.direction === "in" }
 }
 
-/** Who a message's matter waits on: its peer's name, or the one codeg's
- *  words carry for an older matter. */
+/** What a message's matter says was written: its words, or — no line in
+ *  the read — its summary. */
+export function messageText(item: ItemInfo): string {
+  return messageWords(item)?.text ?? item.summary
+}
+
+/** Who a message's matter waits on (or came from): its peer's name. */
 export function peerName(item: ItemInfo): string {
-  const name = item.peer?.name?.trim()
-  if (name) return name
-  return WAITING_ANSWER.exec(item.summary)?.[1]?.trim() ?? ""
+  return item.peer?.name?.trim() ?? ""
 }

@@ -344,6 +344,8 @@ mod tests {
             answer_row_id: None,
             answer_state: None,
             peer: None,
+            written: None,
+            direction: None,
         }
     }
 

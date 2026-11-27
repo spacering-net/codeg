@@ -350,6 +350,11 @@ struct ReplyContent {
     body_quotes: Vec<i64>,
     /// The paths its `read` calls named (7.7).
     reads: Vec<String>,
+    /// Every text run of the turn, the body's last — what the page shows of
+    /// it. `None` from a checkpoint an older codeg wrote, which kept only
+    /// the last: the page then reads the earlier runs off the turn's lines
+    /// (`turn.said`), and a list of the last alone would hide them.
+    texts: Option<Vec<crate::acp::reply_turn::ReplyText>>,
 }
 
 impl ReplyContent {
@@ -361,6 +366,7 @@ impl ReplyContent {
             quotes: s.quotes.clone(),
             body_quotes: s.last_text.as_ref().map(|t| t.quotes.clone()).unwrap_or_default(),
             reads: s.reads.clone(),
+            texts: Some(s.texts.clone()),
         }
     }
 
@@ -406,6 +412,9 @@ impl ReplyContent {
                         .collect()
                 })
                 .unwrap_or_default(),
+            texts: data
+                .get("texts")
+                .and_then(|t| serde_json::from_value(t.clone()).ok()),
         }
     }
 }
@@ -664,6 +673,25 @@ impl PersonalAgentEngine {
     #[cfg(test)]
     pub(crate) async fn hold_pump_for_test(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.pump_lock.lock().await
+    }
+
+    /// The owner messages the turn in flight carries.
+    #[cfg(test)]
+    pub(crate) async fn turn_owner_rows_for_test(&self) -> Vec<i32> {
+        self.state
+            .lock()
+            .await
+            .turn
+            .as_ref()
+            .map(|t| t.owner_row_ids.clone())
+            .unwrap_or_default()
+    }
+
+    /// Hand the owner's message `row` to the turn in flight, as sending it
+    /// does.
+    #[cfg(test)]
+    pub(crate) async fn give_way_for_test(&self, row: TimelineRow) -> TimelineRow {
+        self.give_way_to(row, &[]).await
     }
 
     /// Put `rows` on the turn in flight as the owner messages it carries.
@@ -1099,6 +1127,44 @@ impl PersonalAgentEngine {
     }
 
     /// Write one timeline row and broadcast it.
+    /// Record `row`, owner row `from` sent again, and show it: `None` when
+    /// `from` was sent again already ([`svc::insert_resent_row`]).
+    async fn push_resent_row(
+        &self,
+        row: NewRow,
+        from: i32,
+    ) -> Result<Option<TimelineRow>, super::refusal::Refusal> {
+        let inserted = svc::insert_resent_row(&self.db.conn, self.bot().await, row, from)
+            .await
+            .map_err(|e| e.to_string())?
+            .map(svc::to_row);
+        if let Some(r) = &inserted {
+            self.emit_rows(vec![r.clone()]);
+            if let Ok(Some(first)) = svc::get_row(&self.db.conn, from).await {
+                self.emit_rows(vec![svc::to_row(first)]);
+            }
+        }
+        Ok(inserted)
+    }
+
+    /// The copy owner row `from` was sent again as.
+    async fn copy_of(&self, from: Option<i32>) -> Result<TimelineRow, String> {
+        let first = match from {
+            Some(id) => svc::get_row(&self.db.conn, id).await.map_err(|e| e.to_string())?,
+            None => None,
+        };
+        let copy = first
+            .as_ref()
+            .and_then(|r| matter_svc::row_data(r)["resent_as"].as_i64())
+            .and_then(|id| i32::try_from(id).ok())
+            .ok_or("could not record the message")?;
+        svc::get_row(&self.db.conn, copy)
+            .await
+            .map_err(|e| e.to_string())?
+            .map(svc::to_row)
+            .ok_or_else(|| "could not record the message".to_string())
+    }
+
     pub(super) async fn push_row(&self, row: NewRow) -> Option<TimelineRow> {
         match svc::insert_row(&self.db.conn, self.bot().await, row).await {
             Ok(m) => {
@@ -1213,6 +1279,7 @@ impl PersonalAgentEngine {
             None,
             ReadMark::Keep,
             matter_svc::AnswerMove::Revert,
+            Some(batch_id),
         )
         .await
         .unwrap_or_default();
@@ -1973,10 +2040,28 @@ impl PersonalAgentEngine {
         self.emit(PersonalAgentChange::Reply {
             row_id,
             current: snap.current.clone(),
+            texts: snap.texts.clone(),
+            ver: snap.ver,
         });
         if checkpoint {
             self.checkpoint_reply(row_id, &snap).await;
         }
+    }
+
+    /// Push the reply in flight now, not after the push's usual gather: a
+    /// row the turn writes next (a message, a piece of work) is shown after
+    /// the text it was written after, never before it. (Its checkpoint is
+    /// the usual push's to write.)
+    pub(super) async fn push_reply_now(&self) {
+        let Some((row_id, snap)) = self.reply_snapshot().await else {
+            return;
+        };
+        self.emit(PersonalAgentChange::Reply {
+            row_id,
+            current: snap.current,
+            texts: snap.texts,
+            ver: snap.ver,
+        });
     }
 
     /// The checkpoint a push left for later.
@@ -2013,6 +2098,11 @@ impl PersonalAgentEngine {
             );
             map.insert("step_count".into(), snap.step_count.into());
             map.insert(
+                "texts".into(),
+                serde_json::to_value(&snap.texts).unwrap_or_default(),
+            );
+            map.insert("ver".into(), snap.ver.into());
+            map.insert(
                 "quotes".into(),
                 serde_json::to_value(&snap.quotes).unwrap_or_default(),
             );
@@ -2021,7 +2111,9 @@ impl PersonalAgentEngine {
                 serde_json::to_value(&snap.reads).unwrap_or_default(),
             );
         }
-        if let Ok(true) = svc::checkpoint_reply_row(&self.db.conn, row_id, data).await {
+        // Written in tasks of their own, an older checkpoint may come after a
+        // newer one: it is not written over it.
+        if let Ok(true) = svc::checkpoint_reply_row(&self.db.conn, row_id, data, snap.ver).await {
             if let Ok(Some(updated)) = svc::get_row(&self.db.conn, row_id).await {
                 self.emit_rows(vec![svc::to_row(updated)]);
             }
@@ -2091,6 +2183,14 @@ impl PersonalAgentEngine {
         let mut data = data;
         if let (Some(covers), Some(map)) = (covers.as_ref(), data.as_object_mut()) {
             map.insert("covers".into(), serde_json::json!(covers));
+        }
+        // Every run it said — not from a checkpoint an older codeg wrote: the
+        // page reads those runs off the turn's lines, as it did.
+        if let (Some(texts), Some(map)) = (content.texts.as_ref(), data.as_object_mut()) {
+            map.insert(
+                "texts".into(),
+                serde_json::to_value(texts).unwrap_or_default(),
+            );
         }
         match svc::settle_reply_row(&self.db.conn, row_id, content.text, data, reply_to).await {
             Ok(Some(row)) => {
@@ -3453,11 +3553,20 @@ impl PersonalAgentEngine {
         } else {
             Vec::new()
         };
-        for o in &owners {
-            let data = o
-                .data
-                .as_deref()
-                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok());
+        let owner_data: Vec<Option<serde_json::Value>> = owners
+            .iter()
+            .map(|o| {
+                o.data
+                    .as_deref()
+                    .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+            })
+            .collect();
+        let linked = linked_answers(
+            &self.db.conn,
+            owners.iter().zip(&owner_data).map(|(o, d)| (o.id, d.as_ref())),
+        )
+        .await;
+        for (o, data) in owners.iter().zip(owner_data) {
             owner_lines.push(OwnerLine {
                 id: o.id,
                 quote: match o.reply_to {
@@ -3466,7 +3575,7 @@ impl PersonalAgentEngine {
                 },
                 clicked: super::card_acts::clicked_of(o),
                 text: super::messages::owner_text_for_brain(&o.body, &team),
-                notes: owner_notes(data.as_ref(), me),
+                notes: owner_notes(data.as_ref(), me, o.id, &linked),
             });
         }
         // Events that gave way to the owner's message follow it: the message
@@ -3612,13 +3721,29 @@ impl PersonalAgentEngine {
         reply.batch_id = Some(batch.id);
         // A routine's run, with nothing of the owner's: its reply is the
         // routine's report (6.9).
+        // A run the owner started first, should one ride with a run that
+        // came round by itself: its report shows even when it found
+        // nothing new.
         let routine = if owners.is_empty() && messages.is_empty() {
-            events
+            let runs: Vec<serde_json::Value> = events
                 .iter()
                 .filter(|e| e.kind == super::routines::ROUTINE_EVENT)
-                .find_map(|e| e.payload.as_deref())
-                .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
-                .map(|p| serde_json::json!({ "id": p["routine_id"], "title": p["title"], "seq": p["seq"] }))
+                .filter_map(|e| e.payload.as_deref())
+                .filter_map(|p| serde_json::from_str::<serde_json::Value>(p).ok())
+                .collect();
+            runs.iter()
+                .find(|p| super::routines::owner_started(p["trigger"].as_str().unwrap_or("")))
+                .or_else(|| runs.first())
+                .map(|p| {
+                    serde_json::json!({
+                        "id": p["routine_id"],
+                        "title": p["title"],
+                        "seq": p["seq"],
+                        // Whether the owner started it (`trial`, `now`): its
+                        // report shows even when it found nothing new.
+                        "trigger": p["trigger"],
+                    })
+                })
         } else {
             None
         };
@@ -4061,6 +4186,8 @@ impl PersonalAgentEngine {
                 self.emit(PersonalAgentChange::Reply {
                     row_id,
                     current: snap.current.clone(),
+                    texts: snap.texts.clone(),
+                    ver: snap.ver,
                 });
             }
             reported = self.settle_reply(
@@ -4184,6 +4311,7 @@ impl PersonalAgentEngine {
                 } else {
                     matter_svc::AnswerMove::Close
                 },
+                Some(turn.batch_id),
             )
             .await
             .unwrap_or_default();
@@ -4544,32 +4672,27 @@ impl PersonalAgentEngine {
     }
 
     /// The page's send: [`Self::send_owner_message`], answering question
-    /// `answers` when given (§5.3), run to its end on the engine's own task
-    /// — a page that goes away midway (a closed tab drops its request)
+    /// `answers` when given (§5.3). The command runs it on a task of its
+    /// own: a page that goes away midway (a closed tab drops its request)
     /// does not cut a hand-over to the turn in flight short between its
     /// claim and its outcome.
     pub async fn send_from_page(
-        self: &Arc<Self>,
+        &self,
         text: String,
         blocks: Vec<PromptInputBlock>,
         reply_to: Option<i32>,
         answers: Option<i32>,
     ) -> Result<TimelineRow, super::refusal::Refusal> {
-        let me = self.clone();
-        tokio::spawn(async move {
-            me.queue_owner_message_answering(
-                text,
-                blocks,
-                reply_to,
-                Origin::Typed,
-                None,
-                None,
-                answers,
-            )
-            .await
-        })
+        self.queue_owner_message_answering(
+            text,
+            blocks,
+            reply_to,
+            Origin::Typed,
+            None,
+            None,
+            answers,
+        )
         .await
-        .map_err(|e| e.to_string())?
     }
 
     /// Show what moving owner rows wrote: the rows, and the questions
@@ -4740,10 +4863,10 @@ impl PersonalAgentEngine {
         if !data.is_empty() {
             row.data = Some(serde_json::Value::Object(data));
         }
-        let row = match (reply_to, reply_data) {
+        let written = match (reply_to, reply_data) {
             // An answer to one of the assistant's questions.
             (_, None) if answers.is_some() => {
-                self.write_answer(row, answers.unwrap_or_default(), resent_from.is_some())
+                self.write_answer(row, answers.unwrap_or_default(), resent_from)
                     .await?
             }
             // From a card's button: the press is kept with the message.
@@ -4756,9 +4879,17 @@ impl PersonalAgentEngine {
                 let mut rows = vec![inserted.clone()];
                 rows.extend(card.map(svc::to_row));
                 self.emit_rows(rows);
-                inserted
+                Some(inserted)
             }
-            _ => self.push_row(row).await.ok_or("could not record the message")?,
+            _ => match resent_from {
+                Some(from) => self.push_resent_row(row, from).await?,
+                None => Some(self.push_row(row).await.ok_or("could not record the message")?),
+            },
+        };
+        let Some(row) = written else {
+            // Sent again already, by another send at once: that copy is the
+            // one, and it went its way — not handed over a second time.
+            return Ok(self.copy_of(resent_from).await?);
         };
         self.emit(PersonalAgentChange::Status);
         // The third request like it in a month: offered as a routine (6.7).
@@ -4779,10 +4910,11 @@ impl PersonalAgentEngine {
         &self,
         row: NewRow,
         item_id: i32,
-        resent: bool,
-    ) -> Result<TimelineRow, super::refusal::Refusal> {
+        resent_from: Option<i32>,
+    ) -> Result<Option<TimelineRow>, super::refusal::Refusal> {
         use super::refusal::{keys, Refusal};
         let bot = self.bot().await;
+        let tz = self.owner_tz().await;
         let _guard = self.reminder_lock.lock().await;
         let item = svc::get_item_of(&self.db.conn, bot, item_id)
             .await
@@ -4795,6 +4927,8 @@ impl PersonalAgentEngine {
                 row.clone(),
                 item_id,
                 &summary,
+                tz,
+                resent_from,
             )
             .await
             .map_err(|e| e.to_string())?,
@@ -4806,13 +4940,10 @@ impl PersonalAgentEngine {
             rows.extend(a.cards.into_iter().map(svc::to_row));
             self.emit_rows(rows);
             self.emit_item(item_id);
-            return Ok(inserted);
+            return Ok(Some(inserted));
         }
-        if resent {
-            return Ok(self
-                .push_row(row)
-                .await
-                .ok_or("could not record the message")?);
+        if let Some(from) = resent_from {
+            return self.push_resent_row(row, from).await;
         }
         // Not answerable now. The clock handed it to the assistant to do
         // meanwhile (an `act` matter fired): it is queued for them.
@@ -4847,20 +4978,36 @@ impl PersonalAgentEngine {
     /// takes this one in while it runs, when the agent folds steered input
     /// into the turn in flight; otherwise the message waits its turn.
     async fn give_way_to(&self, row: TimelineRow, blocks: &[PromptInputBlock]) -> TimelineRow {
+        // The turn chosen, and — read while it is still the engine's turn —
+        // which of its connection's turns it is: what a steer is aimed at,
+        // so one that goes out after this turn gave way to the next lands
+        // in neither (it is delivered as the next message instead).
         let turn = {
             let st = self.state.lock().await;
-            st.turn.as_ref().map(|t| {
-                (
-                    t.kind,
-                    t.conn_id.clone(),
-                    t.owner_row_ids.is_empty(),
-                    t.preempted,
-                    t.batch_id,
-                    t.segment_id,
-                )
-            })
+            match st.turn.as_ref() {
+                Some(t) => {
+                    let running = match self.manager.get_state(&t.conn_id).await {
+                        Some(s) => {
+                            let s = s.read().await;
+                            s.turn_in_flight.then_some(s.turns_completed)
+                        }
+                        None => None,
+                    };
+                    Some((
+                        t.kind,
+                        t.conn_id.clone(),
+                        t.owner_row_ids.is_empty(),
+                        t.preempted,
+                        t.batch_id,
+                        t.segment_id,
+                        running,
+                    ))
+                }
+                None => None,
+            }
         };
-        let Some((kind, conn_id, no_owner, preempted, batch_id, segment_id)) = turn else {
+        let Some((kind, conn_id, no_owner, preempted, batch_id, segment_id, running)) = turn
+        else {
             return row;
         };
         if kind != BatchKind::Delivery {
@@ -4884,37 +5031,63 @@ impl PersonalAgentEngine {
             }
             return row;
         }
+        // The connection's turn is over already (the engine has not heard
+        // yet): the message goes out after it, as the next.
+        let Some(turns_completed) = running else {
+            return row;
+        };
         // Claimed for the turn BEFORE it is handed over: should the turn end
         // while the hand-over is under way, its settlement finds the row
         // among its own (answered with it), and no pump finds it queued and
         // sends it a second time. A hand-over that fails gives it back.
+        // One the turn has among its own already (the delivery that started
+        // it took it) is the turn's as it is: neither counted twice nor
+        // claimed.
         {
             let mut st = self.state.lock().await;
             match st.turn.as_mut() {
                 Some(t) if t.batch_id == batch_id => {
-                    t.owner_row_ids.push(row.id);
                     // A `dispatch_wait` under way stops for it, folded in
                     // or not (then it waits for the turn to end).
                     t.owner_writes += 1;
+                    if t.owner_row_ids.contains(&row.id) {
+                        return row;
+                    }
+                    t.owner_row_ids.push(row.id);
                 }
                 _ => return row,
             }
         }
         // Marked as claimed in the same write: until the fold is known to
-        // have worked, the turn's end does not take it as read (§5.2).
-        let _ = matter_svc::claim_owner_row_for_steering(
+        // have worked, the turn's end does not take it as read (§5.2). Not
+        // claimed — taken by another delivery meanwhile, or the write
+        // failed — it is not this turn's: its count among the turn's own
+        // goes, and the delivery that has it, or the next, sends it.
+        let claimed = matter_svc::claim_owner_row_for_steering(
             &self.db.conn,
             row.id,
             batch_id,
             segment_id,
         )
         .await;
-        match self.fold_into_turn(&row, blocks, &conn_id).await {
+        if !matches!(claimed, Ok(true)) {
+            if let Err(e) = claimed {
+                tracing::warn!("[personal_agent] message not claimed for the turn: {e}");
+            }
+            let mut st = self.state.lock().await;
+            if let Some(t) = st.turn.as_mut().filter(|t| t.batch_id == batch_id) {
+                if let Some(at) = t.owner_row_ids.iter().rposition(|id| *id == row.id) {
+                    t.owner_row_ids.remove(at);
+                }
+            }
+            return row;
+        }
+        match self.fold_into_turn(&row, blocks, &conn_id, turns_completed).await {
             Ok(()) => {
                 // It is the running turn's now, marked as folded in for
                 // the page — and a question it answers settles as the turn
                 // did, if it ended meanwhile.
-                match matter_svc::settle_steer(&self.db.conn, row.id, true).await {
+                match matter_svc::settle_steer(&self.db.conn, row.id, batch_id, true).await {
                     Ok(moved) => self.emit_moved(moved),
                     Err(e) => tracing::warn!("[personal_agent] folded message not marked: {e}"),
                 }
@@ -4935,7 +5108,7 @@ impl PersonalAgentEngine {
                 // be sent again from the page like them: that stays — the
                 // owner may already have sent it again, and a copy queued
                 // here as well would reach the agent twice.
-                match matter_svc::settle_steer(&self.db.conn, row.id, false).await {
+                match matter_svc::settle_steer(&self.db.conn, row.id, batch_id, false).await {
                     Ok(moved) => self.emit_moved(moved),
                     Err(e) => tracing::warn!("[personal_agent] message not put back: {e}"),
                 }
@@ -4952,12 +5125,14 @@ impl PersonalAgentEngine {
     /// Hand `row` to the turn in flight on `conn_id` as steered input, when
     /// the agent takes it: its connection reports native steering, and it
     /// is not a claude-agent-acp of 0.86.0 or earlier, which never answers a
-    /// folded prompt.
+    /// folded prompt. Only into the connection's turn `turns_completed`
+    /// names (the one the claim is for): once that is over, it is refused.
     async fn fold_into_turn(
         &self,
         row: &TimelineRow,
         blocks: &[PromptInputBlock],
         conn_id: &str,
+        turns_completed: u64,
     ) -> Result<(), String> {
         let state = self
             .manager
@@ -4984,12 +5159,13 @@ impl PersonalAgentEngine {
         } else {
             Vec::new()
         };
+        let linked = linked_answers(&self.db.conn, [(row.id, row.data.as_ref())]).await;
         let line = OwnerLine {
             id: row.id,
             quote,
             clicked: row.data.as_ref().and_then(super::card_acts::clicked_in),
             text: super::messages::owner_text_for_brain(&row.body, &team),
-            notes: owner_notes(row.data.as_ref(), me),
+            notes: owner_notes(row.data.as_ref(), me, row.id, &linked),
         };
         // Its own time, as a delivery's: the turn may have begun before
         // midnight (6.1).
@@ -5007,7 +5183,7 @@ impl PersonalAgentEngine {
             all
         });
         self.manager
-            .submit_feedback(conn_id, text, more)
+            .submit_feedback_for_turn(conn_id, text, more, Some(turns_completed))
             .await
             .map(|_| ())
             .map_err(|e| e.to_string())
@@ -5116,6 +5292,10 @@ impl PersonalAgentEngine {
         if row.kind != TimelineKind::Owner || row.status != Some(OwnerStatus::Interrupted) {
             return Err("only an interrupted message can be sent again".into());
         }
+        // Sent again already (a second click): that copy.
+        if matter_svc::row_data(&row).get("resent_as").is_some_and(|v| !v.is_null()) {
+            return self.copy_of(Some(row.id)).await;
+        }
         let blocks = row
             .data
             .as_deref()
@@ -5138,18 +5318,11 @@ impl PersonalAgentEngine {
                 .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
                 .and_then(|d| d.get("card_click").cloned()),
         );
+        // Marked sent again in the same write as the copy (two sends at
+        // once write one copy, handed over once).
         let new = self
             .queue_owner_message(row.body.clone(), blocks, reply_to, Origin::Resent(row.id), card_click, None)
             .await?;
-        let mut data = row
-            .data
-            .as_deref()
-            .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
-        if let Some(map) = data.as_object_mut() {
-            map.insert("resent_as".into(), new.id.into());
-        }
-        let _ = svc::update_row_data(&self.db.conn, row.id, None, Some(data)).await;
         if let Ok(Some(updated)) = svc::get_row(&self.db.conn, row.id).await {
             self.emit_rows(vec![svc::to_row(updated)]);
         }
@@ -5798,16 +5971,24 @@ impl PersonalAgentEngine {
         status.connection_id = conn.clone();
         if let Some(t) = turn.as_ref() {
             if let (Some(row_id), Some(token)) = (t.reply_row_id, t.reply_token.as_deref()) {
-                let current = match self.manager.get_state(&t.conn_id).await {
-                    Some(state) => state
-                        .read()
-                        .await
-                        .reply_turns
-                        .snapshot(token)
-                        .and_then(|s| s.current),
+                let snap = match self.manager.get_state(&t.conn_id).await {
+                    Some(state) => state.read().await.reply_turns.snapshot(token),
                     None => None,
                 };
-                status.live_reply = Some(LiveReply { row_id, current });
+                status.live_reply = Some(match snap {
+                    Some(s) => LiveReply {
+                        row_id,
+                        current: s.current,
+                        texts: s.texts,
+                        ver: s.ver,
+                    },
+                    None => LiveReply {
+                        row_id,
+                        current: None,
+                        texts: Vec::new(),
+                        ver: 0,
+                    },
+                });
             }
         }
         status.turn = turn.as_ref().map(|t| TurnInfo {
@@ -6202,21 +6383,68 @@ pub fn is_dispatch_owner(owner_window_label: &str) -> bool {
     owner_window_label == DISPATCH_OWNER_LABEL
 }
 
-/// The lines codeg adds after one of the owner's messages for the
+/// The lines codeg adds after the owner's message `row_id` for the
 /// assistant: what it brought up (6.8), and — an answer to one of its
-/// questions — which (§5.3).
-fn owner_notes(data: Option<&serde_json::Value>, me: i32) -> Vec<String> {
+/// questions — which (§5.3), and whether its turn's end is to close that
+/// question: only while the question still waits on this answer
+/// (`linked`, [`matter_svc::still_linked`] as the delivery is put
+/// together). The tag says so itself, with the condition the closing is
+/// made on: an assistant whose working directory predates the rule reads
+/// it there too.
+fn owner_notes(
+    data: Option<&serde_json::Value>,
+    me: i32,
+    row_id: i32,
+    linked: &std::collections::HashSet<(i32, i32)>,
+) -> Vec<String> {
     let mut notes: Vec<String> = super::mentions::hits_in(data)
         .iter()
         .map(|h| super::mentions::delivery_note(h, me))
         .collect();
     if let Some(a) = data.and_then(|d| d.get(matter_svc::ANSWERS_ITEM)) {
-        if let Some(id) = a["id"].as_i64() {
+        if let Some(id) = a["id"].as_i64().and_then(|id| i32::try_from(id).ok()) {
             let summary = a["summary"].as_str().unwrap_or_default().replace('<', "‹");
-            notes.push(format!("<codeg-answer matter=\"{id}\">{summary}</codeg-answer>"));
+            notes.push(if linked.contains(&(id, row_id)) {
+                format!(
+                    "<codeg-answer matter=\"{id}\" linked=\"yes\">Question #{id}: {summary} \
+                     When your turn ends normally and #{id} still waits on you with this answer, \
+                     codeg closes it; if you or the owner change #{id} before then, it stays as \
+                     it is when your turn ends.</codeg-answer>"
+                )
+            } else {
+                format!(
+                    "<codeg-answer matter=\"{id}\" linked=\"no\">Question #{id}: {summary} \
+                     It changed after the owner answered: codeg leaves #{id} as it is when your \
+                     turn ends.</codeg-answer>"
+                )
+            });
         }
     }
     notes
+}
+
+/// The questions the owner rows `rows` answer that still wait on them
+/// ([`matter_svc::still_linked`]); none, when it cannot be read — every
+/// answer then tells the assistant codeg leaves its question be, the
+/// promise that cannot turn out false.
+async fn linked_answers<'a>(
+    conn: &impl sea_orm::ConnectionTrait,
+    rows: impl IntoIterator<Item = (i32, Option<&'a serde_json::Value>)>,
+) -> std::collections::HashSet<(i32, i32)> {
+    let pairs: Vec<(i32, i32)> = rows
+        .into_iter()
+        .filter_map(|(row_id, data)| {
+            let id = data?.get(matter_svc::ANSWERS_ITEM)?["id"].as_i64()?;
+            Some((i32::try_from(id).ok()?, row_id))
+        })
+        .collect();
+    match matter_svc::still_linked(conn, &pairs).await {
+        Ok(linked) => linked,
+        Err(e) => {
+            tracing::warn!("[personal_agent] answers' questions not read: {e}");
+            Default::default()
+        }
+    }
 }
 
 /// Whether the adapter `info` names (`(name, version)` from `agentInfo`)

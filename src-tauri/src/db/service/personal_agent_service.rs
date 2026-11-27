@@ -1375,6 +1375,53 @@ pub async fn insert_row(
     Ok(row.into_active(bot, Utc::now()).insert(conn).await?)
 }
 
+/// Mark owner row `from` as sent again as `copy`, inside `txn` — only
+/// when it was not already: of two sends again at once, one copy stands.
+/// Whether it was marked.
+pub async fn mark_resent(
+    txn: &impl ConnectionTrait,
+    from: i32,
+    copy: i32,
+) -> Result<bool, DbError> {
+    let res = timeline::Entity::update_many()
+        .col_expr(
+            timeline::Column::Data,
+            Expr::cust_with_values(
+                "json_set(CASE WHEN json_valid(data) THEN data ELSE '{}' END, '$.resent_as', ?)",
+                [sea_orm::Value::from(copy)],
+            ),
+        )
+        .col_expr(timeline::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(timeline::Column::Id.eq(from))
+        .filter(Expr::cust(
+            "(CASE WHEN json_valid(data) THEN json_extract(data, '$.resent_as') END) IS NULL",
+        ))
+        .exec(txn)
+        .await?;
+    Ok(res.rows_affected == 1)
+}
+
+/// Insert `row`, owner row `from` sent again, marking `from` so in the same
+/// transaction ([`mark_resent`]): `None`, nothing written, when it was sent
+/// again already.
+pub async fn insert_resent_row(
+    conn: &DatabaseConnection,
+    bot: i32,
+    row: NewRow,
+    from: i32,
+) -> Result<Option<timeline::Model>, DbError> {
+    use sea_orm::TransactionTrait;
+    require_bot(bot)?;
+    let txn = conn.begin().await?;
+    let inserted = row.into_active(bot, Utc::now()).insert(&txn).await?;
+    if !mark_resent(&txn, from, inserted.id).await? {
+        txn.rollback().await?;
+        return Ok(None);
+    }
+    txn.commit().await?;
+    Ok(Some(inserted))
+}
+
 /// Insert `row` and, in the same transaction, set row `other`'s data to
 /// `data` (the assistant's own rows only): both are written, or neither.
 /// Returns the new row and `other` as written.
@@ -1446,6 +1493,7 @@ pub async fn checkpoint_reply_row(
     conn: &DatabaseConnection,
     id: i32,
     data: serde_json::Value,
+    ver: u64,
 ) -> Result<bool, DbError> {
     let res = timeline::Entity::update_many()
         .col_expr(timeline::Column::Data, Expr::value(data.to_string()))
@@ -1453,6 +1501,11 @@ pub async fn checkpoint_reply_row(
         .filter(timeline::Column::Id.eq(id))
         .filter(timeline::Column::Kind.eq(TimelineKind::Reply))
         .filter(still_running())
+        // Never an older copy over a newer one.
+        .filter(Expr::cust_with_values(
+            "COALESCE(CASE WHEN json_valid(data) THEN json_extract(data, '$.ver') END, -1) < ?",
+            [sea_orm::Value::from(ver as i64)],
+        ))
         .exec(conn)
         .await?;
     Ok(res.rows_affected == 1)
@@ -3079,6 +3132,21 @@ pub async fn update_item_with(
         ),
         None => None,
     };
+    // Its time set by hand — moved, taken away, or dropped with it — while
+    // it waited on the owner's answer: the answer's row, as it was before
+    // this write (which may clear the link: a new time also sets what it
+    // waits for).
+    let sets_time = write.time.is_some() || write.status == Some(ItemStatus::Dropped);
+    let linked = |m: &item::Model| {
+        (m.answer_state.as_deref() == Some("linked")).then_some(m.answer_row_id).flatten()
+    };
+    // Read before the transaction, as the keys above are; read again in it
+    // after the write, for a link made in between.
+    let answered_before = if sets_time {
+        item::Entity::find_by_id(id).one(conn).await?.as_ref().and_then(linked)
+    } else {
+        None
+    };
     let now = Utc::now();
     let txn = conn.begin().await?;
     let mut withdrawn = None;
@@ -3124,7 +3192,13 @@ pub async fn update_item_with(
                 .filter(notice::Column::Id.eq(n.id))
                 .exec(&txn)
                 .await?;
-            let Some(row_id) = n.timeline_id else {
+            // No row to put back (none, or gone): the card alone, which an
+            // undo opens again as it was.
+            let row = match n.timeline_id {
+                Some(row_id) => timeline::Entity::find_by_id(row_id).one(&txn).await?,
+                None => None,
+            };
+            let Some(row) = row else {
                 cards.push(serde_json::json!({
                     "notice_id": n.id,
                     "from_state": NoticeState::Open,
@@ -3133,9 +3207,7 @@ pub async fn update_item_with(
                 }));
                 continue;
             };
-            let Some(row) = timeline::Entity::find_by_id(row_id).one(&txn).await? else {
-                continue;
-            };
+            let row_id = row.id;
             let mut data = row
                 .data
                 .as_deref()
@@ -3178,6 +3250,21 @@ pub async fn update_item_with(
         txn.rollback().await?;
         return Ok(None);
     };
+    // Set by hand while it waited on the owner's answer: that time stands,
+    // not the one it had before the answer, should the answer's turn not
+    // finish. An undo of this act puts it back as the answer stands then.
+    let mut answer_prior = None;
+    if sets_time {
+        let row = undo
+            .as_ref()
+            .and_then(|u| linked(&u.before))
+            .or(answered_before)
+            .or_else(|| linked(&item));
+        if let Some(row_id) = row {
+            answer_prior =
+                super::personal_agent_matter_service::take_answer_prior(&txn, row_id).await?;
+        }
+    }
     let mut note_id = None;
     if let (Some(n), Some(key)) = (note, note_key) {
         let mut payload = n.payload;
@@ -3200,6 +3287,7 @@ pub async fn update_item_with(
                     "fired_at": item.fired_at,
                 },
                 "cards": cards,
+                "answer_prior": answer_prior,
             });
         }
         let made = event::ActiveModel {
@@ -3988,7 +4076,15 @@ pub async fn release_claim(
             .col_expr(item::Column::WaitsFor, Expr::value(Some(waits_for)))
             .col_expr(item::Column::UpdatedAt, Expr::value(now))
             .filter(item::Column::DispatchId.eq(id))
-            .filter(item::Column::Status.eq(ItemStatus::Done))
+            // Done with it — or given up when it was stopped, which a new
+            // round of the same work moves on like done.
+            .filter(
+                Condition::any().add(item::Column::Status.eq(ItemStatus::Done)).add(
+                    Condition::all()
+                        .add(item::Column::Status.eq(ItemStatus::Dropped))
+                        .add(item::Column::ClosedHow.eq("stopped")),
+                ),
+            )
             .exec(&txn)
             .await?;
     }
@@ -4256,7 +4352,7 @@ pub async fn op_settle(
 /// `not_executed`. The same test as [`op_attempted`]'s, so of the two racing
 /// for one entry exactly one wins — a send this refuses is never written.
 pub async fn op_unattempted_to_not_executed(
-    conn: &DatabaseConnection,
+    conn: &impl ConnectionTrait,
     op_id: &str,
     detail: &str,
 ) -> Result<bool, DbError> {
@@ -4615,6 +4711,57 @@ pub struct DispatchWrite {
     pub expect_round_op: Option<String>,
     /// The pull-request fix round it carries (7.4), or none.
     pub pr_fix: Option<Option<String>>,
+    /// Only while it runs on this connection.
+    pub expect_connection: Option<String>,
+    /// Only while its round is this operation's (`None`: none).
+    pub expect_round_op_is: Option<Option<String>>,
+}
+
+/// How hooking a board task up to the dispatch it runs went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bind {
+    Bound,
+    /// The dispatch was stopped (no longer live) before its task was made.
+    Stopped,
+    /// It runs another task already: made by an earlier start of it.
+    Already(i32),
+}
+
+/// Hook board task `task_id` up to dispatch `dispatch_id`, inside the
+/// transaction that makes the task: only while the dispatch is live and
+/// runs no task yet. So a task exists only with its dispatch on it — a stop
+/// finds it there — and one start that lost a race to another makes none.
+pub async fn bind_work_task_in(
+    txn: &impl ConnectionTrait,
+    dispatch_id: i32,
+    task_id: i32,
+) -> Result<Bind, DbError> {
+    let res = dispatch::Entity::update_many()
+        .col_expr(dispatch::Column::WorkTaskId, Expr::value(Some(task_id)))
+        .col_expr(dispatch::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(dispatch::Column::Id.eq(dispatch_id))
+        .filter(dispatch::Column::State.is_in([
+            DispatchState::Queued,
+            DispatchState::Running,
+            DispatchState::WaitingInput,
+            DispatchState::Review,
+        ]))
+        .filter(dispatch::Column::WorkTaskId.is_null())
+        .exec(txn)
+        .await?;
+    if res.rows_affected == 1 {
+        return Ok(Bind::Bound);
+    }
+    let d = dispatch::Entity::find_by_id(dispatch_id).one(txn).await?;
+    Ok(match d.and_then(|d| d.work_task_id.filter(|_| {
+        matches!(
+            d.state,
+            DispatchState::Queued | DispatchState::Running | DispatchState::WaitingInput | DispatchState::Review
+        )
+    })) {
+        Some(t) => Bind::Already(t),
+        None => Bind::Stopped,
+    })
 }
 
 /// Update a dispatch. With `expect`, only while it is in one of those states
@@ -4635,6 +4782,14 @@ pub async fn update_dispatch(
     }
     if let Some(op) = write.expect_round_op {
         update = update.filter(dispatch::Column::RoundOpId.eq(op));
+    }
+    if let Some(conn) = write.expect_connection {
+        update = update.filter(dispatch::Column::ConnectionId.eq(conn));
+    }
+    match write.expect_round_op_is {
+        Some(Some(op)) => update = update.filter(dispatch::Column::RoundOpId.eq(op)),
+        Some(None) => update = update.filter(dispatch::Column::RoundOpId.is_null()),
+        None => {}
     }
     if let Some(v) = write.round_op_id {
         update = update.col_expr(dispatch::Column::RoundOpId, Expr::value(v));
@@ -4938,18 +5093,46 @@ fn ask_state_filter(states: &[&str]) -> String {
 /// its assistant (`event`; its source key is made from the notice's id, so
 /// one wait is told once), in one transaction. The event's payload gets the
 /// card's `ask_id` and `row_id`; the row's `ref_id` is the notice's id.
+/// The round a conversation's question is of: its dispatch still running
+/// or waiting on that connection and that round's operation.
+#[derive(Debug, Clone)]
+pub struct RoundGuard {
+    pub dispatch_id: i32,
+    pub connection_id: String,
+    pub op: Option<String>,
+}
+
 pub async fn create_ask(
     conn: &DatabaseConnection,
     bot: i32,
     new: NewNotice,
     mut row: NewRow,
     event: NewEvent,
-) -> Result<(notice::Model, timeline::Model, event::Model), DbError> {
+    round: Option<RoundGuard>,
+) -> Result<Option<(notice::Model, timeline::Model, event::Model)>, DbError> {
     use sea_orm::TransactionTrait;
     require_bot(bot)?;
     let prefix = scoped_source_key(conn, bot, "ask:").await?;
     let now = Utc::now();
     let txn = conn.begin().await?;
+    // The round's check is the first statement, a write that changes nothing:
+    // it takes the write lock, so a stop cannot come between the check and
+    // the card. Its round over (stopped, followed up): no card, no event.
+    if let Some(r) = round {
+        let mut still = dispatch::Entity::update_many()
+            .col_expr(dispatch::Column::UpdatedAt, Expr::col(dispatch::Column::UpdatedAt).into())
+            .filter(dispatch::Column::Id.eq(r.dispatch_id))
+            .filter(dispatch::Column::State.is_in([DispatchState::Running, DispatchState::WaitingInput]))
+            .filter(dispatch::Column::ConnectionId.eq(r.connection_id));
+        still = match r.op {
+            Some(op) => still.filter(dispatch::Column::RoundOpId.eq(op)),
+            None => still.filter(dispatch::Column::RoundOpId.is_null()),
+        };
+        if still.exec(&txn).await?.rows_affected != 1 {
+            txn.rollback().await?;
+            return Ok(None);
+        }
+    }
     let made = notice::ActiveModel {
         id: NotSet,
         bot_id: Set(Some(bot)),
@@ -5015,7 +5198,7 @@ pub async fn create_ask(
         event_id: Some(ev.id),
         ..card
     };
-    Ok((made, card, ev))
+    Ok(Some((made, card, ev)))
 }
 
 /// The ask card raised for one underlying request (`subject`: connection

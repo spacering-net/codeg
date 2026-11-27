@@ -566,8 +566,9 @@ export interface PageScope {
   /** Start a message quoting this row. */
   onQuote: (rowId: number) => void
   /** Put `text` in the composer, quoting this row (a card's message the
-   *  owner wants to edit first). */
-  onDraft?: (rowId: number, text: string) => void
+   *  owner wants to edit first). `false`: not put in — the box is sending
+   *  (locked) and the owner is told to try again once it is done. */
+  onDraft?: (rowId: number, text: string) => boolean
   /** Scroll to a row (loading it first when it is older than what is held). */
   jumpTo: (rowId: number) => void
   /** The rows the page holds, by id. */

@@ -1121,12 +1121,25 @@ impl PersonalAgentEngine {
         until: Option<&str>,
         source: super::reminders::OpSource,
     ) -> Result<super::reminders::ItemActed, super::refusal::Refusal> {
+        self.settle_item_seen(item_id, act, until, source, None).await
+    }
+
+    /// [`Self::settle_item_from`], from a button that read the matter at
+    /// `seen` (its `updated_at`): refused when it was written since.
+    pub async fn settle_item_seen(
+        &self,
+        item_id: i32,
+        act: &str,
+        until: Option<&str>,
+        source: super::reminders::OpSource,
+        seen: Option<DateTime<Utc>>,
+    ) -> Result<super::reminders::ItemActed, super::refusal::Refusal> {
         let (tz, mornings) = self.owner_day().await;
         let op = super::reminders::ItemOp::parse(act, until, tz, super::clock::now(), mornings)
             .map_err(|e| {
                 super::refusal::Refusal::new(super::refusal::keys::BAD_TIME, e)
             })?;
-        self.item_op(item_id, op, source).await
+        self.item_op_seen(item_id, op, source, seen).await
     }
 }
 

@@ -1029,10 +1029,7 @@
                   },
                   "exists": {
                     "type": "boolean",
-                    "enum": [
-                      true
-                    ],
-                    "description": "Only true: absence cannot be proven."
+                    "description": "Only true: absence cannot be proven; false is rejected at runtime."
                   },
                   "enabled": {
                     "type": "boolean"
@@ -1720,6 +1717,27 @@
           "minimum": 0,
           "maximum": 45000,
           "description": "How long to wait at most, in ms; default and cap 45000. 0 looks once without waiting."
+        }
+      }
+    }
+  },
+  {
+    "name": "dispatch_stop",
+    "description": "Stop one of your own dispatches where it is: when the owner asks you to, or when the work is no longer needed — its direction turned out wrong, or new work replaced it. Do not stop work only because it is slow. The work is canceled (a board task on the board too), its matter is given up, the owner sees who stopped it and why, and nobody is woken. The answer says how to go on with it if needed (a follow-up, or `dispatch` with `replaces`). Other assistants' work is theirs to stop.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "dispatch_id",
+        "reason"
+      ],
+      "properties": {
+        "dispatch_id": {
+          "type": "integer",
+          "description": "The dispatch to stop (one of yours, from dispatch)."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why, in a sentence the owner reads on its card (at most 200 characters)."
         }
       }
     }

@@ -10,6 +10,7 @@ import {
   Trash2,
 } from "lucide-react"
 
+import { AgentPanelCard } from "@/components/settings/agent-panel-layout"
 import { Badge } from "@/components/ui/badge"
 import { BrowserLink } from "@/components/ui/browser-link"
 import { Button } from "@/components/ui/button"
@@ -265,197 +266,155 @@ export function OpenCodePermissionsSection({
   const customEntries = view.entries.filter((entry) => entry.custom)
 
   return (
-    <div className="space-y-2.5 rounded-md border bg-background/60 p-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <label className="text-2xs font-medium">
-            {t("openCode.permissions.title")}
-          </label>
-          <p className="mt-1 text-3xs text-muted-foreground">
-            {t("openCode.permissions.description")}
+    <div className="space-y-3">
+      <AgentPanelCard
+        title={t("openCode.permissions.title")}
+        description={t("openCode.permissions.description")}
+        control={
+          <BrowserLink
+            href={DOCS_URL}
+            className="inline-flex shrink-0 items-center gap-1 text-2xs text-primary hover:underline"
+          >
+            {t("openCode.permissions.docsLink")}
+            <ExternalLink className="h-3 w-3" />
+          </BrowserLink>
+        }
+      >
+        {!editable && (
+          <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
+            {t("openCode.permissions.unparsableConfig")}
           </p>
-        </div>
-        <BrowserLink
-          href={DOCS_URL}
-          className="inline-flex shrink-0 items-center gap-1 text-2xs text-primary hover:underline"
-        >
-          {t("openCode.permissions.docsLink")}
-          <ExternalLink className="h-3 w-3" />
-        </BrowserLink>
-      </div>
+        )}
+        {editable && view.invalid && (
+          <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
+            {t("openCode.permissions.invalidBlock")}
+          </p>
+        )}
+        {editable && !view.invalid && view.orderingUnsafe && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5">
+            <p className="min-w-0 flex-1 text-2xs text-amber-500">
+              {view.orderingFixable
+                ? t("openCode.permissions.orderingUnsafe")
+                : t("openCode.permissions.orderingUnsafeManual")}{" "}
+              {t("openCode.permissions.orderingLocked")}
+            </p>
+            {view.orderingFixable && (
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={disabled}
+                onClick={() =>
+                  onChange(normalizeOpenCodePermissionOrder(configText))
+                }
+              >
+                {t("openCode.permissions.fixOrder")}
+              </Button>
+            )}
+          </div>
+        )}
+        {editable && view.agentOverrides.length > 0 && (
+          <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
+            {t("openCode.permissions.agentOverrides", {
+              agents: view.agentOverrides.join(", "),
+            })}
+          </p>
+        )}
+        {editable && !view.invalid && view.legacy && (
+          <p className="text-2xs text-muted-foreground">
+            {t("openCode.permissions.legacyRules")}
+          </p>
+        )}
+      </AgentPanelCard>
 
-      {!editable && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
-          {t("openCode.permissions.unparsableConfig")}
-        </p>
-      )}
-      {editable && view.invalid && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
-          {t("openCode.permissions.invalidBlock")}
-        </p>
-      )}
-      {editable && !view.invalid && view.orderingUnsafe && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5">
-          <p className="min-w-0 flex-1 text-2xs text-amber-500">
-            {view.orderingFixable
-              ? t("openCode.permissions.orderingUnsafe")
-              : t("openCode.permissions.orderingUnsafeManual")}{" "}
-            {t("openCode.permissions.orderingLocked")}
-          </p>
-          {view.orderingFixable && (
+      {/* ---- Auto-accept: the headline knob ---- */}
+      <AgentPanelCard
+        icon={ShieldCheck}
+        title={t("openCode.permissions.autoAcceptTitle")}
+        description={t("openCode.permissions.autoAcceptHint")}
+        htmlFor="opencode-auto-accept"
+        control={
+          <Switch
+            id="opencode-auto-accept"
+            checked={view.autoAcceptAll}
+            // Auto-accept replaces every rule, so it stays available while the
+            // order is off (it is never on then: see `autoAcceptAll`).
+            disabled={disabled || !editable || view.invalid}
+            onCheckedChange={(checked) => {
+              // Off only drops the global "*" — anything the user set per tool
+              // survives, and a block that held nothing else disappears anyway.
+              onChange(
+                checked
+                  ? applyOpenCodeAutoAccept(configText)
+                  : setOpenCodeGlobalPermission(configText, null)
+              )
+            }}
+            aria-label={t("openCode.permissions.autoAcceptTitle")}
+          />
+        }
+      />
+
+      <AgentPanelCard>
+        {/* ---- Global default ("*") ---- */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-2xs font-medium">
+              {t("openCode.permissions.globalLabel")}
+            </div>
+            <p className="mt-0.5 text-2xs text-muted-foreground">
+              {t("openCode.permissions.globalHint")}
+            </p>
+          </div>
+          <Select
+            value={view.globalAction ?? UNSET}
+            disabled={locked}
+            onValueChange={handleGlobalChange}
+          >
+            <SelectTrigger className="h-7 w-44 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="end">
+              <SelectItem value={UNSET}>
+                {t("openCode.permissions.actionUnset")}
+              </SelectItem>
+              {OPENCODE_PERMISSION_ACTIONS.map((action) => (
+                <SelectItem key={action} value={action}>
+                  {actionLabel(action)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* ---- Per-tool grid ---- */}
+        <div className="space-y-2 border-t pt-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs font-medium">
+              {t("openCode.permissions.perToolTitle")}
+            </div>
             <Button
               type="button"
               size="xs"
               variant="outline"
-              disabled={disabled}
-              onClick={() =>
-                onChange(normalizeOpenCodePermissionOrder(configText))
-              }
+              // Deliberately not gated on `view.invalid`: wiping the block is the
+              // one repair the visual editor can still offer for a broken one.
+              disabled={disabled || !editable || view.shape === "unset"}
+              onClick={() => onChange(clearOpenCodePermissions(configText))}
             >
-              {t("openCode.permissions.fixOrder")}
+              {t("openCode.permissions.reset")}
             </Button>
-          )}
-        </div>
-      )}
-      {editable && view.agentOverrides.length > 0 && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
-          {t("openCode.permissions.agentOverrides", {
-            agents: view.agentOverrides.join(", "),
-          })}
-        </p>
-      )}
-      {editable && !view.invalid && view.legacy && (
-        <p className="rounded-md border bg-muted/20 px-2.5 py-1.5 text-2xs text-muted-foreground">
-          {t("openCode.permissions.legacyRules")}
-        </p>
-      )}
-
-      {/* ---- Auto-accept: the headline knob ---- */}
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/20 px-2.5 py-2">
-        <div className="flex min-w-0 flex-1 items-start gap-2">
-          <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <div className="min-w-0">
-            <div className="text-xs font-medium">
-              {t("openCode.permissions.autoAcceptTitle")}
-            </div>
-            <p className="mt-0.5 text-3xs text-muted-foreground">
-              {t("openCode.permissions.autoAcceptHint")}
-            </p>
-          </div>
-        </div>
-        <Switch
-          checked={view.autoAcceptAll}
-          // Auto-accept replaces every rule, so it stays available while the
-          // order is off (it is never on then: see `autoAcceptAll`).
-          disabled={disabled || !editable || view.invalid}
-          onCheckedChange={(checked) => {
-            // Off only drops the global "*" — anything the user set per tool
-            // survives, and a block that held nothing else disappears anyway.
-            onChange(
-              checked
-                ? applyOpenCodeAutoAccept(configText)
-                : setOpenCodeGlobalPermission(configText, null)
-            )
-          }}
-          aria-label={t("openCode.permissions.autoAcceptTitle")}
-        />
-      </div>
-
-      {/* ---- Global default ("*") ---- */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-2xs font-medium">
-            {t("openCode.permissions.globalLabel")}
-          </div>
-          <p className="mt-0.5 text-3xs text-muted-foreground">
-            {t("openCode.permissions.globalHint")}
-          </p>
-        </div>
-        <Select
-          value={view.globalAction ?? UNSET}
-          disabled={locked}
-          onValueChange={handleGlobalChange}
-        >
-          <SelectTrigger className="h-7 w-44 text-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent align="end">
-            <SelectItem value={UNSET}>
-              {t("openCode.permissions.actionUnset")}
-            </SelectItem>
-            {OPENCODE_PERMISSION_ACTIONS.map((action) => (
-              <SelectItem key={action} value={action}>
-                {actionLabel(action)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {/* ---- Per-tool grid ---- */}
-      <div className="space-y-1.5 border-t pt-2">
-        <div className="flex items-center justify-between gap-2">
-          <div className="text-2xs font-medium text-muted-foreground">
-            {t("openCode.permissions.perToolTitle")}
-          </div>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            // Deliberately not gated on `view.invalid`: wiping the block is the
-            // one repair the visual editor can still offer for a broken one.
-            disabled={disabled || !editable || view.shape === "unset"}
-            onClick={() => onChange(clearOpenCodePermissions(configText))}
-          >
-            {t("openCode.permissions.reset")}
-          </Button>
-        </div>
-        <div className="space-y-1">
-          {knownEntries.map((entry) => (
-            <PermissionRow
-              key={entry.key}
-              entry={entry}
-              label={entry.key}
-              hint={keyHints[entry.key] ?? ""}
-              fineGrained={FINE_GRAINED.get(entry.key)?.fineGrained ?? false}
-              patternExample={
-                FINE_GRAINED.get(entry.key)?.patternExample ?? "*"
-              }
-              inheritLabel={t("openCode.permissions.actionInherit", {
-                action: actionLabel(
-                  effectiveOpenCodeDefault(entry.key, view.globalAction)
-                ),
-              })}
-              actionLabel={actionLabel}
-              expanded={expandedKey === entry.key}
-              locked={locked}
-              ruleEditor={ruleEditor}
-              onToggleExpanded={toggleExpanded}
-              onActionChange={handleKeyChange}
-            />
-          ))}
-        </div>
-      </div>
-
-      {customEntries.length > 0 && (
-        <div className="space-y-1.5 border-t pt-2">
-          <div className="text-2xs font-medium text-muted-foreground">
-            {t("openCode.permissions.customKeys")}
           </div>
           <div className="space-y-1">
-            {customEntries.map((entry) => (
+            {knownEntries.map((entry) => (
               <PermissionRow
                 key={entry.key}
                 entry={entry}
                 label={entry.key}
-                hint={
-                  entry.key === "*"
-                    ? t("openCode.permissions.allToolsResourcesHint")
-                    : t("openCode.permissions.customKeyHint")
+                hint={keyHints[entry.key] ?? ""}
+                fineGrained={FINE_GRAINED.get(entry.key)?.fineGrained ?? false}
+                patternExample={
+                  FINE_GRAINED.get(entry.key)?.patternExample ?? "*"
                 }
-                fineGrained
-                patternExample="*"
-                baseEditable={entry.key !== "*"}
                 inheritLabel={t("openCode.permissions.actionInherit", {
                   action: actionLabel(
                     effectiveOpenCodeDefault(entry.key, view.globalAction)
@@ -471,7 +430,43 @@ export function OpenCodePermissionsSection({
             ))}
           </div>
         </div>
-      )}
+
+        {customEntries.length > 0 && (
+          <div className="space-y-2 border-t pt-3">
+            <div className="text-xs font-medium">
+              {t("openCode.permissions.customKeys")}
+            </div>
+            <div className="space-y-1">
+              {customEntries.map((entry) => (
+                <PermissionRow
+                  key={entry.key}
+                  entry={entry}
+                  label={entry.key}
+                  hint={
+                    entry.key === "*"
+                      ? t("openCode.permissions.allToolsResourcesHint")
+                      : t("openCode.permissions.customKeyHint")
+                  }
+                  fineGrained
+                  patternExample="*"
+                  baseEditable={entry.key !== "*"}
+                  inheritLabel={t("openCode.permissions.actionInherit", {
+                    action: actionLabel(
+                      effectiveOpenCodeDefault(entry.key, view.globalAction)
+                    ),
+                  })}
+                  actionLabel={actionLabel}
+                  expanded={expandedKey === entry.key}
+                  locked={locked}
+                  ruleEditor={ruleEditor}
+                  onToggleExpanded={toggleExpanded}
+                  onActionChange={handleKeyChange}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </AgentPanelCard>
     </div>
   )
 }

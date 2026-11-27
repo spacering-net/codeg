@@ -272,6 +272,24 @@ function iconTone(state: DispatchState | null): string {
   }
 }
 
+/** How a piece of work stands, as its icon on its tone (a still one: a
+ *  folded news line's, D8). */
+export function StateIcon({
+  state,
+  className,
+}: {
+  state: DispatchState | null
+  className?: string
+}) {
+  const Icon = state ? STATE_ICON[state] : CircleDashed
+  return (
+    <Icon
+      aria-hidden
+      className={cn("size-3.5 shrink-0", iconTone(state), className)}
+    />
+  )
+}
+
 export function WorkPill({
   rowId,
   state,

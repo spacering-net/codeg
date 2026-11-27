@@ -14,7 +14,15 @@ import type { DispatchInfo, TaskFacts, TimelineRow } from "@/lib/types"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 const api = vi.hoisted(() => ({
-  personalAgentDispatchStop: vi.fn(async () => true),
+  personalAgentDispatchStop: vi.fn(
+    async (): Promise<{
+      outcome: string
+      by?: string
+      updated_at?: string
+    }> => ({
+      outcome: "stopped",
+    })
+  ),
 }))
 const opener = vi.hoisted(() => ({
   openInSystemBrowser: vi.fn(async () => {}),
@@ -24,6 +32,9 @@ const toasts = vi.hoisted(() => ({ message: vi.fn(), error: vi.fn() }))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/lib/link-open", () => opener)
 vi.mock("sonner", () => ({ toast: toasts }))
+vi.mock("@/stores/personal-agent-roster-store", () => ({
+  useRoster: () => null,
+}))
 vi.mock("@/contexts/personal-agent-context", () => ({
   useBotId: () => 4,
   usePersonalAgent: () => ({
@@ -44,12 +55,19 @@ vi.mock("@/contexts/tab-context", () => ({
 import { EventCard } from "./event-card"
 import { buildMessageItems, type MessageItem } from "./message-items"
 import { PageScopeContext, type PageScope } from "./shared"
-import { LadderChip, TaskActions, TaskStrip } from "./task-strip"
+import {
+  LadderChip,
+  TaskActions,
+  TaskStrip,
+  WorkStopButton,
+} from "./task-strip"
 
 function facts(patch: Partial<TaskFacts> = {}): TaskFacts {
   return {
     task_id: 7,
     status: "running",
+    run_seq: 1,
+    updated_at: "2026-11-10T09:00:00Z",
     folder_id: 2,
     branch: "pa/fix-cold-start",
     base_branch: "main",
@@ -220,17 +238,19 @@ describe("the task card", () => {
   })
 
   it("views the pull request, opens the session and stops the work", async () => {
+    const d = dispatch({
+      ladder: "mergeable",
+      state: "review",
+      task: facts({
+        status: "review",
+        pr_url: "https://github.com/o/r/pull/9",
+      }),
+    })
     draw(
-      <TaskActions
-        d={dispatch({
-          ladder: "mergeable",
-          state: "review",
-          task: facts({
-            status: "review",
-            pr_url: "https://github.com/o/r/pull/9",
-          }),
-        })}
-      />
+      <>
+        <TaskActions d={d} />
+        <WorkStopButton d={d} />
+      </>
     )
     fireEvent.click(screen.getByRole("button", { name: "View PR" }))
     expect(opener.openInSystemBrowser).toHaveBeenCalledWith(
@@ -242,14 +262,59 @@ describe("the task card", () => {
       workTaskId: 7,
     })
     const stop = screen.getByRole("button", { name: "Stop" })
-    api.personalAgentDispatchStop.mockResolvedValueOnce(false)
+    api.personalAgentDispatchStop.mockResolvedValueOnce({
+      outcome: "past_stopping",
+    })
     fireEvent.click(stop)
-    expect(api.personalAgentDispatchStop).toHaveBeenCalledWith(4, 234)
+    // With what the card read: a stale one stops nothing new.
+    expect(api.personalAgentDispatchStop).toHaveBeenCalledWith(4, 234, {
+      updatedAt: d.updated_at,
+      runSeq: 1,
+      taskUpdatedAt: "2026-11-10T09:00:00Z",
+    })
     expect(stop.hasAttribute("disabled")).toBe(true)
     // Past stopping by the time it arrived: said so.
     await waitFor(() =>
       expect(toasts.message).toHaveBeenCalledWith(
         "Too late to stop: it has finished or is merging"
+      )
+    )
+  })
+
+  it("stops a chat or a session too, and says when the board will not", async () => {
+    // A session's work: no board task.
+    const d = dispatch({ mode: "session", state: "waiting_input", task: null })
+    const { rerender } = draw(<WorkStopButton d={d} />)
+    const stop = screen.getByRole("button", { name: "Stop" })
+    api.personalAgentDispatchStop.mockResolvedValueOnce({
+      outcome: "stopped",
+      by: "owner",
+      updated_at: "2026-11-10T10:00:00Z",
+    })
+    fireEvent.click(stop)
+    // Off until the work is read again past the stop.
+    await waitFor(() => expect(stop.hasAttribute("disabled")).toBe(true))
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <PageScopeContext.Provider value={scope()}>
+          <WorkStopButton
+            d={{ ...d, state: "running", updated_at: "2026-11-10T10:00:01Z" }}
+          />
+        </PageScopeContext.Provider>
+      </NextIntlClientProvider>
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Stop" }).hasAttribute("disabled")
+      ).toBe(false)
+    )
+    api.personalAgentDispatchStop.mockResolvedValueOnce({
+      outcome: "board_refused",
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }))
+    await waitFor(() =>
+      expect(toasts.message).toHaveBeenCalledWith(
+        "The board won't cancel its task now (it is merging or done)"
       )
     )
   })

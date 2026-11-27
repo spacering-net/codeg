@@ -318,6 +318,9 @@ pub struct ItemActParams {
     /// `panel` (the default) or `card`.
     #[serde(default)]
     pub from: Option<String>,
+    /// The matter's `updated_at` as the button read it.
+    #[serde(default)]
+    pub expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub async fn personal_agent_item_act(
@@ -332,6 +335,7 @@ pub async fn personal_agent_item_act(
             params.act,
             params.until,
             params.from,
+            params.expect_updated_at,
         )
         .await?,
     ))
@@ -493,13 +497,28 @@ pub struct DispatchStopParams {
     #[serde(default)]
     pub bot_id: Option<i32>,
     pub dispatch_id: i32,
+    /// What the card read: the dispatch's version, its task's run and
+    /// version.
+    #[serde(default)]
+    pub expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub expect_run_seq: Option<i32>,
+    #[serde(default)]
+    pub expect_task_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub async fn personal_agent_dispatch_stop(
     Json(params): Json<DispatchStopParams>,
-) -> Result<Json<bool>, AppCommandError> {
+) -> Result<Json<crate::personal_agent::stop::StopReply>, AppCommandError> {
     Ok(Json(
-        pa::personal_agent_dispatch_stop_core(params.bot_id, params.dispatch_id).await?,
+        pa::personal_agent_dispatch_stop_core(
+            params.bot_id,
+            params.dispatch_id,
+            params.expect_updated_at,
+            params.expect_run_seq,
+            params.expect_task_updated_at,
+        )
+        .await?,
     ))
 }
 
@@ -868,6 +887,10 @@ pub struct NoticeActParams {
     /// handed to the assistant).
     #[serde(default)]
     pub text: Option<String>,
+    /// A reminder card's answer from a matter's row: the matter's
+    /// `updated_at` as the row read it.
+    #[serde(default)]
+    pub expect_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub async fn personal_agent_notice_act(
@@ -879,6 +902,7 @@ pub async fn personal_agent_notice_act(
             params.notice_id,
             params.action,
             params.text,
+            params.expect_updated_at,
         )
         .await?,
     ))

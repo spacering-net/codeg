@@ -41,7 +41,7 @@
  * which can be run again.
  */
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   ArrowLeftRight,
@@ -671,6 +671,7 @@ function LoopCard({ item }: { item: NoticeItem }) {
   const [a, b] = faces(data?.bots)
   const { busy, failed, answer } = useAnswer(Number(row.ref_id))
   const [sheet, setSheet] = useState<TimelineRow | null>(null)
+  const lookRef = useRef<HTMLButtonElement | null>(null)
   const botName = useBotName()
   const names = { a: botName(a ?? null), b: botName(b ?? null) }
   const text =
@@ -745,6 +746,7 @@ function LoopCard({ item }: { item: NoticeItem }) {
           ) : null}
           {thread != null && a && b ? (
             <Button
+              ref={lookRef}
               size="sm"
               variant="secondary"
               onClick={() =>
@@ -774,7 +776,11 @@ function LoopCard({ item }: { item: NoticeItem }) {
           ) : null}
         </SheetActions>
       ) : null}
-      <ExchangeSheet row={sheet} onClose={() => setSheet(null)} />
+      <ExchangeSheet
+        row={sheet}
+        onClose={() => setSheet(null)}
+        anchor={lookRef}
+      />
     </CardFrame>
   )
 }

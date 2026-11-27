@@ -1791,6 +1791,18 @@
   --os-size: 8px;
 }
 
+/* A dialog's own scrollbar (in its rail, see DialogContent): kept off the
+   round corners along its length, and 2px in from the edge — the padding is
+   inside the strip, so it grows by 4px to keep the 6px (8px) thumb. */
+[data-slot="dialog-scrollbar-rail"] > .os-scrollbar.os-theme-codeg {
+  --os-size: 10px;
+  --os-padding-perpendicular: 2px;
+  --os-padding-axis: 1.25rem;
+}
+[data-slot="dialog-scrollbar-rail"] > .os-scrollbar.os-theme-codeg:hover {
+  --os-size: 12px;
+}
+
 /* Forge label chips. The six values come from `labelSwatch()` as inline custom
    properties (both themes at once); this picks which set applies, because the
    theme is a class on the root and an inline style cannot see it. Unlayered on
@@ -5229,21 +5241,6 @@ button.pa-choice:enabled:not(.pa-choice-chosen):hover {
     motion-grow var(--motion-widget) var(--motion-ease-enter) backwards;
 }
 
-/* A reply split into short bubbles (10.7), new to the page: after its
-   first, each bubble rises in 120ms after the one before. */
-.motion-message-enter [data-pa-bubble-part]:not([data-pa-bubble-part="0"]) {
-  animation: motion-rise var(--motion-row) var(--motion-ease-enter) backwards;
-}
-.motion-message-enter [data-pa-bubble-part="1"] {
-  animation-delay: 120ms;
-}
-.motion-message-enter [data-pa-bubble-part="2"] {
-  animation-delay: 240ms;
-}
-.motion-message-enter [data-pa-bubble-part="3"] {
-  animation-delay: 360ms;
-}
-
 @keyframes motion-rise {
   from {
     opacity: 0;
@@ -5760,10 +5757,6 @@ button.pa-choice:enabled:not(.pa-choice-chosen):hover {
   .motion-pill {
     animation: motion-fade var(--motion-enter) var(--motion-ease-standard)
       backwards;
-  }
-
-  .motion-message-enter [data-pa-bubble-part] {
-    animation: none;
   }
 
   .motion-pill,

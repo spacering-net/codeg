@@ -65,6 +65,9 @@ pub const ITEM_NOTE_EVENT: &str = "item_note";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ItemOp {
     Done,
+    /// A repeating matter's this time passed over: on to its next, by its
+    /// rule; the last time skipped ends it (`skipped`).
+    Skip,
     Drop,
     /// Set aside, to wait with no time.
     Later,
@@ -73,8 +76,9 @@ pub enum ItemOp {
 }
 
 impl ItemOp {
-    /// An act as the page names it: `done`, `drop`, `later`, `snooze` (with
-    /// `until`: `15m`, `1h`, `tomorrow`, a time; without, `later`).
+    /// An act as the page names it: `done`, `skip`, `drop`, `later`,
+    /// `snooze` (with `until`: `15m`, `1h`, `tomorrow`, a time; without,
+    /// `later`).
     pub fn parse(
         act: &str,
         until: Option<&str>,
@@ -84,6 +88,7 @@ impl ItemOp {
     ) -> Result<Self, String> {
         match (act, until.map(str::trim).filter(|u| !u.is_empty())) {
             ("done", _) => Ok(ItemOp::Done),
+            ("skip", _) => Ok(ItemOp::Skip),
             ("drop", _) => Ok(ItemOp::Drop),
             ("later", None) | ("snooze", None) => Ok(ItemOp::Later),
             ("snooze", Some(u)) | ("later", Some(u)) => {
@@ -756,11 +761,28 @@ impl PersonalAgentEngine {
         op: ItemOp,
         source: OpSource,
     ) -> Result<ItemActed, Refusal> {
+        self.item_op_seen(item_id, op, source, None).await
+    }
+
+    /// [`Self::item_op`], from a button that read the matter at `seen` (its
+    /// `updated_at`): refused (`changed`) when it was written since — a
+    /// stale button never acts on the matter as it is now (a repeating
+    /// one's next time skipped too).
+    pub async fn item_op_seen(
+        &self,
+        item_id: i32,
+        op: ItemOp,
+        source: OpSource,
+        seen: Option<DateTime<Utc>>,
+    ) -> Result<ItemActed, Refusal> {
         let bot = self.bot().await;
         let item = svc::get_item_of(&self.db.conn, bot, item_id)
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| Refusal::new(keys::GONE, format!("no matter #{item_id}")))?;
+        if seen.is_some_and(|s| s != item.updated_at) {
+            return Err(Self::changed_since_seen(item_id));
+        }
         let timed = matches!(op, ItemOp::Later | ItemOp::Snooze(_));
         // Handed-out work settles itself as the work ends — except a pull
         // request codeg does not follow yet (8.5): the owner closes that
@@ -816,12 +838,25 @@ impl PersonalAgentEngine {
         let tz = self.owner_tz().await;
         let now = clock::now();
         // Someone else has it: no time to wait for.
-        if timed && matches!(item.waits_for, Some(WaitsFor::Agent | WaitsFor::External)) {
+        if timed && item.waits_for == Some(WaitsFor::External) {
+            return Err(Refusal::new(
+                keys::WAITS_OUTSIDE,
+                "this matter waits on something outside codeg, not for a time",
+            ));
+        }
+        if timed && item.waits_for == Some(WaitsFor::Agent) {
             return Err(Refusal::new(
                 keys::IN_OTHER_HANDS,
                 "this matter is in someone else's hands, not waiting for a time",
             )
             .with("bot", self.bot_name_of(bot).await));
+        }
+        // Only a repeating matter has a "this time" to skip.
+        if op == ItemOp::Skip && item.repeat.is_none() {
+            return Err(Refusal::new(
+                keys::SKIP_NOT_REPEATING,
+                "only a repeating matter can skip a time",
+            ));
         }
         // A time still ahead: putting it off moves it later, never sooner;
         // with no time is not "later" for it.
@@ -879,6 +914,36 @@ impl PersonalAgentEngine {
                     None,
                     format!("The owner marked #{item_id} {name} done."),
                     "done",
+                ),
+            },
+            ItemOp::Skip => match after_done(&item, tz, now) {
+                Some(next) => {
+                    let when = next
+                        .due_at
+                        .map(|t| due::describe(t, tz, now))
+                        .unwrap_or_default();
+                    (
+                        ItemWrite {
+                            waits_for: Some(Some(WaitsFor::Time)),
+                            time: Some(next),
+                            ..Default::default()
+                        },
+                        "done",
+                        None,
+                        format!("The owner skipped #{item_id} {name} this time; it comes up next {when}."),
+                        "skip",
+                    )
+                }
+                None => (
+                    ItemWrite {
+                        status: Some(ItemStatus::Done),
+                        closing: owner("skipped"),
+                        ..Default::default()
+                    },
+                    "done",
+                    None,
+                    format!("The owner skipped the last time of #{item_id} {name}; it is over."),
+                    "skip",
                 ),
             },
             ItemOp::Drop => (
@@ -1002,6 +1067,15 @@ impl PersonalAgentEngine {
             undo: changed.note_id.filter(|_| source == OpSource::Panel),
             withdrawn: changed.withdrawn,
         })
+    }
+
+    /// The refusal of a button that read matter `item_id` before its last
+    /// write.
+    fn changed_since_seen(item_id: i32) -> Refusal {
+        Refusal::new(
+            keys::CHANGED,
+            format!("matter #{item_id} changed since it was shown: look at it again"),
+        )
     }
 
     /// What a matter's open reminder cards close as (`card`'s state).
@@ -1137,6 +1211,7 @@ impl PersonalAgentEngine {
         notice: &notice_entity::Model,
         action: &str,
         text: Option<String>,
+        seen: Option<DateTime<Utc>>,
     ) -> Result<TimelineRow, Refusal> {
         let item_id = serde_json::from_str::<Value>(&notice.payload)
             .ok()
@@ -1182,6 +1257,14 @@ impl PersonalAgentEngine {
         let item = svc::get_item_of(&self.db.conn, self.bot().await, item_id)
             .await
             .map_err(|e| e.to_string())?;
+        // From a matter's row that read it before its last write: nothing
+        // is done — not even the hand-over, which goes out before the
+        // matter is written.
+        if let (Some(s), Some(i)) = (seen, item.as_ref()) {
+            if s != i.updated_at {
+                return Err(Self::changed_since_seen(item_id));
+            }
+        }
         let settled = match item.as_ref().map(|i| i.status) {
             None => Some("closed"),
             Some(ItemStatus::Done) => Some("done"),
@@ -1201,7 +1284,7 @@ impl PersonalAgentEngine {
         match op {
             Some(op) => {
                 // The matter's change closes its open cards, this one too.
-                if let Err(e) = self.item_op(item_id, op, OpSource::ReminderCard).await {
+                if let Err(e) = self.item_op_seen(item_id, op, OpSource::ReminderCard, seen).await {
                     let _ = self
                         .set_reminder_row(&notice, "open", None, Some(&e))
                         .await;

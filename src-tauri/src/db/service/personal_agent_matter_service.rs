@@ -18,7 +18,7 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseConnection,
     EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::personal_agent_message_service::{stored_event_key, LIVE_MESSAGE_STATES};
@@ -43,6 +43,131 @@ const ITEM_NOTE: &str = "item_note";
 pub const STEER_CLAIM: &str = "steer_claim";
 /// The data key of an owner row folded into a turn in flight.
 pub const MERGED: &str = "merged";
+/// The data key of an answer's row that keeps the time its question had
+/// before the answer cleared it ([`AnswerPrior`]).
+pub const ANSWER_PRIOR: &str = "answer_prior";
+
+/// A question's time as it was when the owner's answer was linked to it
+/// (which clears it: an answered question is not reminded of): put back
+/// when the turn that had the answer does not finish, unless somebody set
+/// the question's time themselves meanwhile — that took it off the
+/// answer's row. Kept on the answer's row: a matter has no data column.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnswerPrior {
+    pub due_at: Option<DateTime<Utc>>,
+    pub repeat: Option<String>,
+    pub at_due: Option<String>,
+    pub act_spec: Option<String>,
+    /// The owner's zone as the answer came, for the rule's next time.
+    pub tz: String,
+}
+
+impl AnswerPrior {
+    /// `item`'s time, if it has one.
+    pub fn of(item: &item::Model, tz: chrono_tz::Tz) -> Option<Self> {
+        item.due_at.map(|due_at| Self {
+            due_at: Some(due_at),
+            repeat: item.repeat.clone(),
+            at_due: item.at_due.clone(),
+            act_spec: item.act_spec.clone(),
+            tz: tz.name().to_string(),
+        })
+    }
+
+    /// Its time as it stands at `now`, and the rule with it: as it was,
+    /// when it has not come yet (a repeating matter's first time, or a
+    /// moment it was put off to); the rule's next time after `now`, when
+    /// it went by and the rule goes on; none for a one-off whose time went
+    /// by, nor for a rule that ended.
+    pub fn due_again(&self, now: DateTime<Utc>) -> Option<(DateTime<Utc>, Option<String>)> {
+        use crate::personal_agent::due::{next_after, Repeat};
+        let due_at = self.due_at?;
+        if due_at > now {
+            return Some((due_at, self.repeat.clone()));
+        }
+        let rule = Repeat::parse(self.repeat.as_deref())?;
+        let tz = crate::personal_agent::clock::zone_of(&self.tz);
+        let next = next_after(&rule, tz, now)?;
+        // The rule's own time now, not a moment of its own.
+        let repeat = serde_json::to_string(&rule.placed(tz, false)).ok();
+        Some((next, repeat))
+    }
+}
+
+/// The time owner row `row` keeps for the question it answers, if any.
+fn prior_on(row: &timeline::Model) -> Option<AnswerPrior> {
+    serde_json::from_value(row_data(row).get(ANSWER_PRIOR)?.clone()).ok()
+}
+
+/// Write `prior` on owner row `row_id` (`None`: take it off), inside `txn`.
+async fn write_prior(
+    txn: &impl ConnectionTrait,
+    row_id: i32,
+    prior: Option<&AnswerPrior>,
+) -> Result<(), DbError> {
+    let Some(row) = timeline::Entity::find_by_id(row_id).one(txn).await? else {
+        return Ok(());
+    };
+    let mut data = row_data(&row);
+    let Some(map) = data.as_object_mut() else {
+        return Ok(());
+    };
+    match prior {
+        Some(p) => {
+            map.insert(ANSWER_PRIOR.into(), serde_json::json!(p));
+        }
+        None if map.remove(ANSWER_PRIOR).is_some() => {}
+        None => return Ok(()),
+    }
+    timeline::Entity::update_many()
+        .col_expr(timeline::Column::Data, Expr::value(Some(data.to_string())))
+        .filter(timeline::Column::Id.eq(row_id))
+        .exec(txn)
+        .await?;
+    Ok(())
+}
+
+/// Take the time a question had before its answer off the answer's row
+/// `row_id`, inside `txn`: somebody set the question's time themselves
+/// while it waited on the answer, and that time stands. What it was.
+pub async fn take_answer_prior(
+    txn: &impl ConnectionTrait,
+    row_id: i32,
+) -> Result<Option<AnswerPrior>, DbError> {
+    let prior = match timeline::Entity::find_by_id(row_id).one(txn).await? {
+        Some(row) => prior_on(&row),
+        None => None,
+    };
+    if prior.is_some() {
+        write_prior(txn, row_id, None).await?;
+    }
+    Ok(prior)
+}
+
+/// Put question `item_id`'s time back as `prior` says at `now`, inside
+/// `txn` ([`AnswerPrior::due_again`]); not fired for it — the time put
+/// back is always still to come. Whether it had one to put back.
+pub async fn restore_prior(
+    txn: &impl ConnectionTrait,
+    item_id: i32,
+    prior: &AnswerPrior,
+    now: DateTime<Utc>,
+) -> Result<bool, DbError> {
+    let Some((due_at, repeat)) = prior.due_again(now) else {
+        return Ok(false);
+    };
+    item::Entity::update_many()
+        .col_expr(item::Column::DueAt, Expr::value(Some(due_at)))
+        .col_expr(item::Column::Repeat, Expr::value(repeat))
+        .col_expr(item::Column::AtDue, Expr::value(prior.at_due.clone()))
+        .col_expr(item::Column::ActSpec, Expr::value(prior.act_spec.clone()))
+        .col_expr(item::Column::FiredAt, Expr::value(None::<DateTime<Utc>>))
+        .col_expr(item::Column::UpdatedAt, Expr::value(now))
+        .filter(item::Column::Id.eq(item_id))
+        .exec(txn)
+        .await?;
+    Ok(true)
+}
 
 /// Why an act cannot be taken back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +209,11 @@ struct UndoNote {
     after: After,
     #[serde(default)]
     cards: Vec<CardSnap>,
+    /// The time the question had before its answer, which this act took
+    /// off the answer's row ([`take_answer_prior`]): the undo puts it
+    /// back as the answer stands then.
+    #[serde(default)]
+    answer_prior: Option<AnswerPrior>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -189,20 +319,27 @@ pub async fn answer_now(
     conn: &impl ConnectionTrait,
     row_id: Option<i32>,
 ) -> Result<AnswerNow, DbError> {
-    let Some(row) = (match row_id {
+    let row = match row_id {
         Some(id) => timeline::Entity::find_by_id(id).one(conn).await?,
         None => None,
-    }) else {
-        return Ok(AnswerNow::Interrupted);
     };
-    let status = match row.batch_id {
+    let status = match row.as_ref().and_then(|r| r.batch_id) {
         Some(b) => batch::Entity::find_by_id(b).one(conn).await?.map(|b| b.status),
         None => None,
     };
-    Ok(match row.status {
+    Ok(answer_now_from(row.as_ref(), status))
+}
+
+/// [`answer_now`] of the answer's row `row` as read, its batch's status
+/// `status`.
+fn answer_now_from(row: Option<&timeline::Model>, status: Option<BatchStatus>) -> AnswerNow {
+    let Some(row) = row else {
+        return AnswerNow::Interrupted;
+    };
+    match row.status {
         Some(OwnerStatus::Queued) => AnswerNow::Linked,
         Some(OwnerStatus::Interrupted) | None => AnswerNow::Interrupted,
-        Some(OwnerStatus::Delivered | OwnerStatus::Answered) if !confirmed(&row) => {
+        Some(OwnerStatus::Delivered | OwnerStatus::Answered) if !confirmed(row) => {
             AnswerNow::Linked
         }
         // Delivered: its turn runs, or ended and the row was not moved
@@ -213,7 +350,7 @@ pub async fn answer_now(
             Some(BatchStatus::Running) => AnswerNow::Linked,
             _ => AnswerNow::Interrupted,
         },
-    })
+    }
 }
 
 /// Why the message an act took back (or stopped waiting for) keeps it
@@ -223,37 +360,46 @@ async fn message_refusal(
     conn: &impl ConnectionTrait,
     m: &NoteMessage,
 ) -> Result<Option<UndoRefused>, DbError> {
-    let peer = m.to_bot_id;
-    let gone = agent::Entity::find_by_id(peer)
-        .one(conn)
-        .await?
-        .is_none_or(|b| b.deleted_at.is_some());
-    if gone {
-        return Ok(Some(UndoRefused::PeerGone { peer }));
-    }
+    let peer = agent::Entity::find_by_id(m.to_bot_id).one(conn).await?;
     // A receiver may still answer a message taken back or stopped: the
     // answer is what matters, not the message's state.
     let replied = message::Entity::find()
         .filter(message::Column::ReplyTo.eq(m.id))
-        .filter(message::Column::FromBotId.eq(peer))
+        .filter(message::Column::FromBotId.eq(m.to_bot_id))
         .one(conn)
         .await?
         .is_some();
-    if replied {
-        return Ok(Some(UndoRefused::Replied { peer }));
+    let msg = message::Entity::find_by_id(m.id).one(conn).await?;
+    Ok(message_refusal_from(m, peer.as_ref(), replied, msg.as_ref()))
+}
+
+/// [`message_refusal`] from what it reads: the receiver (`peer`), whether
+/// it answered the message (`replied`), and the message itself.
+fn message_refusal_from(
+    m: &NoteMessage,
+    peer: Option<&agent::Model>,
+    replied: bool,
+    msg: Option<&message::Model>,
+) -> Option<UndoRefused> {
+    let to = m.to_bot_id;
+    if peer.is_none_or(|b| b.deleted_at.is_some()) {
+        return Some(UndoRefused::PeerGone { peer: to });
     }
-    let Some(msg) = message::Entity::find_by_id(m.id).one(conn).await? else {
-        return Ok(Some(UndoRefused::Changed));
+    if replied {
+        return Some(UndoRefused::Replied { peer: to });
+    }
+    let Some(msg) = msg else {
+        return Some(UndoRefused::Changed);
     };
     let ok = match m.outcome.as_str() {
         "withdrawn" => msg.state == MessageState::Stopped,
         _ => LIVE_MESSAGE_STATES.contains(&msg.state),
     };
-    Ok(match (ok, msg.state) {
+    match (ok, msg.state) {
         (true, _) => None,
-        (false, MessageState::Replied) => Some(UndoRefused::Replied { peer }),
+        (false, MessageState::Replied) => Some(UndoRefused::Replied { peer: to }),
         (false, _) => Some(UndoRefused::Changed),
-    })
+    }
 }
 
 /// Why the answer the act closed (or dropped) a question on keeps it from
@@ -266,10 +412,15 @@ async fn answer_refusal(
         return Ok((None, None));
     }
     let now = answer_now(conn, before.answer_row_id).await?;
-    Ok(match now {
+    Ok(answer_refusal_from(now))
+}
+
+/// [`answer_refusal`] of a linked answer standing `now`.
+fn answer_refusal_from(now: AnswerNow) -> (Option<UndoRefused>, Option<AnswerNow>) {
+    match now {
         AnswerNow::Read => (Some(UndoRefused::AnswerRead), Some(now)),
         _ => (None, Some(now)),
-    })
+    }
 }
 
 /// Take back the owner's act `token` on `bot`'s matter `item_id` (§4.3),
@@ -348,6 +499,17 @@ pub async fn undo_item_op(
         txn.rollback().await?;
         return Ok(Err(why));
     }
+    // The time the question had before its answer: this act took it off
+    // the answer's row (or it is still there, the act having set no time).
+    let prior = match (&note.answer_prior, b.answer_row_id) {
+        (Some(p), _) => Some(p.clone()),
+        (None, Some(row_id)) => timeline::Entity::find_by_id(row_id)
+            .one(&txn)
+            .await?
+            .as_ref()
+            .and_then(prior_on),
+        (None, None) => None,
+    };
     if answer == Some(AnswerNow::Interrupted) {
         item::Entity::update_many()
             .col_expr(item::Column::WaitsFor, Expr::value(Some(WaitsFor::Owner)))
@@ -356,6 +518,16 @@ pub async fn undo_item_op(
             .filter(item::Column::Id.eq(item_id))
             .exec(&txn)
             .await?;
+        // Its answer's turn did not finish: its time back, as one does.
+        if let Some(p) = &prior {
+            restore_prior(&txn, item_id, p, at).await?;
+        }
+    } else if answer == Some(AnswerNow::Linked) {
+        // Waiting on the answer again: the time goes back on its row, to
+        // come back should that turn not finish.
+        if let (Some(p), Some(row_id)) = (&note.answer_prior, b.answer_row_id) {
+            write_prior(&txn, row_id, Some(p)).await?;
+        }
     }
     let mut requeued = None;
     if let Some(m) = &note.message {
@@ -440,6 +612,7 @@ pub async fn undo_item_op(
     if unread.rows_affected != 1 {
         let what = match note.op.as_str() {
             "done" => "marking it done",
+            "skip" => "skipping it",
             "drop" => "dropping it",
             "snooze" => "putting it off",
             _ => "setting it aside",
@@ -477,10 +650,165 @@ pub async fn undo_item_op(
     }))
 }
 
+/// [`item_undo_token`] of each of `items`, by the matter's id — in a fixed
+/// number of reads, however many there are ("done today" lists them all):
+/// the window's panel lines of their assistants, read once and the latest
+/// of each matter kept; then, for those that could be taken back, the
+/// messages they took back and the receivers, the replies, the answers'
+/// rows and their batches, each read once for all. Judged as one at a time
+/// would be.
+pub async fn item_undo_tokens(
+    conn: &DatabaseConnection,
+    items: &[item::Model],
+    now: DateTime<Utc>,
+) -> Result<std::collections::HashMap<i32, i32>, DbError> {
+    use std::collections::{HashMap, HashSet};
+    let mut out = HashMap::new();
+    let bots: HashSet<i32> = items.iter().filter_map(|i| i.bot_id).collect();
+    if bots.is_empty() {
+        return Ok(out);
+    }
+    let since = now - chrono::Duration::seconds(UNDO_WINDOW_SECS);
+    let notes = event::Entity::find()
+        .filter(event::Column::BotId.is_in(bots.iter().copied().collect::<Vec<_>>()))
+        .filter(event::Column::Kind.eq(ITEM_NOTE))
+        .filter(event::Column::CreatedAt.gte(since))
+        .order_by_desc(event::Column::Id)
+        .all(conn)
+        .await?;
+    // Each matter's latest line, whatever it is: an older act is not the
+    // one taken back.
+    let mut latest: HashMap<(i32, i32), &event::Model> = HashMap::new();
+    for ev in &notes {
+        let Some(bot) = ev.bot_id else {
+            continue;
+        };
+        let item_id = ev
+            .payload
+            .as_deref()
+            .and_then(|p| serde_json::from_str::<Value>(p).ok())
+            .and_then(|p| p["item_id"].as_i64())
+            .and_then(|id| i32::try_from(id).ok());
+        if let Some(item_id) = item_id {
+            latest.entry((bot, item_id)).or_insert(ev);
+        }
+    }
+    // The acts that could be taken back, as far as the matter goes.
+    let mut open: Vec<(&item::Model, &event::Model, UndoNote)> = Vec::new();
+    for i in items {
+        let Some(bot) = i.bot_id else {
+            continue;
+        };
+        let Some(ev) = latest.get(&(bot, i.id)) else {
+            continue;
+        };
+        let Some(note) = note_of(ev, i.id) else {
+            continue;
+        };
+        if note.after.updated_at != i.updated_at || note.after.status != i.status {
+            continue;
+        }
+        open.push((i, ev, note));
+    }
+    if open.is_empty() {
+        return Ok(out);
+    }
+    // What their checks read, once for all (a few hundred ids a query, well
+    // under SQLite's bound on a statement's variables).
+    const CHUNK: usize = 500;
+    let messages: Vec<&NoteMessage> = open.iter().filter_map(|(_, _, n)| n.message.as_ref()).collect();
+    let to_bots: Vec<i32> = messages
+        .iter()
+        .map(|m| m.to_bot_id)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let mut peers: HashMap<i32, agent::Model> = HashMap::new();
+    for ids in to_bots.chunks(CHUNK) {
+        for b in agent::Entity::find()
+            .filter(agent::Column::Id.is_in(ids.to_vec()))
+            .all(conn)
+            .await?
+        {
+            peers.insert(b.id, b);
+        }
+    }
+    let message_ids: Vec<i32> = messages.iter().map(|m| m.id).collect();
+    let mut sent: HashMap<i32, message::Model> = HashMap::new();
+    let mut replies: Vec<message::Model> = Vec::new();
+    for ids in message_ids.chunks(CHUNK) {
+        for m in message::Entity::find()
+            .filter(message::Column::Id.is_in(ids.to_vec()))
+            .all(conn)
+            .await?
+        {
+            sent.insert(m.id, m);
+        }
+        replies.extend(
+            message::Entity::find()
+                .filter(message::Column::ReplyTo.is_in(ids.to_vec()))
+                .all(conn)
+                .await?,
+        );
+    }
+    let answer_rows: Vec<i32> = open
+        .iter()
+        .filter(|(_, _, n)| n.before.answer_state.as_deref() == Some("linked"))
+        .filter_map(|(_, _, n)| n.before.answer_row_id)
+        .collect();
+    let mut rows: HashMap<i32, timeline::Model> = HashMap::new();
+    for ids in answer_rows.chunks(CHUNK) {
+        for r in timeline::Entity::find()
+            .filter(timeline::Column::Id.is_in(ids.to_vec()))
+            .all(conn)
+            .await?
+        {
+            rows.insert(r.id, r);
+        }
+    }
+    let batch_ids: Vec<i32> = rows
+        .values()
+        .filter_map(|r| r.batch_id)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let mut batches: HashMap<i32, BatchStatus> = HashMap::new();
+    for ids in batch_ids.chunks(CHUNK) {
+        for b in batch::Entity::find()
+            .filter(batch::Column::Id.is_in(ids.to_vec()))
+            .all(conn)
+            .await?
+        {
+            batches.insert(b.id, b.status);
+        }
+    }
+    for (i, ev, note) in open {
+        if let Some(m) = &note.message {
+            let replied = replies
+                .iter()
+                .any(|r| r.reply_to == Some(m.id) && r.from_bot_id == m.to_bot_id);
+            if message_refusal_from(m, peers.get(&m.to_bot_id), replied, sent.get(&m.id)).is_some() {
+                continue;
+            }
+        }
+        if note.before.answer_state.as_deref() == Some("linked") {
+            let row = note.before.answer_row_id.and_then(|id| rows.get(&id));
+            let status = row.and_then(|r| r.batch_id).and_then(|b| batches.get(&b).copied());
+            if answer_refusal_from(answer_now_from(row, status)).0.is_some() {
+                continue;
+            }
+        }
+        out.insert(i.id, ev.id);
+    }
+    Ok(out)
+}
+
 /// What takes back the owner's latest act on `item` from the panel, while
 /// it still would (§4.6, "done today"'s [Undo]): within the window, the
 /// matter not written since, and nothing it set going in the way — the
-/// same checks `undo_item_op` makes.
+/// same checks `undo_item_op` makes. One at a time; "done today" reads
+/// them all at once ([`item_undo_tokens`]).
+#[cfg(test)]
 pub async fn item_undo_token(
     conn: &DatabaseConnection,
     item: &item::Model,
@@ -567,10 +895,47 @@ fn linked_to(
 ) -> sea_orm::UpdateMany<item::Entity> {
     update
         .filter(item::Column::Id.eq(item_id))
-        .filter(item::Column::Status.eq(ItemStatus::Waiting))
-        .filter(item::Column::WaitsFor.eq(WaitsFor::Agent))
-        .filter(item::Column::AnswerState.eq("linked"))
+        .filter(waiting_on_its_answer())
         .filter(item::Column::AnswerRowId.eq(row_id))
+}
+
+/// A question waiting on the assistant to read the owner's answer linked
+/// to it — [`linked_to`] short of which question and which answer.
+fn waiting_on_its_answer() -> sea_orm::Condition {
+    sea_orm::Condition::all()
+        .add(item::Column::Status.eq(ItemStatus::Waiting))
+        .add(item::Column::WaitsFor.eq(WaitsFor::Agent))
+        .add(item::Column::AnswerState.eq("linked"))
+}
+
+/// Of `pairs` — a question, and the owner row that answers it — those its
+/// settling would still take ([`linked_to`]): what a delivery tells the
+/// assistant its turn's end will do with the question is what it does,
+/// as things stand when the delivery is put together. A question the
+/// assistant or the owner moved meanwhile, or answered again in a later
+/// row, is not among them.
+pub async fn still_linked(
+    conn: &impl ConnectionTrait,
+    pairs: &[(i32, i32)],
+) -> Result<std::collections::HashSet<(i32, i32)>, DbError> {
+    if pairs.is_empty() {
+        return Ok(Default::default());
+    }
+    let ids: Vec<i32> = pairs.iter().map(|(item, _)| *item).collect();
+    let waiting = item::Entity::find()
+        .filter(item::Column::Id.is_in(ids))
+        .filter(waiting_on_its_answer())
+        .all(conn)
+        .await?;
+    Ok(pairs
+        .iter()
+        .copied()
+        .filter(|(item_id, row_id)| {
+            waiting
+                .iter()
+                .any(|i| i.id == *item_id && i.answer_row_id == Some(*row_id))
+        })
+        .collect())
 }
 
 /// Settle the question owner row `row_id` answers as `how` says, inside
@@ -603,11 +968,32 @@ async fn settle_answer(
             ),
     }
     .col_expr(item::Column::UpdatedAt, Expr::value(now));
-    Ok(linked_to(update, item_id, row_id)
+    let settled = linked_to(update, item_id, row_id)
         .exec(txn)
         .await?
         .rows_affected
-        == 1)
+        == 1;
+    if settled {
+        match how {
+            // Answered: the time it had before is done with.
+            AnswerMove::Close => {
+                take_answer_prior(txn, row_id).await?;
+            }
+            // Back with the owner: its time back, as it would stand now.
+            AnswerMove::Revert => {
+                if let Some(prior) = timeline::Entity::find_by_id(row_id)
+                    .one(txn)
+                    .await?
+                    .as_ref()
+                    .and_then(prior_on)
+                {
+                    restore_prior(txn, item_id, &prior, now).await?;
+                }
+            }
+            AnswerMove::Keep => {}
+        }
+    }
+    Ok(settled)
 }
 
 /// What moving owner rows did: the rows as they are now, and the questions
@@ -624,6 +1010,11 @@ pub struct RowsMoved {
 /// ([`confirmed`]) settle their question as `answers` says; one claimed for
 /// a turn in flight and not folded yet is left to how that comes out
 /// ([`settle_steer`]).
+///
+/// `settling_batch`, when set, is the batch whose end this is: a row
+/// another batch has — delivered with it, claimed for it, folded into it —
+/// is not this one's to move, nor its question this one's to settle, even
+/// when this turn once counted it among its own.
 #[allow(clippy::too_many_arguments)]
 pub async fn move_owner_rows_settling(
     conn: &DatabaseConnection,
@@ -634,6 +1025,7 @@ pub async fn move_owner_rows_settling(
     segment_id: Option<i32>,
     read: super::personal_agent_service::ReadMark,
     answers: AnswerMove,
+    settling_batch: Option<i32>,
 ) -> Result<RowsMoved, DbError> {
     use super::personal_agent_service::move_owner_rows;
     if ids.is_empty() {
@@ -641,13 +1033,19 @@ pub async fn move_owner_rows_settling(
     }
     let txn = conn.begin().await?;
     write_first(&txn).await?;
-    let moving = timeline::Entity::find()
+    let moving: Vec<timeline::Model> = timeline::Entity::find()
         .filter(timeline::Column::Id.is_in(ids.to_vec()))
         .filter(timeline::Column::Kind.eq(timeline::TimelineKind::Owner))
         .filter(timeline::Column::Status.is_in(from.to_vec()))
         .all(&txn)
-        .await?;
-    let rows = move_owner_rows(&txn, ids, from, to, batch_id, segment_id, read).await?;
+        .await?
+        .into_iter()
+        .filter(|r| settling_batch.is_none_or(|b| of_batch(r, b)))
+        .collect();
+    // The write lock is held from the first statement: what was read is
+    // what moves.
+    let ids: Vec<i32> = moving.iter().map(|r| r.id).collect();
+    let rows = move_owner_rows(&txn, &ids, from, to, batch_id, segment_id, read).await?;
     let mut items = Vec::new();
     for r in moving.iter().filter(|r| confirmed(r)) {
         if let Some(item_id) = answers_item_of(r) {
@@ -658,6 +1056,13 @@ pub async fn move_owner_rows_settling(
     }
     txn.commit().await?;
     Ok(RowsMoved { rows, items })
+}
+
+/// Whether owner row `r` is batch `b`'s: delivered with it, and not
+/// claimed for another's turn.
+fn of_batch(r: &timeline::Model, b: i32) -> bool {
+    let claim = &row_data(r)[STEER_CLAIM];
+    r.batch_id == Some(b) && (claim.is_null() || claim.as_i64() == Some(i64::from(b)))
 }
 
 /// Claim owner row `row_id` for the turn in flight (`batch_id`), before it
@@ -698,14 +1103,21 @@ pub async fn claim_owner_row_for_steering(
 /// too, when the turn ended meanwhile: nothing of it reached the agent) —
 /// unless an interruption left it "interrupted", to be sent again, when
 /// its question goes back to the owner. The row and the questions settled.
+/// Only while the row is still claimed for `batch_id`: a hand-over that
+/// comes out after another batch took the row is not this one's.
 pub async fn settle_steer(
     conn: &DatabaseConnection,
     row_id: i32,
+    batch_id: i32,
     folded: bool,
 ) -> Result<RowsMoved, DbError> {
     let txn = conn.begin().await?;
     write_first(&txn).await?;
-    let Some(row) = timeline::Entity::find_by_id(row_id).one(&txn).await? else {
+    let Some(row) = timeline::Entity::find_by_id(row_id)
+        .one(&txn)
+        .await?
+        .filter(|r| row_data(r)[STEER_CLAIM].as_i64() == Some(i64::from(batch_id)))
+    else {
         txn.rollback().await?;
         return Ok(RowsMoved::default());
     };
@@ -782,7 +1194,9 @@ pub async fn settle_stranded_owner_rows(
                 .add(
                     sea_orm::Condition::all()
                         .add(timeline::Column::Status.eq(OwnerStatus::Answered))
-                        .add(timeline::Column::Data.like("%\"steer_claim\"%")),
+                        .add(Expr::cust(
+                            "json_valid(data) AND json_extract(data, '$.steer_claim') IS NOT NULL",
+                        )),
                 ),
         )
         .order_by_asc(timeline::Column::Id)
@@ -893,13 +1307,19 @@ pub struct Answering {
 /// open reminder cards closed. Only while the question can still be
 /// answered — this assistant's, a question, open or waiting, not waiting
 /// on the assistant already — whatever else changed in it; `None`, nothing
-/// written, when it cannot.
+/// written, when it cannot. The time it had is kept on the row
+/// ([`AnswerPrior`], `tz` the owner's zone). `resent_from`: the row is that
+/// owner row sent again, marked so in the same write — `None` too when it
+/// was sent again already (two sends at once: one copy).
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_owner_row_answering(
     conn: &DatabaseConnection,
     bot: i32,
     mut row: super::personal_agent_service::NewRow,
     item_id: i32,
     summary: &str,
+    tz: chrono_tz::Tz,
+    resent_from: Option<i32>,
 ) -> Result<Option<Answering>, DbError> {
     use crate::db::entities::personal_agent_item::ItemKind;
     use crate::db::entities::personal_agent_notice::NoticeKind;
@@ -913,7 +1333,12 @@ pub async fn insert_owner_row_answering(
     });
     row.data = Some(data);
     let txn = conn.begin().await?;
-    let inserted = row.into_active(bot, now).insert(&txn).await?;
+    let mut inserted = row.into_active(bot, now).insert(&txn).await?;
+    let prior = item::Entity::find_by_id(item_id)
+        .one(&txn)
+        .await?
+        .as_ref()
+        .and_then(|i| AnswerPrior::of(i, tz));
     let linked = item::Entity::update_many()
         .col_expr(item::Column::Status, Expr::value(ItemStatus::Waiting))
         .col_expr(item::Column::WaitsFor, Expr::value(Some(WaitsFor::Agent)))
@@ -939,6 +1364,18 @@ pub async fn insert_owner_row_answering(
     if linked.rows_affected != 1 {
         txn.rollback().await?;
         return Ok(None);
+    }
+    if let Some(from) = resent_from {
+        if !super::personal_agent_service::mark_resent(&txn, from, inserted.id).await? {
+            txn.rollback().await?;
+            return Ok(None);
+        }
+    }
+    if let Some(p) = &prior {
+        write_prior(&txn, inserted.id, Some(p)).await?;
+        if let Some(r) = timeline::Entity::find_by_id(inserted.id).one(&txn).await? {
+            inserted = r;
+        }
     }
     let mut cards = Vec::new();
     let open = notice::Entity::find()

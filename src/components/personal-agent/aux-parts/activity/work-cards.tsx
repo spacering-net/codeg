@@ -46,9 +46,21 @@ import {
 import { useActivityTranslate } from "../../activity-text"
 import { repeatText } from "../../due-text"
 import { AnsweredForYou } from "../../event-card"
-import { LadderChip, TaskStopButton, TaskStrip } from "../../task-strip"
+import {
+  LadderChip,
+  TaskStrip,
+  WorkStopButton,
+  workStoppable,
+} from "../../task-strip"
 import { useTodayRowProps, type Opener } from "../../today-section"
-import { peerName, useWaited, useWhen } from "../../matter-text"
+import {
+  messageWords,
+  peerName,
+  useWaited,
+  useWaitedFor,
+  useWhen,
+  useWhenInSentence,
+} from "../../matter-text"
 import {
   hasItemActions,
   MatterActions,
@@ -56,6 +68,7 @@ import {
   useRowBotName,
   useUndoMatter,
 } from "./matter-actions"
+import { useActSettle } from "./act-settle"
 
 /** A piece of work's glyph leading a row, in px at 100% zoom: as a kind's
  *  icon tile. */
@@ -70,37 +83,16 @@ const KIND_ICON: Record<Exclude<ItemKind, "dispatch">, LucideIcon> = {
   when_mentioned: Ear,
 }
 
-/** codeg's own words for the matters of a message between assistants
- *  (`messages.rs`): its sender's, and its receiver's. */
-const WAITING_ANSWER = /^Waiting for (.+?)'s answer: ([\s\S]*)$/
-const WROTE_TO_YOU = /^(.+?) wrote to you: ([\s\S]*)$/
-
-/** A message's matter written by codeg, in the page's language: what it
- *  says with its sender or receiver named; `null` for words of anyone
- *  else's (an assistant's own summary), shown as written. */
-export function messageMatterWords(
-  summary: string
-): { key: "waitingAnswer" | "wroteToYou"; name: string; text: string } | null {
-  const waiting = WAITING_ANSWER.exec(summary)
-  if (waiting)
-    return { key: "waitingAnswer", name: waiting[1]!, text: waiting[2]! }
-  const wrote = WROTE_TO_YOU.exec(summary)
-  if (wrote) return { key: "wroteToYou", name: wrote[1]!, text: wrote[2]! }
-  return null
-}
-
-/** A matter's title: its summary — codeg's words for a message's matter in
- *  the page's language. */
+/** A matter's title: its summary — a message's, what was written (from
+ *  its line), with who wrote it when it was written to this assistant. */
 function useMatterTitle(): (item: ItemInfo) => string {
   const t = useTranslations("PersonalAgent.items")
   return (item) => {
-    const words =
-      item.kind === "message" ? messageMatterWords(item.summary) : null
+    const words = item.kind === "message" ? messageWords(item) : null
+    if (!words) return item.summary
     // Who it waits on is said on its line: the title is what was written.
-    if (words?.key === "waitingAnswer") return words.text
-    return words
-      ? t(words.key, { name: words.name, text: words.text })
-      : item.summary
+    if (!words.toMe) return words.text
+    return t("wroteToYou", { name: peerName(item), text: words.text })
   }
 }
 
@@ -295,13 +287,7 @@ export function ActivityRowView({
   const onOpenChange = (o: boolean) => setOpen(row.thing, o)
   if (row.routine) {
     return (
-      <RoutineRow
-        r={row.routine}
-        readOnly={scope.readOnly}
-        open={open}
-        onOpenChange={onOpenChange}
-        flash={flash}
-      />
+      <RoutineRow r={row.routine} readOnly={scope.readOnly} flash={flash} />
     )
   }
   return (
@@ -383,6 +369,7 @@ function finish(
     unfold,
     flash,
     dispatch,
+    scope,
   }: {
     row: ActivityRow
     open: boolean
@@ -390,21 +377,42 @@ function finish(
     unfold: ReactNode
     flash: boolean
     dispatch: DispatchInfo | null
+    scope: RowScope
   }
 ): PanelItemProps {
   const buttons = props.actions != null
+  // [Stop] for any work while it moves — a chat or a session too: after the
+  // row's other buttons; on a task's strip when it has none; on its own
+  // otherwise.
+  const stoppable = workStoppable(dispatch, scope.readOnly)
   const strip = dispatch?.task ? (
-    <TaskStrip d={dispatch} compact bot={row.bot_id} stop={!buttons} />
+    <TaskStrip
+      d={dispatch}
+      compact
+      bot={row.bot_id}
+      stop={!buttons}
+      from="activity"
+    />
   ) : null
-  const actions =
-    buttons && dispatch?.task ? (
-      <>
-        {props.actions}
-        <TaskStopButton d={dispatch} bot={row.bot_id} className="ms-auto" />
-      </>
-    ) : (
-      props.actions
-    )
+  const stop =
+    dispatch && stoppable ? (
+      <WorkStopButton
+        d={dispatch}
+        bot={row.bot_id}
+        from="activity"
+        className="ms-auto"
+      />
+    ) : null
+  const actions = buttons ? (
+    <>
+      {props.actions}
+      {stop}
+    </>
+  ) : strip ? (
+    props.actions
+  ) : (
+    (stop ?? props.actions)
+  )
   return {
     ...props,
     actions,
@@ -497,10 +505,14 @@ function useMatterLine(): (
   const locale = useLocale()
   const nameOf = useRowBotName()
   const waited = useWaited()
+  const waitedFor = useWaitedFor()
   const when = useWhen()
+  const whenIn = useWhenInSentence()
   return (row, item, now) => {
     const name = nameOf(row.bot_id)
     const wait = waited(item.created_at, now)
+    // For "waiting {wait}": a length of time, never "just now".
+    const waitFor = waitedFor(item.created_at, now)
     const plain = (meta: string) => ({ meta, callout: null })
     if (item.kind === "when_mentioned" && item.mention) {
       const m = item.mention
@@ -532,7 +544,7 @@ function useMatterLine(): (
         }
     }
     if (item.due_at && timeAhead(item, now)) {
-      const at = when(item.due_at)
+      const at = whenIn(item.due_at)
       if (item.repeat) {
         const rule = repeatText(tw, item.repeat, now, locale)
         return plain(t("repeats", { name, rule, when: at }))
@@ -555,14 +567,14 @@ function useMatterLine(): (
     if (item.waits_for === "time" && !item.due_at) return plain(t("setAside"))
     switch (item.waits_for) {
       case "agent":
-        return plain(t("following", { name, wait }))
+        return plain(t("following", { name, wait: waitFor }))
       case "external":
         return plain(t("external", { name, wait }))
       default:
         return plain(
           item.kind === "question"
-            ? t("asks", { name, wait })
-            : t("needsYou", { name, wait })
+            ? t("asks", { name, wait: waitFor })
+            : t("needsYou", { name, wait: waitFor })
         )
     }
   }
@@ -653,6 +665,12 @@ function MatterClosedShell({ today, ...p }: ShellProps & { today: TodayRow }) {
   const undoMatter = useUndoMatter()
   const jumpTo = useJumpTo(p.scope.inDrawer)
   const [acting, setActing] = useState(false)
+  // Taken back, [Undo] stays off until the row is read again without that
+  // undo (or goes: the matter is open again).
+  const settle = useActSettle(
+    `today:${today.key}`,
+    String(today.matter_undo ?? "")
+  )
   const bot = today.bot_id
   const name = nameOf(bot)
   const peer = today.peer?.name?.trim() || t("meta.someone")
@@ -663,7 +681,10 @@ function MatterClosedShell({ today, ...p }: ShellProps & { today: TodayRow }) {
   const by = today.closed_by
   const how = today.closed_how
   const key = ((): string => {
+    // Given up because its work was stopped.
+    if (how === "stopped") return by === "agent" ? "agentStopped" : "stopped"
     if (by === "owner") {
+      if (how === "skipped") return "skippedLast"
       if (how === "withdrawn") return "withdrawn"
       if (how === "stopped_waiting") return "stoppedWaiting"
       if (how === "dropped") return "dropped"
@@ -690,19 +711,25 @@ function MatterClosedShell({ today, ...p }: ShellProps & { today: TodayRow }) {
   const kind = (today.state ?? "reminder") as ItemKind
   const title =
     kind === "message"
-      ? (messageMatterWords(today.title)?.text ?? today.title)
+      ? (messageWords(today)?.text ?? today.title)
       : today.title
   const undo = today.matter_undo
   const itemId = today.item_id
+  // Taking back a skip says so, as the toast's [Undo] does.
+  const undoneWords = how === "skipped" ? t("toast.undoneSkip") : undefined
   const action =
     !p.scope.readOnly && undo != null && itemId != null ? (
       <Button
         size="sm"
         variant="outline"
-        disabled={acting}
+        disabled={acting || settle.waiting}
         onClick={() => {
           setActing(true)
-          void undoMatter(bot, itemId, undo).finally(() => setActing(false))
+          void undoMatter(bot, itemId, undo, undoneWords)
+            .then((done) => {
+              if (done) settle.waitFor({ differs: String(undo) })
+            })
+            .finally(() => setActing(false))
         }}
         data-pa-today-act="matter-undo"
       >

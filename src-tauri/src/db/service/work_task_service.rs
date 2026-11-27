@@ -777,26 +777,54 @@ pub async fn create(
     conn: &DatabaseConnection,
     draft: WorkTaskDraft,
 ) -> Result<WorkTaskInfo, DbError> {
-    create_inner(conn, draft, None).await
+    match create_inner(conn, draft, None).await? {
+        Made::Task(t) => Ok(*t),
+        // Not a dispatch's: nothing to hook up, nothing to refuse it.
+        Made::Bind(_) => Err(DbError::Validation("no dispatch to hook the task up to".into())),
+    }
 }
 
 /// Create a task on behalf of a personal-agent dispatch. The ONLY path that
 /// writes `personal_agent_dispatch_id`, in the same insert as the row itself,
 /// so the task is the dispatch's from its first moment. It lands as the
 /// board's settings say, like any other task.
+/// What creating a personal agent's dispatch's task came to.
+#[derive(Debug)]
+pub enum CreateForDispatch {
+    Created(Box<WorkTaskInfo>),
+    /// The dispatch was stopped first: no task.
+    Stopped,
+    /// An earlier start of the dispatch made its task already: no other.
+    Already(i32),
+}
+
+/// A task for a personal agent's dispatch, hooked up to it in the same
+/// transaction ([`crate::db::service::personal_agent_service::bind_work_task_in`]).
 pub async fn create_for_personal_agent(
     conn: &DatabaseConnection,
     draft: WorkTaskDraft,
     dispatch_id: i32,
-) -> Result<WorkTaskInfo, DbError> {
-    create_inner(conn, draft, Some(dispatch_id)).await
+) -> Result<CreateForDispatch, DbError> {
+    match create_inner(conn, draft, Some(dispatch_id)).await? {
+        Made::Task(t) => Ok(CreateForDispatch::Created(t)),
+        Made::Bind(crate::db::service::personal_agent_service::Bind::Already(t)) => {
+            Ok(CreateForDispatch::Already(t))
+        }
+        Made::Bind(_) => Ok(CreateForDispatch::Stopped),
+    }
+}
+
+/// What `create_inner` made: the task, or — a dispatch's — why not.
+enum Made {
+    Task(Box<WorkTaskInfo>),
+    Bind(crate::db::service::personal_agent_service::Bind),
 }
 
 async fn create_inner(
     conn: &DatabaseConnection,
     draft: WorkTaskDraft,
     dispatch_id: Option<i32>,
-) -> Result<WorkTaskInfo, DbError> {
+) -> Result<Made, DbError> {
     // A dispatched task was written by the personal agent, not typed by the
     // user; the timeline says so.
     let actor = if dispatch_id.is_some() { "agent" } else { "user" };
@@ -833,8 +861,15 @@ async fn create_inner(
         insert_todo_row(&txn, &draft, config_str, max_order, now, None, dispatch_id).await?;
     let payload = dispatch_id.map(|id| serde_json::json!({ "personal_agent_dispatch": id }));
     record_event(&txn, row.id, "created", actor, payload).await?;
+    if let Some(d) = dispatch_id {
+        let bind = crate::db::service::personal_agent_service::bind_work_task_in(&txn, d, row.id).await?;
+        if bind != crate::db::service::personal_agent_service::Bind::Bound {
+            txn.rollback().await?;
+            return Ok(Made::Bind(bind));
+        }
+    }
     txn.commit().await?;
-    Ok(to_info(row))
+    Ok(Made::Task(Box::new(to_info(row))))
 }
 
 /// A task a personal-agent dispatch makes on a pull request (7.4): the
@@ -908,6 +943,17 @@ pub async fn create_on_pull_for_personal_agent(
         Some(serde_json::json!({ "source_key": source.key, "kind": source.kind })),
     )
     .await?;
+    match crate::db::service::personal_agent_service::bind_work_task_in(&txn, dispatch_id, row.id).await? {
+        crate::db::service::personal_agent_service::Bind::Bound => {}
+        crate::db::service::personal_agent_service::Bind::Stopped => {
+            txn.rollback().await?;
+            return Ok(ForgeCreateOutcome::DispatchStopped);
+        }
+        crate::db::service::personal_agent_service::Bind::Already(t) => {
+            txn.rollback().await?;
+            return Ok(ForgeCreateOutcome::DispatchAlready(t));
+        }
+    }
     txn.commit().await?;
     Ok(ForgeCreateOutcome::Created(Box::new(to_info(row))))
 }
@@ -923,6 +969,10 @@ pub enum ForgeCreateOutcome {
     /// new task's own order, each with the newest such task. Never empty; a
     /// task triggered from one item has exactly one entry.
     Duplicate(Vec<SourceConflict>),
+    /// A personal agent's dispatch's task: the dispatch was stopped first.
+    DispatchStopped,
+    /// A personal agent's dispatch's task: an earlier start made it.
+    DispatchAlready(i32),
 }
 
 /// One item of a task being created that ANOTHER live task already handles.
@@ -2510,6 +2560,90 @@ pub async fn cancel_running_generation(
     .await
 }
 
+/// [`cancel_inner`] inside `txn`: `Ok(Some(run_seq))`, the run it ended
+/// (a cancel leaves `run_seq` as it is), when the conditional write took;
+/// `Ok(None)` only when it did not. Writing the task or its event failing
+/// is an error, never `None`. `updated_at`, when given, is another
+/// condition: a task moved since it was read (put back to do) is not
+/// canceled. The event records the run and, a personal agent's stop,
+/// `pa_stop`.
+#[allow(clippy::too_many_arguments)]
+pub async fn cancel_in<C: ConnectionTrait>(
+    txn: &C,
+    id: i32,
+    expected: &[WorkTaskStatus],
+    run_seq: Option<i32>,
+    updated_at: Option<chrono::DateTime<Utc>>,
+    actor: &str,
+    reason: Option<&str>,
+    pa_stop: Option<PaStop>,
+) -> Result<Option<i32>, DbError> {
+    let now = Utc::now();
+    let mut update = cancel_update(id, expected, now);
+    if let Some(run_seq) = run_seq {
+        update = update.filter(work_task::Column::RunSeq.eq(run_seq));
+    }
+    if let Some(at) = updated_at {
+        update = update.filter(work_task::Column::UpdatedAt.eq(at));
+    }
+    if update.exec(txn).await?.rows_affected != 1 {
+        return Ok(None);
+    }
+    let run = work_task::Entity::find_by_id(id)
+        .one(txn)
+        .await?
+        .map(|t| t.run_seq)
+        .ok_or_else(|| DbError::NotFound(format!("task #{id}, inside its own cancel")))?;
+    let mut extra = serde_json::json!({ "run_seq": run });
+    if let Some(r) = reason.map(str::trim).filter(|r| !r.is_empty()) {
+        extra["reason"] = r.into();
+    }
+    if let Some(p) = pa_stop {
+        extra["pa_stop"] = serde_json::json!({ "dispatch_id": p.dispatch_id, "by": p.by });
+    }
+    status_changed_event(txn, id, actor, None, WorkTaskStatus::Canceled, Some(extra)).await?;
+    Ok(Some(run))
+}
+
+/// The write of a cancel: the columns a cancel clears, on a live row in
+/// one of `expected`.
+fn cancel_update(
+    id: i32,
+    expected: &[WorkTaskStatus],
+    now: chrono::DateTime<Utc>,
+) -> sea_orm::UpdateMany<work_task::Entity> {
+    work_task::Entity::update_many()
+        .col_expr(
+            work_task::Column::Status,
+            Expr::value(status_str(WorkTaskStatus::Canceled)),
+        )
+        .col_expr(work_task::Column::ConnectionId, Expr::value(None::<String>))
+        // A cancel mid-repair abandons the auto-remerge; a later requeue must
+        // not re-fire a stale merge.
+        .col_expr(work_task::Column::PendingMerge, Expr::value(None::<String>))
+        // Same reasoning for a planned start: stopping a task drops its plan,
+        // so a requeue days later cannot resurrect a time nobody remembers
+        // setting and launch an agent unattended. (A running row carries no
+        // plan — every claim consumes it — so this only bites the user path,
+        // but the clear belongs to "canceled", not to one caller.)
+        .col_expr(
+            work_task::Column::ScheduledAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
+        // Stopping a task the user had put aside settles the question it was
+        // put aside for; a later requeue starts from "canceled", not from a
+        // "handle later" nobody can see any more.
+        .col_expr(
+            work_task::Column::DeferredAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
+        .col_expr(work_task::Column::FinishedAt, Expr::value(Some(now)))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.is_in(expected.iter().copied()))
+        .filter(work_task::Column::DeletedAt.is_null())
+}
+
 /// running/awaiting_input → review for the given generation. Captures the
 /// agent's summary and the diff-stat snapshot; also writes a `diff_stat` event
 /// when stats are present.
@@ -3737,23 +3871,80 @@ pub async fn cancel(
     id: i32,
     reason: Option<&str>,
 ) -> Result<bool, DbError> {
-    cancel_inner(
-        conn,
-        id,
-        &[
-            WorkTaskStatus::Todo,
-            WorkTaskStatus::Queued,
-            WorkTaskStatus::Preparing,
-            WorkTaskStatus::Running,
-            WorkTaskStatus::AwaitingInput,
-            WorkTaskStatus::Review,
-            WorkTaskStatus::Failed,
-        ],
-        None,
-        "user",
-        reason,
-    )
-    .await
+    cancel_inner(conn, id, CANCELABLE, None, "user", reason).await
+}
+
+/// The states a task can be canceled from: any not terminal, but merging.
+pub const CANCELABLE: &[WorkTaskStatus] = &[
+    WorkTaskStatus::Todo,
+    WorkTaskStatus::Queued,
+    WorkTaskStatus::Preparing,
+    WorkTaskStatus::Running,
+    WorkTaskStatus::AwaitingInput,
+    WorkTaskStatus::Review,
+    WorkTaskStatus::Failed,
+];
+
+/// A personal agent's stop of the dispatch a task runs (`by`: who stopped
+/// it, `owner` / `owner_in_session` / `agent`), recorded on the task's
+/// cancel so every reader of the board's history tells it from a cancel
+/// on the board.
+#[derive(Debug, Clone)]
+pub struct PaStop {
+    pub dispatch_id: i32,
+    pub by: String,
+}
+
+/// What a task's cancel event says: who (`actor`), the run it ended
+/// (`run_seq`, absent on events written before it was kept), and — a
+/// personal agent's stop — which dispatch and who stopped it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CancelRecord {
+    pub actor: String,
+    pub run_seq: Option<i32>,
+    pub pa_stop: Option<(i32, String)>,
+}
+
+/// The latest cancel of task `id`'s run `run_seq`, as its `status_changed`
+/// event records it. One with no run recorded is not taken for any run.
+pub async fn latest_cancel_of_run<C: ConnectionTrait>(
+    conn: &C,
+    id: i32,
+    run_seq: i32,
+) -> Result<Option<CancelRecord>, DbError> {
+    let events = work_task_event::Entity::find()
+        .filter(work_task_event::Column::TaskId.eq(id))
+        .filter(work_task_event::Column::Kind.eq("status_changed"))
+        .order_by_desc(work_task_event::Column::Id)
+        .limit(50)
+        .all(conn)
+        .await?;
+    for ev in events {
+        let payload: serde_json::Value = ev
+            .payload
+            .as_deref()
+            .and_then(|p| serde_json::from_str(p).ok())
+            .unwrap_or_default();
+        if payload["to"].as_str() != Some(status_str(WorkTaskStatus::Canceled)) {
+            continue;
+        }
+        let run = payload["run_seq"].as_i64().and_then(|r| i32::try_from(r).ok());
+        if run != Some(run_seq) {
+            continue;
+        }
+        let pa_stop = payload.get("pa_stop").and_then(|p| {
+            Some((
+                i32::try_from(p["dispatch_id"].as_i64()?).ok()?,
+                p["by"].as_str()?.to_string(),
+            ))
+        });
+        return Ok(Some(CancelRecord {
+            actor: ev.actor,
+            run_seq: run,
+            pa_stop,
+        }));
+    }
+    Ok(None)
 }
 
 /// The single conditional UPDATE behind both cancels: `expected` (and, for an
@@ -3768,53 +3959,17 @@ async fn cancel_inner(
     actor: &str,
     reason: Option<&str>,
 ) -> Result<bool, DbError> {
-    let now = Utc::now();
     let txn = conn.begin().await?;
-    let mut update = work_task::Entity::update_many()
-        .col_expr(
-            work_task::Column::Status,
-            Expr::value(status_str(WorkTaskStatus::Canceled)),
-        )
-        .col_expr(work_task::Column::ConnectionId, Expr::value(None::<String>))
-        // A cancel mid-repair abandons the auto-remerge; a later requeue must
-        // not re-fire a stale merge.
-        .col_expr(work_task::Column::PendingMerge, Expr::value(None::<String>))
-        // Same reasoning for a planned start: stopping a task drops its plan,
-        // so a requeue days later cannot resurrect a time nobody remembers
-        // setting and launch an agent unattended. (A running row carries no
-        // plan — every claim consumes it — so this only bites the user path,
-        // but the clear belongs to "canceled", not to one caller.)
-        .col_expr(
-            work_task::Column::ScheduledAt,
-            Expr::value(None::<chrono::DateTime<Utc>>),
-        )
-        // Stopping a task the user had put aside settles the question it was
-        // put aside for; a later requeue starts from "canceled", not from a
-        // "handle later" nobody can see any more.
-        .col_expr(
-            work_task::Column::DeferredAt,
-            Expr::value(None::<chrono::DateTime<Utc>>),
-        )
-        .col_expr(work_task::Column::FinishedAt, Expr::value(Some(now)))
-        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
-        .filter(work_task::Column::Id.eq(id))
-        .filter(work_task::Column::Status.is_in(expected.iter().copied()))
-        .filter(work_task::Column::DeletedAt.is_null());
-    if let Some(run_seq) = run_seq {
-        update = update.filter(work_task::Column::RunSeq.eq(run_seq));
+    match cancel_in(&txn, id, expected, run_seq, None, actor, reason, None).await? {
+        Some(_) => {
+            txn.commit().await?;
+            Ok(true)
+        }
+        None => {
+            txn.rollback().await?;
+            Ok(false)
+        }
     }
-    let res = update.exec(&txn).await?;
-    if res.rows_affected != 1 {
-        txn.rollback().await?;
-        return Ok(false);
-    }
-    let extra = reason
-        .map(str::trim)
-        .filter(|r| !r.is_empty())
-        .map(|r| serde_json::json!({ "reason": r }));
-    status_changed_event(&txn, id, actor, None, WorkTaskStatus::Canceled, extra).await?;
-    txn.commit().await?;
-    Ok(true)
 }
 
 /// Flag / clear the worktree-cleanup outcome. Never touches `status` — a done
@@ -6821,6 +6976,7 @@ mod tests {
             match handle.await.expect("join").expect("no lock error") {
                 ForgeCreateOutcome::Created(_) => created += 1,
                 ForgeCreateOutcome::Duplicate(_) => duplicate += 1,
+                other => panic!("not a dispatch's: {other:?}"),
             }
         }
         assert_eq!((created, duplicate), (1, 1));

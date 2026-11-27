@@ -2171,10 +2171,20 @@ export type ReplyStep =
       awaiting?: boolean
     }
 
-/** The reply in flight, as a snapshot carries it. */
+/** One text run of a reply's turn: its step's ordinal, and what it says. */
+export interface ReplyText {
+  n: number
+  text: string
+}
+
+/** The reply in flight, as a snapshot carries it: the step it is on, every
+ *  text run so far (the one being written last), and the version of that
+ *  copy — a later copy of the same reply has a greater one. */
 export interface LiveReply {
   row_id: number
   current: ReplyStep | null
+  texts: ReplyText[]
+  ver: number
 }
 
 export interface SegmentInfo {
@@ -2318,6 +2328,9 @@ export interface DispatchInfo {
   check_round?: number | null
   /** The routine whose run handed it out (6.9). */
   routine_id?: number | null
+  /** Stopped: who stopped it, and the assistant's reason. */
+  stopped_by?: StoppedBy
+  stop_reason?: string
 }
 
 /** Where a round of acceptance stands (7.5). */
@@ -2733,6 +2746,9 @@ export interface PrFacts {
 export interface TaskFacts {
   task_id: number
   status: WorkTaskStatus
+  /** Its run and version, as a card's [Stop] read them. */
+  run_seq: number
+  updated_at: string
   /** The project it belongs to. */
   folder_id: number
   branch: string | null
@@ -2827,6 +2843,33 @@ export interface ItemInfo {
   answer_state?: "linked" | "interrupted" | null
   /** A message's: the assistant it waits on. */
   peer?: ItemPeer | null
+  /** A message's: what was written, from its line (not codeg's summary of
+   *  it), and which way it went. Absent for an older read: show `summary`. */
+  written?: string
+  direction?: "in" | "out"
+}
+
+/** Who stopped a piece of work: the owner on its card or in the
+ *  conversation, in its own session, on the board; or its assistant. */
+export type StoppedBy =
+  | "owner"
+  | "owner_in_session"
+  | "owner_on_board"
+  | "agent"
+
+/** What a [Stop] came to. */
+export interface StopReply {
+  outcome:
+    | "stopped"
+    | "already_stopped"
+    | "past_stopping"
+    | "board_refused"
+    | "changed"
+  by?: StoppedBy
+  reason?: string
+  state?: DispatchState
+  /** The dispatch as the stop wrote it. */
+  updated_at?: string
 }
 
 /** Who settled a matter. */
@@ -2835,6 +2878,8 @@ export type ItemClosedBy = "owner" | "agent" | "codeg"
 /** How a matter was settled. */
 export type ItemClosedHow =
   | "done"
+  | "skipped"
+  | "stopped"
   | "dropped"
   | "withdrawn"
   | "stopped_waiting"
@@ -3341,6 +3386,10 @@ export interface TodayRow {
   /** ... what takes the owner's act on the panel back
    *  (`personalAgentItemUndo`), while it still can be. */
   matter_undo?: number | null
+  /** ... a message's: what was written, from its line, and which way it
+   *  went. */
+  written?: string
+  direction?: "in" | "out"
 }
 
 /** "Today": every assistant's, in four groups. */
@@ -4165,7 +4214,14 @@ export interface PersonalAgentStats {
  *  it is about (0: the primary, before it is set up). */
 export type PersonalAgentChange = { bot_id?: number } & (
   | { kind: "timeline"; rows: TimelineRow[] }
-  | { kind: "reply"; row_id: number; current: ReplyStep | null }
+  | {
+      kind: "reply"
+      row_id: number
+      current: ReplyStep | null
+      /** Every text run so far, whole (not what changed). */
+      texts: ReplyText[]
+      ver: number
+    }
   | { kind: "status" }
   | { kind: "agent" }
   | { kind: "dispatch"; id: number }
@@ -5449,6 +5505,12 @@ export interface RemoteControlInfo {
   /** The remote session's claude.ai/code URL; `null` when Claude Code turned
    *  Remote Control on without returning one. */
   session_url: string | null
+  /** Remote Control started with the session on its own
+   *  (`remoteControlAtStartup`, or a rollout the user may never have chosen;
+   *  claude-agent-acp 0.113.0) rather than by the user's `/remote-control`.
+   *  Nobody handed the session over, so it does not keep the connection from
+   *  the idle teardown (`isConnectionBusy`). Absent when false. */
+  at_startup?: boolean
 }
 
 export interface SessionUsageUpdateInfo {

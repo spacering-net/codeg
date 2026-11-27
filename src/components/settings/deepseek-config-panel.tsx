@@ -5,6 +5,10 @@ import { useTranslations } from "next-intl"
 import { Eye, EyeOff, Loader2, Save } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  AgentPanelCard,
+  AgentPanelSaveBar,
+} from "@/components/settings/agent-panel-layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import type { AcpAgentInfo } from "@/lib/types"
@@ -224,16 +228,10 @@ export function DeepSeekConfigPanel({
   }, [agent.env, agent.enabled, apiKey, baseUrl, onSaveEnv, t])
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-      <div>
-        <label className="text-xs font-medium">
-          {t("deepseek.configManagement")}
-        </label>
-        <p className="mt-1 text-2xs text-muted-foreground">
-          {t("deepseek.configDescription")}
-        </p>
-      </div>
-
+    <AgentPanelCard
+      title={t("deepseek.configManagement")}
+      description={t("deepseek.configDescription")}
+    >
       {/* ── Endpoint ───────────────────────────────────────────────── */}
       <div className="space-y-1.5">
         <label
@@ -308,7 +306,7 @@ export function DeepSeekConfigPanel({
         </p>
       </div>
 
-      <div className="flex justify-end">
+      <AgentPanelSaveBar>
         <Button
           type="button"
           size="sm"
@@ -328,7 +326,7 @@ export function DeepSeekConfigPanel({
             </>
           )}
         </Button>
-      </div>
-    </div>
+      </AgentPanelSaveBar>
+    </AgentPanelCard>
   )
 }

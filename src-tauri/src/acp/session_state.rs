@@ -547,6 +547,20 @@ pub struct SessionState {
     /// to another session, since codeg closes the session a fork leaves and
     /// its CLI with it. Carried on `to_snapshot()`.
     pub remote_control: Option<RemoteControlInfo>,
+    /// A Claude plan was approved with a fresh context while Remote Control
+    /// was on, and the turn has not ended: once the adapter has replaced the
+    /// session's query — its `usage_update` of 0 tokens, which only a
+    /// replacement that exists sends — Remote Control has ended with the old
+    /// query (`connection::clear_context_plan_option`). A cancel that comes
+    /// first keeps the old query, and so Remote Control; the turn's end
+    /// forgets it. A turn that ends without the report is ambiguous — a Stop
+    /// before the adapter acted on the answer kept the old query, one during
+    /// the replacement (or a replacement that failed) did not — and nothing
+    /// on the wire tells them apart, so Remote Control is kept: a stale strip
+    /// costs a dead link, which its off button clears, while clearing a live
+    /// one would unpin the connection for a sweep that ends the remote
+    /// session. Backend-internal.
+    pub clear_context_restart_pending: bool,
     /// True once the agent's initial selectors handshake (modes +
     /// config_options) has finished and `SelectorsReady` has fired. Persisted
     /// on the snapshot so a frontend that reconnects after refresh can see
@@ -1057,6 +1071,7 @@ impl SessionState {
             wants_prompt_suggestions,
             claude_settings: None,
             remote_control: None,
+            clear_context_restart_pending: false,
             selectors_ready: false,
             selectors_settling: true,
             selection_conversation_id: None,
@@ -1698,6 +1713,9 @@ impl SessionState {
                 }
             }
             AcpEvent::TurnComplete { stop_reason, .. } => {
+                // The fresh context continues the approving turn; one that
+                // ended without it kept the old query.
+                self.clear_context_restart_pending = false;
                 // Diagnostic only (no behavior change): pairs with the
                 // StatusChanged log above. This is the ACTUAL point the turn
                 // settles (`self.status` flips to `Connected` right below,
@@ -4436,6 +4454,7 @@ mod tests {
         let on = || AcpEvent::RemoteControl {
             remote_control: Some(RemoteControlInfo {
                 session_url: Some("https://claude.ai/code/session_01".into()),
+                at_startup: false,
             }),
         };
         let mut s = fresh_state();

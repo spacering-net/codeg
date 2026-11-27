@@ -1,34 +1,33 @@
-import { readFileSync } from "node:fs"
-import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 
-import { messageMatterWords } from "./work-cards"
+import { messageText, messageWords } from "../../matter-text"
+import type { ItemInfo } from "@/lib/types"
 
-/** The words codeg writes a message's matters in (`messages.rs`). */
-const rust = readFileSync(
-  join(process.cwd(), "src-tauri/src/personal_agent/messages.rs"),
-  "utf8"
-)
+const item = (over: Partial<ItemInfo>): ItemInfo =>
+  ({
+    id: 1,
+    kind: "message",
+    summary: "Waiting for 产品's answer: 请基于…",
+    ...over,
+  }) as ItemInfo
 
-describe("a message's matter written by codeg", () => {
-  it("is read in the words the backend writes it in", () => {
-    expect(rust).toContain(
-      `summary: format!("{} wrote to you: {excerpt}", display_name(&me))`
-    )
-    expect(rust).toContain(
-      `waiting_summary: format!("Waiting for {}'s answer: {excerpt}", display_name(&to))`
-    )
-    expect(
-      messageMatterWords("Waiting for 产品's answer: 请基于\n第二行")
-    ).toEqual({ key: "waitingAnswer", name: "产品", text: "请基于\n第二行" })
-    expect(messageMatterWords("研发 wrote to you: 看一下")).toEqual({
-      key: "wroteToYou",
-      name: "研发",
+describe("a message's matter", () => {
+  it("reads what was written off its line, all of it", () => {
+    const m = item({ written: "请基于\n第二行", direction: "out" })
+    expect(messageWords(m)).toEqual({ text: "请基于\n第二行", toMe: false })
+    expect(messageText(m)).toBe("请基于\n第二行")
+  })
+
+  it("knows one written to this assistant", () => {
+    expect(messageWords(item({ written: "看一下", direction: "in" }))).toEqual({
       text: "看一下",
+      toMe: true,
     })
   })
 
-  it("leaves anyone else's words as they are", () => {
-    expect(messageMatterWords("Ask 产品 about the roadmap")).toBeNull()
+  it("shows an older read's summary as it is", () => {
+    const old = item({})
+    expect(messageWords(old)).toBeNull()
+    expect(messageText(old)).toBe(old.summary)
   })
 })

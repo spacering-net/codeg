@@ -11,7 +11,7 @@
  * every assistant shares are a button in the window chrome, by the panel's
  * toggle, and what acts on the assistant itself — the session underneath,
  * compacting, a new session — is in the "⋯" by its face on the panel. The
- * assistants are listed on the workspace's sidebar ("Personal assistants");
+ * assistants are listed on the workspace's sidebar ("Assistants");
  * the capsule lists them too, for a collapsed sidebar or a phone. The
  * sessions it reaches — its own, and those of the work it handed out —
  * open in a drawer on the right, over the page.
@@ -35,6 +35,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -372,23 +373,42 @@ export function PersonalAgentPage() {
   const [sessionOpen, setSessionOpen] = useState(false)
   const [confirmNew, setConfirmNew] = useState(false)
   const [quoting, setQuotingRow] = useState<number | null>(null)
+  // The assistant shown (its real id, the primary's too), for the callbacks
+  // made before it is read.
+  const shownAgent = useRef<number | null>(null)
   // One of its questions the owner answers ([Answer] on the activity, C1):
   // kept with the page's store, the assistant's own — a quote or an
   // answer, never both.
   const setQuoting = useCallback((rowId: number | null) => {
     setQuotingRow(rowId)
-    if (rowId != null) usePersonalAgentUi.getState().setPendingAnswer(null)
+    const bot = shownAgent.current
+    if (rowId != null && bot != null) {
+      usePersonalAgentUi.getState().clearPendingAnswer(bot)
+    }
   }, [])
   // A card's message the owner wants to edit first (9.2): into the
-  // composer, quoting the card.
+  // composer, quoting the card — not while the box is sending (it is
+  // locked): neither the quote nor the text changes then.
   const [draft, setDraft] = useState<{ text: string; n: number } | null>(null)
+  const tComposer = useTranslations("PersonalAgent.composer")
   const onDraft = useCallback(
     (rowId: number, text: string) => {
+      const bot = shownAgent.current
+      if (bot != null && usePersonalAgentUi.getState().composerSending[bot]) {
+        toast.message(tComposer("draftWhileSending"))
+        return false
+      }
       setQuoting(rowId)
       setDraft((d) => ({ text, n: (d?.n ?? 0) + 1 }))
+      return true
     },
-    [setQuoting]
+    [setQuoting, tComposer]
   )
+  // A send done: its quote goes — only when the page still quotes the row
+  // it went with (another may have been picked meanwhile).
+  const clearSentQuote = useCallback((sent: number) => {
+    setQuotingRow((q) => (q === sent ? null : q))
+  }, [])
   const jumpRef = useRef<((rowId: number) => void) | null>(null)
   const sentRef = useRef<(() => void) | null>(null)
   // Another assistant shown in the same frame: a quote or a draft meant for
@@ -490,6 +510,9 @@ export function PersonalAgentPage() {
   // assistant and its conversation is drawn.
   const pendingJump = usePersonalAgentUi((s) => s.pendingJump)
   const agentId = agent?.id ?? null
+  useLayoutEffect(() => {
+    shownAgent.current = agentId
+  }, [agentId])
   useEffect(() => {
     if (!pendingJump || loading || pageOver) return
     if (agentId == null || pendingJump.bot !== agentId) return
@@ -499,31 +522,47 @@ export function PersonalAgentPage() {
 
   // A question to answer, asked for from the activity: this assistant's
   // box answers it.
-  const pendingAnswer = usePersonalAgentUi((s) => s.pendingAnswer)
-  const answering: AnsweringQuestion | null =
-    pendingAnswer && agentId != null && pendingAnswer.bot === agentId
-      ? { itemId: pendingAnswer.itemId, summary: pendingAnswer.summary }
-      : null
-  const clearAnswer = useCallback(
-    () => usePersonalAgentUi.getState().setPendingAnswer(null),
-    []
+  const pendingAnswer = usePersonalAgentUi((s) =>
+    agentId == null ? undefined : s.pendingAnswer[agentId]
   )
+  const answering: AnsweringQuestion | null = useMemo(
+    () =>
+      pendingAnswer
+        ? { itemId: pendingAnswer.itemId, summary: pendingAnswer.summary }
+        : null,
+    [pendingAnswer]
+  )
+  const clearAnswer = useCallback(() => {
+    if (agentId != null)
+      usePersonalAgentUi.getState().clearPendingAnswer(agentId)
+  }, [agentId])
+  // A question picked to answer takes the place of this assistant's quote:
+  // one or the other — a quote kept under it would come back once the
+  // answer is sent, and the next message would reply to it.
+  const [answerSeen, setAnswerSeen] = useState(pendingAnswer)
+  if (answerSeen !== pendingAnswer) {
+    setAnswerSeen(pendingAnswer)
+    if (pendingAnswer) setQuotingRow(null)
+  }
 
   // The question can no longer be answered — settled, gone, or answered
-  // already (from another window): the bar goes, the words stay.
+  // already (from another window): the bar goes, the words stay. Answered
+  // by this box's own send, its push ahead of the send's return: quietly.
   const answerStands = useAnswerStanding(answering?.itemId ?? null, agentId)
   const tAnswer = useTranslations("PersonalAgent.answer")
   const answeringId = answering?.itemId ?? null
   useEffect(() => {
-    if (answeringId == null) return
+    if (answeringId == null || agentId == null) return
     if (answerStands === "open" || answerStands === "unknown") return
-    clearAnswer()
+    const ui = usePersonalAgentUi.getState()
+    ui.clearPendingAnswer(agentId, answeringId)
+    if (ui.answerSending[agentId]?.itemId === answeringId) return
     toast.message(
       answerStands === "answered"
         ? tAnswer("alreadyAnswered", { name: agentName })
         : tAnswer("ended")
     )
-  }, [answeringId, answerStands, tAnswer, agentName, clearAnswer])
+  }, [answeringId, answerStands, tAnswer, agentName, agentId])
 
   // Read for the first time, or switched to before it was read: the shape of
   // a conversation, waiting.
@@ -631,6 +670,7 @@ export function PersonalAgentPage() {
               answering={answering}
               draft={draft}
               onClearQuote={() => setQuoting(null)}
+              onQuoteSent={clearSentQuote}
               onClearAnswer={clearAnswer}
               onSent={() => sentRef.current?.()}
             />

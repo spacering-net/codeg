@@ -89,9 +89,7 @@ describe("CollaborationSettings", () => {
     expect(screen.queryByRole("tab", { name: "Assistants" })).toBeNull()
     expect(screen.queryByLabelText("Working directory")).toBeNull()
     expect(
-      screen.getByText(
-        'Assistants: in the sidebar\'s "Personal assistants" group'
-      )
+      screen.getByText('Assistants: in the sidebar\'s "Assistants" group')
     ).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Open" }))
     expect(openPage).toHaveBeenCalledWith("assistants")

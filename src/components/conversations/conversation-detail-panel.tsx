@@ -29,7 +29,10 @@ import {
   useAcpEvent,
 } from "@/contexts/acp-connections-context"
 import { ActivityLiveProvider } from "@/components/message/activity/activity-live-context"
-import { SelectionAskComposer } from "@/components/message/selection-ask-composer"
+import {
+  SelectionAskComposer,
+  type SelectionAskLiveSelectors,
+} from "@/components/message/selection-ask-composer"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { useAskConversationDrawerStore } from "@/stores/ask-conversation-drawer-store"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
@@ -2168,18 +2171,24 @@ const ConversationTabView = memo(function ConversationTabView({
    * neither derails nor pollutes the thread the user is reading. It is linked
    * to this one, listed under its Session Details rather than in the sidebar.
    *
-   * The ask is pinned to THIS conversation's agent — the answer is a
-   * continuation of what that agent just said — and runs in this
-   * conversation's folder. It needs a persisted row: that is what the mention
-   * names and what the ask is linked to.
+   * The ask starts on THIS conversation's agent — the answer is usually a
+   * continuation of what that agent just said — but the composer lets the user
+   * pick another, and that agent's settings, as the new-task dialog does. It
+   * runs in this conversation's folder, and needs a persisted row: that is
+   * what the mention names and what the ask is linked to.
    */
   // Depends on primitives, not the folder OBJECT: branch polling rewrites that
   // row regularly, and the render prop has to stay referentially stable (it is
   // a MessageListView prop).
   const askFolderId = folder?.id ?? null
   const askMainTitle = ownTab?.title ?? null
-  const askPromptCapabilities = conn.promptCapabilities
-  const askModes = effectiveModes?.available_modes ?? null
+  const askLive = useMemo<SelectionAskLiveSelectors>(
+    () => ({
+      availableCommands: connectionCommands,
+      promptCapabilities: conn.promptCapabilities,
+    }),
+    [conn.promptCapabilities, connectionCommands]
+  )
   const openAskDrawer = useAskConversationDrawerStore((s) => s.openNew)
   const canAskSelection =
     askFolderId != null &&
@@ -2197,18 +2206,18 @@ const ConversationTabView = memo(function ConversationTabView({
               formatConversationTitle(askMainTitle).trim() ||
               `#${dbConversationId}`,
           }}
-          agentType={selectedAgent}
-          promptCapabilities={askPromptCapabilities}
-          modes={askModes}
+          defaultAgentType={selectedAgent}
+          live={askLive}
           defaultPath={workingDirForConnection}
           onClose={close}
-          onSubmit={(draft, modeId) => {
+          onSubmit={(draft, pick) => {
             const opened = openAskDrawer({
               parentConversationId: dbConversationId,
-              agentType: selectedAgent,
+              agentType: pick.agentType,
               folderId: askFolderId,
               workingDir: workingDirForConnection ?? null,
-              initialSend: { draft, modeId },
+              initialSend: { draft, modeId: pick.modeId },
+              configValues: pick.configValues,
             })
             // The drawer still holds another ask's unsent first message:
             // keep this one in the bubble rather than dropping either.
@@ -2221,9 +2230,8 @@ const ConversationTabView = memo(function ConversationTabView({
     },
     [
       askFolderId,
+      askLive,
       askMainTitle,
-      askModes,
-      askPromptCapabilities,
       dbConversationId,
       openAskDrawer,
       selectedAgent,

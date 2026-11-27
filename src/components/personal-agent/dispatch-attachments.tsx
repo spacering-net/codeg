@@ -19,6 +19,7 @@
 
 import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
+import { create } from "zustand"
 
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useElapsedLabel } from "@/hooks/use-elapsed-label"
@@ -39,13 +40,28 @@ import {
   str,
   useOpenWork,
   useOtherAssistant,
+  usePageScope,
   workTargetOf,
 } from "./shared"
 import { CheckLabel, DoneWhen } from "./acceptance-bits"
+import { useStoppedWords, useWorkStoppable, WorkStopButton } from "./task-strip"
 import { WorkPill } from "./work-card"
 
 /** Pills shown before the rest fold into "N more". */
 const SHOWN_PILLS = 3
+
+/** The groups of pills opened past "N more", by the group's first pill
+ *  before any made way: kept for the list, not the bubble — a group moved
+ *  into another bubble (a line came), or whose first pill made way for its
+ *  news, stays open. */
+const usePillGroupsOpen = create<{ open: Record<number, true> }>(() => ({
+  open: {},
+}))
+
+/** Forget the opened groups (tests: one case's are not another's). */
+export function clearPillGroupsOpen() {
+  usePillGroupsOpen.setState({ open: {} })
+}
 
 function prFixOf(v: unknown): PrFixMark | null {
   if (!v || typeof v !== "object") return null
@@ -101,6 +117,8 @@ function DispatchPill({
   const t = useTranslations("PersonalAgent.dispatchCard")
   const openWork = useOpenWork()
   const otherAssistant = useOtherAssistant()
+  const stoppedWords = useStoppedWords()
+  const { agentName } = usePageScope()
   const elapsedLabel = useElapsedLabel()
   const data = row.data
   // A follow-up that never went out says so, whatever the work is doing.
@@ -118,7 +136,11 @@ function DispatchPill({
   const checkRound = info?.check_round ?? num(data, "check_round")
   const doneWhen = info?.done_when ?? str(data, "done_when")
   const prFix = prFixOf(data?.pr_fix)
-  const pill = (
+  // [Stop] beside it while its work moves (5.7) — not on a follow-up that
+  // never went out: it reads the work's latest state, which a later
+  // follow-up that did go out may be running in.
+  const stoppable = useWorkStoppable(notSent ? null : (info ?? null))
+  const workPill = (
     <WorkPill
       rowId={row.id}
       state={state}
@@ -130,7 +152,21 @@ function DispatchPill({
       onOpen={canOpenWork(target) ? () => openWork(target) : null}
     />
   )
-  if (checkFor == null && !doneWhen && !prFix) return pill
+  const pill =
+    stoppable && info ? (
+      <div className="flex max-w-full min-w-0 items-center gap-1.5">
+        {workPill}
+        <WorkStopButton d={info} />
+      </div>
+    ) : (
+      workPill
+    )
+  // Stopped: who stopped it, as its stop card says.
+  const stopped =
+    info?.state === "canceled" && info.stopped_by
+      ? stoppedWords(info.stopped_by, info.stop_reason, agentName)
+      : null
+  if (checkFor == null && !doneWhen && !prFix && !stopped) return pill
   return (
     <div className="flex max-w-full min-w-0 flex-col items-start gap-1">
       {checkFor != null ? (
@@ -138,6 +174,14 @@ function DispatchPill({
       ) : null}
       {prFix ? <PrFixLabel fix={prFix} className="ps-1" /> : null}
       {pill}
+      {stopped ? (
+        <p
+          className="ps-1 text-xs break-words text-muted-foreground"
+          data-pa-stopped-by={info?.stopped_by}
+        >
+          {stopped}
+        </p>
+      ) : null}
       {doneWhen && data?.followup !== true ? (
         <DoneWhen text={doneWhen} className="ps-1" />
       ) : null}
@@ -147,12 +191,26 @@ function DispatchPill({
 
 export function DispatchAttachments({
   rows,
+  group = null,
 }: {
   rows: readonly TimelineRow[]
+  /** The group they are (`PartEntry`'s): what keeps "N more" open. */
+  group?: number | null
 }) {
   const t = useTranslations("PersonalAgent.dispatchCard")
   const { dispatchById } = usePersonalAgent()
-  const [expanded, setExpanded] = useState(false)
+  const opened = usePillGroupsOpen((s) =>
+    group != null ? s.open[group] === true : false
+  )
+  const [ownOpen, setOwnOpen] = useState(false)
+  const expanded = group != null ? opened : ownOpen
+  const setExpanded = (open: true) => {
+    if (group == null) setOwnOpen(open)
+    else
+      usePillGroupsOpen.setState((s) => ({
+        open: { ...s.open, [group]: open },
+      }))
+  }
   const shown = expanded ? rows : rows.slice(0, SHOWN_PILLS)
   const hidden = rows.length - shown.length
   return (

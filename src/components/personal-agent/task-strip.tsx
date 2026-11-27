@@ -22,16 +22,31 @@ import { GitBranch, Square } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import { useBotId } from "@/contexts/personal-agent-context"
+import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentDispatchStop } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { openInSystemBrowser } from "@/lib/link-open"
-import type { DispatchInfo, Ladder, PrFacts } from "@/lib/types"
+import type {
+  DispatchInfo,
+  DispatchState,
+  Ladder,
+  PrFacts,
+  StoppedBy,
+} from "@/lib/types"
+import { refreshActivity } from "@/stores/personal-agent-activity-store"
+import { useRoster } from "@/stores/personal-agent-roster-store"
 import { cn } from "@/lib/utils"
 
 import { BranchChip } from "./aux-parts/kit/branch-chip"
 import { StatusPill, type PillTone } from "./aux-parts/kit/status-pill"
-import { canOpenWork, useOpenWork, usePageScope, workTargetOf } from "./shared"
+import { useActSettle } from "./aux-parts/activity/act-settle"
+import {
+  canOpenWork,
+  useBotName,
+  useOpenWork,
+  usePageScope,
+  workTargetOf,
+} from "./shared"
 
 const LADDERS: readonly Ladder[] = [
   "working",
@@ -206,6 +221,7 @@ export function TaskStrip({
   compact = false,
   stop: withStop = true,
   bot,
+  from = "page",
 }: {
   d: DispatchInfo
   chip?: boolean
@@ -216,6 +232,8 @@ export function TaskStrip({
   /** The assistant the work is of, when it is not the page's (another's
    *  row on the primary's activity): what stopping it goes to. */
   bot?: number | null
+  /** Where the strip is: what its [Stop] reads again after it. */
+  from?: "activity" | "page"
 }) {
   const t = useTranslations("PersonalAgent.taskCard")
   const stoppable = useTaskStoppable(d)
@@ -264,7 +282,7 @@ export function TaskStrip({
     // [Stop] a line of their own under it.
     const stopButton =
       withStop && stoppable ? (
-        <TaskStopButton d={d} bot={bot} className="ms-auto" />
+        <WorkStopButton d={d} bot={bot} from={from} className="ms-auto" />
       ) : null
     return (
       <div
@@ -327,43 +345,132 @@ export function TaskStrip({
   )
 }
 
-/** Whether a task's work can be stopped from here: still moving or
- *  waiting — one the board finished (its pull request ready to merge, say)
- *  is past stopping — on a page that runs here. */
-export function useTaskStoppable(d: DispatchInfo | null): boolean {
+/** The states a piece of work can be stopped in. */
+const STOPPABLE: ReadonlySet<DispatchState> = new Set<DispatchState>([
+  "queued",
+  "running",
+  "waiting_input",
+  "review",
+])
+
+/** Whether a piece of work can be stopped from here (5.7) — a board task,
+ *  a chat or a session alike: still moving or waiting (one merging is past
+ *  stopping), on a page that runs here. */
+export function useWorkStoppable(d: DispatchInfo | null): boolean {
   const { readOnly } = usePageScope()
+  return workStoppable(d, readOnly)
+}
+
+/** {@link useWorkStoppable} for a list that knows whether it is read-only. */
+export function workStoppable(
+  d: DispatchInfo | null,
+  readOnly: boolean
+): boolean {
   return (
-    d?.task != null &&
-    !readOnly &&
-    LIVE_LADDERS.has(d.ladder) &&
-    d.state !== "completed"
+    d != null && !readOnly && STOPPABLE.has(d.state) && d.ladder !== "merging"
   )
 }
 
-/** [Stop] on a side panel's card: red words on an outlined button, as
- *  quiet as the buttons next to it until hovered. Nothing when the work
- *  cannot be stopped (`useTaskStoppable`). */
-export function TaskStopButton({
+/** The old name of {@link useWorkStoppable}. */
+export const useTaskStoppable = useWorkStoppable
+
+/** Who stopped a piece of work, as the owner reads it ("You stopped it",
+ *  "Dev stopped it: …"). A stop card from before codeg kept who: the
+ *  owner's. */
+export function useStoppedWords(): (
+  by: StoppedBy | string | null | undefined,
+  reason: string | null | undefined,
+  name: string
+) => string {
+  const t = useTranslations("PersonalAgent.stopped")
+  return (by, reason, name) => {
+    switch (by) {
+      case "owner_in_session":
+        return t("inSession")
+      case "owner_on_board":
+        return t("onBoard")
+      case "agent":
+        return reason?.trim()
+          ? t("agent", { name, reason: reason.trim() })
+          : t("agentPlain", { name })
+      default:
+        return t("owner")
+    }
+  }
+}
+
+/** [Stop] on a piece of work, wherever it shows — its row on the activity,
+ *  its news on the timeline, its pill (5.7): red words on an outlined
+ *  button, quiet until hovered. It sends what it read (the work's version,
+ *  its board task's run and version): a stale one stops nothing new. Once
+ *  stopped it stays off until the work is read again past that stop (here
+ *  or in another window: a follow-up there opens it again). Nothing when
+ *  the work cannot be stopped. */
+export function WorkStopButton({
   d,
   bot,
   className,
+  from = "page",
 }: {
   d: DispatchInfo
   /** The assistant the work is of, when it is not the page's. */
   bot?: number | null
   className?: string
+  /** What reads it again: the activity's list, or the page's dispatches. */
+  from?: "activity" | "page"
 }) {
   const t = useTranslations("PersonalAgent.taskCard")
-  const pageBot = useBotId()
+  const stoppedWords = useStoppedWords()
+  const { botId: pageBot, refetchDispatches } = usePersonalAgent()
   const botId = bot !== undefined ? bot : pageBot
-  const stoppable = useTaskStoppable(d)
+  const stoppable = useWorkStoppable(d)
+  const botName = useBotName()
+  const roster = useRoster()
+  const { agentName } = usePageScope()
+  // The assistant the work is of, by name: the page's own, or another's as
+  // the roster names it.
+  const whose = () => {
+    if (bot == null || bot === pageBot) return agentName
+    const entry = roster?.find((e) => e.id === bot)
+    return botName(entry ?? { id: bot, kind: "worker" })
+  }
+  const reread = () => {
+    if (from === "activity") refreshActivity()
+    else void refetchDispatches?.([d.id])
+  }
+  const settle = useActSettle(`dispatch:${d.id}`, d.updated_at, reread)
   const [stopping, setStopping] = useState(false)
   if (!stoppable) return null
   const stop = () => {
     setStopping(true)
-    personalAgentDispatchStop(botId, d.id)
-      .then((stopped) => {
-        if (!stopped) toast.message(t("pastStopping"))
+    personalAgentDispatchStop(botId, d.id, {
+      updatedAt: d.updated_at,
+      runSeq: d.task?.run_seq ?? null,
+      taskUpdatedAt: d.task?.updated_at ?? null,
+    })
+      .then((reply) => {
+        switch (reply.outcome) {
+          case "stopped":
+            if (reply.updated_at) settle.waitFor({ atLeast: reply.updated_at })
+            break
+          case "already_stopped":
+            toast.message(
+              t("alreadyStopped", {
+                who: stoppedWords(reply.by, reply.reason, whose()),
+              })
+            )
+            reread()
+            break
+          case "changed":
+            toast.message(t("changed"))
+            reread()
+            break
+          case "board_refused":
+            toast.message(t("boardRefused"))
+            break
+          default:
+            toast.message(t("pastStopping"))
+        }
       })
       .catch((e) => toast.error(toErrorMessage(e)))
       .finally(() => setStopping(false))
@@ -373,7 +480,7 @@ export function TaskStopButton({
       size="sm"
       variant="outline"
       data-pa-task-act="stop"
-      disabled={stopping}
+      disabled={stopping || settle.waiting}
       className={cn(
         "text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-400/10 dark:hover:text-red-300",
         className
@@ -386,41 +493,28 @@ export function TaskStopButton({
   )
 }
 
-/** Whether the task card has a button to show: a pull request to view, a
- *  session to open, work to stop. */
-export function hasTaskActions(d: DispatchInfo, readOnly: boolean): boolean {
+/** The old name of {@link WorkStopButton}. */
+export const TaskStopButton = WorkStopButton
+
+/** Whether the task card has a button of its own to show: a pull request
+ *  to view, a session to open. ([Stop] is the card's, for any work:
+ *  `WorkStopButton`.) */
+export function hasTaskActions(d: DispatchInfo): boolean {
   const task = d.task
   if (!task) return false
-  const live = LIVE_LADDERS.has(d.ladder) && d.state !== "completed"
-  return (
-    task.pr_url != null || canOpenWork(workTargetOf(d)) || (live && !readOnly)
-  )
+  return task.pr_url != null || canOpenWork(workTargetOf(d))
 }
 
 /** The task card's buttons, on its card's last band (`SheetActions`):
- *  [View PR] [Open session] [Stop] — the last while the work still moves.
- *  Nothing when there is none. */
+ *  [View PR] [Open session]. Nothing when there is none. */
 export function TaskActions({ d }: { d: DispatchInfo }) {
   const t = useTranslations("PersonalAgent.taskCard")
-  const botId = useBotId()
-  const { readOnly } = usePageScope()
   const openWork = useOpenWork()
-  const [stopping, setStopping] = useState(false)
   const task = d.task
   if (!task) return null
   const target = workTargetOf(d)
   const canOpen = canOpenWork(target)
-  const live = LIVE_LADDERS.has(d.ladder) && d.state !== "completed"
-  if (!hasTaskActions(d, readOnly)) return null
-  const stop = () => {
-    setStopping(true)
-    personalAgentDispatchStop(botId, d.id)
-      .then((stopped) => {
-        if (!stopped) toast.message(t("pastStopping"))
-      })
-      .catch((e) => toast.error(toErrorMessage(e)))
-      .finally(() => setStopping(false))
-  }
+  if (!hasTaskActions(d)) return null
   return (
     <>
       {task.pr_url ? (
@@ -447,17 +541,6 @@ export function TaskActions({ d }: { d: DispatchInfo }) {
           onClick={() => openWork(target)}
         >
           {t("openSession")}
-        </Button>
-      ) : null}
-      {live && !readOnly ? (
-        <Button
-          size="sm"
-          variant="destructive"
-          data-pa-task-act="stop"
-          disabled={stopping}
-          onClick={stop}
-        >
-          {t("stop")}
         </Button>
       ) : null}
     </>

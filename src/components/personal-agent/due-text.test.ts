@@ -5,7 +5,12 @@ import enMessages from "@/i18n/messages/en.json"
 import zhMessages from "@/i18n/messages/zh-CN.json"
 
 import type { Translate } from "./activity-text"
-import { dueWhen, humanDuration, repeatText } from "./due-text"
+import {
+  dueWhen,
+  dueWhenInSentence,
+  humanDuration,
+  repeatText,
+} from "./due-text"
 
 const en = createTranslator({
   locale: "en",
@@ -27,6 +32,26 @@ const clock = (iso: string, locale = "en") =>
     hour: "2-digit",
     minute: "2-digit",
   })
+
+describe("when a matter is due, inside a sentence", () => {
+  it("reads as part of it: at, tomorrow at, on a day at", () => {
+    expect(dueWhenInSentence(en, at(11, 15), NOW, "en")).toBe(
+      `at ${clock(at(11, 15))}`
+    )
+    expect(dueWhenInSentence(en, at(12, 15), NOW, "en")).toBe(
+      `tomorrow at ${clock(at(12, 15))}`
+    )
+    expect(dueWhenInSentence(en, at(14, 9), NOW, "en")).toMatch(
+      new RegExp(`^on \\S+ at ${clock(at(14, 9))}$`)
+    )
+    expect(dueWhenInSentence(en, at(25, 9), NOW, "en")).toMatch(
+      new RegExp(`^on .+ 25 at ${clock(at(25, 9))}$`)
+    )
+    expect(dueWhenInSentence(zh, at(12, 15), NOW, "zh-CN")).toBe(
+      `明天 ${clock(at(12, 15), "zh-CN")}`
+    )
+  })
+})
 
 describe("when a matter is due", () => {
   it("is a clock time today, and tomorrow or yesterday next door", () => {

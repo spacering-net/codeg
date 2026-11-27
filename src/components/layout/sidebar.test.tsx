@@ -815,13 +815,13 @@ describe("Sidebar — Section order control", () => {
       .map((el) => el.getAttribute("aria-label") ?? "")
       .filter((label) => label.includes("position"))
 
-  it("defaults to Personal assistants → Folders → Chat → Recent", async () => {
+  it("defaults to Assistants → Folders → Chat → Recent", async () => {
     const user = userEvent.setup()
     renderSidebar()
     await user.click(screen.getByRole("button", { name: "View options" }))
 
     expect(orderRowNames()).toEqual([
-      "Personal assistants — position 1 of 4",
+      "Assistants — position 1 of 4",
       "Folders — position 2 of 4",
       "Chat — position 3 of 4",
       "Recent — position 4 of 4",
@@ -841,7 +841,7 @@ describe("Sidebar — Section order control", () => {
     await user.click(screen.getByRole("button", { name: "Recent — Move up" }))
 
     expect(orderRowNames()).toEqual([
-      "Personal assistants — position 1 of 4",
+      "Assistants — position 1 of 4",
       "Folders — position 2 of 4",
       "Recent — position 3 of 4",
       "Chat — position 4 of 4",
@@ -863,7 +863,7 @@ describe("Sidebar — Section order control", () => {
     await user.click(screen.getByRole("button", { name: "View options" }))
 
     expect(
-      screen.getByRole("button", { name: "Personal assistants — Move up" })
+      screen.getByRole("button", { name: "Assistants — Move up" })
     ).toBeDisabled()
     expect(
       screen.getByRole("button", { name: "Recent — Move down" })
@@ -890,7 +890,7 @@ describe("Sidebar — Section order control", () => {
     await user.keyboard("{Alt>}{ArrowDown}{/Alt}")
 
     expect(orderRowNames()).toEqual([
-      "Personal assistants — position 1 of 4",
+      "Assistants — position 1 of 4",
       "Chat — position 2 of 4",
       "Folders — position 3 of 4",
       "Recent — position 4 of 4",
@@ -909,7 +909,7 @@ describe("Sidebar — Section order control", () => {
 
     expect(orderRowNames()).toEqual([
       "Chat — position 1 of 4",
-      "Personal assistants — position 2 of 4",
+      "Assistants — position 2 of 4",
       "Folders — position 3 of 4",
       "Recent — position 4 of 4",
     ])
