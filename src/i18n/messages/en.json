@@ -8152,6 +8152,7 @@
         "unknownAgent": "This Codeg does not know this agent. Update Codeg to manage its servers.",
         "symlink": "The path is a link: saving writes to the file it points to.",
         "commentsLost": "The file has comments, and saving removes them.",
+        "accountConfig": "Account configuration",
         "pluginGate": "Plugin switches, changed along with it:",
         "sessions": "Sessions",
         "deliveryFile": "The agent reads this file itself when it starts.",

@@ -8152,6 +8152,7 @@
         "unknownAgent": "这个 Codeg 不认识这个智能体。更新 Codeg 后才能管理它的服务。",
         "symlink": "这个路径是一个链接：保存时写入它指向的文件。",
         "commentsLost": "这个文件里有注释，保存会去掉它们。",
+        "accountConfig": "账户配置",
         "pluginGate": "插件开关，会随之一起修改：",
         "sessions": "会话",
         "deliveryFile": "智能体启动时自己读取这个文件。",

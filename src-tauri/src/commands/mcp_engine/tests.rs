@@ -50,6 +50,7 @@ impl Sandbox {
             })
             .collect();
         let ctx = EngineCtx {
+            family_paths: Default::default(),
             paths,
             lock_path: dir.path().join("locks").join("mcp.lock"),
             backup_root: dir.path().join("backups"),
@@ -3173,4 +3174,61 @@ async fn results_and_the_inventory_are_shaped_for_the_page() {
             }]
         })
     );
+}
+
+#[tokio::test]
+async fn an_isolated_account_is_part_of_the_family_plan_and_rollback() {
+    let mut sandbox = Sandbox::new();
+    let app = McpAppType::Codex;
+    let extra = sandbox.dir.path().join("second").join("config.toml");
+    let original = "# keep this setting\nmodel = \"account-model\"\n";
+    write(&extra, original);
+    sandbox.ctx.add_family_path(
+        app,
+        AgentPaths {
+            servers: extra.clone(),
+            plugin_gate: None,
+        },
+    );
+    let edit = set(app, "docs", stdio("read-docs", &[], &[]));
+    let mut request = McpApplyRequest {
+        basis: BTreeMap::from([(app, sandbox.agent(app).config.basis.unwrap())]),
+        ops: vec![edit],
+        preflight: true,
+    };
+    let preview = apply_in(&sandbox.ctx, &request).await;
+    assert!(preview.ok);
+    assert!(preview.agents[0]
+        .writes
+        .iter()
+        .any(|f| f.path == extra.display().to_string()));
+    assert!(sandbox.read(app).is_none());
+    assert_eq!(std::fs::read_to_string(&extra).unwrap(), original);
+
+    request.preflight = false;
+    write(&extra, &format!("{original}# external edit\n"));
+    let stale = apply_in(&sandbox.ctx, &request).await;
+    assert_eq!(stale.outcome, McpApplyOutcome::ChangedElsewhere);
+    assert!(sandbox.read(app).is_none());
+    request
+        .basis
+        .insert(app, sandbox.agent(app).config.basis.unwrap());
+    {
+        let _reset = HooksGuard;
+        hooks::fail_write_of(Some(extra.clone()));
+        let failed = apply_in(&sandbox.ctx, &request).await;
+        assert_eq!(failed.outcome, McpApplyOutcome::WriteFailed);
+        assert!(sandbox.read(app).is_none());
+        assert!(!std::fs::read_to_string(&extra)
+            .unwrap()
+            .contains("read-docs"));
+    }
+    assert!(apply_in(&sandbox.ctx, &request).await.ok);
+    let copy = std::fs::read_to_string(extra).unwrap();
+    assert!(
+        copy.contains("read-docs")
+            && copy.contains("# external edit")
+            && copy.contains("account-model")
+    );
+    assert!(sandbox.read(app).unwrap().contains("read-docs"));
 }

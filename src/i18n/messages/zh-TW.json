@@ -8152,6 +8152,7 @@
         "unknownAgent": "這個 Codeg 不認得這個智能體。更新 Codeg 後才能管理它的服務。",
         "symlink": "這個路徑是一個連結：儲存時寫入它指向的檔案。",
         "commentsLost": "這個檔案裡有註解，儲存會移除它們。",
+        "accountConfig": "帳戶設定",
         "pluginGate": "外掛開關，會隨之一起修改：",
         "sessions": "會話",
         "deliveryFile": "智能體啟動時自行讀取這個檔案。",

@@ -411,6 +411,8 @@ pub(crate) fn format_of(app: McpAppType, path: &std::path::Path) -> McpConfigFor
 #[derive(Debug, Clone)]
 pub(crate) struct EngineCtx {
     pub paths: BTreeMap<McpAppType, AgentPaths>,
+    /// Additional account configs that inherit writes to a family.
+    pub family_paths: BTreeMap<McpAppType, Vec<AgentPaths>>,
     /// The MCP write lock file.
     pub lock_path: PathBuf,
     /// `<backup_root>/<agent>/` holds the copies taken before each write.
@@ -442,9 +444,62 @@ impl EngineCtx {
             .collect();
         Self {
             paths,
+            family_paths: BTreeMap::new(),
             lock_path: super::lock::default_lock_path(),
             backup_root: default_backup_root(),
             lock_wait: super::lock::LOCK_WAIT,
+        }
+    }
+
+    pub(crate) fn add_family_path(&mut self, app: McpAppType, paths: AgentPaths) {
+        let same_path = |a: &std::path::Path, b: &std::path::Path| {
+            a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+        };
+        if !paths.servers.is_absolute()
+            || self
+                .paths
+                .values()
+                .any(|other| same_path(&other.servers, &paths.servers))
+        {
+            return;
+        }
+        let mirrors = self.family_paths.entry(app).or_default();
+        if !mirrors
+            .iter()
+            .any(|other| same_path(&other.servers, &paths.servers))
+        {
+            mirrors.push(paths);
+            mirrors.sort_by(|a, b| a.servers.cmp(&b.servers));
+        }
+    }
+
+    pub(crate) fn add_custom_account_paths(&mut self) {
+        use crate::acp::family_isolator::{extra_homes_from_live_registry, IsolatorFamily};
+        for (app, family) in [
+            (McpAppType::ClaudeCode, IsolatorFamily::Claude),
+            (McpAppType::Codex, IsolatorFamily::Codex),
+            (McpAppType::Grok, IsolatorFamily::Grok),
+            (McpAppType::Gemini, IsolatorFamily::Gemini),
+            (McpAppType::OpenCode, IsolatorFamily::OpenCode),
+        ] {
+            for home in extra_homes_from_live_registry(family) {
+                let root = if family == IsolatorFamily::Gemini {
+                    let Some(parent) = home.parent() else {
+                        continue;
+                    };
+                    parent
+                } else {
+                    home.as_path()
+                };
+                if !root.is_absolute() {
+                    continue;
+                }
+                let env = AgentEnv::from_overrides(BTreeMap::from([(
+                    family.isolator_key().to_owned(),
+                    root.to_string_lossy().into_owned(),
+                )]));
+                self.add_family_path(app, resolve_paths(app, &env));
+            }
         }
     }
 

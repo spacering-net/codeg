@@ -8152,6 +8152,7 @@
         "unknownAgent": "이 Codeg는 이 에이전트를 알지 못합니다. 서버를 관리하려면 Codeg를 업데이트하세요.",
         "symlink": "이 경로는 링크입니다. 저장하면 링크가 가리키는 파일에 기록됩니다.",
         "commentsLost": "이 파일에는 주석이 있으며, 저장하면 주석이 사라집니다.",
+        "accountConfig": "계정 설정",
         "pluginGate": "함께 변경되는 플러그인 스위치:",
         "sessions": "세션",
         "deliveryFile": "에이전트가 시작할 때 이 파일을 직접 읽습니다.",

@@ -8152,6 +8152,7 @@
         "unknownAgent": "Este Codeg no conoce este agente. Actualiza Codeg para gestionar sus servidores.",
         "symlink": "La ruta es un enlace: al guardar se escribe en el archivo al que apunta.",
         "commentsLost": "El archivo tiene comentarios y guardar los elimina.",
+        "accountConfig": "Configuración de la cuenta",
         "pluginGate": "Interruptores de plugins, que cambian con él:",
         "sessions": "Sesiones",
         "deliveryFile": "El agente lee este archivo él mismo al arrancar.",

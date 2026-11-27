@@ -86,7 +86,7 @@ function AgentResult({
           {agent.writes.map((write) => (
             <li key={write.path} className="min-w-0">
               <PathText path={write.path} />
-              {(write.creates || write.role === "plugin_gate") && (
+              {(write.creates || write.role.endsWith("plugin_gate")) && (
                 <span className="flex flex-wrap items-center gap-x-2 text-2xs text-muted-foreground">
                   {write.creates && (
                     <span className="inline-flex items-center gap-1">
@@ -94,7 +94,7 @@ function AgentResult({
                       {t("createsFile")}
                     </span>
                   )}
-                  {write.role === "plugin_gate" && (
+                  {write.role.endsWith("plugin_gate") && (
                     <span>{t("pluginGate")}</span>
                   )}
                 </span>

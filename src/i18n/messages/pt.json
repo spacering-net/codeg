@@ -8152,6 +8152,7 @@
         "unknownAgent": "Este Codeg não conhece este agente. Atualize o Codeg para gerenciar os servidores dele.",
         "symlink": "O caminho é um link: salvar grava no arquivo para o qual ele aponta.",
         "commentsLost": "O arquivo tem comentários, e salvar os remove.",
+        "accountConfig": "Configuração da conta",
         "pluginGate": "Interruptores de plugins, alterados junto:",
         "sessions": "Sessões",
         "deliveryFile": "O agente lê este arquivo sozinho quando inicia.",

@@ -8152,6 +8152,7 @@
         "unknownAgent": "Ce Codeg ne connaît pas cet agent. Mettez Codeg à jour pour gérer ses serveurs.",
         "symlink": "Ce chemin est un lien : l’enregistrement écrit dans le fichier vers lequel il pointe.",
         "commentsLost": "Le fichier contient des commentaires, et l’enregistrement les supprime.",
+        "accountConfig": "Configuration du compte",
         "pluginGate": "Interrupteurs de plugins, modifiés en même temps :",
         "sessions": "Sessions",
         "deliveryFile": "L’agent lit ce fichier lui-même au démarrage.",

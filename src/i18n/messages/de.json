@@ -8152,6 +8152,7 @@
         "unknownAgent": "Dieses Codeg kennt diesen Agenten nicht. Aktualisiere Codeg, um seine Server zu verwalten.",
         "symlink": "Der Pfad ist ein Link: Beim Speichern wird in die Datei geschrieben, auf die er zeigt.",
         "commentsLost": "Die Datei enthält Kommentare, und Speichern entfernt sie.",
+        "accountConfig": "Kontokonfiguration",
         "pluginGate": "Plugin-Schalter, werden mit geändert:",
         "sessions": "Sitzungen",
         "deliveryFile": "Der Agent liest diese Datei beim Start selbst.",

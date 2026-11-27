@@ -657,8 +657,8 @@ fn written_fingerprint(
     key: &str,
     basis: Option<&str>,
 ) -> Option<String> {
-    let paths = engine.paths_of(agent)?;
-    let (config, entries) = inventory::read_agent(agent, paths);
+    engine.paths_of(agent)?;
+    let (config, entries) = inventory::read_family(engine, agent);
     if config.basis.is_none() || config.basis.as_deref() != basis {
         return None;
     }

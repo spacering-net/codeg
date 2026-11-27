@@ -42,7 +42,7 @@ use serde_json::{Map, Value};
 use crate::commands::mcp::McpAppType;
 use crate::commands::mcp_engine::agents::EngineCtx;
 use crate::commands::mcp_engine::fsio;
-use crate::commands::mcp_engine::inventory::read_agent;
+use crate::commands::mcp_engine::inventory::read_family;
 use crate::commands::mcp_engine::model::{McpEntry, McpFileStatus, McpTransport};
 
 use super::model::{codes, InstalledAgent, InstalledItem, LocalState, PinnedPackageRef, Reason};
@@ -223,8 +223,8 @@ pub(crate) fn read_agents(
         .map(|agent| {
             let read = match engine.paths_of(agent) {
                 None => AgentRead::Unreadable,
-                Some(paths) => {
-                    let (config, entries) = read_agent(agent, paths);
+                Some(_) => {
+                    let (config, entries) = read_family(engine, agent);
                     if config.status == McpFileStatus::Unreadable {
                         AgentRead::Unreadable
                     } else {
