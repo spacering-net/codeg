@@ -3982,6 +3982,7 @@
       "delegation": {
         "unknownAgent": "子智能体",
         "openDetail": "查看会话",
+        "delegationPinnedModel": "本次委派由父级指定使用 {model}",
         "resumed": "已恢复",
         "resumeReasonLabel": "恢复原因",
         "detailTitle": "子智能体会话",

@@ -331,6 +331,17 @@ function DelegationStepRow({
               #{model.taskId.slice(0, 8)}
             </span>
           ) : null}
+          {model.model ? (
+            <span
+              className="max-w-[12rem] truncate font-mono text-xs text-activity-secondary"
+              title={tDelegation("delegationPinnedModel", {
+                model: model.model,
+              })}
+              dir="auto"
+            >
+              {model.model}
+            </span>
+          ) : null}
           {progress && progress.steps > 0 ? (
             // Pulled in by the space after its dot, so the dot sits centred
             // between the id and the count.

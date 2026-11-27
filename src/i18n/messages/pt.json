@@ -3982,6 +3982,7 @@
       "delegation": {
         "unknownAgent": "Subagente",
         "openDetail": "Ver conversa",
+        "delegationPinnedModel": "Iniciado em {model}, definido pelo pai para esta delegação",
         "resumed": "Retomado",
         "resumeReasonLabel": "Motivo da retomada",
         "detailTitle": "Conversa do subagente",

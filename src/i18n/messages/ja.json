@@ -3982,6 +3982,7 @@
       "delegation": {
         "unknownAgent": "サブエージェント",
         "openDetail": "会話を表示",
+        "delegationPinnedModel": "この委任では親が {model} を指定しました",
         "resumed": "再開済み",
         "resumeReasonLabel": "再開理由",
         "detailTitle": "サブエージェントの会話",

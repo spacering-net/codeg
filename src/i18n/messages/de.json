@@ -3982,6 +3982,7 @@
       "delegation": {
         "unknownAgent": "Sub-Agent",
         "openDetail": "Konversation anzeigen",
+        "delegationPinnedModel": "Gestartet mit {model}, vom Eltern-Agenten für diese Delegation festgelegt",
         "resumed": "Fortgesetzt",
         "resumeReasonLabel": "Grund der Fortsetzung",
         "detailTitle": "Unteragent-Konversation",
