@@ -1,0 +1,24 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.workspace-summary",
+  "name": "Workspace Summary",
+  "version": "1.0.0",
+  "server": { "entry": "summary.mjs", "methods": ["summary"] },
+  "contributes": {
+    "workspacePanels": [
+      {
+        "id": "summary",
+        "title": "Workspace Summary",
+        "view": "serverText",
+        "method": "summary"
+      }
+    ],
+    "commands": [
+      {
+        "id": "show-summary",
+        "title": "Show Workspace Summary",
+        "action": { "type": "openWorkspacePanel", "panelId": "summary" }
+      }
+    ]
+  }
+}
