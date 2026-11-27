@@ -1615,6 +1615,32 @@ mod tests {
         assert!(conflicts[0].archive_path.ends_with("rollout-x.jsonl"));
     }
 
+    /// Antigravity's old standalone-server sessions are copied into the CLI's
+    /// tree only when reopened, so one never reopened exists ONLY in the legacy
+    /// tree — both trees must reach the archive, each restoring to its own
+    /// root, and neither root may widen to the token files beside it.
+    #[test]
+    fn antigravity_backs_up_both_the_cli_and_the_legacy_trees() {
+        let sources = external_transcript_sources();
+        let cli = sources.iter().find(|s| s.agent == "antigravity").unwrap();
+        let legacy = sources
+            .iter()
+            .find(|s| s.agent == "antigravity-acp")
+            .expect("legacy Antigravity sessions are not registered for backup");
+        assert!(cli.sqlite && legacy.sqlite);
+        assert!(!cli.is_file && !legacy.is_file);
+        assert!(
+            cli.root.ends_with("antigravity-cli/conversations"),
+            "{:?}",
+            cli.root
+        );
+        assert!(
+            legacy.root.ends_with("antigravity-acp/conversations"),
+            "{:?}",
+            legacy.root
+        );
+    }
+
     /// Kimi's index is the only record of a session's working directory, so a
     /// restored session needs its line even where kimi has been used since the
     /// backup; the session files beside it restore as before.

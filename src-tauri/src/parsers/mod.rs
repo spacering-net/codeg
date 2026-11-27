@@ -334,6 +334,22 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             indexes: &[],
         },
         ExternalSource {
+            // Sessions the standalone `agy_acp_server` wrote under
+            // `<GEMINI_HOME>/antigravity-acp/conversations` (`.db` + `.meta`).
+            // codeg still lists them and copies each into the CLI's tree only
+            // when it is reopened, so one never reopened lives here alone and
+            // must still reach a backup. As above, the root is `conversations`
+            // and never `antigravity-acp`, whose siblings are the old server's
+            // OAuth token files. Restores back into the legacy tree, which the
+            // parser keeps reading.
+            agent: "antigravity-acp",
+            root: antigravity::resolve_antigravity_legacy_sessions_dir(),
+            is_file: false,
+            sqlite: true,
+            include_top: None,
+            indexes: &[],
+        },
+        ExternalSource {
             // Antigravity CLI 不再为每个会话生成 `.meta` sidecar，而是把
             // `workspace_uris`（会话目录）索引在父目录的 `conversation_summaries.db`。
             // 单独注册一个 file source（而不是把上面的 root 上移到 `antigravity-cli`），

@@ -158,8 +158,14 @@ pub(crate) fn resolve_antigravity_sessions_dir_for_env(env: &AgentEnv) -> PathBu
         .join(SESSIONS_DIR_NAME)
 }
 
-/// [`resolve_antigravity_legacy_sessions_dir_for_env`] for the process's own
-/// environment.
+/// `<home>/antigravity-acp/conversations` — the sessions the standalone
+/// `agy_acp_server` wrote, read (and backed up) until each is migrated into the
+/// CLI's tree on open.
+pub(crate) fn resolve_antigravity_legacy_sessions_dir() -> PathBuf {
+    resolve_antigravity_legacy_sessions_dir_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_antigravity_legacy_sessions_dir`] for the CLI launched with `env`.
 pub(crate) fn resolve_antigravity_legacy_sessions_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_gemini_home_for_env(env)
         .join(ACP_SUBDIR)

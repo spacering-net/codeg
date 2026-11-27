@@ -1278,13 +1278,15 @@ export function AntigravityConfigPanel({
           </p>
         ) : null}
 
-        {/* Only for the browser-driven methods, and only once the form can
-            actually produce a working session — Gemini Enterprise resolves a
-            license against gcp.project/location during sign-in, so starting one
-            without them just burns an attempt. `disabled` rather than hidden:
-            the section explains the headless problem, which is exactly what a
-            user who cannot complete the flow needs to read. */}
-        {usesBrowserSignIn(method) ? (
+        {/* Only for personal Google sign-in: `agy acp --login`, which this
+            drives, signs a personal account in and nothing else, so for Gemini
+            Enterprise it would report a success that leaves the Enterprise
+            method unauthenticated (the CLI signs Enterprise in at session
+            start instead — see its method hint). `disabled` rather than hidden
+            while the stored row is not saved yet: the section explains the
+            headless problem, which is exactly what a user who cannot complete
+            the flow needs to read. */}
+        {method === "oauth-personal" ? (
           <HeadlessSignIn
             disabled={busy || persistedIncomplete !== null}
             method={method}

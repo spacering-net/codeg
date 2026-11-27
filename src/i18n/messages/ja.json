@@ -1087,7 +1087,7 @@
       },
       "methodHints": {
         "oauth-personal": "無料プランを含むすべての Antigravity プランで利用できる Google アカウントです。Antigravity CLI がサインインをキャッシュし、agy acp で再利用します。このマシンにブラウザがない場合は下のブラウザなしサインインを使用してください。",
-        "oauth-business": "Gemini Enterprise アカウントです。GCP プロジェクトとロケーションが必要です。このマシンにブラウザがない場合は下のブラウザなしサインインを使用してください。",
+        "oauth-business": "Gemini Enterprise アカウントです。GCP プロジェクトとロケーションが必要です。Antigravity CLI はセッション開始時に、codeg が動作するマシンのブラウザでサインインします。ブラウザなしサインインは個人の Google アカウントのみ対応です。",
         "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
         "agent-platform": "Formerly Vertex AI. Use an API key, or a project and location with Application Default Credentials (gcloud auth application-default login)."
       },

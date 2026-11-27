@@ -50,6 +50,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 use crate::acp::error::AcpError;
 use crate::models::AgentType;
@@ -127,6 +128,25 @@ fn slot() -> &'static Mutex<Option<Pending>> {
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
+/// The code exchange [`finish`] is running, if any: set (under the [`slot`]
+/// lock, in the same critical section that takes the attempt out of it) for
+/// as long as the child is exchanging the pasted code, so [`sign_out`] can
+/// still reach a sign-in that has already left the slot.
+static EXCHANGING: OnceLock<std::sync::Mutex<Option<CancellationToken>>> = OnceLock::new();
+
+fn exchanging() -> &'static std::sync::Mutex<Option<CancellationToken>> {
+    EXCHANGING.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Held by [`finish`] for the whole exchange, and awaited by [`sign_out`]
+/// after it cancels one, so the `logout` never runs while a login child that
+/// could still store a credential is alive.
+static EXCHANGE_GATE: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn exchange_gate() -> &'static Mutex<()> {
+    EXCHANGE_GATE.get_or_init(|| Mutex::new(()))
+}
+
 /// Begin a browser-free sign-in: spawn `agy acp --login`, wait for the URL it
 /// prints, and hand that URL to the panel.
 ///
@@ -146,6 +166,17 @@ pub async fn start(
         return Err(AcpError::protocol(format!(
             "{method_id} does not use a browser sign-in; set its credential in the panel instead"
         )));
+    }
+    // `agy acp --login` only signs a personal Google account in (it records
+    // `oauth-personal`), so offering it for Gemini Enterprise would report a
+    // success that leaves the Enterprise method unauthenticated. Enterprise
+    // signs in through the CLI's own `authenticate` at session start.
+    if method_id != "oauth-personal" {
+        return Err(AcpError::protocol(
+            "The Antigravity CLI's browser-free sign-in only supports a personal Google \
+             account. Gemini Enterprise signs in when a session starts, in a browser on the \
+             machine codeg runs on.",
+        ));
     }
 
     // 先短暂加锁取出旧的未完成登录，释放锁后再清理进程与启动新进程，
@@ -224,9 +255,14 @@ pub async fn finish(handle: &str, pasted: &str) -> Result<AntigravityLoginOutcom
         });
     }
 
+    // Taken before the attempt leaves the slot, so a sign-out that finds the
+    // slot empty is guaranteed to see this exchange (see `EXCHANGING`).
+    let _exchange = exchange_gate().lock().await;
+    let cancelled = CancellationToken::new();
+
     // 取出 pending 后立刻释放全局锁，防止在长达 180 秒的 token 交换期间
     // 阻塞 cancel / start，或级联阻塞持有全局连接锁的 sign_out。
-    let mut pending = {
+    let pending = {
         let mut guard = slot().lock().await;
         let Some(pending) = guard.take() else {
             return Err(AcpError::protocol(
@@ -239,9 +275,20 @@ pub async fn finish(handle: &str, pasted: &str) -> Result<AntigravityLoginOutcom
                 "this sign-in was replaced by a newer attempt; use the link on screen",
             ));
         }
+        *exchanging().lock().unwrap_or_else(|e| e.into_inner()) = Some(cancelled.clone());
         pending
     };
+    let outcome = exchange(pending, pasted, &cancelled).await;
+    *exchanging().lock().unwrap_or_else(|e| e.into_inner()) = None;
+    outcome
+}
 
+/// The exchange half of [`finish`]: write the code, wait for the CLI.
+async fn exchange(
+    mut pending: Pending,
+    pasted: &str,
+    cancelled: &CancellationToken,
+) -> Result<AntigravityLoginOutcome, AcpError> {
     // 清空 URL 行之后 CLI 已打印的交互提示文案（如 "Then paste the authorization code..."），
     // 避免后续失败时把提示语误当成错误信息展示给用户。
     while pending.lines.try_recv().is_ok() {}
@@ -258,7 +305,18 @@ pub async fn finish(handle: &str, pasted: &str) -> Result<AntigravityLoginOutcom
     // 写入一行后关闭 stdin，显式通知 CLI 输入已结束。
     drop(stdin);
 
-    let wait = tokio::time::timeout(EXCHANGE_WAIT, pending.child.wait()).await;
+    let wait = tokio::select! {
+        wait = tokio::time::timeout(EXCHANGE_WAIT, pending.child.wait()) => wait,
+        () = cancelled.cancelled() => {
+            kill(pending).await;
+            return Ok(AntigravityLoginOutcome {
+                signed_in: false,
+                message: Some("the sign-in was abandoned by a sign-out".into()),
+                retryable: false,
+                credential_path: None,
+            });
+        }
+    };
     match wait {
         Ok(Ok(status)) if status.success() => {
             let _ = drain_output(&mut pending.lines, &mut pending.readers).await;
@@ -320,10 +378,24 @@ pub async fn cancel(handle: &str) -> Result<(), AcpError> {
 /// sign-in can reach a different account.
 pub async fn sign_out(runtime_env: &BTreeMap<String, String>) -> Result<(), AcpError> {
     // 短暂加锁取出并放弃未完成的登录尝试，释放锁后再执行进程退出与 ACP logout。
-    let pending = { slot().lock().await.take() };
+    // An exchange already past the slot is cancelled under the same lock, and
+    // the gate is then awaited, so its child is dead before `logout` runs and
+    // cannot store the credential being signed out of afterwards.
+    let pending = {
+        let mut guard = slot().lock().await;
+        if let Some(token) = exchanging()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            token.cancel();
+        }
+        guard.take()
+    };
     if let Some(pending) = pending {
         kill(pending).await;
     }
+    let _exchange = exchange_gate().lock().await;
 
     let mut child = spawn_acp(runtime_env).await?;
     let mut stdin = child
@@ -420,9 +492,8 @@ async fn spawn_login(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     configure_agy_command(&mut command, runtime_env);
-    // The panel's method is the intent; `--login` itself only knows Google.
-    // `oauth-business` goes through the same Google consent screen, where the
-    // user can pick the enterprise account.
+    // `--login` only knows personal Google sign-in; `start` refuses the
+    // other methods before getting here.
     tracing::info!("[ACP][Antigravity] starting agy acp --login for {method_id}");
     let mut child = command
         .spawn()

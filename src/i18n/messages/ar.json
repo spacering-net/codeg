@@ -1087,7 +1087,7 @@
       },
       "methodHints": {
         "oauth-personal": "حسابك على Google، على أي خطة Antigravity بما في ذلك الخطة المجانية. يخزّن Antigravity CLI تسجيل الدخول مؤقتًا ويعيد استخدامه لـ agy acp. لا يوجد متصفح على هذا الجهاز؟ استخدم تسجيل الدخول دون متصفح أدناه.",
-        "oauth-business": "حسابك في Gemini Enterprise. يحتاج إلى مشروع وموقع GCP. لا يوجد متصفح على هذا الجهاز؟ استخدم تسجيل الدخول دون متصفح أدناه.",
+        "oauth-business": "حسابك في Gemini Enterprise. يحتاج إلى مشروع وموقع GCP. تسجّل واجهة Antigravity CLI الدخول عند بدء الجلسة، في متصفح على الجهاز الذي يعمل عليه codeg؛ تسجيل الدخول دون متصفح يدعم حسابات Google الشخصية فقط.",
         "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
         "agent-platform": "Formerly Vertex AI. Use an API key, or a project and location with Application Default Credentials (gcloud auth application-default login)."
       },

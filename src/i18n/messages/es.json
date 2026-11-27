@@ -1087,7 +1087,7 @@
       },
       "methodHints": {
         "oauth-personal": "Tu cuenta de Google, en cualquier plan de Antigravity incluido el gratuito. La CLI de Antigravity almacena el inicio de sesión en caché y lo reutiliza para agy acp. ¿Sin navegador en esta máquina? Usa el acceso sin navegador de abajo.",
-        "oauth-business": "Tu cuenta de Gemini Enterprise. Necesita un proyecto y una ubicación de GCP. ¿Sin navegador en esta máquina? Usa el acceso sin navegador de abajo.",
+        "oauth-business": "Tu cuenta de Gemini Enterprise. Necesita un proyecto y una ubicación de GCP. La CLI de Antigravity inicia sesión al empezar una sesión, en un navegador de la máquina donde se ejecuta codeg; el acceso sin navegador solo admite cuentas personales de Google.",
         "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
         "agent-platform": "Formerly Vertex AI. Use an API key, or a project and location with Application Default Credentials (gcloud auth application-default login)."
       },

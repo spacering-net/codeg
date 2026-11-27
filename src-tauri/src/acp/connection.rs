@@ -448,9 +448,13 @@ fn antigravity_non_interactive_auth_method_for_env(
 /// `initialize` and `session/new`, if any.
 ///
 /// The API-key methods always need one (see
-/// [`antigravity_non_interactive_auth_method_for_env`]). The two Google
-/// methods need one only when the CLI's cached auth state names a DIFFERENT
-/// method: `agy acp` keeps using the method its last `authenticate` recorded
+/// [`antigravity_non_interactive_auth_method_for_env`]), and so does Gemini
+/// Enterprise: with no cached state the CLI infers a personal Google login,
+/// and `agy acp --login` itself only ever records `oauth-personal`, so without
+/// an explicit `authenticate oauth-business` an Enterprise choice would run on
+/// whatever personal account the CLI holds. Personal Google sign-in needs one
+/// only when the CLI's cached auth state names a DIFFERENT method: `agy acp`
+/// keeps using the method its last `authenticate` recorded
 /// in `<gemini home>/antigravity-cli/cache/acp-auth-state.json`, so a user who
 /// switches the panel from an API key back to Google sign-in would otherwise
 /// get `-32000 Authentication required` on every launch — the launch scrubs
@@ -486,7 +490,8 @@ fn read_antigravity_cached_auth_method(gemini_home: &Path) -> Option<String> {
         .map(|method| method.trim().to_string())
 }
 
-/// The Google method the panel recorded, when the CLI's cached method differs.
+/// The Google method the panel recorded: always for Gemini Enterprise, and for
+/// personal sign-in only when the CLI's cached method differs.
 fn antigravity_oauth_switch_auth_method(
     runtime_env: &BTreeMap<String, String>,
     cached: Option<&str>,
@@ -496,7 +501,7 @@ fn antigravity_oauth_switch_auth_method(
         .map(|value| value.trim())?
     {
         "oauth-personal" => "oauth-personal",
-        "oauth-business" => "oauth-business",
+        "oauth-business" => return Some("oauth-business"),
         _ => return None,
     };
     let cached = match cached?.trim() {
@@ -8285,17 +8290,44 @@ async fn sign_in_antigravity_non_interactive(
         ),
     )
     .await?;
+    // A Google method that fails to authenticate must not fall through to
+    // `session/new`: the CLI would then run on whatever method it had cached
+    // (another account, or an API key the launch has scrubbed), which for
+    // Gemini Enterprise means silently using a personal account. The CLI's
+    // own refusal ("No browser is available here…", a declined consent) is
+    // the useful message. An API-key `authenticate` keeps falling through:
+    // `session/new` then reports the missing credential itself.
+    let google = matches!(method_id, "oauth-personal" | "oauth-business");
     match outcome {
         Ok(Ok(_)) => tracing::info!(
             "[ACP][{}] authenticated with {method_id} in {:?}",
             AgentType::Antigravity,
             started.elapsed()
         ),
+        Ok(Err(e)) if google => {
+            tracing::warn!(
+                "[ACP][{}] {method_id} authenticate failed after {:?}: {e}",
+                AgentType::Antigravity,
+                started.elapsed()
+            );
+            return Err(e);
+        }
         Ok(Err(e)) => tracing::warn!(
             "[ACP][{}] {method_id} authenticate failed after {:?}: {e}; continuing to session/new",
             AgentType::Antigravity,
             started.elapsed()
         ),
+        Err(_) if google => {
+            tracing::warn!(
+                "[ACP][{}] {method_id} authenticate timed out after {:?}",
+                AgentType::Antigravity,
+                wait
+            );
+            return Err(agent_client_protocol::Error::internal_error().data(format!(
+                "Antigravity did not finish signing in with {method_id} within {} s",
+                wait.as_secs()
+            )));
+        }
         Err(_) => tracing::warn!(
             "[ACP][{}] {method_id} authenticate timed out after {:?}; continuing to session/new",
             AgentType::Antigravity,
@@ -32720,10 +32752,15 @@ mod tests {
             antigravity_oauth_switch_auth_method(&personal, Some("gemini-api-key")),
             Some("oauth-personal")
         );
-        assert_eq!(
-            antigravity_oauth_switch_auth_method(&business, Some("oauth-personal")),
-            Some("oauth-business")
-        );
+        // Gemini Enterprise always authenticates: the CLI's inferred default
+        // and `agy acp --login` are both personal.
+        for cached in [None, Some("oauth-personal"), Some("oauth-business")] {
+            assert_eq!(
+                antigravity_oauth_switch_auth_method(&business, cached),
+                Some("oauth-business"),
+                "{cached:?}"
+            );
+        }
         assert_eq!(
             antigravity_oauth_switch_auth_method(&personal, Some("vertex-ai")),
             Some("oauth-personal")

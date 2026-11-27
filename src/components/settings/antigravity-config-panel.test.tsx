@@ -507,12 +507,21 @@ describe("AntigravityConfigPanel", () => {
       expect(screen.queryByText(h.title)).not.toBeInTheDocument()
     })
 
-    /** Gemini Enterprise resolves a license against gcp.project/location during
-     *  sign-in, so starting one without them only burns an attempt. */
-    it("cannot be started while the form is still missing a credential", () => {
-      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-business" } })
-      expect(screen.getByText(m.missingEnterpriseConfig)).toBeInTheDocument()
-      expect(screen.getByRole("button", { name: h.start })).toBeDisabled()
+    /** `agy acp --login` signs a personal Google account in and nothing else,
+     *  so Gemini Enterprise (which the CLI signs in at session start) is not
+     *  offered a sign-in that would report success without authenticating it. */
+    it("is not offered for Gemini Enterprise", () => {
+      renderPanel({
+        env: {
+          AGY_AUTH_METHOD: "oauth-business",
+          GOOGLE_CLOUD_PROJECT: "acme",
+          GOOGLE_CLOUD_LOCATION: "eu",
+        },
+      })
+      expect(screen.queryByText(h.title)).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole("button", { name: h.start })
+      ).not.toBeInTheDocument()
     })
 
     it("shows the link and the dead-end address it will redirect to", async () => {
@@ -776,40 +785,6 @@ describe("AntigravityConfigPanel", () => {
     })
 
     /**
-     * The backend builds the agent's environment from the DATABASE, so a
-     * project typed but not saved is a project the sign-in will not see.
-     * Allowing it would spend a whole Google consent round trip and only then
-     * fail license resolution.
-     */
-    it("waits for a save before offering an Enterprise sign-in", () => {
-      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-business" } })
-      const project = screen.getByLabelText(m.gcpProjectLabel)
-      const location = screen.getByLabelText(m.gcpLocationLabel)
-      fireEvent.change(project, { target: { value: "acme" } })
-      fireEvent.change(location, { target: { value: "eu" } })
-
-      // The form is now complete, so its own warning is gone...
-      expect(
-        screen.queryByText(m.missingEnterpriseConfig)
-      ).not.toBeInTheDocument()
-      // ...but the stored row is not, and that is what signs in.
-      expect(screen.getByText(h.saveFirst)).toBeInTheDocument()
-      expect(screen.getByRole("button", { name: h.start })).toBeDisabled()
-    })
-
-    it("offers the sign-in once the row actually carries the config", () => {
-      renderPanel({
-        env: {
-          AGY_AUTH_METHOD: "oauth-business",
-          GOOGLE_CLOUD_PROJECT: "acme",
-          GOOGLE_CLOUD_LOCATION: "eu",
-        },
-      })
-      expect(screen.queryByText(h.saveFirst)).not.toBeInTheDocument()
-      expect(screen.getByRole("button", { name: h.start })).toBeEnabled()
-    })
-
-    /**
      * The web transport throws the backend's `{code, message}` JSON verbatim —
      * it is not an `Error`. `String(e)` on that renders "[object Object]", and
      * it does so in SERVER mode, which is the only deployment this section
@@ -902,7 +877,6 @@ describe("AntigravityConfigPanel", () => {
    */
   describe("sign-out", () => {
     const s = m.signOut
-    const h = m.headless
 
     beforeEach(() => {
       vi.mocked(acpAntigravitySignOut).mockResolvedValue({
@@ -970,7 +944,7 @@ describe("AntigravityConfigPanel", () => {
      */
     it("stays available when the stored row cannot sign in", () => {
       renderPanel({ env: { AGY_AUTH_METHOD: "oauth-business" } })
-      expect(screen.getByRole("button", { name: h.start })).toBeDisabled()
+      expect(screen.getByText(m.missingEnterpriseConfig)).toBeInTheDocument()
       expect(screen.getByRole("button", { name: s.action })).toBeEnabled()
     })
 

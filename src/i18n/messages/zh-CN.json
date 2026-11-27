@@ -1087,7 +1087,7 @@
       },
       "methodHints": {
         "oauth-personal": "你的 Google 账号，任意 Antigravity 套餐（含免费版）均可。登录由 Antigravity CLI 缓存并复用；本机没有浏览器时用下面的免浏览器登录。",
-        "oauth-business": "你的 Gemini Enterprise 账号。需要填 GCP 项目与区域；本机没有浏览器时用下面的免浏览器登录。",
+        "oauth-business": "你的 Gemini Enterprise 账号。需要填 GCP 项目与区域。Antigravity CLI 会在会话启动时、在运行 codeg 的机器上用浏览器完成登录；免浏览器登录只支持个人 Google 账号。",
         "gemini-api-key": "Gemini Developer API 的密钥，以 GEMINI_API_KEY 传给智能体。",
         "agent-platform": "即原 Vertex AI。可用 API Key，或用项目 + 区域配合应用默认凭据（gcloud auth application-default login）。"
       },
