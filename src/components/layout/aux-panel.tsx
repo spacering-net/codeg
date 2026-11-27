@@ -8,6 +8,7 @@ import {
   GitCommit,
   GitPullRequestArrow,
   ListTodo,
+  Puzzle,
   ReceiptText,
   Zap,
   type LucideIcon,
@@ -26,6 +27,7 @@ import { useTabReselect } from "@/hooks/use-tab-reselect"
 import { useZoomLevel } from "@/hooks/use-appearance"
 import { useAuxTabOrder, type AuxTabOrder } from "@/lib/aux-panel-tab-order"
 import { useFolderForgeProvider } from "@/lib/forge-provider-cache"
+import { useHostPlugins } from "@/lib/host-plugins"
 import { isDesktop } from "@/lib/platform"
 import { rightChromeReserve } from "@/lib/window-chrome"
 import { cn } from "@/lib/utils"
@@ -39,6 +41,7 @@ import { GitLogTab } from "./aux-panel-git-log-tab"
 import { AutomationsAuxTab } from "./aux-panel-automations-tab"
 import { TasksAuxTab } from "./aux-panel-tasks-tab"
 import { ForgeAuxTab } from "./aux-panel-forge-tab"
+import { WorkspacePluginPanels } from "./workspace-plugin-panels"
 
 const LAZY_TABS: AuxPanelTab[] = [
   "file_tree",
@@ -65,6 +68,7 @@ const TAB_ICONS: Record<AuxPanelTab, LucideIcon> = {
   tasks: ListTodo,
   issues: CircleDot,
   pull_requests: GitPullRequestArrow,
+  plugins: Puzzle,
 }
 // The three folder-content tabs share one label namespace (Folder.auxPanel.tabs);
 // session details resolves from its own (Folder.sessionDetails.menuLabel), and
@@ -110,7 +114,15 @@ export function AuxPanel() {
   const tAutomations = useTranslations("Automations")
   const tTasks = useTranslations("Tasks")
   const tForge = useTranslations("Forge")
-  const { isOpen, activeTab, setActiveTab, setOpen } = useAuxPanelContext()
+  const tPlugins = useTranslations("HostPlugins")
+  const {
+    isOpen,
+    activeTab,
+    setActiveTab,
+    setOpen,
+    selectedPluginPanel,
+    setSelectedPluginPanel,
+  } = useAuxPanelContext()
   const { activeFolderId } = useActiveFolder()
   const isChatMode = useIsActiveChatMode()
   const isMobile = useIsMobile()
@@ -121,11 +133,19 @@ export function AuxPanel() {
     () => new Set(LAZY_TABS.filter((tab) => tab === activeTab))
   )
 
-  const { showFolderTabs, effectiveTab } = resolveAuxTabView(
+  const { showFolderTabs, effectiveTab: folderTab } = resolveAuxTabView(
     activeTab,
     activeFolderId,
     isChatMode
   )
+  const { data: catalog, error: pluginError } = useHostPlugins(
+    isOpen && showFolderTabs
+  )
+  const plugins = catalog?.filter((plugin) => plugin.enabled) ?? []
+  const showPluginTab =
+    plugins.length > 0 || (folderTab === "plugins" && !catalog && !pluginError)
+  const effectiveTab =
+    folderTab === "plugins" && !showPluginTab ? "session_details" : folderTab
   // GitLab calls them merge requests, GitHub and Gitea pull requests: the tab
   // is named for the forge the project's remote is on, as the repository
   // panel's own switcher is. Looked up only while the tab is on the rail.
@@ -147,10 +167,10 @@ export function AuxPanel() {
   // chat session), so other consumers of `activeTab` stay in sync with what's
   // shown. Done in an effect — never a render-time setState on the provider.
   useEffect(() => {
-    if (!showFolderTabs && activeTab !== "session_details") {
-      setActiveTab("session_details")
+    if (activeTab !== effectiveTab) {
+      setActiveTab(effectiveTab)
     }
-  }, [showFolderTabs, activeTab, setActiveTab])
+  }, [effectiveTab, activeTab, setActiveTab])
 
   const handleTabValueChange = useCallback(
     (value: string) => {
@@ -179,6 +199,8 @@ export function AuxPanel() {
           return tAutomations("title")
         case "tasks":
           return tTasks("title")
+        case "plugins":
+          return tPlugins("title")
         case "issues":
           return tForge("tabIssues")
         case "pull_requests":
@@ -191,10 +213,13 @@ export function AuxPanel() {
           return t(FOLDER_TAB_LABEL_KEY[tab])
       }
     },
-    [t, tDetails, tAutomations, tTasks, tForge, forgeProvider]
+    [t, tDetails, tAutomations, tTasks, tForge, tPlugins, forgeProvider]
   )
 
   const shownTabs = showFolderTabs ? tabOrder : SESSION_DETAILS_ONLY
+  const mobileTabs = showPluginTab
+    ? [...shownTabs, "plugins" as const]
+    : shownTabs
 
   if (!isOpen) return null
 
@@ -260,6 +285,25 @@ export function AuxPanel() {
           <ForgeAuxTab auxTab="pull_requests" forgeTab="prs" />
         ) : null}
       </TabsContent>
+      {showPluginTab && activeFolderId !== null && (
+        <TabsContent
+          value="plugins"
+          className="mt-0 min-h-0 flex-1 overflow-hidden"
+        >
+          {catalog ? (
+            <WorkspacePluginPanels
+              plugins={plugins}
+              folderId={activeFolderId}
+              selected={selectedPluginPanel}
+              onSelect={setSelectedPluginPanel}
+            />
+          ) : (
+            <p className="p-3 text-xs text-muted-foreground">
+              {tPlugins("loading")}
+            </p>
+          )}
+        </TabsContent>
+      )}
     </>
   )
 
@@ -292,7 +336,7 @@ export function AuxPanel() {
               variant="line"
               className="h-10 w-full shrink-0 justify-start border-b border-border ws-chrome-border px-3 group-data-horizontal/tabs:h-10"
             >
-              {shownTabs.map((tab) => (
+              {mobileTabs.map((tab) => (
                 <MobileAuxTabTrigger
                   key={tab}
                   tab={tab}
@@ -337,6 +381,7 @@ export function AuxPanel() {
               <div className="flex min-w-0 flex-1 flex-col">{panels}</div>
               <AuxPanelTabRail
                 tabs={shownTabs}
+                showPluginTab={showPluginTab}
                 visible={showFolderTabs}
                 icons={TAB_ICONS}
                 labelOf={tabLabel}

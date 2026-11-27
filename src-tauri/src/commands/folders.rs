@@ -689,6 +689,30 @@ pub async fn open_folder_core(
         .ok_or_else(|| AppCommandError::not_found("Folder not found after add"))
 }
 
+pub async fn open_folder_with_plugins(
+    plugins: &std::sync::Arc<crate::host_plugins::HostPlugins>,
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    path: String,
+) -> Result<FolderDetail, AppCommandError> {
+    let path = plugins.workspace_open_path(path).await?;
+    let detail = open_folder_core(db, path).await?;
+    observe_folder_open(plugins, emitter, &detail);
+    Ok(detail)
+}
+
+fn observe_folder_open(
+    plugins: &std::sync::Arc<crate::host_plugins::HostPlugins>,
+    emitter: &EventEmitter,
+    detail: &FolderDetail,
+) {
+    plugins.observe(
+        emitter,
+        crate::host_plugins::lifecycle::Event::OpenAfter,
+        serde_json::json!({ "folderId": detail.id, "path": detail.path }),
+    );
+}
+
 /// Open a freshly created git worktree directory as a folder, recording the
 /// *root* folder it descends from. Parents are flattened: a worktree created
 /// from another worktree still records the original root, so every worktree of a
@@ -810,11 +834,12 @@ pub async fn backfill_worktree_folder_aliases(emitter: &EventEmitter, db: &AppDa
 /// the remote server's broadcaster (remote desktop) — so only windows talking
 /// to this same backend react.
 pub async fn open_folder_in_workspace_core(
+    plugins: &std::sync::Arc<crate::host_plugins::HostPlugins>,
     emitter: &EventEmitter,
     db: &AppDatabase,
     path: String,
 ) -> Result<FolderDetail, AppCommandError> {
-    let detail = open_folder_core(db, path).await?;
+    let detail = open_folder_with_plugins(plugins, emitter, db, path).await?;
     crate::web::event_bridge::emit_event(emitter, "folder://open-in-workspace", &detail);
     Ok(detail)
 }
@@ -830,6 +855,17 @@ pub async fn open_folder_by_id_core(
         .await
         .map_err(AppCommandError::from)?
         .ok_or_else(|| AppCommandError::not_found(format!("Folder {folder_id} not found")))
+}
+
+pub async fn reopen_folder_with_plugins(
+    plugins: &std::sync::Arc<crate::host_plugins::HostPlugins>,
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    folder_id: i32,
+) -> Result<FolderDetail, AppCommandError> {
+    let detail = open_folder_by_id_core(db, folder_id).await?;
+    observe_folder_open(plugins, emitter, &detail);
+    Ok(detail)
 }
 
 pub async fn remove_folder_from_workspace_core(
@@ -876,6 +912,21 @@ pub async fn remove_folder_from_workspace_core(
     if let Some(path) = folder_path {
         crate::office_watch::stop_office_watches_under_root(&path);
     }
+    Ok(())
+}
+
+pub async fn close_folder_with_plugins(
+    plugins: &std::sync::Arc<crate::host_plugins::HostPlugins>,
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    folder_id: i32,
+) -> Result<(), AppCommandError> {
+    remove_folder_from_workspace_core(emitter, db, folder_id).await?;
+    plugins.observe(
+        emitter,
+        crate::host_plugins::lifecycle::Event::CloseAfter,
+        serde_json::json!({ "folderId": folder_id }),
+    );
     Ok(())
 }
 
@@ -1110,10 +1161,12 @@ pub async fn list_all_folder_details(
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn open_folder(
+    app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    plugins: tauri::State<'_, std::sync::Arc<crate::host_plugins::HostPlugins>>,
     path: String,
 ) -> Result<FolderDetail, AppCommandError> {
-    open_folder_core(&db, path).await
+    open_folder_with_plugins(&plugins, &EventEmitter::from_app(&app), &db, path).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1131,19 +1184,22 @@ pub async fn open_worktree_folder(
 pub async fn open_folder_in_workspace(
     app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    plugins: tauri::State<'_, std::sync::Arc<crate::host_plugins::HostPlugins>>,
     path: String,
 ) -> Result<FolderDetail, AppCommandError> {
     let emitter = EventEmitter::from_app(&app);
-    open_folder_in_workspace_core(&emitter, &db, path).await
+    open_folder_in_workspace_core(&plugins, &emitter, &db, path).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn open_folder_by_id(
+    app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    plugins: tauri::State<'_, std::sync::Arc<crate::host_plugins::HostPlugins>>,
     folder_id: i32,
 ) -> Result<FolderDetail, AppCommandError> {
-    open_folder_by_id_core(&db, folder_id).await
+    reopen_folder_with_plugins(&plugins, &EventEmitter::from_app(&app), &db, folder_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1151,9 +1207,10 @@ pub async fn open_folder_by_id(
 pub async fn remove_folder_from_workspace(
     app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    plugins: tauri::State<'_, std::sync::Arc<crate::host_plugins::HostPlugins>>,
     folder_id: i32,
 ) -> Result<(), AppCommandError> {
-    remove_folder_from_workspace_core(&EventEmitter::from_app(&app), &db, folder_id).await
+    close_folder_with_plugins(&plugins, &EventEmitter::from_app(&app), &db, folder_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]

@@ -52,6 +52,7 @@ import type {
   QuestionAnswer,
 } from "@/lib/types"
 import { cn, randomUUID } from "@/lib/utils"
+import type { HostPluginSessionContext } from "@/lib/host-plugins"
 import { userPromptHistory } from "@/lib/composer-history"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import {
@@ -381,14 +382,25 @@ export function CanvasConversationSurface({
   const boundFolderId =
     summary?.folder_id ??
     (draftTarget?.kind === "folder" ? draftTarget.folderId : null)
-  const folderPath = useAppWorkspaceStore((s) => {
-    const id =
-      boundFolderId ??
-      (draftTarget?.kind === "folder" ? draftTarget.folderId : null)
-    return id != null
-      ? (s.allFolders.find((f) => f.id === id)?.path ?? null)
+  const folderMeta = useAppWorkspaceStore((s) =>
+    boundFolderId != null
+      ? (s.allFolders.find((f) => f.id === boundFolderId) ?? null)
       : null
-  })
+  )
+  const folderPath = folderMeta?.path ?? null
+  const pluginContext = useMemo<HostPluginSessionContext>(
+    () => ({
+      folderId:
+        boundFolderId != null &&
+        boundFolderId > 0 &&
+        folderMeta?.kind !== "chat"
+          ? boundFolderId
+          : null,
+      conversationId: dbConversationId,
+      sessionKey: contextKey,
+    }),
+    [boundFolderId, folderMeta?.kind, dbConversationId, contextKey]
+  )
 
   const workingDir =
     folderPath ??
@@ -1091,6 +1103,7 @@ export function CanvasConversationSurface({
           attachmentTabId={contextKey}
           folderPickerOverride={folderPickerOverride}
           isActive={isActive}
+          pluginContext={pluginContext}
         >
           {isDraft && onAgentTypeChange && (
             <div className="flex shrink-0 justify-center border-b border-border/60 px-3 py-2">
