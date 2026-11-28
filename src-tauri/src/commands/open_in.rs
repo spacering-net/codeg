@@ -59,16 +59,69 @@ pub async fn open_local_file(path: String) -> Result<(), AppCommandError> {
 #[cfg(any(feature = "tauri-runtime", all(test, not(windows))))]
 const OPEN_LOCAL_FILE_FAILED: &str = "Failed to open the file";
 
-/// Windows: `ShellExecuteEx` (the opener plugin's path) answers synchronously,
-/// and a type with no association gets the shell's own "Open with" chooser.
+/// Windows: `ShellExecuteExW`, called here rather than through the opener
+/// plugin, which passes no flags and initializes no COM. Microsoft's rules for
+/// a thread with no message loop — every tokio worker — are COM initialized
+/// (shell extensions are COM objects) and `SEE_MASK_NOASYNC` (or a DDE-backed
+/// association can be dropped as the call returns). Run on the blocking pool:
+/// with `SEE_MASK_NOASYNC` the call waits for the handoff, and for a type with
+/// no association it shows the shell's own "Open with" chooser, as Explorer
+/// does on a double-click.
 #[cfg(all(feature = "tauri-runtime", windows))]
 async fn launch_default_app(target: &Path) -> Result<(), AppCommandError> {
-    tauri_plugin_opener::open_path(target, None::<&str>).map_err(|err| {
+    let owned = target.to_path_buf();
+    let outcome = tokio::task::spawn_blocking(move || shell_execute_default_verb(&owned))
+        .await
+        .map_err(|err| err.to_string())
+        .and_then(|result| result.map_err(|err| err.to_string()));
+    outcome.map_err(|why| {
         AppCommandError::external_command(
             OPEN_LOCAL_FILE_FAILED,
-            format!("{}: {err}", target.display()),
+            format!("{}: {why}", target.display()),
         )
     })
+}
+
+#[cfg(all(feature = "tauri-runtime", windows))]
+fn shell_execute_default_verb(target: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+    };
+    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let file: Vec<u16> = target
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // S_OK and S_FALSE (already initialized on this thread) each take one
+    // CoUninitialize; a failure (a thread already in the MTA) takes none, and
+    // the shell still works from there.
+    let com = unsafe {
+        CoInitializeEx(
+            std::ptr::null(),
+            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+        )
+    };
+    // SAFETY: SHELLEXECUTEINFOW is plain data; all-zero is its documented
+    // "nothing set" state (null verb = the file type's default verb).
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOASYNC;
+    info.lpFile = file.as_ptr();
+    info.nShow = SW_SHOWNORMAL;
+    // SAFETY: `info` and the `file` buffer it points into outlive the call.
+    let opened = unsafe { ShellExecuteExW(&mut info) } != 0;
+    let error = (!opened).then(std::io::Error::last_os_error);
+    if com >= 0 {
+        unsafe { CoUninitialize() };
+    }
+    match error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 /// macOS `open` / Linux `xdg-open`, run by codeg rather than the opener plugin:
@@ -221,7 +274,8 @@ async fn run_default_app_launcher(
 /// dot segments collapsed), so what arrives is taken as is — not trimmed, since
 /// a file name may begin or end with a space. A URL (`https://…`, `file://…`)
 /// is not absolute and is refused by that check. A directory, or a macOS `.app`
-/// bundle, is the file manager row's errand, not "open this file".
+/// bundle, is the file manager row's errand, not "open this file" — and so is
+/// a file whose default "open" runs code (see [`runs_code_when_opened`]).
 ///
 /// `test` is in the cfg so the unit tests can reach it in a server-mode build,
 /// where the command itself does not exist.
@@ -248,7 +302,16 @@ fn validate_open_local_file_path(path: &str) -> Result<PathBuf, AppCommandError>
         // back into the native `F:\repo\a.pdf` the Windows shell expects (and
         // leaves a POSIX path as it is), without the `\\?\` form canonicalize
         // would give.
-        Ok(meta) if meta.is_file() => std::path::absolute(&target).map_err(AppCommandError::io),
+        Ok(meta) if meta.is_file() => {
+            let resolved = std::path::absolute(&target).map_err(AppCommandError::io)?;
+            if runs_code_when_opened(&resolved, &meta) {
+                return Err(AppCommandError::invalid_input(format!(
+                    "{path} can run code when opened, so it is not opened from here; \
+                     reveal it in the file manager to look at it first"
+                )));
+            }
+            Ok(resolved)
+        }
         Ok(_) => Err(AppCommandError::invalid_input(format!(
             "not a file: {path}"
         ))),
@@ -257,6 +320,144 @@ fn validate_open_local_file_path(path: &str) -> Result<PathBuf, AppCommandError>
         ))),
     }
 }
+
+/// Whether the OS's default "open" of this file runs code rather than showing
+/// a document: a program, a script the shell executes, a shortcut, an
+/// installer. A file reference's badge shows whatever text the message gave it
+/// (`[report.pdf](./setup.exe)` reads as a PDF), so "Open with default app"
+/// must not be a one-click way to run what an agent's reply pointed at. Judged
+/// by the name the shell will see and, through a symlink, by the file it
+/// names; on Unix any execute bit counts too (`open` runs an extensionless
+/// executable in Terminal, and some `xdg-open` setups run one directly).
+#[cfg(any(test, feature = "tauri-runtime"))]
+fn runs_code_when_opened(path: &Path, meta: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o111 != 0 {
+            return true;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = meta;
+    let canonical = std::fs::canonicalize(path).ok();
+    std::iter::once(path)
+        .chain(canonical.as_deref())
+        .any(extension_runs_code)
+}
+
+#[cfg(any(test, feature = "tauri-runtime"))]
+fn extension_runs_code(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    let ext = ext.to_ascii_lowercase();
+    if RUNNABLE_EXTENSIONS.contains(&ext.as_str()) {
+        return true;
+    }
+    // Whatever else this machine runs by name (`PATHEXT` is `.COM;.EXE;…`).
+    #[cfg(windows)]
+    if let Some(pathext) = std::env::var_os("PATHEXT") {
+        return pathext
+            .to_string_lossy()
+            .split(';')
+            .any(|entry| entry.trim_start_matches('.').eq_ignore_ascii_case(&ext));
+    }
+    false
+}
+
+/// File types whose default action runs or installs something.
+#[cfg(all(any(test, feature = "tauri-runtime"), windows))]
+const RUNNABLE_EXTENSIONS: &[&str] = &[
+    "exe",
+    "com",
+    "bat",
+    "cmd",
+    "pif",
+    "scr",
+    "cpl",
+    "msc",
+    "msi",
+    "msp",
+    "mst",
+    "msix",
+    "msixbundle",
+    "appx",
+    "appxbundle",
+    "appinstaller",
+    "application",
+    "appref-ms",
+    "hta",
+    "inf",
+    "ins",
+    "isp",
+    "jar",
+    "js",
+    "jse",
+    "lnk",
+    "ps1",
+    "psm1",
+    "psd1",
+    "reg",
+    "scf",
+    "sct",
+    "shb",
+    "shs",
+    "url",
+    "vb",
+    "vbe",
+    "vbs",
+    "ws",
+    "wsc",
+    "wsf",
+    "wsh",
+    "xbap",
+    "settingcontent-ms",
+    "diagcab",
+    "chm",
+    "library-ms",
+    "search-ms",
+    "website",
+    "gadget",
+];
+
+#[cfg(all(any(test, feature = "tauri-runtime"), target_os = "macos"))]
+const RUNNABLE_EXTENSIONS: &[&str] = &[
+    "app",
+    "command",
+    "tool",
+    "terminal",
+    "pkg",
+    "mpkg",
+    "workflow",
+    "action",
+    "jar",
+    "webloc",
+    "inetloc",
+    "fileloc",
+    "url",
+    "mobileconfig",
+    "prefpane",
+    "saver",
+    "qlgenerator",
+    "mdimporter",
+    "kext",
+    "osax",
+];
+
+#[cfg(all(any(test, feature = "tauri-runtime"), unix, not(target_os = "macos")))]
+const RUNNABLE_EXTENSIONS: &[&str] = &[
+    "desktop",
+    "appimage",
+    "run",
+    "jar",
+    "deb",
+    "rpm",
+    "flatpakref",
+    "flatpak",
+    "snap",
+    "url",
+];
 
 fn validate_open_in_code_path(path: &str) -> Result<PathBuf, AppCommandError> {
     let trimmed = path.trim();
@@ -652,7 +853,7 @@ mod tests {
     }
 
     /// A directory (or a macOS `.app` bundle) is the file manager row's
-    /// errand; a name that begins or ends with a space is still that file.
+    /// errand; a name that begins with a space is still that file.
     #[test]
     fn local_file_refuses_a_directory_and_keeps_the_name_as_given() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -660,11 +861,85 @@ mod tests {
             .expect_err("directory");
         assert!(err.message.contains("not a file"), "{err:?}");
 
-        let spaced = dir.path().join(" notes .md ");
+        let spaced = dir.path().join(" notes.md");
         fs::write(&spaced, "x").expect("write file");
         let resolved = validate_open_local_file_path(spaced.to_str().expect("utf8"))
-            .expect("existing file with surrounding spaces");
+            .expect("existing file with a leading space");
         assert_eq!(resolved, spaced);
+    }
+
+    /// A trailing space is a legal Unix file name; Win32 path normalization
+    /// strips it, so the case only exists off Windows.
+    #[cfg(not(windows))]
+    #[test]
+    fn local_file_keeps_a_trailing_space() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spaced = dir.path().join("notes.md ");
+        fs::write(&spaced, "x").expect("write file");
+        let resolved = validate_open_local_file_path(spaced.to_str().expect("utf8"))
+            .expect("existing file with a trailing space");
+        assert_eq!(resolved, spaced);
+    }
+
+    /// The renderer hands Windows paths over slash-normalized; the shell gets
+    /// the native form.
+    #[cfg(windows)]
+    #[test]
+    fn local_file_hands_windows_its_native_separators() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("a.md");
+        fs::write(&file, "x").expect("write file");
+        let slashed = file.to_str().expect("utf8").replace('\\', "/");
+        let resolved = validate_open_local_file_path(&slashed).expect("existing file");
+        assert_eq!(resolved, file);
+        assert!(!resolved.to_string_lossy().contains('/'), "{resolved:?}");
+    }
+
+    /// `[report.pdf](./payload)` must not be a one-click way to run the
+    /// payload: a runnable type is refused whatever its case, and so is a
+    /// document-named link to one.
+    #[test]
+    fn local_file_refuses_what_runs_code_when_opened() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ext = RUNNABLE_EXTENSIONS[0];
+        for name in [
+            format!("payload.{ext}"),
+            format!("PAYLOAD.{}", ext.to_uppercase()),
+        ] {
+            let file = dir.path().join(&name);
+            fs::write(&file, "x").expect("write file");
+            let err = validate_open_local_file_path(file.to_str().expect("utf8"))
+                .expect_err("runnable type");
+            assert!(err.message.contains("can run code"), "{name}: {err:?}");
+        }
+
+        let doc = dir.path().join("report.pdf");
+        fs::write(&doc, "%PDF").expect("write file");
+        validate_open_local_file_path(doc.to_str().expect("utf8")).expect("a document");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_file_refuses_an_executable_and_a_link_to_a_runnable_type() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let tool = dir.path().join("report.pdf");
+        fs::write(&tool, "#!/bin/sh\n").expect("write file");
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).expect("chmod");
+        let err =
+            validate_open_local_file_path(tool.to_str().expect("utf8")).expect_err("executable");
+        assert!(err.message.contains("can run code"), "{err:?}");
+
+        let payload = dir
+            .path()
+            .join(format!("payload.{}", RUNNABLE_EXTENSIONS[0]));
+        fs::write(&payload, "x").expect("write file");
+        let link = dir.path().join("notes.pdf");
+        std::os::unix::fs::symlink(&payload, &link).expect("symlink");
+        let err = validate_open_local_file_path(link.to_str().expect("utf8"))
+            .expect_err("link to a runnable type");
+        assert!(err.message.contains("can run code"), "{err:?}");
     }
 
     /// A launcher stub: `body` is the shell script after the shebang.
@@ -691,7 +966,14 @@ mod tests {
         )
         .await
         .expect_err("non-zero exit");
-        assert!(err.message.contains("default application"), "{err:?}");
+        assert!(
+            matches!(
+                err.code,
+                crate::app_error::AppErrorCode::ExternalCommandFailed
+            ),
+            "{err:?}"
+        );
+        assert!(err.message.contains("Failed to open"), "{err:?}");
         let detail = err.detail.unwrap_or_default();
         assert!(detail.contains("/repo/a.xyz"), "{detail}");
         assert!(detail.contains("No application knows"), "{detail}");
