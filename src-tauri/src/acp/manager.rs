@@ -34,6 +34,7 @@ use crate::acp::types::{
 };
 use crate::db::entities::conversation::{self, ConversationKind, ConversationStatus};
 use crate::db::service::conversation_service;
+use crate::db::service::tab_service::OpenConversations;
 use crate::db::AppDatabase;
 use crate::models::agent::AgentType;
 use crate::web::event_bridge::{emit_with_state, emit_with_state_gated, EventEmitter};
@@ -1306,6 +1307,17 @@ impl ConnectionManager {
     /// `idle_timeout`. `Prompting` connections are always preserved (a turn is
     /// in flight). Returns the number of connections that were disconnected.
     pub async fn sweep_idle(&self, idle_timeout: Duration) -> usize {
+        self.sweep_idle_except(idle_timeout, &OpenConversations::default())
+            .await
+    }
+
+    /// [`Self::sweep_idle`], sparing connections working on a conversation
+    /// open in a workspace tab (see `acp::idle_sweep`).
+    pub async fn sweep_idle_except(
+        &self,
+        idle_timeout: Duration,
+        open_conversations: &OpenConversations,
+    ) -> usize {
         let now = chrono::Utc::now();
         let timeout = match chrono::Duration::from_std(idle_timeout) {
             Ok(d) => d,
@@ -1326,6 +1338,13 @@ impl ConnectionManager {
                 }
                 if teardown_blocker(&state, now, |child| connections.contains_key(child)).is_some()
                 {
+                    continue;
+                }
+                if open_conversations.contains(
+                    state.conversation_id,
+                    conn.agent_type,
+                    state.external_id.as_deref(),
+                ) {
                     continue;
                 }
                 let elapsed = now.signed_duration_since(state.last_activity_at);
@@ -9822,6 +9841,63 @@ mod tests {
             mgr.connections.lock().await.get("stale").is_none(),
             "Idle connection must be removed after sweep"
         );
+    }
+
+    /// A conversation open in a workspace tab keeps its agent while no client
+    /// touches it (a laptop asleep, a phone in the background); the same
+    /// connection is reclaimed once its tab is closed.
+    #[tokio::test]
+    async fn sweep_idle_except_spares_a_conversation_open_in_a_tab() {
+        let mgr = ConnectionManager::new();
+        for (id, conversation) in [("open", 7), ("closed", 8)] {
+            insert_fake_connection(&mgr, id, AgentType::ClaudeCode, None, EventEmitter::Noop).await;
+            backdate_last_activity(&mgr, id, 600).await;
+            let state = mgr.get_state(id).await.unwrap();
+            state.write().await.conversation_id = Some(conversation);
+        }
+
+        let open = OpenConversations {
+            ids: std::collections::HashSet::from([7]),
+            ..Default::default()
+        };
+        let n = mgr.sweep_idle_except(Duration::from_secs(300), &open).await;
+        assert_eq!(n, 1);
+        let connections = mgr.connections.lock().await;
+        assert!(connections.contains_key("open"));
+        assert!(!connections.contains_key("closed"));
+        drop(connections);
+
+        let n = mgr
+            .sweep_idle_except(Duration::from_secs(300), &OpenConversations::default())
+            .await;
+        assert_eq!(n, 1, "the tab was closed");
+    }
+
+    /// A conversation opened from history and only read: its connection binds
+    /// the conversation on the first prompt, so until then it is matched by
+    /// its session — of the same agent only.
+    #[tokio::test]
+    async fn sweep_idle_except_matches_an_unprompted_connection_by_its_session() {
+        let mgr = ConnectionManager::new();
+        for (id, agent) in [("read", AgentType::ClaudeCode), ("other", AgentType::Codex)] {
+            insert_fake_connection(&mgr, id, agent, None, EventEmitter::Noop).await;
+            backdate_last_activity(&mgr, id, 600).await;
+            let state = mgr.get_state(id).await.unwrap();
+            state.write().await.external_id = Some("sess-1".to_string());
+        }
+
+        let open = OpenConversations {
+            ids: std::collections::HashSet::from([7]),
+            sessions: std::collections::HashSet::from([(
+                AgentType::ClaudeCode,
+                "sess-1".to_string(),
+            )]),
+        };
+        let n = mgr.sweep_idle_except(Duration::from_secs(300), &open).await;
+        assert_eq!(n, 1);
+        let connections = mgr.connections.lock().await;
+        assert!(connections.contains_key("read"));
+        assert!(!connections.contains_key("other"), "same id, another agent");
     }
 
     #[tokio::test]

@@ -627,6 +627,7 @@ async fn async_main(
     if let Some(idle_timeout) = codeg_lib::idle_timeout_from_env() {
         tokio::spawn(codeg_lib::idle_sweep_task(
             state.connection_manager.clone_ref(),
+            state.db.conn.clone(),
             idle_timeout,
             std::time::Duration::from_secs(codeg_lib::SWEEP_INTERVAL_SECS),
         ));
