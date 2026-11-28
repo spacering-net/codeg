@@ -49,7 +49,9 @@ export interface ConnectionWork {
  *     summed, like the backend's `has_active_background_work`;
  *   * Claude Code's Remote Control, which runs in the agent CLI: the user
  *     handed the session to claude.ai/code or a phone. It stays until they
- *     turn it off (the backend sweep spares it too);
+ *     turn it off (the backend sweep spares it too). Not Remote Control that
+ *     started with the session on its own (`at_startup`): nobody handed that
+ *     session over, and with the setting on every Claude session would stay;
  *   * a codeg delegation (`delegate_to_agent`) still running. It outlives the
  *     turn that started it, and the backend cancels every sub-agent a parent
  *     has in flight when the parent goes (the backend sweep spares it too,
@@ -65,7 +67,7 @@ export function isConnectionBusy(conn: ConnectionWork): boolean {
     conn.status === "prompting" ||
     conn.backgroundOutstanding > 0 ||
     conn.asyncTasks.some((task) => !isAsyncTaskTerminal(task)) ||
-    conn.remoteControl != null ||
+    (conn.remoteControl != null && !conn.remoteControl.at_startup) ||
     conn.delegatedChildren.length > 0
   )
 }

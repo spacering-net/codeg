@@ -149,15 +149,14 @@ describe("a reminder card", () => {
   it("hands it to the assistant in the owner's words", async () => {
     api.personalAgentNoticeAct.mockResolvedValue(card({ state: "handed" }))
     draw(card({}))
-    fireEvent.click(
-      screen.getByRole("button", { name: "Hand to the assistant" })
-    )
+    fireEvent.click(screen.getByRole("button", { name: "Hand to Aide" }))
+    // The owner's words name no ledger number: the quoted card says which.
     await waitFor(() =>
       expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(
         12,
         "hand_over",
         7,
-        "Handle reminder #7: Call the bank"
+        "Please handle this reminder: Call the bank"
       )
     )
   })

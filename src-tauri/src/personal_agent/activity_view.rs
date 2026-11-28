@@ -28,6 +28,8 @@ const STANDS_FOR_NOTHING: [&str; 6] = [
 #[derive(Debug, Clone, Copy)]
 pub struct ItemCard {
     pub row_id: i32,
+    /// Its notice: what the panel's [Hand to ...] answers.
+    pub notice_id: i32,
     /// Open, its notice open: the owner's to act on.
     pub open: bool,
     /// Handed to its assistant.
@@ -70,6 +72,9 @@ pub struct ActivityRow {
     /// The card of a matter's latest firing that has no "today" row (one
     /// from another day): "view the reminder".
     pub card_row_id: Option<i32>,
+    /// The matter's reminder card while it is open, the owner's to answer:
+    /// what the panel's [Hand to ...] answers.
+    pub card_notice_id: Option<i32>,
 }
 
 /// The primary's pill (C6): "today"'s count of what waits on the owner, and
@@ -114,6 +119,7 @@ fn today_row(row: TodayRow) -> ActivityRow {
         item: None,
         routine: None,
         card_row_id: None,
+        card_notice_id: None,
     }
 }
 
@@ -207,8 +213,13 @@ pub fn merge(inp: Inputs) -> ActivityView {
             .chain(watching.iter_mut())
             .chain(next.iter_mut())
             .find(|r| stands(r));
+        let open_card = item_cards
+            .get(&item.id)
+            .filter(|c| c.open)
+            .map(|c| c.notice_id);
         if let Some(row) = standing {
             row.thing = format!("item:{}", item.id);
+            row.card_notice_id = open_card;
             row.item = Some(item);
             continue;
         }
@@ -240,11 +251,13 @@ pub fn merge(inp: Inputs) -> ActivityView {
                 item: None,
                 routine: None,
                 card_row_id: None,
+                card_notice_id: None,
             },
         };
         row.thing = format!("item:{}", item.id);
         row.bot_id = Some(of);
         row.card_row_id = card.map(|c| c.row_id);
+        row.card_notice_id = open_card;
         row.item = Some(item);
         match group {
             0 => own_needs.push(row),
@@ -267,6 +280,7 @@ pub fn merge(inp: Inputs) -> ActivityView {
         item: None,
         routine: Some(r),
         card_row_id: None,
+        card_notice_id: None,
     }));
     // By when it happens; what has no time after, the latest changed
     // first; a paused routine last.
@@ -324,6 +338,14 @@ mod tests {
             act_spec: None,
             fired_at: None,
             mention: None,
+            closed_at: None,
+            closed_by: None,
+            closed_how: None,
+            answer_row_id: None,
+            answer_state: None,
+            peer: None,
+            written: None,
+            direction: None,
         }
     }
 
@@ -423,6 +445,7 @@ mod tests {
             1,
             ItemCard {
                 row_id: 40,
+                notice_id: 41,
                 open: false,
                 handed: false,
             },
@@ -441,6 +464,7 @@ mod tests {
             1,
             ItemCard {
                 row_id: 40,
+                notice_id: 41,
                 open: false,
                 handed: true,
             },

@@ -211,19 +211,8 @@ impl AcpAgentMeta {
     }
 }
 
-/// Launch args for Google Antigravity's ACP server, resolved at compile time.
-///
-/// The ACP registry publishes `--uid=` for the two Linux targets and for
-/// nothing else, and that asymmetry is deliberate: the flag comes from the
-/// binary's linked-in absl `InitGoogle`, which — when the process runs as root
-/// — drops privileges to `nobody` unless told otherwise. Passing it everywhere
-/// would risk a hard "unknown flag" startup error on the Windows build, which
-/// need not link the same initializer.
-const ANTIGRAVITY_LAUNCH_ARGS: &[&str] = if cfg!(target_os = "linux") {
-    &["--uid="]
-} else {
-    &[]
-};
+/// Where the Settings page sends a user who has no `agy` yet.
+const ANTIGRAVITY_INSTALL_URL: &str = "https://antigravity.google/download";
 
 /// Where the Settings page sends a user who has no `kiro-cli` yet. The CLI's
 /// own `/docs/cli/installation/` redirects here.
@@ -445,6 +434,13 @@ pub fn binary_system_dirs(agent_type: AgentType) -> &'static [&'static str] {
         AgentType::MiniMaxCode => &[".minimax-code/bin"],
         #[cfg(windows)]
         AgentType::MiniMaxCode => &[".minimax-code"],
+        // `install.ps1` / `install.cmd` put `agy.exe` in
+        // `%LOCALAPPDATA%\agy\bin` and add it to the user PATH, which a codeg
+        // already running (or launched before the next sign-in) does not see.
+        // On macOS and Linux `install.sh` uses `~/.local/bin`, which the
+        // system resolver already probes.
+        #[cfg(windows)]
+        AgentType::Antigravity => &["AppData/Local/agy/bin"],
         _ => &[],
     }
 }
@@ -467,7 +463,7 @@ pub const PI_MIN_RUNTIME_VERSION: &str = "0.81.0";
 /// for when the installed copy's own package.json cannot be read. A runtime
 /// resolved to this value is marked unconfirmed (`codex_runtime`), so it never
 /// counts as the version a catalog was checked against. Move it with the pin.
-pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.171.0";
+pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.172.0";
 
 /// The npm package the built-in Claude Code entry runs — and the name the
 /// adapter reports as `agentInfo.name` at `initialize`, which is its
@@ -3756,9 +3752,89 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     `type` must be absent or "stdio", a boolean config option
             //     needs a boolean value) accepts what codeg sends: codeg's
             //     stdio entry has no `type` key, and it sends booleans typed.
+            //
+            // 0.112.0 (2026-11-24) keeps Claude Agent SDK 0.3.331 (Claude Code
+            // 2.1.331) and `engines.node` ">=22", and moves to ACP SDK 2.12.0.
+            // Measured live with fresh installs of 0.111.0 and 0.112.0, the
+            // twenty-three harness scenarios match after normalization, and so
+            // does a `session/fork` at a mid-thread `_meta.jetbrains.air.fork`
+            // point.
+            //   * #1704 **rewinds the session on an edited message**, and codeg
+            //     takes it: the user message's "edit and resend". The client
+            //     lists AIR capability `sessionRewind`; `_session/rewind
+            //     {sessionId, cursorId}` then closes the query and resumes the
+            //     SAME Claude session at the entry before the message
+            //     (`resumeSessionAt`), model, effort, Fast mode and mode kept.
+            //     The cursor is `before:<uuid of the prompt's JSONL record>`,
+            //     resolved against the stored history, so codeg builds it from
+            //     the transcript (`crate::acp::rewind`) and leaves
+            //     `session.cursors` (live `cursor_update`) undeclared — measured:
+            //     a built cursor rewinds the last and a middle turn, also in a
+            //     process that resumed the session. The first message and a
+            //     slash command have no cursor (-32602, codeg's
+            //     `unavailable`); a running turn answers `{rewound:false,
+            //     reason:"busy"}`. Claude Code deletes nothing: the dropped
+            //     prompt stays in the JSONL as an abandoned branch beside the
+            //     new prompt, and `<session dir>/rewind.json` names it until a
+            //     later resume shows the cut in the CLI's own history.
+            //     `parsers::claude_rewind` hides both shapes — the same shape a
+            //     double-Esc edit in the terminal leaves, which codeg showed
+            //     as two branches back to back until now.
+            //   * Undeclared, nothing else differs: history reads also cut at a
+            //     `rewind.json` (absent unless a rewind ran), and
+            //     `_session/rewind` answers -32601.
+            //   * #1711 ends a sub-agent MCP request's wait when Claude Code
+            //     gives up on it; only `acp`-transport MCP servers go through
+            //     that bridge, and codeg declares none.
+            //
+            // 0.113.0 (2026-11-26) keeps every dependency of 0.112.0 (ACP SDK
+            // 2.12.0, Claude Agent SDK 0.3.331, so Claude Code 2.1.331) and
+            // `engines.node` ">=22".
+            //   * #1523 **starts Remote Control with the session** when
+            //     Claude Code's `initialize` reports
+            //     `remote_control_auto_enable` (`remoteControlAtStartup` in the
+            //     settings, else the policy default, else a rollout the user
+            //     may never have chosen): right after the setup response of a
+            //     new, loaded, resumed or forked session, and after a restart
+            //     of its query, holding prompts back until it answers. The
+            //     answer is a `notice`, not the `/remote-control` reply chunk
+            //     codeg reads: info "Remote Control connected" (the session
+            //     URL in the description) or warning "Could not start Remote
+            //     Control". Taken as-is, codeg only toasted it: no strip, no
+            //     link or QR code, no off button, and the sweeps took the CLI
+            //     with the remote session in it once the tab closed.
+            //     `connection::remote_control_notice` now reads both into
+            //     `AcpEvent::RemoteControl` — the strip appears and the
+            //     "connected" toast is dropped; the failure keeps its toast —
+            //     at all three notice seams, the `session/load` drain
+            //     included, since the notice comes after the load's response
+            //     while that drain can still read. Marked `at_startup`: nobody
+            //     handed the session over, so unlike the user's own
+            //     `/remote-control` it does not keep the connection from the
+            //     idle sweeps or a move (`manager::teardown_blocker`,
+            //     `isConnectionBusy`) — with the setting on, every Claude
+            //     session, delegations and assistants' too, would otherwise
+            //     never be reaped. A `/remote-control` the user sends hands it
+            //     over (its reply clears the mark), and a restarted query that
+            //     connects again keeps a handed-over session handed over.
+            //     While the start runs a `/remote-control` is refused ("Try
+            //     again in a moment"), as during another one. Read from the
+            //     adapter's source: Remote Control needs a claude.ai account.
+            //   * #1716 serves `/plugin` (aliases `/plugins`, `/marketplace`)
+            //     itself: it runs `claude plugin …` / `claude plugin
+            //     marketplace …` without a shell, then `reloadPlugins`, and
+            //     answers in one reply chunk without a model turn, like
+            //     `/mcp`. It reaches codeg's `/` menu through
+            //     `available_commands_update` with nothing to change. A
+            //     plugin a codeg Harness install put in place and `/plugin`
+            //     then removes or disables is what the listing's host checks
+            //     already report, as for the same command typed in a terminal.
+            //   * #1639 (a Monitor or Workflow call whose task joins the live
+            //     background set after its result) is in the ACP v2 core;
+            //     codeg speaks v1.
             distribution: AgentDistribution::Npx {
-                version: "0.111.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.111.0",
+                version: "0.113.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.113.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -5347,9 +5423,86 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // from the rollout, where `parsers::codex` still finds it. #744's
             // v2 work, #795's CRLF terminal output, `customAnswerFields` and
             // the renamed background-task module do not reach a v1 client.
+            //
+            // 2.12.0 (2026-11-24) keeps `@openai/codex` ^0.171.0 (still
+            // 0.171.0) and ACP SDK ~2.9.1. The thirty live scenarios replay as
+            // on 2.11.0 (timing, ordering and hash noise only), and so does a
+            // `session/fork` at a tail or mid-thread `_meta.jetbrains.air.fork`
+            // point.
+            //
+            // (mmm) **In-place rewind** (#801), adopted with claude's #1704 for
+            // the user message's "edit and resend" (`crate::acp::rewind`).
+            // AIR capability `sessionRewind` registers `_session/rewind
+            // {sessionId, cursorId}` (v1 only), which cuts the SAME thread with
+            // app-server `thread/revert {beforeTurnId}`; codex persists the
+            // cut as a new `rollout-…-<thread>_<rollout>.jsonl` whose
+            // `history_base` keeps the turns before it — the layout
+            // `parsers::codex` already reads for Codex Desktop's edit. The
+            // cursor is `before:<turnId>` (the turn's `task_started.turn_id`),
+            // resolved statelessly through `thread/turns/list`, so codeg builds
+            // it from the rollout and leaves `session.cursors` undeclared
+            // (measured: rewinds the last turn, refuses the first with
+            // -32602, answers `busy` during a running turn). codex reloads the
+            // thread on every revert — it restarts the MCP servers, codeg-mcp
+            // included — and the adapter refuses beforehand (`busy`,
+            // `backgroundWork`) wherever that would kill work.
+            //
+            // (nnn) Inert otherwise. Cursors and `cursor_update` go only to a
+            // client declaring `session.cursors` (and to every v2 client), a
+            // `session/fork` `cursorId` is new and optional, and the
+            // `thread/status/changed` suppression only covers a running rewind.
+            //
+            // 2.12.1 (2026-11-26) is #800 alone: `@openai/codex` ^0.171.0 →
+            // **^0.172.0** (a fresh install resolves 0.172.0) and the app-server
+            // bindings regenerated from it. The bundled `dist/index.js` is 2.12.0's
+            // byte for byte bar the version and that range; ACP SDK stays ~2.9.1
+            // and `engines` is still absent. codex 0.172.0's bundled catalog is
+            // 0.171.0's (same 14 models, same JSON), so the offline snapshot
+            // stands; `CODEX_NESTED_VERSION_FALLBACK` moves. Under codeg's exact
+            // `clientCapabilities` (`sessionRewind` included) the forty live
+            // scenarios replay as on 2.12.0 — timing, request order, the model
+            // prompt's hashes and the version only.
+            //
+            // (ooo) **Spend limits by scope** (codex #62329). A provider's
+            // `api_key_spend_limit_exceeded` / `project_spend_limit_exceeded` /
+            // `organization_spend_limit_exceeded` (HTTP 429 or a streamed
+            // `response.failed`) now ends the turn as
+            // `apiKeySpendLimitExceeded` / `projectSpendLimitExceeded` /
+            // `organizationSpendLimitExceeded`, titled "Your API key|project|
+            // organization has reached its spend limit.", never retried. 0.171
+            // gave the project and organization ones `usageLimitExceeded`
+            // ("Quota exceeded. …"), which the adapter files as
+            // `quota_exhausted` — a `limit` with no actions. Its error table has
+            // no entry for the new values, so measured live they arrive as
+            // `provider_error`: category `service` with a Retry that can only
+            // fail again. `connection::reclassify_codex_spend_limit` puts the
+            // three titles back among the limits without Retry; the rollout's
+            // `task_complete.error` carries the new title and snake-case code,
+            // and a reload draws the title as before.
+            //
+            // (ppp) **Lazy stdio MCP startup** (#62366, now on by default). When
+            // a thread republishes its MCP servers with a tool catalog the
+            // process has already cached, an optional stdio server is no longer
+            // started until its first tool call. Measured with a stdio stand-in
+            // passed as `codeg-mcp` on `session/new`: a new session still starts
+            // it eagerly; after a rewind's thread reload 2.12.0 spawned a fresh
+            // process at once, while 2.12.1 spawns none until the next call to
+            // one of its tools. codeg-mcp holds no state between calls, so
+            // nothing depends on when it starts.
+            //
+            // (qqq) Inert otherwise. #62348 persists a child agent's queued final
+            // reply as the addressed `response_item.agent_message` when the
+            // parent turn is interrupted, the shape `parsers::codex` already
+            // folds into the child's capsule. `ModelInfo.available_access_programs`
+            // gains an optional `daybreak_availability` (no bundled model sets
+            // it, and codeg's own fields and overrides never do — only a native
+            // provider catalog can carry one through, as codex itself would
+            // read it); `[permissions.<profile>.credentials]`,
+            // per-tool app `approvals_reviewer`, Bedrock Runtime login and the
+            // realtime items are keys and methods codeg does not write or call.
             distribution: AgentDistribution::Npx {
-                version: "2.11.0",
-                package: "@agentclientprotocol/codex-acp@2.11.0",
+                version: "2.12.1",
+                package: "@agentclientprotocol/codex-acp@2.12.1",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -6362,7 +6515,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // Two behaviours around a Stop, the same in 2.171.0, 2.177.0, 2.177.1,
             // 2.179.0, 2.179.2, 2.179.3, 2.180.0, 2.181.0, 2.182.0, 2.183.0,
-            // 2.184.0, 2.185.0 and 2.186.0, need codeg's help.
+            // 2.184.0, 2.185.0, 2.186.0 and 2.187.0, need codeg's help.
             // CodeBuddy answers a `session/prompt` that starts within 500 ms of a
             // `session/cancel` it took mid-turn with `cancelled`, without running
             // the prompt or keeping it in its history, so codeg holds the first
@@ -6704,9 +6857,40 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // the background summary request, 12.1 s. 2.186.0 loads a 2.185.0
             // session on `default-model`, and an install without optional
             // dependencies still runs whole turns.
+            //
+            // 2.187.0 adds a block at the top of `bin/codebuddy` that maps a
+            // branded environment prefix onto `CODEBUDDY_*` when a
+            // `customization.json` declares one; the npm package ships none, so
+            // it does nothing, and `--acp` still runs
+            // `dist/codebuddy-headless.js`. The inlined ACP SDK is the same
+            // 1.9.0 code split across shared modules, with the same 32 MiB line
+            // limit; a copy of the SDK's v2 API now rides along, loaded only by
+            // the new `_codebuddy.ai/conversations/fork` request, which codeg
+            // does not send. `package.json` changes its version and the
+            // sandbox-cli pins (5.13.0-beta.14 to 5.14.0-beta.1). `initialize`
+            // and `session/new` answer as 2.186.0 does (`protocolVersion: 1`),
+            // the models (default `default-model`), modes, `thought_level`,
+            // `sandbox` and `multitask` keep their values, no `sessionUpdate`
+            // kind or `session/*` method came or went, and the command list
+            // drops `model:text-to-video` and `model:image-to-video`. The Read
+            // tool-hint line, the compaction divider (on `/compact` and on
+            // automatic compaction), the `<cb_summary>` boundary record and its
+            // `session/load` replay are byte for byte as in 2.186.0, and the
+            // recorded turns and their transcripts match 2.186.0 apart from
+            // usage numbers and timing. The barrier still answers a prompt sent
+            // within 500 ms of a cancelled answer `cancelled` (one sent 600 ms
+            // after ran), and after a Stop that caught a permission request the
+            // next prompt still answers `cancelled` with `finishReason:
+            // "stop"`. A stdio server handed over on `session/new` is started
+            // and its tool reaches the model, and one named `codeg-mcp` still
+            // asks once per call, for `DeferExecuteTool`. Of three Stops during
+            // a sub-agent, the cancelled prompt was answered after 79 ms, 39 ms
+            // and, behind the background summary request, 12.1 s. 2.187.0 loads
+            // a 2.186.0 session on `default-model`, and an install without
+            // optional dependencies still runs whole turns.
             distribution: AgentDistribution::Npx {
-                version: "2.186.0",
-                package: "@tencent-ai/codebuddy-code@2.186.0",
+                version: "2.187.0",
+                package: "@tencent-ai/codebuddy-code@2.187.0",
                 cmd: "codebuddy",
                 args: &["--acp"],
                 env: &[],
@@ -7481,9 +7665,41 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // and 2.7.3 loads and resumes a session 2.7.2 wrote with the same
             // replay. An approved or dismissed plan review still settles
             // `ExitPlanMode` `failed` with `isError`, so the workaround stays.
+            //
+            // 2.8.0 is a minor release, and the mandated check passes verbatim:
+            // `acpMcpServersToConfigRecord` still gives an entry without `type`
+            // `{transport: "stdio", …, environment_id: "local"}`, and the "does
+            // not declare a runtime identity" throw is still absent.
+            // `engines.node` (`>=22.19.0`), `bin` and the postinstall are
+            // unchanged, but `ws`, `qrcode` and `chokidar` are bundled into
+            // `dist/main.mjs` again, so an install fetches only the optional
+            // clipboard package and the 2.3.0 note about needing the
+            // dependencies installed no longer applies. 367 of 4320 modules
+            // changed; the only `packages/acp-server` one awaits disposal at
+            // shutdown. A live A/B against a fresh 2.7.3 matched on
+            // `initialize` (`protocolVersion: 1`), `session/new` (the model,
+            // thinking and mode values for all four block shapes, the 14 slash
+            // commands), text, MCP (`mcp__probe__echo` reached the server),
+            // question, Edit, Skill, deny-rule and provider-error turns, a turn
+            // cancelled mid-tool, the session-lock texts and codes, the
+            // missing-model behaviour described under 2.7.3 and the
+            // `wire.jsonl` record types, and 2.8.0 loads and resumes a session
+            // 2.7.3 wrote. An approved plan review now settles `ExitPlanMode`
+            // `completed`; a dismissed one still settles `failed` with
+            // `isError`, so the workaround stays. In `default` mode a Bash
+            // command Kimi proves read-only (`echo`, `ls`) runs without a
+            // permission request, while `touch` still asks. A stdio server
+            // handed over on `session/new` that answers within its startup
+            // timeout (30 s) now reaches the model on the first turn, which
+            // waits for it; one that fails its first start still does not. A
+            // lock recorded under another hostname is taken over, and the old
+            // holder's next prompt answers `session.stale`. `wire.jsonl` adds
+            // `turn.ended.continuation` and `tool.call.argsRaw`, and resuming an
+            // older session appends `tool_update_pending` reminders; the parser
+            // reads none of them.
             distribution: AgentDistribution::Npx {
-                version: "2.7.3",
-                package: "@moonshot-ai/kimi-code@2.7.3",
+                version: "2.8.0",
+                package: "@moonshot-ai/kimi-code@2.8.0",
                 cmd: "kimi",
                 args: &["acp"],
                 env: &[],
@@ -8479,9 +8695,24 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // cannot is skipped for the next Node the bridge finds. Not
             // measured: whether the official CLI starts a forwarded stdio MCP
             // server; the bridge still forwards `mcpServers` unchanged.
+            //
+            // Bridge 0.94.0 (2026-11-25) changes `package.json` only in its
+            // version. Installed fresh on 2026-11-26, 0.93.1 and 0.94.0 resolve
+            // the same dependencies (ACP SDK 1.9.0), and `dist/cli.js` is
+            // byte-identical. Against the stand-in backend given codeg's env
+            // and capabilities, the same scenarios as for 0.93.1 (the
+            // background sub-agent prompt included) give all three channels
+            // the same frames as 0.93.1 apart from ids and timings. The one
+            // addition is an opt-in `session.defaultThoughtLevel` in the
+            // bridge's own `~/.config/zcode-acp/config.json`, which codeg does
+            // not write: when set, a new session advertises that level and,
+            // once created, gets `session/setThoughtLevel` if the model offers
+            // it (a level the model lacks is only warned about on stderr);
+            // codeg's saved thought, replayed after the mode gate, still lands
+            // over it. Its settings routes are remote-only and unused by codeg.
             distribution: AgentDistribution::Npx {
-                version: "0.93.1",
-                package: "zcode-acp-server@0.93.1",
+                version: "0.94.0",
+                package: "zcode-acp-server@0.94.0",
                 cmd: "zcode-acp-server",
                 args: &["server"],
                 env: &[],
@@ -8730,13 +8961,23 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   + codeg 的客户端能力）：文本、bash、`session/new` 交来的 stdio MCP 工具
             //   三种回合都正常结束，停止后立即再发也正常。
             //
+            // 0.13.0 只改了一处（#20）：`boot.ts` 挂上 `dsh-tool-call-timeout-policy`
+            // （新增依赖，同为 0.2.2-rc.5，其余依赖与 0.12.0 逐项相同），`grep` / `glob`
+            // 自己声明的 30 s `timeoutMs` 从此真的生效——到点中止并回一条
+            // `isError: true`、`code: TOOL_TIMEOUT` 的普通工具结果；shell、read/write/edit
+            // 不声明预算，不受影响。npm 包与 tag 只差 `boot.js` 与 README。实测（同一替身
+            // 端点 + codeg 的客户端能力）：`initialize`、`session/new` 除版本号与会话 id
+            // 外逐字段相同，文本、bash、stdio MCP 工具、停止后再发都正常结束，会话日志的
+            // 记录类型与字段形状与 0.12.0 逐条相同。超时结果走 `parsers::deepseek` 现有的
+            // `isError` 分支与实时的失败工具卡，代码不用动。
+            //
             // Keep `version` and `package` moving together: `version` is what
             // the agents list shows as the upgrade target beside the installed
             // version, so a drift leaves the Upgrade button installing one
             // version while the row keeps calling it stale.
             distribution: AgentDistribution::Npx {
-                version: "0.12.0",
-                package: "deepseek-acp@0.12.0",
+                version: "0.13.0",
+                package: "deepseek-acp@0.13.0",
                 cmd: "deepseek-acp",
                 args: &[],
                 env: &[],
@@ -9131,26 +9372,49 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // lazy-load gate and the config-dir resolution read the same in the
             // bundle; the session-level frames were not re-run live on 1.1.91.
             //
-            // Held at 1.1.91 (1.1.96 audited on 2026-11-23): from 1.1.94 a
-            // sub-agent the model starts without setting `run_in_background`
-            // runs in the background ("Changed the default Subagent execution
-            // strategy to run in the background"; the Agent tool's `executeLocal`
-            // gains `void 0===this.params.run_in_background`, and its
-            // description now tells the model to leave agents in the
-            // background unless its very next step needs the result). The
-            // prompt then ends at the launch, and the sub-agent's result and
-            // the reply Qoder writes after it arrive once the prompt has been
-            // answered. codeg follows only Claude Code's out-of-turn activity
+            // 1.1.98 follows 1.1.92 to 1.1.97, which codeg skipped (audited
+            // 2026-11-26). From 1.1.94 a sub-agent the model starts without
+            // setting `run_in_background` runs in the background ("Changed the
+            // default Subagent execution strategy to run in the background";
+            // the Agent tool's `executeLocal` gains `void
+            // 0===this.params.run_in_background`, and its description tells
+            // the model to leave agents in the background unless its very next
+            // step needs the result). The prompt then ends at the launch, and
+            // when the sub-agent finishes Qoder runs the turn that reports its
+            // result by itself, streaming it as ordinary `session/update`s with
+            // no prompt pending (read in the 1.1.91 and 1.1.98 bundles; the
+            // ACP layer that does it is token-identical between them, so the
+            // 1.1.81 note above that such turns send no frame no longer holds).
+            // codeg follows only Claude Code's out-of-turn activity
             // (`acp::background_watch`) and the frontend drops every other
             // agent's out-of-turn deltas, so that reply would show only after
-            // the conversation is reopened; on 1.1.91 that happens only when
-            // the model asks for a background agent itself. Read in the bundle
-            // and the changelog, not run live: without a Qoder login no
-            // session opens, even under `--fake-responses`. Everything else
-            // 1.1.92 to 1.1.96 change reads the same or stays away from codeg
-            // (the ACP agent's 65 members are unchanged; `initialize`, the
-            // "Authentication required" and "Not logged in" refusals and the
-            // `server/discover` MCP probe match live).
+            // the conversation is reopened. codeg therefore launches Qoder with
+            // `QODER_ENABLE_AGENT_SESSIONS=0`, the one input of that default:
+            // `function uE(){return"0"!==process.env[ese]}` with `ese =
+            // fo("ENABLE_AGENT_SESSIONS")` gates the background branch in
+            // `executeLocal`, and no settings key, CLI option or ACP capability
+            // feeds it. With it every sub-agent runs in the foreground and
+            // reports in the same prompt, and the model is no longer offered
+            // `run_in_background` or `name` (the tool description says agent
+            // sessions are disabled and all agents run synchronously);
+            // `/subtask`, background forks and named teammates go with it. That
+            // is stricter than 1.1.91, where an agent the model asked to run in
+            // the background did, but such a reply also showed only on reopen
+            // there. 1.1.91 already reads the variable the same way. A user who
+            // wants background agents back sets `QODER_ENABLE_AGENT_SESSIONS=1`
+            // in the agent's env settings (`merge_agent_env`). Launched as codeg
+            // launches it, 1.1.98 answers `initialize` like 1.1.91
+            // (`protocolVersion: 1`), refuses `session/new` and `session/list`
+            // with the same "Authentication required" (and "Not logged in"
+            // under `--fake-responses`), still probes stdio MCP servers with
+            // `server/discover`, and logs `lazy=false`, with the variable set or
+            // not; the ACP agent's 65 members, its update kinds and the
+            // config-dir resolution read the same in the bundle. 1.1.97 parks a
+            // stdio MCP server that fails to connect until its config changes
+            // (HTTP servers retry with a 30 s to 300 s backoff); the rest of
+            // 1.1.97 and 1.1.98 (model-switch hooks, `-p` and CodeMode
+            // background fixes, TUI fixes) stays away from codeg. Without a
+            // Qoder login no session opens, so no sub-agent was run live.
             //
             // `QODER_EXPOSE_TOKEN_USAGE` turns OFF qoder's own token-count
             // redaction, and without it every qoder session reports zero tokens
@@ -9174,8 +9438,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `m1A` in 1.1.73, `Or` / `_1A` in 1.1.74, `Lr` / `xGA` in 1.1.75,
             // `xr` / `K4A` in 1.1.81, `Ii` / `POA` in 1.1.83, `ki` / `ROA` in
             // 1.1.84, `Ri` / `QJA` in 1.1.86, `wi` / `bJA` in 1.1.87, `yi` /
-            // `w9A` in 1.1.88, `yi` / `k9A` in 1.1.89 and `xo` / `vtn` in
-            // 1.1.91 (the minified names
+            // `w9A` in 1.1.88, `yi` / `k9A` in 1.1.89, `xo` / `vtn` in
+            // 1.1.91 and `fo` / `ijt` in 1.1.98 (the minified names
             // change every build), so grepping the bundle for
             // the full literal returns nothing — grep the bare suffix instead,
             // the same trap `parsers::qoder` documents for the config-dir vars.
@@ -9184,12 +9448,16 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `runtime_env` override it, so a user who wants the redaction back
             // sets `QODER_EXPOSE_TOKEN_USAGE=0` in the agent's env settings.
             distribution: AgentDistribution::Npx {
-                version: "1.1.91",
-                package: "@qoder-ai/qodercli@1.1.91",
+                version: "1.1.98",
+                package: "@qoder-ai/qodercli@1.1.98",
                 cmd: "qoder",
                 // The launch adds `--settings` after these (see 1.1.84 above).
                 args: &["--acp"],
-                env: &[("QODER_EXPOSE_TOKEN_USAGE", "1")],
+                env: &[
+                    ("QODER_EXPOSE_TOKEN_USAGE", "1"),
+                    // Sub-agents in the foreground (see 1.1.98 above).
+                    ("QODER_ENABLE_AGENT_SESSIONS", "0"),
+                ],
                 // package.json declares `engines.node: ">=20.0.0"`.
                 node_required: Some("20.0.0"),
             },
@@ -9198,317 +9466,53 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             agent_type,
             supports_mcp: true,
             name: "Google Antigravity",
-            description: "Google's AI coding agent (first-party ACP server)",
-            // `agy_acp_server` is Google's OWN ACP server, not a community
-            // bridge: the verified handshake advertises `loadSession`,
-            // `sessionCapabilities` list+resume, image/audio/embeddedContext
-            // prompts and MCP http+sse, with `agentInfo.name =
-            // "antigravity-acp"`. Model, thinking level (since 1.4.0) and
-            // session mode (default/auto_edit/yolo) arrive as standard
-            // `configOptions`, so the composer selectors need no per-agent
-            // code.
+            description: "Google's AI coding agent (native ACP via agy acp)",
+            // `agy acp` is the Antigravity CLI's OWN ACP server — the entry
+            // point Google documents for Zed/JetBrains/Xcode, and one the CLI
+            // has shipped since 1.5.0 (`agy --help` lists `acp`). codeg
+            // launches the user's installed CLI instead of downloading the
+            // standalone `agy_acp_server` archive it used before:
             //
-            // WHOLE-TREE, NOT SINGLE-FILE. The archive is FLAT but holds TWO
-            // executables:
+            //   * one install, one login. The CLI stores its credential in
+            //     the system keyring and reuses it for `agy acp`; the
+            //     standalone server kept a second credential under
+            //     `<GEMINI_HOME>/antigravity-acp/` that had to be signed in
+            //     again.
+            //   * the CLI updates itself (`agy update`), so codeg pins
+            //     nothing and the terminal and codeg never drift apart.
+            //   * sessions land in `~/.gemini/antigravity-cli/conversations`
+            //     (SQLite, the same schema the standalone server wrote), so
+            //     the parser reads one tree.
             //
-            //   agy_acp_server.par     the server (a compiled binary despite
-            //                          the `.par` name — it embeds a whole
-            //                          CPython runtime)
-            //   localharness_external  the Go harness the server drives
+            // Verified handshake against 1.5.15: `agentInfo = {name:
+            // "Antigravity ACP Server", version: "1.5.15"}`, `loadSession`,
+            // `sessionCapabilities` list/resume/close/additionalDirectories,
+            // image + embeddedContext prompts, MCP http+sse, `auth.logout`,
+            // the same four auth methods as the standalone server, and the
+            // standard `model` / `thought_level` / `mode` configOptions.
+            // `session/new` succeeds without any settings.json when the CLI
+            // is signed in; with no credential it fails `-32000
+            // Authentication required`, and `agy acp --login` (1.5.0+) is
+            // the terminal flow codeg's headless sign-in drives.
             //
-            // `main.py::_configure_localharness_path` looks for
-            // `localharness_external` (then `localharness`) beside
-            // `dirname(argv[0])` / `dirname(sys.executable)` and logs
-            // "Localharness not found." when it is missing. Copying the
-            // single `cmd` file out of the archive (`dir_entry: None`) would
-            // strand that sibling, so this uses the same whole-tree
-            // extraction Cursor does — and `install_extracted_tree` also
-            // marks the harness executable.
-            //
-            // AUTH IS A FILE, NOT AN ENV VAR. `session/new` FAILS with
-            // `-32000 Authentication required` unless
-            // `$GEMINI_HOME/antigravity-acp/settings.json` declares
-            // `auth.type` (env-based selection was removed upstream; the
-            // server's own message says so). codeg does not implement the ACP
-            // `authenticate` request, so the launch path writes that file
-            // instead — see `sync_antigravity_settings_file` in connection.rs
-            // and the Antigravity settings panel that feeds it. With
-            // `auth.type` set, the server runs its own browser OAuth loopback
-            // flow inside `session/new`.
-            //
-            // VERSION vs URL. These used to disagree: `version` was the ACP
-            // registry's `1.0.0` while the archives carried a dated build id
-            // (`agy_acp_server_20260818_01_RC01`), so substituting a requested
-            // version into the URL was a no-op and `supports_custom_version()`
-            // answered false. Google has since renamed the archives after the
-            // release itself, so the version now templates into the URL like
-            // every other binary agent and the custom-version control appears
-            // for Antigravity. The name has moved twice since: 1.0.0–1.1.x are
-            // `agy-acp-server-agy_acp_server_<version>-<target>.zip` (1.0.0 is
-            // the old build, back-published), and from 1.2.0 the infix is gone
-            // (`agy-acp-server-<version>-<target>.zip`). Only the current shape
-            // is templated, so a typed version below 1.2.0 404s at download —
-            // as does one never published (1.0.1) — rather than caching the
-            // wrong bytes, which is the same contract Cursor and OpenCode
-            // already have. `darwin-x86_64` first shipped with 1.2.1 (1.2.0
-            // still covered only the other five targets), so on an Intel Mac
-            // anything older 404s the same way.
-            //
-            // 1.3.0, checked against 1.2.1: every archive is still flat with
-            // the same two executables and modes, and `tools.py`,
-            // `config_options.py`, `paths.py`, `settings.py` and `oauth/` are
-            // byte-identical. So the MCP `rawInput` codeg folds, the mode
-            // values, the token paths and the loopback OAuth flow the login
-            // relay drives are unchanged. `initialize` matches, and
-            // `session/new` still fails `-32000 Authentication required` until
-            // settings.json declares `auth.type`, which gained a `gateway`
-            // value codeg does not offer. New on the wire is `usage_update`,
-            // which reaches the context ring like any agent's, and the Windows
-            // server is still the PyInstaller onefile that codeg's TMP/TEMP
-            // scratch and `_MEI*` reaping are built for. One launch detail
-            // moved: `main.py` now appends `localhost,127.0.0.1,::1` to both
-            // `NO_PROXY` spellings whenever a proxy variable is set. codeg
-            // already exports those hosts, so its value passes through, except
-            // `*`, which codeg sends alone because Python skips a `*` inside a
-            // list. The server turns it into `*,localhost,127.0.0.1,::1`, so
-            // with a proxy configured and a `*` bypass list, its urllib and
-            // requests traffic is proxied again.
-            //
-            // 1.4.0, checked against 1.3.0: every archive is still flat with
-            // the same two executables and modes. `main.py`, `tools.py`,
-            // `paths.py`, `settings.py` and `oauth/` are byte-identical, and
-            // the mode and `auth.type` values are unchanged, so the MCP
-            // `rawInput` codeg folds, the token paths, the login relay's OAuth
-            // flow and the `NO_PROXY` rewrite above all still hold. `initialize`
-            // only adds `agentCapabilities._meta.antigravity` (`tier`,
-            // `systemPrompt.append`), `session/new` still fails `-32000` until
-            // `auth.type` is declared, and the Windows server is still the
-            // PyInstaller onefile. What moved is the model picker. The `model`
-            // option lists one row per model family and a new `thinking_level`
-            // option (category `thought_level`) picks the variant, while the
-            // flat `models` list keeps every variant id, the ids 1.3.0's picker
-            // listed. A model saved under 1.3.0 is such an id, and
-            // `session_model_list_offers` in connection.rs replays it as saved
-            // for the server to map. A model switch now takes effect at the
-            // next prompt, and `start_subagent` became `invoke_subagent` beside
-            // a new `run_workflow` tool; codeg maps neither name.
-            //
-            // 1.4.1, checked against 1.4.0: every archive is still flat with
-            // the same two executables and modes. Of the server's own Python
-            // only `server.py`, `model_selection.py`, `client_info.py`, the
-            // gateway modules and the version string changed; `main.py`,
-            // `tools.py`, `config_options.py`, `paths.py`, `settings.py`,
-            // `oauth/` and the MCP modules are byte-identical, the protobuf
-            // descriptors the history parser reads are unchanged, and the Go
-            // harness differs only in build stamps. `initialize` (apart from
-            // the version), `session/new` with its `model`, `thinking_level`
-            // and `mode` values and flat `models` list, the slash commands, a
-            // model then thinking-level switch, and a gateway turn that calls a
-            // tool on a wire MCP server all answer as 1.4.0 does. What moved:
-            // an Agent Platform session now defaults to `gemini-4-argon-high`
-            // and lists Gemini 4 Argon first, a Google-login model list drops
-            // the models the plan marks disabled, and the Windows server, still
-            // the PyInstaller onefile, embeds Python 3.14 where it embedded
-            // 3.10.
-            //
-            // 1.4.3, checked against 1.4.1 (1.4.2 came out four hours earlier
-            // the same day, was never listed by the ACP registry, and differs
-            // from 1.4.3 in the server's own Python only by the version string):
-            // every archive is still flat with the same two executables and
-            // modes, and the ACP registry now lists a `sha256` per archive.
-            // `main.py`, `config_options.py`, `model_selection.py`, `paths.py`,
-            // `settings.py`, `oauth/`, `hooks.py` and the MCP modules are
-            // byte-identical, `server.py::_ask_user_handler` is unchanged, and so
-            // are the protobuf fields the history parser reads, Step 154
-            // included. `initialize` (`protocolVersion: 1`), `session/new` with
-            // its `model`, `thinking_level` and `mode` values and flat `models`
-            // list, the slash commands, a model then thinking-level switch, a
-            // saved 1.3.0 variant id, a gateway turn that calls a tool on a wire
-            // MCP server, `session/load` replay and the native question frames
-            // (answered and cancelled) all answer as 1.4.1 does. What moved: a
-            // `usage_update` with `used: 0` now follows `session/new` and each
-            // model change, and prompt answers carry a `usage` breakdown that
-            // codeg does not record for this agent (`PromptUsageMode`). An
-            // auto-approved MCP call now gets the same MCP title, `rawInput` and
-            // `_meta` as a permission-gated one. The skill directories are no
-            // longer passed to the harness as workspaces, so the system prompt
-            // names the session folder as the command directory, the server no
-            // longer creates empty `.gemini/skills` and `.agents/skills` folders
-            // in the project, and a read-only folder no longer fails
-            // `session/new`. Instead the harness writes its built-in
-            // `run-workflow` skill to `<cwd>/skills/system/run-workflow/SKILL.md`
-            // at every `session/new` and leaves it there (it is skipped for a
-            // read-only folder, and a run with `run_workflow` disabled through
-            // `_meta.antigravity.disabledTools` did not write it). The Windows
-            // x86_64 server is still the PyInstaller onefile with Python 3.14.
-            //
-            // 1.4.4, checked against 1.4.3: every archive is still flat with the
-            // same two executables and modes, the Windows server is still the
-            // PyInstaller onefile with Python 3.14 on both architectures, and
-            // the macOS arm64 harness's strings differ only in build stamps. Of
-            // the server's own Python only `server.py`, `tools.py`,
-            // `model_selection.py`, `client_info.py` and the version string
-            // changed. `main.py`, `config_options.py`, `paths.py`, `settings.py`,
-            // `oauth/`, `hooks.py`, the MCP and gateway modules and the vendored
-            // ACP SDK are byte-identical, `server.py::_ask_user_handler` is
-            // unchanged, and so are all 264 protobuf descriptors. `initialize`
-            // (`protocolVersion: 1`) adds only `additionalDirectories` to
-            // `sessionCapabilities`, which codeg never sends. `session/new` with
-            // its `model`, `thinking_level` and `mode` values and flat `models`
-            // list (API key, gateway and Agent Platform), the slash commands, a
-            // model then thinking-level switch, a saved 1.3.0 variant id, a
-            // gateway turn that calls a tool on a wire MCP server (asked and
-            // auto-approved), `session/load` replay and the native question
-            // frames with their Step 154 records (answered and cancelled) all
-            // answer as 1.4.3 does. What moved is file access. The harness's
-            // own `view_file` replaces the server's: its live call reports
-            // `file_path` and zero-based `start_line`/`end_line`, and history
-            // stores a `view_file` step rather than an `agency_tool_call`.
-            // `client_view_file` now asks `fs/read_text_file` for the whole file,
-            // with no `line` or `limit`, and slices out the lines itself, so
-            // codeg lets Antigravity's reads return up to the 16 MiB a file may
-            // have rather than 2 MiB (`read_response_limit` in
-            // `acp::file_system_runtime`). Lines read that way from a
-            // 16,480,000-byte file reached the model. And `client_create_file`
-            // and `client_edit_file` refuse content that looks like
-            // `view_file`'s numbered output, without sending
-            // `fs/write_text_file`, though the call still ends `completed`.
-            //
-            // 1.5.0, checked against 1.4.5: every archive is still flat with the
-            // same two executables and modes, and the Windows server is still
-            // the PyInstaller onefile with Python 3.14 on both architectures.
-            // The Linux server is about 110 MB smaller because its native code
-            // shrank, while its Python grew slightly. Of the server's own
-            // Python, `server.py`, `tools.py`, `model_selection.py`,
-            // `settings.py`, `paths.py`, `main.py`, `client_info.py` and the
-            // version string changed, and `token_usage_tracker.py` is new.
-            // `config_options.py`, `hooks.py`, `oauth/` and the MCP and gateway
-            // modules are byte-identical, `server.py::_ask_user_handler` is
-            // unchanged, and so are the protobuf fields the history parser
-            // reads, Step 154 included. The vendored ACP SDK moved to schema
-            // 1.23, and the Go harness is a real rebuild rather than new build
-            // stamps, though its tool names and the frames and history steps
-            // codeg reads did not move. `initialize` (`protocolVersion: 1`),
-            // the API-key and gateway selectors and flat `models` list, the
-            // slash commands, a model then thinking-level switch, a saved 1.3.0
-            // variant id, a gateway turn that calls a tool on a wire MCP server
-            // (asked and auto-approved), a Stop during a pending permission,
-            // `session/load` replay, the native question frames with their
-            // Step 154 records, and the file tools all answer as 1.4.5 does.
-            // What moved: a `usage_update` and the `available_commands_update`
-            // now arrive before the `session/new` answer, which the ACP runtime
-            // parks and replays into the session once codeg attaches it (see
-            // `acp::agent_session`). `usage_update.used` no longer counts
-            // cached tokens twice, so the context ring reads lower on a turn
-            // that hit the cache, and the prompt answer's `usage`, which codeg
-            // does not record for this agent, splits its counts differently. An
-            // Agent Platform session lists Gemini 4 Carbon first and defaults to
-            // `gemini-4-carbon-medium`; every 1.4.5 id is still offered.
-            // `client_view_file` now shows at most 800 lines (45 KiB) per call
-            // and refuses content with NUL bytes as binary, but still asks
-            // `fs/read_text_file` for the whole file, so lines of a
-            // 16,480,000-byte file reached the model only with the 16 MiB
-            // allowance. Google sign-in, Linux and Windows were not run live.
-            //
-            // 1.5.2, checked against 1.5.0 (1.5.1 was never published; its URLs
-            // 404): every archive is still flat with the same two executables
-            // and modes, and the Windows server is still the PyInstaller
-            // onefile with Python 3.14 on both architectures. Of the server's
-            // own Python, `server.py`, `hooks.py`, `model_selection.py`,
-            // `paths.py`, `proxy_agent_config.py`, `usage.py`,
-            // `admin_controls_manager.py`, `browser_subagent.py`, the Gemini
-            // Enterprise license modules and the version string changed.
-            // `tools.py`, `config_options.py`, `settings.py`, `main.py`,
-            // `client_info.py`, `oauth/`, the MCP and gateway modules, the
-            // vendored ACP SDK and every protobuf descriptor are byte-identical,
-            // and `server.py::_ask_user_handler` is unchanged. `initialize`
-            // (`protocolVersion: 1`), the API-key and gateway selectors and
-            // flat `models` list, the slash commands, a model then
-            // thinking-level switch, a saved 1.3.0 variant id, a gateway turn
-            // that calls a tool on a wire MCP server (asked and auto-approved),
-            // `session/load` replay, an answered question with its Step 154
-            // record, and the file tools (16 MiB allowance included) answer as
-            // 1.5.0 does. What moved: the `available_commands_update` now
-            // follows the `session/new` answer (the `usage_update` still comes
-            // first). A skipped question no longer lets the turn go on: after
-            // the usual "Interaction cancelled" close the server waits until
-            // the turn is cancelled, so the question bridge stops the turn the
-            // way the user's Stop does when the adapter reports 1.5.1 or later
-            // (see `try_bridge_antigravity_ask`), and the question is saved as a
-            // cancelled step rather than a skipped one, which
-            // `parsers::antigravity` reads as declined. A Stop no longer
-            // streams "context canceled" as text. The harness now gives the
-            // model `~/.gemini/AGENTS.md` and `GEMINI.md` (from `~/.gemini`
-            // even when `GEMINI_HOME` points elsewhere) and the project's
-            // `AGENTS.md` and `GEMINI.md` as user rules; 1.5.0 sent none. Paths
-            // a project `.aiexclude` names are refused, as is changing an
-            // `.aiexclude`. A model picked in a session is restored when the
-            // session is loaded in a new process. Agent Platform adds Gemini 4
-            // Neon and Gemini 4 Hydrogen after Carbon, with an `extra_high`
-            // thinking level; every 1.5.0 id is still offered. Google sign-in,
-            // Linux and Windows were not run live.
-            distribution: AgentDistribution::Binary {
-                version: "1.5.2",
-                // Never resolvable on PATH (there is no standalone CLI by
-                // this name); it exists because `Binary` requires one, and
-                // for dir-tree agents `installed_binary_path` ignores it in
-                // favour of `dir_entry`.
-                cmd: "agy_acp_server",
-                // `--uid=` is an absl/InitGoogle flag ("If root, switch to
-                // this user id (or empty-string not to switch)"), not an ACP
-                // one: without it a root process (Docker) drops to `nobody`.
-                // The ACP registry passes it on Linux ONLY, and so do we —
-                // the Windows build need not link the same InitGoogle, and an
-                // unknown flag is a hard startup error there.
-                args: ANTIGRAVITY_LAUNCH_ARGS,
+            // AUTH IS THE CLI'S. Unlike the standalone server, `agy acp` does
+            // not read `<GEMINI_HOME>/antigravity-acp/settings.json`;
+            // `apply_antigravity_env_policy` still filters GEMINI_API_KEY /
+            // GOOGLE_* by the method chosen in the panel, and the ACP
+            // `authenticate` / `logout` requests plus `agy acp --login` are
+            // the only supported ways to change the cached Google account.
+            distribution: AgentDistribution::System {
+                cmd: "agy",
+                // `--dangerously-skip-permissions`（Turbo 模式）由设置面板的权限模式开关
+                // `AGY_DANGEROUSLY_SKIP_PERMISSIONS` 控制，在 `build_agent` 中按需附加，
+                // 保持默认启动行为与 CLI 一致，不破坏原生 4 个会话 mode。
+                args: &["acp"],
                 env: &[],
-                platforms: &[
-                    PlatformBinary {
-                        platform: "darwin-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.5.2-darwin-arm64.zip",
-                        sha256: None,
-                    },
-                    PlatformBinary {
-                        platform: "darwin-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.5.2-darwin-x86_64.zip",
-                        sha256: None,
-                    },
-                    PlatformBinary {
-                        platform: "linux-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.2-linux-arm64.zip",
-                        sha256: None,
-                    },
-                    PlatformBinary {
-                        platform: "linux-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.2-linux-x86_64.zip",
-                        sha256: None,
-                    },
-                    PlatformBinary {
-                        platform: "windows-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.5.2-windows-arm64.zip",
-                        sha256: None,
-                    },
-                    PlatformBinary {
-                        platform: "windows-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.5.2-windows-x86_64.zip",
-                        sha256: None,
-                    },
-                ],
-                dir_entry: Some(BinaryDirEntry {
-                    unix: "agy_acp_server.par",
-                    windows: "agy_acp_server.exe",
-                    // The Go harness the server execs. Required, not just
-                    // chmod'd: without it the server starts and then logs
-                    // "Localharness not found." — a working handshake
-                    // attached to a broken agent, which is worse than a
-                    // failed install. It also invalidates any single-file
-                    // cache left behind by a pre-integration CUSTOM entry
-                    // for `antigravity-acp` (see `required_siblings`).
-                    required_siblings: PlatformFiles {
-                        unix: &["localharness_external"],
-                        windows: &["localharness_external.exe"],
-                    },
-                }),
+                install_url: ANTIGRAVITY_INSTALL_URL,
+                // `agy update` is the CLI's own updater (it prints the
+                // installed version and exits 0 when current), so codeg
+                // never pins or downloads a build.
+                update_args: Some(&["update"]),
             },
         },
         AgentType::Kiro => AcpAgentMeta {
@@ -9963,59 +9967,31 @@ mod tests {
         }
     }
 
-    // Google Antigravity's archive is FLAT but holds two executables — the
-    // server and the `localharness_external` binary it spawns — so it must
-    // use whole-tree extraction (the single-file copy-out would strand the
-    // harness and the server would log "Localharness not found."). The Linux
-    // targets, and only those, carry the absl `--uid=` flag.
+    // Antigravity is now the CLI's own `agy acp` entry: codeg installs and
+    // pins nothing, probes `agy` on PATH / `~/.local/bin`, and lets the vendor
+    // updater move it.
     #[test]
-    fn antigravity_pins_dir_tree_binary_and_linux_only_uid_flag() {
+    fn antigravity_launches_the_cli_native_acp_entry() {
         let meta = get_agent_meta(AgentType::Antigravity);
         assert!(meta.supports_mcp);
         assert_eq!(registry_id_for(AgentType::Antigravity), "antigravity-acp");
+        assert_eq!(meta.registry_version(), None);
+        assert!(!meta.supports_custom_version());
         match meta.distribution {
-            AgentDistribution::Binary {
-                version,
+            AgentDistribution::System {
                 cmd,
                 args,
-                platforms,
-                dir_entry,
-                ..
+                env,
+                install_url,
+                update_args,
             } => {
-                assert_eq!(version, "1.5.2");
-                assert_eq!(cmd, "agy_acp_server");
-                let entry = dir_entry.expect("antigravity must use dir-tree extraction");
-                assert_eq!(entry.unix, "agy_acp_server.par");
-                assert_eq!(entry.windows, "agy_acp_server.exe");
-                // Six targets: upstream added the Intel macOS build in 1.2.1.
-                assert_eq!(platforms.len(), 6);
-                assert!(platforms.iter().any(|p| p.platform == "darwin-x86_64"));
-                for platform in platforms {
-                    assert!(
-                        platform.url.contains("/agy-acp-server-1.5.2-"),
-                        "{} URL lost the release name: {}",
-                        platform.platform,
-                        platform.url
-                    );
-                }
-                if cfg!(target_os = "linux") {
-                    assert_eq!(args, &["--uid="]);
-                } else {
-                    assert!(args.is_empty(), "--uid= is a Linux-only absl flag");
-                }
-                // The harness must be REQUIRED, not merely chmod'd. It is what
-                // stops a stale single-file cache — which a pre-integration
-                // CUSTOM `antigravity-acp` entry would have written under the
-                // same key, because the archive is flat — from being adopted
-                // and launched without it.
-                let required = entry.required_siblings.for_current_platform();
-                assert_eq!(required.len(), 1);
-                assert!(
-                    required[0].starts_with("localharness_external"),
-                    "unexpected required sibling: {required:?}"
-                );
+                assert_eq!(cmd, "agy");
+                assert_eq!(args, &["acp"]);
+                assert!(env.is_empty());
+                assert!(install_url.starts_with("https://antigravity.google/"));
+                assert_eq!(update_args, Some(&["update"][..]));
             }
-            other => panic!("expected binary distribution for Antigravity, got {other:?}"),
+            other => panic!("expected system distribution for Antigravity, got {other:?}"),
         }
     }
 
@@ -10093,8 +10069,9 @@ mod tests {
         // Cursor is the control: a binary agent whose release path IS its
         // pinned version, so the substitution genuinely selects a build.
         assert!(get_agent_meta(AgentType::Cursor).supports_custom_version());
-        // Antigravity joined it once Google's archives took the release name.
-        assert!(get_agent_meta(AgentType::Antigravity).supports_custom_version());
+        // Antigravity is a system agent now: the vendor updates it, codeg pins
+        // nothing to substitute.
+        assert!(!get_agent_meta(AgentType::Antigravity).supports_custom_version());
         // npx installs `<package>@<version>` directly — no URL involved.
         assert!(get_agent_meta(AgentType::Codex).supports_custom_version());
     }
@@ -10162,12 +10139,16 @@ mod tests {
             }
             other => panic!("expected system distribution for Kiro, got {other:?}"),
         }
-        // Kiro, TRAE CLI and MiniMax Code use the system distribution; every other
-        // built-in has a pinned version codeg installs itself.
+        // Kiro, TRAE CLI, MiniMax Code and Antigravity use the system
+        // distribution; every other built-in has a pinned version codeg
+        // installs itself.
         for agent_type in builtin_acp_agents() {
             if !matches!(
                 agent_type,
-                AgentType::Kiro | AgentType::Trae | AgentType::MiniMaxCode
+                AgentType::Kiro
+                    | AgentType::Trae
+                    | AgentType::MiniMaxCode
+                    | AgentType::Antigravity
             ) {
                 assert!(
                     get_agent_meta(agent_type).registry_version().is_some(),
@@ -10398,8 +10379,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.111.0",
-            "@agentclientprotocol/claude-agent-acp@0.111.0",
+            "0.113.0",
+            "@agentclientprotocol/claude-agent-acp@0.113.0",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -10426,22 +10407,22 @@ mod tests {
         );
         assert_npx_version(
             AgentType::CodeBuddy,
-            "2.186.0",
-            "@tencent-ai/codebuddy-code@2.186.0",
+            "2.187.0",
+            "@tencent-ai/codebuddy-code@2.187.0",
             Some("22.0.0"),
         );
         // Kimi Code must never land on 0.37.0–0.38.0: every session in that
         // range dies on the codeg-mcp stdio entry (see the registry entry).
         assert_npx_version(
             AgentType::KimiCode,
-            "2.7.3",
-            "@moonshot-ai/kimi-code@2.7.3",
+            "2.8.0",
+            "@moonshot-ai/kimi-code@2.8.0",
             Some("22.19.0"),
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.11.0",
-            "@agentclientprotocol/codex-acp@2.11.0",
+            "2.12.1",
+            "@agentclientprotocol/codex-acp@2.12.1",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.35", "pi-acp@0.0.35", Some("22.0.0"));
@@ -10453,14 +10434,14 @@ mod tests {
         );
         assert_npx_version(
             AgentType::DeepSeek,
-            "0.12.0",
-            "deepseek-acp@0.12.0",
+            "0.13.0",
+            "deepseek-acp@0.13.0",
             Some("22.19.0"),
         );
         assert_npx_version(
             AgentType::Qoder,
-            "1.1.91",
-            "@qoder-ai/qodercli@1.1.91",
+            "1.1.98",
+            "@qoder-ai/qodercli@1.1.98",
             Some("20.0.0"),
         );
         assert_npx_version(
@@ -10525,6 +10506,23 @@ mod tests {
                 assert!(
                     env.contains(&("QODER_EXPOSE_TOKEN_USAGE", "1")),
                     "qoder must launch with token redaction off, got {env:?}"
+                );
+            }
+            other => panic!("expected npx distribution for Qoder, got {other:?}"),
+        }
+    }
+
+    // From 1.1.94 qoder runs model-started sub-agents in the background and
+    // streams the reply out of turn, where codeg drops it; this env keeps them
+    // in the foreground so the reply lands in the prompt that started them.
+    #[test]
+    fn qoder_launches_with_sub_agents_in_the_foreground() {
+        let meta = get_agent_meta(AgentType::Qoder);
+        match meta.distribution {
+            AgentDistribution::Npx { env, .. } => {
+                assert!(
+                    env.contains(&("QODER_ENABLE_AGENT_SESSIONS", "0")),
+                    "qoder must launch with background agent sessions off, got {env:?}"
                 );
             }
             other => panic!("expected npx distribution for Qoder, got {other:?}"),

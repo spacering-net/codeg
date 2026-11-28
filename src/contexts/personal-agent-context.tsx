@@ -25,9 +25,23 @@ import {
   type PersonalAgentChange,
   type PersonalAgentSnapshot,
   type ReplyStep,
+  type ReplyText,
   type TimelineCursor,
   type TimelineRow,
 } from "@/lib/types"
+
+/** A reply in flight, as the page last heard it. */
+export interface LiveTurn {
+  /** The step it is on. */
+  current: ReplyStep | null
+  /** Every text run so far, whole. */
+  texts: readonly ReplyText[]
+  /** The copy's version: a later copy has a greater one. */
+  ver: number
+}
+
+/** The longest a recovery's reads hold back what is pushed meanwhile. */
+const RECOVER_HOLD_MS = 5_000
 
 /** Rows the page loads first, and per "load older". */
 const PAGE_SIZE = 60
@@ -65,14 +79,15 @@ interface PersonalAgentContextValue {
   routineVersion: number
   /** The agent waits on the owner (a question or permission request). */
   needsOwner: boolean
-  /** The step each reply in flight is on, as last pushed, by reply row id. */
-  liveReplies: ReadonlyMap<number, ReplyStep | null>
-  /** The last text each reply in flight wrote, by reply row id: its bubble
-   *  keeps it while the turn goes on with other steps (they are the status
-   *  line's, 10.7). */
-  liveTexts?: ReadonlyMap<number, { n: number; text: string }>
+  /** Each reply in flight as last heard, by reply row id: the step it is
+   *  on and every text run so far — the newest copy only (by `ver`), and
+   *  none once the row settled. */
+  liveReplies: ReadonlyMap<number, LiveTurn>
   /** The dispatches the cards on the page point at, by id. */
   dispatchById: ReadonlyMap<number, DispatchInfo>
+  /** Read these dispatches again (a [Stop] that did not see its own write
+   *  come back). */
+  refetchDispatches: (ids: number[]) => Promise<void>
   /** Rows quoted from outside what is held, by id; `null` when it does not
    *  exist. */
   quoted: ReadonlyMap<number, TimelineRow | null>
@@ -283,18 +298,9 @@ function usePersonalAgentStore(
   const [dispatchVersion, setDispatchVersion] = useState(0)
   const [itemVersion, setItemVersion] = useState(0)
   const [routineVersion, setRoutineVersion] = useState(0)
-  const [liveReplies, setLiveReplies] = useState<
-    ReadonlyMap<number, ReplyStep | null>
-  >(() => new Map())
-  const [liveTexts, setLiveTexts] = useState<
-    ReadonlyMap<number, { n: number; text: string }>
-  >(() => new Map())
-  const keepText = useCallback((rowId: number, step: ReplyStep | null) => {
-    if (step?.t !== "text") return
-    setLiveTexts((held) =>
-      new Map(held).set(rowId, { n: step.n, text: step.text })
-    )
-  }, [])
+  const [liveReplies, setLiveReplies] = useState<ReadonlyMap<number, LiveTurn>>(
+    () => new Map()
+  )
   const [dispatchById, setDispatchById] = useState<
     ReadonlyMap<number, DispatchInfo>
   >(() => new Map())
@@ -302,10 +308,45 @@ function usePersonalAgentStore(
     () => new Map()
   )
   const snapReq = useRef(0)
+  /** The read whose snapshot is drawn: an older one never goes over it. */
+  const snapShown = useRef(0)
   const rowsRef = useRef<TimelineRow[]>([])
   useEffect(() => {
     rowsRef.current = rows
   }, [rows])
+  const publishLive = useCallback((rowId: number, turn: LiveTurn) => {
+    setLiveReplies((held) => {
+      const had = held.get(rowId)
+      if (had && had.ver >= turn.ver) return held
+      return new Map(held).set(rowId, turn)
+    })
+  }, [])
+  /** Back from a lost connection, reading: the copies pushed meanwhile wait
+   *  for what was read, and are drawn with it. */
+  const recovering = useRef({
+    /** The latest recovery; only it draws what was read. */
+    gen: 0,
+    active: false,
+    held: new Map<number, LiveTurn>(),
+    rows: [] as TimelineRow[],
+  })
+  /** A copy of reply `rowId` in flight: taken only when newer than the one
+   *  held (a slow read never takes text back), and never once the row
+   *  settled — the settled row draws it then, alone. */
+  const takeLive = useCallback(
+    (rowId: number, turn: LiveTurn) => {
+      const row = rowsRef.current.find((r) => r.id === rowId)
+      if (row && row.kind === "reply" && row.data?.state !== "running") return
+      const r = recovering.current
+      if (r.active) {
+        const had = r.held.get(rowId)
+        if (!had || had.ver < turn.ver) r.held.set(rowId, turn)
+        return
+      }
+      publishLive(rowId, turn)
+    },
+    [publishLive]
+  )
   /** A read-only page's reconciliation mark: every change before it to a
    *  row held has been read. Advanced only by a read of changed rows that
    *  went through to the end — never by the newest page, which says nothing
@@ -319,31 +360,54 @@ function usePersonalAgentStore(
     setRows((held) => mergeRows(held, incoming))
   }, [])
 
-  const refreshSnapshot = useCallback(async () => {
+  /** Read the snapshot, tagged with the order it was asked for; `null`
+   *  when it failed. */
+  const readSnapshot = useCallback(async () => {
     const id = ++snapReq.current
     try {
-      const snap = await personalAgentGet(botId)
-      if (id !== snapReq.current) return
+      return { id, snap: await personalAgentGet(botId) }
+    } catch {
+      // keep the last good one; the next nudge recovers
+      return { id, snap: null }
+    }
+  }, [botId])
+  /** A snapshot read, drawn unless one read after it is drawn already — a
+   *  later read that failed takes nothing from it. */
+  const applySnapshot = useCallback(
+    ({ id, snap }: { id: number; snap: PersonalAgentSnapshot | null }) => {
+      if (!snap || id < snapShown.current) return
+      snapShown.current = id
       setSnapshot(snap)
       const live = snap.status.live_reply
       if (live) {
-        // A push may be newer than the snapshot: it wins.
-        setLiveReplies((held) =>
-          held.has(live.row_id)
-            ? held
-            : new Map(held).set(live.row_id, live.current)
-        )
-        keepText(live.row_id, live.current)
+        // A push may be newer than the snapshot: the newer copy stands.
+        takeLive(live.row_id, {
+          current: live.current,
+          texts: live.texts ?? [],
+          ver: live.ver ?? 0,
+        })
       }
-    } catch {
-      // keep the last good one; the next nudge recovers
-    }
-  }, [botId, keepText])
+    },
+    [takeLive]
+  )
+  const refreshSnapshot = useCallback(async () => {
+    applySnapshot(await readSnapshot())
+  }, [readSnapshot, applySnapshot])
 
-  /** The newest page, merged over what is held (older pages stay). */
-  const refreshTimeline = useCallback(async () => {
+  /** Read the newest page; `null` when it failed. */
+  const readTimeline = useCallback(async () => {
     try {
-      const page = await personalAgentTimeline(null, PAGE_SIZE, null, botId)
+      return await personalAgentTimeline(null, PAGE_SIZE, null, botId)
+    } catch {
+      // ignore — a later event recovers
+      return null
+    }
+  }, [botId])
+  /** The newest page, merged over what is held (older pages stay). */
+  const applyTimeline = useCallback(
+    (page: Awaited<ReturnType<typeof personalAgentTimeline>> | null) => {
+      setLoading(false)
+      if (!page) return
       if (rowsRef.current.length === 0) setHasOlder(page.has_older)
       // The first rows held are as of now: changes from here on are what
       // a read-only page reconciles.
@@ -351,16 +415,59 @@ function usePersonalAgentStore(
         changedSince.current = newestStamp(page.rows)
       }
       merge(page.rows)
-    } catch {
-      // ignore — a later event recovers
-    } finally {
-      setLoading(false)
-    }
-  }, [merge, botId])
+    },
+    [merge]
+  )
+
+  const refreshTimeline = useCallback(async () => {
+    applyTimeline(await readTimeline())
+  }, [readTimeline, applyTimeline])
 
   const refresh = useCallback(async () => {
     await Promise.all([refreshSnapshot(), refreshTimeline()])
   }, [refreshSnapshot, refreshTimeline])
+
+  // Back from a lost connection: both read, then both applied in one
+  // update, with the copies of a reply pushed while they were read — what
+  // a reply wrote meanwhile and the lines it wrote between are drawn
+  // together, never a text drawn first and moved once its line comes.
+  /** The status nudge (defined further down), for a recovery's rows. */
+  const nudgeStatusRef = useRef<() => void>(() => {})
+  // Rows broadcast meanwhile wait too (a reply's checkpoint holds its
+  // text); the latest of two recoveries draws, the earlier's reads go. A
+  // read that hangs holds nothing past `RECOVER_HOLD_MS`.
+  const refreshTogether = useCallback(async () => {
+    const r = recovering.current
+    const gen = ++r.gen
+    r.active = true
+    /** What waited, drawn — with what was read, when it came in time. */
+    const release = () => {
+      r.active = false
+      const rows = r.rows
+      const held = [...r.held]
+      r.rows = []
+      r.held.clear()
+      merge(rows)
+      for (const [rowId, turn] of held) publishLive(rowId, turn)
+      if (rows.some(movesUnseen)) nudgeStatusRef.current()
+    }
+    const timer = setTimeout(() => {
+      if (gen === r.gen && r.active) release()
+    }, RECOVER_HOLD_MS)
+    const [snap, page] = await Promise.all([readSnapshot(), readTimeline()])
+    clearTimeout(timer)
+    if (gen !== r.gen) return
+    applySnapshot(snap)
+    applyTimeline(page)
+    if (r.active) release()
+  }, [
+    readSnapshot,
+    readTimeline,
+    applySnapshot,
+    applyTimeline,
+    merge,
+    publishLive,
+  ])
 
   const loadOlder = useCallback(async () => {
     const oldest = rowsRef.current[0]?.id
@@ -480,9 +587,13 @@ function usePersonalAgentStore(
       void refreshSnapshot()
     }, 150)
   }, [refreshSnapshot])
+  useEffect(() => {
+    nudgeStatusRef.current = nudgeStatus
+  }, [nudgeStatus])
 
   useEffect(() => {
     void refresh()
+    const recovery = recovering.current
     let unsub: (() => void) | undefined
     let cancelled = false
     void subscribe<PersonalAgentChange>(
@@ -503,15 +614,20 @@ function usePersonalAgentStore(
         }
         switch (change.kind) {
           case "timeline":
+            if (recovering.current.active) {
+              recovering.current.rows.push(...change.rows)
+              break
+            }
             merge(change.rows)
             // The unread count lives in the snapshot.
             if (change.rows.some(movesUnseen)) nudgeStatus()
             break
           case "reply":
-            setLiveReplies((held) =>
-              new Map(held).set(change.row_id, change.current)
-            )
-            keepText(change.row_id, change.current)
+            takeLive(change.row_id, {
+              current: change.current,
+              texts: change.texts ?? [],
+              ver: change.ver ?? 0,
+            })
             break
           case "status":
           case "agent":
@@ -558,7 +674,7 @@ function usePersonalAgentStore(
       else unsubBoard = u
     })
     const offReconnect = onTransportReconnect(() => {
-      void refresh()
+      void refreshTogether()
       setDispatchVersion((v) => v + 1)
       setItemVersion((v) => v + 1)
       setRoutineVersion((v) => v + 1)
@@ -567,6 +683,11 @@ function usePersonalAgentStore(
     })
     return () => {
       cancelled = true
+      // A recovery under way draws nothing into a store let go.
+      recovery.gen++
+      recovery.active = false
+      recovery.rows = []
+      recovery.held.clear()
       unsub?.()
       unsubBoard?.()
       if (boardTimer != null) clearTimeout(boardTimer)
@@ -574,7 +695,15 @@ function usePersonalAgentStore(
       if (statusTimer.current) clearTimeout(statusTimer.current)
       if (quoteTimer.current) clearTimeout(quoteTimer.current)
     }
-  }, [refresh, nudgeStatus, merge, fetchDispatches, botId, keepText])
+  }, [
+    refresh,
+    refreshTogether,
+    nudgeStatus,
+    merge,
+    fetchDispatches,
+    botId,
+    takeLive,
+  ])
 
   // Read-only elsewhere: poll, since the running process's broadcasts stay
   // in that process. The newest page brings new rows; the changed rows bring
@@ -664,8 +793,8 @@ function usePersonalAgentStore(
       routineVersion,
       needsOwner,
       liveReplies,
-      liveTexts,
       dispatchById,
+      refetchDispatches: fetchDispatches,
       quoted,
       requestQuoted,
     }),
@@ -683,8 +812,8 @@ function usePersonalAgentStore(
       routineVersion,
       needsOwner,
       liveReplies,
-      liveTexts,
       dispatchById,
+      fetchDispatches,
       quoted,
       requestQuoted,
     ]
@@ -727,6 +856,7 @@ function pendingStore(botId: number): PersonalAgentContextValue {
     needsOwner: false,
     liveReplies: new Map(),
     dispatchById: new Map(),
+    refetchDispatches: async () => {},
     quoted: new Map(),
     requestQuoted: () => {},
   }

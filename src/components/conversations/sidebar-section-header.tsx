@@ -120,8 +120,8 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
   /** The assistants section's own right-edge actions (its filter, [+]),
    *  drawn by the assistants' own code in the head's button look. */
   trailing?: (buttonClassName: string) => ReactNode
-  /** Beside the title: the assistants' "waiting on you" badge while the
-   *  section is folded. */
+  /** Beside the title: the assistants' "Beta" mark, and their "waiting on
+   *  you" badge while the section is folded. */
   labelBadge?: ReactNode
 }) {
   const t = useTranslations("Folder.sidebar")

@@ -661,8 +661,14 @@ fn teardown_blocker(
     // Claude Code's Remote Control runs in the agent CLI: the user handed the
     // session to claude.ai/code or a phone, and disconnecting would end it
     // there. It stays until they turn it off or close the connection
-    // themselves.
-    if state.remote_control.is_some() {
+    // themselves. Not Remote Control that started with the session on its
+    // own (`RemoteControlInfo::at_startup`): nobody handed that one over, and
+    // with the setting on every Claude session would stay up for good.
+    if state
+        .remote_control
+        .as_ref()
+        .is_some_and(|remote_control| !remote_control.at_startup)
+    {
         return Some(ConnectionBusy::RemoteControl);
     }
     // A codeg delegation still running. It outlives the turn that started it,
@@ -806,6 +812,34 @@ impl ConnectionManager {
 
     fn delegation_snapshot(&self) -> Option<crate::acp::connection::DelegationInjection> {
         self.delegation_injection.get().cloned()
+    }
+
+    /// [`Self::cancel`] for an explicit stop of the work a connection does:
+    /// stops its turn AND every delegated child it runs, the connection itself
+    /// staying up. A plain turn cancel leaves the children running (they are
+    /// background work — see `DelegationBroker::detach_parent_turn`); a
+    /// disconnect cascades by itself.
+    ///
+    /// Queues [`ConnectionCommand::StopWork`], whose handler in the connection
+    /// loop cascades when it runs — reaching a child the stopped turn started
+    /// while the stop waited in the queue — and cancels the children running
+    /// now right away as well (a loop held up on the agent may not read the
+    /// stop for a while).
+    ///
+    /// The right-away sweep goes BEFORE the stop is queued: once queued, the
+    /// loop can handle it, finish the turn and take the next prompt while
+    /// `send_cancel` still awaits the row update — a sweep after it, keyed by
+    /// the connection alone, would then stop that next turn's children.
+    pub async fn cancel_with_delegated_children(
+        &self,
+        db: &DatabaseConnection,
+        conn_id: &str,
+    ) -> Result<(), AcpError> {
+        if let Some(injection) = self.delegation_injection.get() {
+            injection.broker.cancel_children_of_parent(conn_id).await;
+        }
+        self.send_cancel(db, conn_id, ConnectionCommand::StopWork)
+            .await
     }
 
     /// Returns the shared terminal-shell setting consumed by ACP terminal
@@ -1413,6 +1447,7 @@ impl ConnectionManager {
     /// `send_prompt_linked` acquire the lock externally and then call
     /// this. Re-entering through `send_prompt` from `send_prompt_linked`
     /// while holding the lock would deadlock, hence the split.
+    #[allow(clippy::too_many_arguments)]
     async fn send_prompt_inner(
         &self,
         conn_id: &str,
@@ -1421,6 +1456,8 @@ impl ConnectionManager {
         internal_suffix: Vec<PromptInputBlock>,
         reply_token: Option<String>,
         receipt: Option<crate::acp::prompt_receipt::PromptReceipt>,
+        // The token of a `RewindHold` this prompt is the edited message for.
+        hold_token: Option<&str>,
     ) -> Result<(), AcpError> {
         // Reject an empty prompt BEFORE touching the concurrency gate. An empty
         // prompt produces no turn — and thus no `TurnComplete` to clear the gate
@@ -1476,6 +1513,18 @@ impl ConnectionManager {
                 );
                 return Err(AcpError::TurnInProgress);
             }
+            // A rewound session is reserved for its edited message (see
+            // `RewindHold`); that message releases it.
+            let message_id =
+                hold_token.or_else(|| user_message.as_ref().map(|(id, _)| id.as_str()));
+            if crate::acp::rewind::hold_blocks(s.rewind_hold.as_ref(), message_id) {
+                tracing::debug!(
+                    connection_id = %conn_id,
+                    "[ACP] prompt rejected at the send gate: the session waits for an edited message"
+                );
+                return Err(AcpError::TurnInProgress);
+            }
+            s.rewind_hold = None;
             s.turn_in_flight = true;
         }
         permit.send(ConnectionCommand::Prompt {
@@ -1509,7 +1558,7 @@ impl ConnectionManager {
     ) -> Result<(), AcpError> {
         let prompt_lock = self.clone_prompt_lock(conn_id).await?;
         let _guard = prompt_lock.lock_owned().await;
-        self.send_prompt_inner(conn_id, blocks, None, Vec::new(), None, None)
+        self.send_prompt_inner(conn_id, blocks, None, Vec::new(), None, None, None)
             .await
     }
 
@@ -1582,6 +1631,7 @@ impl ConnectionManager {
             Vec::new(),
             None,
             None,
+            None,
         )
         .await
     }
@@ -1608,6 +1658,7 @@ impl ConnectionManager {
             None,
             Vec::new(),
             reply_token,
+            None,
             None,
         )
         .await
@@ -1640,6 +1691,7 @@ impl ConnectionManager {
             internal_suffix,
             None,
             Some(receipt),
+            None,
         )
         .await
     }
@@ -1671,6 +1723,7 @@ impl ConnectionManager {
             internal_suffix,
             None,
             None,
+            None,
         )
         .await
     }
@@ -1688,6 +1741,9 @@ impl ConnectionManager {
         internal_suffix: Vec<PromptInputBlock>,
         reply_token: Option<String>,
         receipt: Option<crate::acp::prompt_receipt::PromptReceipt>,
+        // An edited message's rewind, done in the same step as its admission
+        // (see `send_prompt_linked_rewinding`).
+        rewind: Option<crate::acp::rewind::RewindTarget>,
     ) -> Result<Option<i32>, AcpError> {
         // Reject an empty prompt up front, BEFORE any side effects: linking /
         // creating the conversation row, flipping it to InProgress, or emitting
@@ -1753,7 +1809,18 @@ impl ConnectionManager {
                 .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
             let (bound, in_flight, launch_dir) = {
                 let s = conn.state.read().await;
-                (s.conversation_id, s.turn_in_flight, s.working_dir.clone())
+                (
+                    s.conversation_id,
+                    // A session held for an edited message is busy for any
+                    // other prompt (see `RewindHold`), checked here before any
+                    // side effect like the flag itself.
+                    s.turn_in_flight
+                        || crate::acp::rewind::hold_blocks(
+                            s.rewind_hold.as_ref(),
+                            client_message_id.as_deref(),
+                        ),
+                    s.working_dir.clone(),
+                )
             };
             (
                 conn.state.clone(),
@@ -1812,6 +1879,73 @@ impl ConnectionManager {
             &crate::paths::codeg_uploads_root(),
         )
         .await?;
+
+        // An edited message: cut the session back to just before the message
+        // it replaces, still before any side effect and under the prompt lock,
+        // so the prompt below is the cut session's first turn — no other
+        // prompt, fork or rewind takes the lock in between, and the hold keeps
+        // out the one path that does not take it. A declined rewind changes
+        // nothing and sends nothing.
+        let hold_token = match rewind.as_ref() {
+            None => None,
+            Some(target) => {
+                // Everything the admission below can still refuse is checked
+                // first: a cut the edited prompt then fails to follow would
+                // leave the conversation shortened with nothing in its place.
+                // An edited message replaces one in an existing row — this
+                // connection's, or the one the caller names (the first-link
+                // adoption below; a NEW row needs nothing rewound).
+                if !already_linked && conversation_id.is_none() {
+                    return Err(AcpError::protocol(
+                        "Editing a message requires its conversation".to_string(),
+                    ));
+                }
+                if delegation.is_some() {
+                    return Err(AcpError::protocol(
+                        "Editing a message is not available for a delegated prompt".to_string(),
+                    ));
+                }
+                // The first-link adoption below binds the caller's row to the
+                // session this connection runs, and refuses when another row
+                // holds that session (a stale reconnect after a fork). Cutting
+                // the session first would then leave it shortened with no
+                // prompt. An edit adopts only the row that already names it.
+                if !already_linked {
+                    let row_id = conversation_id.unwrap_or_default();
+                    let row = conversation_service::get_by_id(&db.conn, row_id)
+                        .await
+                        .map_err(|e| AcpError::protocol(e.to_string()))?;
+                    let session = state_arc.read().await.external_id.clone();
+                    if session.is_none() || row.external_id != session {
+                        return Err(AcpError::protocol(
+                            "This conversation is not the session the agent is running; \
+                             reopen it and edit the message again"
+                                .to_string(),
+                        ));
+                    }
+                }
+                let token = client_message_id
+                    .clone()
+                    .filter(|id| !id.trim().is_empty())
+                    .unwrap_or_else(|| format!("rewind-{}", uuid::Uuid::new_v4()));
+                let outcome = self
+                    .rewind_locked(
+                        db,
+                        conn_id,
+                        &state_arc,
+                        bound_conversation_id.or(conversation_id),
+                        target,
+                        &token,
+                    )
+                    .await?;
+                if !outcome.rewound {
+                    return Err(AcpError::RewindRefused(outcome.reason.unwrap_or_else(
+                        || crate::acp::rewind::REASON_UNAVAILABLE.to_string(),
+                    )));
+                }
+                Some(token)
+            }
+        };
 
         // CANCELLATION SHIELD around the first link, same shape and for the same
         // reason as `fork_session` below.
@@ -2173,6 +2307,7 @@ impl ConnectionManager {
                 internal_suffix,
                 reply_token,
                 receipt,
+                hold_token.as_deref(),
             )
             .await
         {
@@ -2484,7 +2619,138 @@ impl ConnectionManager {
             .map_err(|_| AcpError::protocol("Async task stop reply channel closed".to_string()))?
     }
 
+    /// Send an edited message in place of the one it replaces: as
+    /// [`Self::send_prompt_linked_with_message_id`], but the session is first
+    /// cut back to just before that message (`_session/rewind`, see
+    /// `crate::acp::rewind`) — in the same call and under the same prompt lock
+    /// as the admission, so the edited message is the cut session's next turn.
+    /// A declined rewind is [`AcpError::RewindRefused`] and sends nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_prompt_linked_rewinding(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+        folder_id: Option<i32>,
+        conversation_id: Option<i32>,
+        client_message_id: Option<String>,
+        rewind: crate::acp::rewind::RewindTarget,
+    ) -> Result<Option<i32>, AcpError> {
+        self.send_prompt_linked_full(
+            db,
+            conn_id,
+            blocks,
+            folder_id,
+            conversation_id,
+            None,
+            client_message_id,
+            Vec::new(),
+            None,
+            None,
+            Some(rewind),
+        )
+        .await
+    }
+
+    /// The rewind half of [`Self::send_prompt_linked_rewinding`]; the caller
+    /// holds the prompt lock and has checked that no turn is in flight.
+    ///
+    /// The message is named by its agent id (`MessageTurn::agent_message_id`)
+    /// and checked by its text against a fresh parse of the transcript.
+    /// Protocol only: the transcript is the agent's, and the conversation row
+    /// does not change (it still names the same session). The hold named
+    /// `hold_token` is set before the rewind goes out and stays only when it
+    /// cut the session; the edited prompt's admission releases it.
+    async fn rewind_locked(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
+        state_arc: &Arc<tokio::sync::RwLock<crate::acp::session_state::SessionState>>,
+        conversation_id: Option<i32>,
+        target: &crate::acp::rewind::RewindTarget,
+        hold_token: &str,
+    ) -> Result<crate::acp::rewind::RewindOutcome, AcpError> {
+        let cmd_tx = {
+            let connections = self.connections.lock().await;
+            connections
+                .get(conn_id)
+                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?
+                .cmd_tx
+                .clone()
+        };
+        // A reopened conversation is bound to its row (`selection`) before
+        // its first prompt links it; either names the transcript to read.
+        let (conversation_id, supported) = {
+            let state = state_arc.read().await;
+            (
+                conversation_id
+                    .or(state.conversation_id)
+                    .or(state.selection_conversation_id),
+                state.rewind_supported,
+            )
+        };
+        if !supported {
+            return Err(AcpError::protocol(
+                "This agent does not support editing a sent message".to_string(),
+            ));
+        }
+        let conversation_id = conversation_id.ok_or_else(|| {
+            AcpError::protocol("Editing a message requires a saved conversation".to_string())
+        })?;
+
+        let (detail, _) = crate::commands::conversations::get_folder_conversation_with_text(
+            &db.conn,
+            conversation_id,
+            crate::parsers::codex::CodexText::Display,
+        )
+        .await
+        .map_err(|e| {
+            AcpError::protocol(format!(
+                "Cannot read the conversation to locate the message to edit: {e}"
+            ))
+        })?;
+        let cursor_id = crate::acp::rewind::resolve_rewind_cursor(
+            &detail.turns,
+            &target.agent_message_id,
+            &target.text,
+        )?;
+
+        state_arc.write().await.rewind_hold =
+            Some(crate::acp::rewind::RewindHold::new(hold_token.to_string()));
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let outcome = match cmd_tx
+            .send(ConnectionCommand::Rewind {
+                cursor_id,
+                reply: reply_tx,
+            })
+            .await
+        {
+            Ok(()) => reply_rx
+                .await
+                .map_err(|_| AcpError::protocol("Rewind reply channel closed".to_string()))
+                .and_then(|r| r),
+            Err(_) => Err(AcpError::ProcessExited),
+        };
+        if !matches!(outcome, Ok(ref o) if o.rewound) {
+            state_arc.write().await.rewind_hold = None;
+        }
+        outcome
+    }
+
     pub async fn cancel(&self, db: &DatabaseConnection, conn_id: &str) -> Result<(), AcpError> {
+        self.send_cancel(db, conn_id, ConnectionCommand::Cancel)
+            .await
+    }
+
+    /// Queue `command` — [`ConnectionCommand::Cancel`] or
+    /// [`ConnectionCommand::StopWork`] — and settle the row the way a cancel
+    /// does.
+    async fn send_cancel(
+        &self,
+        db: &DatabaseConnection,
+        conn_id: &str,
+        command: ConnectionCommand,
+    ) -> Result<(), AcpError> {
         let (cmd_tx, state_arc, emitter) = {
             let connections = self.connections.lock().await;
             let conn = connections
@@ -2497,7 +2763,7 @@ impl ConnectionManager {
             )
         };
         cmd_tx
-            .send(ConnectionCommand::Cancel)
+            .send(command)
             .await
             .map_err(|_| AcpError::ProcessExited)?;
 
@@ -2733,6 +2999,11 @@ impl ConnectionManager {
                 connection_id = %conn_id,
                 "[ACP] fork rejected: a turn is already in flight"
             );
+            return Err(AcpError::TurnInProgress);
+        }
+        // A session cut for an edited message waits for it (`RewindHold`): a
+        // fork now would move the connection off the session it was cut on.
+        if crate::acp::rewind::hold_blocks(state_arc.read().await.rewind_hold.as_ref(), None) {
             return Err(AcpError::TurnInProgress);
         }
 
@@ -4055,6 +4326,23 @@ impl ConnectionManager {
         text: String,
         blocks: Option<Vec<PromptInputBlock>>,
     ) -> Result<FeedbackItem, AcpError> {
+        self.submit_feedback_for_turn(conn_id, text, blocks, None).await
+    }
+
+    /// [`Self::submit_feedback`] aimed at one turn: `expect_turns_completed`
+    /// is `SessionState.turns_completed` as the caller saw it while that
+    /// turn ran. Should another turn be running by the time the note goes
+    /// out — the one aimed at ended and the next began — it is answered
+    /// [`AcpError::NoActiveTurn`], the caller's reroute, at admission and
+    /// again where the connection takes the steer. Native channel only: the
+    /// pull path's note waits for whatever turn pulls it.
+    pub async fn submit_feedback_for_turn(
+        &self,
+        conn_id: &str,
+        text: String,
+        blocks: Option<Vec<PromptInputBlock>>,
+        expect_turns_completed: Option<u64>,
+    ) -> Result<FeedbackItem, AcpError> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return Err(AcpError::InvalidFeedback("empty note".into()));
@@ -4094,8 +4382,16 @@ impl ConnectionManager {
         }
 
         if native {
-            return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, blocks)
-                .await;
+            return Self::submit_feedback_native(
+                conn_id,
+                state,
+                cmd_tx,
+                emitter,
+                text,
+                blocks,
+                expect_turns_completed,
+            )
+            .await;
         }
 
         // The pull tool delivers plain text (`PendingFeedback`), so a draft
@@ -4170,6 +4466,7 @@ impl ConnectionManager {
         emitter: EventEmitter,
         text: String,
         blocks: Option<Vec<PromptInputBlock>>,
+        expect_turns_completed: Option<u64>,
     ) -> Result<FeedbackItem, AcpError> {
         // Cheap pre-flight, NOT the authoritative check (that's the loop's
         // idle arm replying `NoActiveTurn`): skip the round-trip when no turn
@@ -4188,6 +4485,10 @@ impl ConnectionManager {
             if s.pending_permission.is_some()
                 && crate::acp::registry::steering_waits_out_open_permission(s.agent_type)
             {
+                return Err(AcpError::NoActiveTurn);
+            }
+            // Not the turn the caller aimed at: it ended meanwhile.
+            if expect_turns_completed.is_some_and(|e| e != s.turns_completed) {
                 return Err(AcpError::NoActiveTurn);
             }
             s.turns_completed
@@ -4280,6 +4581,7 @@ impl ConnectionManager {
                 cmd_tx
                     .send(ConnectionCommand::Steer {
                         blocks: wire_blocks,
+                        expect_turns_completed,
                         reply: reply_tx,
                     })
                     .await
@@ -8291,6 +8593,7 @@ mod tests {
             Vec::new(),
             None,
             None,
+            None,
         );
         let res = tokio::time::timeout(std::time::Duration::from_millis(50), fut).await;
         assert!(
@@ -8306,6 +8609,90 @@ mod tests {
                 .turn_in_flight,
             "the gate must NOT be set while blocked on channel capacity (cancellation-safe)"
         );
+    }
+
+    /// A session cut for an edited message takes that message and nothing
+    /// else (`RewindHold`): another prompt is busy, the edited one is admitted
+    /// and releases the hold.
+    #[tokio::test]
+    async fn a_rewind_hold_admits_only_the_edited_message() {
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-hold";
+        let _rx = insert_live_connection(&mgr, conn_id, AgentType::ClaudeCode, None).await;
+        let state = mgr.get_state(conn_id).await.unwrap();
+        state.write().await.rewind_hold = Some(crate::acp::rewind::RewindHold::new(
+            "optimistic-edit".into(),
+        ));
+        let prompt = |id: Option<&str>| {
+            (
+                vec![PromptInputBlock::Text { text: "x".into() }],
+                id.map(|id| (id.to_string(), Vec::new())),
+            )
+        };
+
+        let (blocks, user) = prompt(Some("optimistic-other"));
+        let other = mgr
+            .send_prompt_inner(conn_id, blocks, user, Vec::new(), None, None, None)
+            .await;
+        assert!(matches!(other, Err(AcpError::TurnInProgress)));
+        let (blocks, user) = prompt(None);
+        let anonymous = mgr
+            .send_prompt_inner(conn_id, blocks, user, Vec::new(), None, None, None)
+            .await;
+        assert!(matches!(anonymous, Err(AcpError::TurnInProgress)));
+        assert!(!state.read().await.turn_in_flight);
+
+        let (blocks, user) = prompt(Some("optimistic-edit"));
+        mgr.send_prompt_inner(conn_id, blocks, user, Vec::new(), None, None, None)
+            .await
+            .expect("the edited message is admitted");
+        let s = state.read().await;
+        assert!(s.turn_in_flight);
+        assert!(s.rewind_hold.is_none());
+    }
+
+    /// An edited message whose rewind cannot even be asked for (here: the
+    /// agent does not offer it) fails before any side effect — no turn, no
+    /// hold, no prompt on the wire.
+    #[tokio::test]
+    async fn an_edited_message_the_agent_cannot_rewind_sends_nothing() {
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/rw-none").await;
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-rw-none";
+        let mut cmd_rx = insert_live_connection(
+            &mgr,
+            conn_id,
+            AgentType::ClaudeCode,
+            Some(PathBuf::from("/tmp/rw-none")),
+        )
+        .await;
+
+        let err = mgr
+            .send_prompt_linked_rewinding(
+                &db,
+                conn_id,
+                vec![PromptInputBlock::Text {
+                    text: "edited".into(),
+                }],
+                Some(folder_id),
+                None,
+                Some("optimistic-edit".to_string()),
+                crate::acp::rewind::RewindTarget {
+                    agent_message_id: "u2".into(),
+                    text: "original".into(),
+                },
+            )
+            .await
+            .expect_err("no rewind, no send");
+        assert!(!matches!(err, AcpError::RewindRefused(_)));
+        let state = mgr.get_state(conn_id).await.unwrap();
+        let s = state.read().await;
+        assert!(!s.turn_in_flight);
+        assert!(s.rewind_hold.is_none());
+        drop(s);
+        assert!(drain_prompt_user_messages(&mut cmd_rx).is_empty());
     }
 
     #[tokio::test]
@@ -9604,6 +9991,7 @@ mod tests {
                 .apply_event(&crate::acp::types::AcpEvent::RemoteControl {
                     remote_control: Some(crate::acp::types::RemoteControlInfo {
                         session_url: Some("https://claude.ai/code/session_01".into()),
+                        at_startup: false,
                     }),
                 });
         }
@@ -9630,6 +10018,39 @@ mod tests {
         backdate_last_activity(&mgr, "remote", 600).await;
         let n = mgr.sweep_idle(Duration::from_secs(300)).await;
         assert_eq!(n, 1, "Remote Control off no longer exempts the sweep");
+    }
+
+    /// Remote Control that started with the session on its own
+    /// (claude-agent-acp 0.113.0, `remoteControlAtStartup` or a rollout) was
+    /// not handed over by the user, so it does not keep the connection up.
+    #[tokio::test]
+    async fn sweep_idle_reaps_remote_control_started_with_the_session() {
+        let mgr = ConnectionManager::new();
+        insert_fake_connection(
+            &mgr,
+            "startup",
+            AgentType::ClaudeCode,
+            None,
+            EventEmitter::Noop,
+        )
+        .await;
+        {
+            let state = mgr.get_state("startup").await.unwrap();
+            let mut state = state.write().await;
+            state.apply_event(&crate::acp::types::AcpEvent::RemoteControl {
+                remote_control: Some(crate::acp::types::RemoteControlInfo {
+                    session_url: Some("https://claude.ai/code/session_01".into()),
+                    at_startup: true,
+                }),
+            });
+            assert!(
+                teardown_blocker(&state, chrono::Utc::now(), |_| false).is_none(),
+                "nor does it block a move"
+            );
+        }
+        backdate_last_activity(&mgr, "startup", 600).await;
+        let n = mgr.sweep_idle(Duration::from_secs(300)).await;
+        assert_eq!(n, 1, "Remote Control started with the session is swept");
     }
 
     /// An async delegation outlives the turn that started it, so its parent
@@ -11138,13 +11559,49 @@ mod tests {
     ) -> tokio::task::JoinHandle<Vec<PromptInputBlock>> {
         tokio::spawn(async move {
             match rx.recv().await {
-                Some(ConnectionCommand::Steer { blocks, reply }) => {
+                Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
                     let _ = reply.send(outcome);
                     blocks
                 }
                 _ => panic!("expected a Steer command"),
             }
         })
+    }
+
+    /// A steer aimed at a turn that is over by the time it is admitted —
+    /// the next is running — is refused before anything goes to the loop,
+    /// and carries the turn it is aimed at to the loop when admitted.
+    #[tokio::test]
+    async fn a_steer_for_a_turn_that_ended_is_refused_at_admission() {
+        let mgr = ConnectionManager::new();
+        let mut rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        mgr.get_state("c1").await.unwrap().write().await.turns_completed = 4;
+        let err = mgr
+            .submit_feedback_for_turn("c1", "for the turn before".into(), None, Some(3))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AcpError::NoActiveTurn));
+        assert!(rx.try_recv().is_err(), "nothing went to the loop");
+        let taken = tokio::spawn(async move {
+            match rx.recv().await {
+                Some(ConnectionCommand::Steer {
+                    expect_turns_completed,
+                    reply,
+                    ..
+                }) => {
+                    let _ = reply.send(Ok(SteerOutcome::Injected));
+                    expect_turns_completed
+                }
+                _ => panic!("expected a Steer command"),
+            }
+        });
+        mgr.submit_feedback_for_turn("c1", "for this turn".into(), None, Some(4))
+            .await
+            .unwrap();
+        assert_eq!(taken.await.unwrap(), Some(4), "the loop checks it again");
     }
 
     /// [`answer_steer`] for a test that submits more than once: answers `n`

@@ -22,6 +22,7 @@ import {
   ChevronRight,
   SquareTerminal,
   ListChecks,
+  Hand,
   MessageCircleQuestionMark,
   ShieldCheck,
   Unlink,
@@ -85,6 +86,7 @@ import { AgentIcon } from "@/components/agent-icon"
 import { useIdentityAssistant } from "@/components/message/delegation-identity"
 import { BotAvatar } from "@/components/personal-agent/bot-avatar"
 import { useBranchChip, useResolvedTags } from "@/hooks/use-conversation-tags"
+import type { BlockingPromptKind } from "@/lib/blocking-prompts"
 import { useDetachAskConversation } from "./use-detach-ask-conversation"
 
 /**
@@ -99,8 +101,28 @@ import { useDetachAskConversation } from "./use-detach-ask-conversation"
 export const CONV_RAIL_DEPTH_STEP = "1.25rem"
 
 /**
+ * One look for every rail of the list, the message steps' timeline's: a 1px
+ * hairline in `--activity-rail` — px, not rem, so the app zoom (which scales
+ * the root font size) moves it with the rows but never thickens it. Each rail
+ * sits at `axis − 0.5px`, so its centre is the axis the row's icon is centred
+ * on.
+ */
+const CONV_RAIL_CLASS = "pointer-events-none absolute z-0 w-px bg-activity-rail"
+
+/**
+ * A rail's run down its row: exactly the row's 2rem slot, no more. Drawn in a
+ * row's pill (1.9375rem, at the top of its slot), it reaches the 1px under
+ * the pill; drawn in a box that is the whole slot (`fullHeight`), it is that
+ * box. Never past it: the rail is translucent, so where two rows' rails
+ * overlapped the join would show as a darker dot down the line.
+ */
+function railSpan(fullHeight: boolean): CSSProperties {
+  return { top: 0, bottom: fullHeight ? 0 : "-0.0625rem" }
+}
+
+/**
  * Vertical guide rails for a delegation sub-session's ANCESTORS. A row at `depth`
- * draws one rail per ancestor level (axis 0 … depth−1), each a 2px line at
+ * draws one rail per ancestor level (axis 0 … depth−1), each a 1px line centred on
  * `axis(level) = 0.875rem + level·CONV_RAIL_DEPTH_STEP` from the row's left edge
  * — the same x as that ancestor row's own rail. Stacked across a contiguous
  * subtree they render each parent's rail as a single continuous vertical line
@@ -112,7 +134,14 @@ export const CONV_RAIL_DEPTH_STEP = "1.25rem"
  * Renders nothing for a root (depth 0). Shared with the list's sub-session
  * loading placeholder so the spine stays continuous while children are fetched.
  */
-export function SubsessionAncestorRails({ depth }: { depth: number }) {
+export function SubsessionAncestorRails({
+  depth,
+  fullHeight = false,
+}: {
+  depth: number
+  /** Drawn in a box that is the row's whole slot (not in its pill). */
+  fullHeight?: boolean
+}) {
   if (depth <= 0) return null
   return (
     <>
@@ -121,13 +150,10 @@ export function SubsessionAncestorRails({ depth }: { depth: number }) {
           key={level}
           aria-hidden
           data-subsession-rail
-          className="pointer-events-none absolute z-0 bg-sidebar-border"
+          className={CONV_RAIL_CLASS}
           style={{
-            top: "-0.0625rem",
-            bottom: "-0.0625rem",
-            left: `calc(0.875rem + ${level} * ${CONV_RAIL_DEPTH_STEP})`,
-            width: "0.125rem",
-            transform: "translateX(-50%)",
+            ...railSpan(fullHeight),
+            left: `calc(0.875rem + ${level} * ${CONV_RAIL_DEPTH_STEP} - 0.5px)`,
           }}
         />
       ))}
@@ -227,6 +253,14 @@ interface SidebarConversationCardProps {
   expanded?: boolean
   /** Toggle this conversation's sub-session subtree (lazily loads on expand). */
   onToggleExpand?: (id: number) => void
+  /**
+   * The agent is parked on a decision and will not move until the user acts:
+   * which one, or `null`. Derived from the live connection rather than from
+   * `conversation.status` — see `conversation-attention` — and passed DOWN by
+   * the list, which holds the one subscription. A card subscribing on its own
+   * would put a store listener on every visible row.
+   */
+  awaiting?: BlockingPromptKind | null
 }
 
 export const SidebarConversationCard = memo(function SidebarConversationCard({
@@ -249,6 +283,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   hasChildren = false,
   expanded = false,
   onToggleExpand,
+  awaiting = null,
 }: SidebarConversationCardProps) {
   const t = useTranslations("Folder.conversationCard")
   const ime = useImeGuard()
@@ -369,8 +404,12 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   ])
 
   const status = conversation.status as ConversationStatus
-  const isRunning = status === "in_progress"
-  const isCancelled = status === "cancelled"
+  // A blocked session is ALSO `in_progress`, so the answer wins the right slot:
+  // "running" is true but useless there, while "waiting for you" is the one
+  // thing the user has to act on. Everything else keeps its old precedence.
+  const isAwaiting = awaiting != null
+  const isRunning = status === "in_progress" && !isAwaiting
+  const isCancelled = status === "cancelled" && !isAwaiting
   const isPinned = conversation.pinned_at != null
   const isCompleted = status === "completed"
 
@@ -442,15 +481,10 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     shifted) rail axis. */}
                     <span
                       aria-hidden
-                      className={cn(
-                        "pointer-events-none absolute z-0 bg-sidebar-border"
-                      )}
+                      className={CONV_RAIL_CLASS}
                       style={{
-                        top: "-0.0625rem",
-                        bottom: "-0.0625rem",
-                        left: "var(--conv-rail-axis, 0.875rem)",
-                        width: "0.125rem",
-                        transform: "translateX(-50%)",
+                        ...railSpan(false),
+                        left: "calc(var(--conv-rail-axis, 0.875rem) - 0.5px)",
                       }}
                     />
                     <div
@@ -487,8 +521,14 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       )}
                       <ConversationStatusDot
                         status={status}
+                        attention={awaiting}
                         size="sm"
                         className="absolute -right-0.5 -bottom-0.5 ring-2 ring-sidebar"
+                        title={
+                          awaiting
+                            ? tSidebar(`statusAwaiting.${awaiting}`)
+                            : undefined
+                        }
                       />
                     </div>
 
@@ -638,7 +678,25 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                         !isSubsession && "group-hover:hidden"
                       )}
                     >
-                      {isRunning ? (
+                      {awaiting != null ? (
+                        // 最值得打断用户的一个状态，所以占用运行中转圈和时间
+                        // 争的那一格。只画一个静态紫色的 Hand 图标：等待原因
+                        // 留在 title 和 sr-only 里，行上不再有可见文案。容器与
+                        // 下面取消状态的 XCircle 完全一致，两个图标于是落在同一
+                        // 个 x 上；悬停也一视同仁地让位给快捷操作。
+                        <span
+                          className="relative inline-flex shrink-0 items-center justify-center"
+                          title={tSidebar(`statusAwaiting.${awaiting}`)}
+                        >
+                          <Hand
+                            className="h-3.5 w-3.5 text-violet-700 dark:text-violet-300"
+                            aria-hidden
+                          />
+                          <span className="sr-only">
+                            {tSidebar(`statusAwaiting.${awaiting}`)}
+                          </span>
+                        </span>
+                      ) : isRunning ? (
                         <span
                           className="relative inline-flex shrink-0 items-center justify-center"
                           title={tSidebar("statusRunningBadge")}

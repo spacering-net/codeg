@@ -234,10 +234,14 @@ Tell them to pick it in your settings, or hand the work to another assistant wit
 
 const TOOL_NOTES: &str = "You do work yourself with `dispatch`: it opens a work session (modes: \
 `task` for code changes in a project's worktree, `chat` for work outside any project, `session` for \
-investigating a project's current checkout); continue it with `dispatch_followup`. Work that is \
+investigating a project's current checkout); continue it with `dispatch_followup`; stop one that is \
+no longer needed (or that the owner asks you to stop) with `dispatch_stop` and a reason — not only \
+because it is slow. Work that is \
 another assistant's (\"Your team\" above, the first lines of each one's persona) you hand to it \
 with `bot_message`. Both return at once; progress reaches \
-you later as a <codeg-events> block. `project_list` gives the project ids they take. \
+you later as a <codeg-events> block. When the owner wants a dispatch's result in this very reply \
+(\"have it checked, then tell me\"), wait for it with `dispatch_wait` — never sleep and poll its \
+session — and mark the news you report with its [[quote:#N]]. `project_list` gives the project ids they take. \
 `item_list` / `item_read` / `item_update` keep your open matters; `timeline_read` pages back \
 through the timeline. Every turn starts with <codeg-now>: the owner's date, time, weekday and zone, \
 whether they are in codeg now — work out \"tomorrow at 3 pm\" from it. To remind the owner at a time, `item_update` with `due` \
@@ -260,10 +264,13 @@ a conflict, ready to merge, merged) as `pr` events; `pr_status` with `watch: tru
 other. When a turn carries inputs from more than one source, say which one each \
 action is for with `for`. Long work never runs in your own turn: dispatch it. Messages and events carry their timeline \
 number as `[#ID]`; when you answer one that is not the newest, write `[[quote:#ID]]` in your \
-answer (it is shown as a quote, not as text). When you report results of work, the owner already \
-sees each result's card above your reply (its title, state, the way to its session): lead with the \
-conclusion and what they need to do, do not say its title, state or session again, and write \
-`[[quote:#ID]]` for each result you report — codeg folds away the cards you reported. Work \
+answer (it is shown as a quote, not as text). When you report results of work: the owner sees each \
+result on the timeline, one you report folded to a line (its title and state) that opens to the \
+whole card, which opens its session; once work has a result, its pill makes way for it. Name each \
+piece of work and its result, then what they need to do, and write `[[quote:#ID]]` for each result \
+you report in your conclusion — the text after your last tool call; a marker written before one \
+reports nothing, and that result stays a whole card. In any \
+reply, never link the session of work you dispatched: its pill and card open it already. Work \
 \"The owner merged\": do not say it was merged, only what follows from it; when it is all the turn \
 brought and nothing follows, reply `[[silent]]` alone. When the owner tells you to change how you or \
 codeg work (shorter replies, ask before dispatching code changes, …), `prefs_update` changes it \
@@ -901,7 +908,9 @@ mod tests {
         assert!(TOOL_NOTES.contains("look at the team first"));
         // An agent with no skill learns how a result is reported here (A3).
         assert!(TOOL_NOTES.contains("`[[quote:#ID]]` for each result you report"));
-        assert!(TOOL_NOTES.contains("do not say its title, state or session again"));
+        // Each piece named in the reply, its marker in the conclusion (P6).
+        assert!(TOOL_NOTES.contains("Name each piece of work and its result"));
+        assert!(TOOL_NOTES.contains("report in your conclusion — the text after your last tool call"));
         // Its skill and tools are not named to the owner.
         assert!(TOOL_NOTES.contains("never name them in what you write"));
         for worker in [false, true] {

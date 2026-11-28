@@ -138,13 +138,19 @@ function draw(
     row = replyRow(),
     running = false,
     page = scope(),
-  }: { row?: TimelineRow; running?: boolean; page?: PageScope } = {}
+    readOnly = false,
+  }: {
+    row?: TimelineRow
+    running?: boolean
+    page?: PageScope
+    readOnly?: boolean
+  } = {}
 ) {
   const tree = (r: TimelineRow) => (
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <PageScopeContext.Provider value={page}>
         <StreamdownContext.Provider value={STATIC}>
-          <PaReplyScope row={r} running={running}>
+          <PaReplyScope row={r} running={running} readOnly={readOnly}>
             <PaJsonRenderBlock source={source} fallback={<pre>code</pre>} />
           </PaReplyScope>
         </StreamdownContext.Provider>
@@ -178,6 +184,7 @@ beforeEach(() => {
   api.personalAgentItemAct.mockResolvedValue(item(5))
   api.personalAgentItems.mockResolvedValue([item(5)])
   onDraft.mockReset()
+  onDraft.mockReturnValue(true)
 })
 afterEach(() => vi.useRealTimers())
 
@@ -255,6 +262,14 @@ describe("an assistant's card: pa.reply", () => {
       screen.getByRole("button", { name: "Put in the input box" })
     )
     expect(onDraft).toHaveBeenCalledWith(120, "Name: Ada")
+    // Not taken (the box is sending): the confirmation stays, its text too.
+    onDraft.mockReturnValueOnce(false)
+    fireEvent.click(screen.getByRole("button", { name: "Send the form" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Put in the input box" })
+    )
+    expect(screen.getByText("Name: Ada")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
     fireEvent.click(screen.getByRole("button", { name: "Send the form" }))
     fireEvent.click(await screen.findByRole("button", { name: "Send" }))
     await waitFor(() =>
@@ -303,6 +318,40 @@ describe("an assistant's card: pa.reply", () => {
   })
 })
 
+describe("an assistant's card in what its turn said on the way (P6)", () => {
+  it("draws its buttons and links, and none of them does anything", async () => {
+    const src = card({
+      a: button("Go with plan A", reply()),
+      b: button("Done", {
+        press: { action: "pa.item", params: { item_id: 5, op: "done" } },
+      }),
+      c: button("Open the task", {
+        press: { action: "pa.open", params: { target: "task", id: 3 } },
+      }),
+      d: {
+        type: "Link",
+        props: { label: "The docs", href: "https://example.com/docs" },
+        children: [],
+      },
+    })
+    draw(src, { readOnly: true })
+    for (const name of ["Go with plan A", "Done", "Open the task"]) {
+      const b = screen.getByRole("button", { name })
+      expect((b as HTMLButtonElement).disabled).toBe(true)
+      fireEvent.click(b)
+    }
+    const link = screen.getByText("The docs")
+    expect(link.closest("a")).toBeNull()
+    expect(link.getAttribute("aria-disabled")).toBe("true")
+    fireEvent.click(link)
+    await act(async () => {})
+    expect(api.personalAgentSend).not.toHaveBeenCalled()
+    expect(api.personalAgentItemAct).not.toHaveBeenCalled()
+    expect(onDraft).not.toHaveBeenCalled()
+    expect(usePersonalAgentUi.getState().workOpen).not.toBe(true)
+  })
+})
+
 describe("an assistant's card: pa.item", () => {
   it("is not there for a matter that is not this assistant's open one", async () => {
     draw(
@@ -346,7 +395,8 @@ describe("an assistant's card: pa.item", () => {
         7,
         5,
         "snooze",
-        "1h"
+        "1h",
+        "card"
       )
     )
     await waitFor(() =>
@@ -360,7 +410,13 @@ describe("an assistant's card: pa.item", () => {
     // Without one, it waits on time with no due.
     fireEvent.click(screen.getByRole("button", { name: "Later" }))
     await waitFor(() =>
-      expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(7, 5, "snooze")
+      expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(
+        7,
+        5,
+        "snooze",
+        undefined,
+        "card"
+      )
     )
   })
 
@@ -382,7 +438,14 @@ describe("an assistant's card: pa.item", () => {
         { action: "pa.item", label: "Done", op: "done" }
       )
     )
-    expect(api.personalAgentItemAct).toHaveBeenCalledWith(7, 5, "done")
+    // A card's press is the card's: not taken back from the panel.
+    expect(api.personalAgentItemAct).toHaveBeenCalledWith(
+      7,
+      5,
+      "done",
+      undefined,
+      "card"
+    )
   })
 
   it("asks before dropping one", async () => {
@@ -403,7 +466,13 @@ describe("an assistant's card: pa.item", () => {
       .find((b) => b.hasAttribute("data-pa-card-drop"))!
     fireEvent.click(confirm)
     await waitFor(() =>
-      expect(api.personalAgentItemAct).toHaveBeenCalledWith(7, 5, "drop")
+      expect(api.personalAgentItemAct).toHaveBeenCalledWith(
+        7,
+        5,
+        "drop",
+        undefined,
+        "card"
+      )
     )
   })
 })

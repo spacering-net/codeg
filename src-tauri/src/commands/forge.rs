@@ -1768,6 +1768,10 @@ pub async fn create_forge_task(
                 "the task board reported a duplicate without naming it",
             )),
         },
+        // A personal agent's dispatch's alone: never from here.
+        ForgeCreateOutcome::DispatchStopped | ForgeCreateOutcome::DispatchAlready(_) => Err(
+            AppCommandError::database_error("the task board answered for a dispatch"),
+        ),
     }
 }
 
@@ -2049,6 +2053,9 @@ pub async fn create_forge_issues_task(
             crate::commands::work_task::nudge_pump(task.folder_id);
             Ok(ForgeIssuesCreateResult::Created { task })
         }
+        ForgeCreateOutcome::DispatchStopped | ForgeCreateOutcome::DispatchAlready(_) => Err(
+            AppCommandError::database_error("the task board answered for a dispatch"),
+        ),
         ForgeCreateOutcome::Duplicate(conflicts) => Ok(ForgeIssuesCreateResult::Duplicate {
             conflicts: conflicts
                 .into_iter()

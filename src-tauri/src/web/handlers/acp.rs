@@ -202,41 +202,62 @@ pub struct AcpPromptParams {
     pub conversation_id: Option<i32>,
     #[serde(default)]
     pub client_message_id: Option<String>,
+    /// An edited message's rewind (see the Tauri command of the same name).
+    #[serde(default)]
+    pub rewind: Option<crate::acp::rewind::RewindTarget>,
 }
 
 pub async fn acp_prompt(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpPromptParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    state
-        .connection_manager
-        .send_prompt_linked_with_message_id(
-            &state.db,
-            &params.connection_id,
-            params.blocks,
-            params.folder_id,
-            params.conversation_id,
-            None,
-            params.client_message_id,
-        )
-        .await
-        .map_err(|e| {
-            let message = e.to_string();
-            // A concurrent send while a turn is in flight is an expected,
-            // recoverable condition (409), not a server fault (500). The
-            // frontend re-queues the draft. Other errors stay 500.
-            match e {
-                AcpError::TurnInProgress => {
-                    AppCommandError::new(AppErrorCode::TurnInProgress, message)
-                }
-                // The conversation was moved to another folder: expected, and
-                // the client recovers by re-pointing its tab — not a fault.
-                AcpError::ConversationMoved { .. } => {
-                    AppCommandError::new(AppErrorCode::InvalidInput, message)
-                }
-                _ => AppCommandError::task_execution_failed(message),
+    let manager = &state.connection_manager;
+    let sent = match params.rewind {
+        Some(rewind) => {
+            manager
+                .send_prompt_linked_rewinding(
+                    &state.db,
+                    &params.connection_id,
+                    params.blocks,
+                    params.folder_id,
+                    params.conversation_id,
+                    params.client_message_id,
+                    rewind,
+                )
+                .await
+        }
+        None => {
+            manager
+                .send_prompt_linked_with_message_id(
+                    &state.db,
+                    &params.connection_id,
+                    params.blocks,
+                    params.folder_id,
+                    params.conversation_id,
+                    None,
+                    params.client_message_id,
+                )
+                .await
+        }
+    };
+    sent.map_err(|e| {
+        let message = e.to_string();
+        // A concurrent send while a turn is in flight is an expected,
+        // recoverable condition (409), not a server fault (500). The
+        // frontend re-queues the draft. Other errors stay 500.
+        match e {
+            AcpError::TurnInProgress => AppCommandError::new(AppErrorCode::TurnInProgress, message),
+            // An edited message's rewind was declined: expected, nothing
+            // changed, and the client keeps its editor open.
+            AcpError::RewindRefused(_) => AppCommandError::new(AppErrorCode::InvalidInput, message),
+            // The conversation was moved to another folder: expected, and
+            // the client recovers by re-pointing its tab — not a fault.
+            AcpError::ConversationMoved { .. } => {
+                AppCommandError::new(AppErrorCode::InvalidInput, message)
             }
-        })?;
+            _ => AppCommandError::task_execution_failed(message),
+        }
+    })?;
     // A person typed this in a codeg window: a dispatch they write in is
     // theirs from now on.
     crate::personal_agent::note_owner_prompt(&params.connection_id, params.conversation_id);
@@ -538,6 +559,18 @@ pub async fn acp_cancel(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpConnectionIdParams>,
 ) -> Result<Json<()>, AppCommandError> {
+    // A personal agent's handed-out work: the owner stopping it (D2),
+    // through to its end even if this request is dropped.
+    let conn = params.connection_id.clone();
+    let stopped = crate::commands::personal_agent::on_own_task(async move {
+        crate::personal_agent::stop::note_owner_cancel(&conn)
+            .await
+            .map_err(AppCommandError::task_execution_failed)
+    })
+    .await?;
+    if stopped {
+        return Ok(Json(()));
+    }
     let manager = &state.connection_manager;
     manager
         .cancel(&state.db.conn, &params.connection_id)
@@ -1148,15 +1181,6 @@ pub async fn acp_validate_pi_command(
     )))
 }
 
-pub async fn acp_sync_antigravity_settings(
-    Extension(state): Extension<Arc<AppState>>,
-) -> Result<Json<crate::acp::connection::AntigravitySyncReport>, AppCommandError> {
-    let result = acp_commands::acp_sync_antigravity_settings_core(&state.db)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(result))
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpAntigravityLoginStartParams {
@@ -1206,11 +1230,11 @@ pub async fn acp_antigravity_login_cancel(
 
 pub async fn acp_antigravity_sign_out(
     Extension(state): Extension<Arc<AppState>>,
-) -> Result<Json<crate::acp::connection::AntigravitySyncReport>, AppCommandError> {
-    let result = acp_commands::acp_antigravity_sign_out_core(&state.db, &state.connection_manager)
+) -> Result<Json<()>, AppCommandError> {
+    acp_commands::acp_antigravity_sign_out_core(&state.db, &state.connection_manager)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(result))
+    Ok(Json(()))
 }
 
 #[derive(Deserialize)]

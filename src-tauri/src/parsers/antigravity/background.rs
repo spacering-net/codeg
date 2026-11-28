@@ -623,6 +623,7 @@ mod tests {
         ));
         let parser = AntigravityParser {
             base_dir: configured.clone(),
+            legacy_dir: None,
             fallback: Some(default),
         };
         assert!(parser.get_conversation("session").is_ok());

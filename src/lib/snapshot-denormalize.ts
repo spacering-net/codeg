@@ -85,6 +85,7 @@ export interface SnapshotPatch {
   /** The composer's pending mode pick on this connection, or `null`. */
   composerModeId: string | null
   supportsFork: boolean
+  supportsRewind: boolean
   /** Whether the running session is on stale (launch-time) config — recovered
    *  from the snapshot so a reconnect/refresh/new tile sees the banner state
    *  that the one-shot `session_config_stale` event won't replay. */
@@ -157,7 +158,10 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     usage: wire.usage,
     promptSuggestion: wire.prompt_suggestion ?? null,
     remoteControl: wire.remote_control
-      ? { session_url: wire.remote_control.session_url ?? null }
+      ? {
+          session_url: wire.remote_control.session_url ?? null,
+          ...(wire.remote_control.at_startup ? { at_startup: true } : {}),
+        }
       : null,
     liveMessage: wire.live_message
       ? denormalizeLiveMessage(wire.live_message, toolMap)
@@ -192,6 +196,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     selectorsReady: wire.selectors_ready,
     composerModeId: wire.composer_mode_id ?? null,
     supportsFork: wire.fork_supported,
+    supportsRewind: wire.rewind_supported ?? false,
     configStale: wire.config_stale ?? false,
     configStaleKind: wire.config_stale_kind ?? null,
     backgroundOutstanding: wire.background_outstanding ?? 0,

@@ -12,7 +12,7 @@
  * Written by codeg, never by the model.
  */
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useFormatter, useTranslations } from "next-intl"
 import { ChevronDown } from "lucide-react"
 
@@ -20,7 +20,7 @@ import type { BotAvatar as AvatarValue, TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 import { BotAvatar } from "./bot-avatar"
-import { ExchangeSheet } from "./exchange-sheet"
+import { ExchangeSheet, lineMessageOf } from "./exchange-sheet"
 import type { MessageItem } from "./message-items"
 import { useEnterClass } from "./message-row"
 import { num, str, useBotName } from "./shared"
@@ -45,12 +45,6 @@ export function peerOf(row: TimelineRow): Peer {
     avatar: (p?.avatar as AvatarValue | null | undefined) ?? null,
     kind: str(p, "kind"),
   }
-}
-
-/** The message's first line, for the hover. */
-function firstLine(text: string): string {
-  const line = text.split("\n").find((l) => l.trim() !== "") ?? ""
-  return line.length > 140 ? `${line.slice(0, 140)}…` : line
 }
 
 /** Where a message stands, when that is worth a word: taken back or held. */
@@ -93,7 +87,6 @@ function Line({
       type="button"
       data-row-id={nested ? row.id : undefined}
       data-pa-exchange-line={out ? "out" : "in"}
-      title={firstLine(row.body)}
       onClick={() => onOpen(row)}
       className={cn(
         "inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground",
@@ -113,12 +106,16 @@ export function ExchangeRow({ item }: { item: ExchangeItem }) {
   const format = useFormatter()
   const [open, setOpen] = useState(false)
   const [sheetRow, setSheetRow] = useState<TimelineRow | null>(null)
+  // The bubble stands over the whole line — the run opening or folding, or
+  // another line joining it, leaves it where it is.
+  const anchor = useRef<HTMLDivElement | null>(null)
   const botName = useBotName()
   const enter = useEnterClass()
   const rows = item.rows
   const names = [...new Set(rows.map((r) => botName(peerOf(r))))]
   return (
     <div
+      ref={anchor}
       data-row-id={item.row.id}
       data-pa-divider
       data-pa-exchange
@@ -158,7 +155,12 @@ export function ExchangeRow({ item }: { item: ExchangeItem }) {
             : null}
         </>
       )}
-      <ExchangeSheet row={sheetRow} onClose={() => setSheetRow(null)} />
+      <ExchangeSheet
+        row={sheetRow}
+        onClose={() => setSheetRow(null)}
+        anchor={anchor}
+        target={sheetRow ? lineMessageOf(sheetRow) : null}
+      />
     </div>
   )
 }

@@ -12,10 +12,11 @@ use crate::models::{
 };
 use crate::parsers::expand_home_prefix;
 use crate::parsers::{
-    backfill_turn_durations, compute_session_stats, folder_name_from_path,
-    infer_context_window_max_tokens, merge_context_window_stats, relocate_orphaned_tool_results,
-    resolve_patch_line_numbers, structurize_read_tool_output, title_from_user_text, truncate_str,
-    AgentEnv, AgentParser, ParseError,
+    add_unplaced_usage_to_total, add_usage_to_turn_current_at, backfill_turn_durations,
+    compute_session_stats, folder_name_from_path, infer_context_window_max_tokens,
+    merge_context_window_stats, relocate_orphaned_tool_results, resolve_patch_line_numbers,
+    structurize_read_tool_output, title_from_user_text, truncate_str, AgentEnv, AgentParser,
+    ParseError,
 };
 
 /// Resolve the DeepSeek Harness home the way `@deepseek-ai/dsh-home-paths`'
@@ -267,6 +268,12 @@ impl DeepSeekParser {
         structurize_read_tool_output(&mut turns);
         resolve_patch_line_numbers(&mut turns, parsed.cwd.as_deref());
         backfill_turn_durations(&mut turns, &[]);
+        let mut unplaced = TurnUsage::default();
+        for (at, usage) in &parsed.spend_elsewhere {
+            if !add_usage_to_turn_current_at(&mut turns, *at, usage) {
+                unplaced = add_usage(unplaced, usage.clone());
+            }
+        }
 
         // Context-window occupancy is the LATEST step's input side; capacity
         // comes from the log's own `request/context.contextWindow` (falling
@@ -275,7 +282,7 @@ impl DeepSeekParser {
             .context_window
             .or_else(|| infer_context_window_max_tokens(parsed.model.as_deref()));
         let session_stats = merge_context_window_stats(
-            compute_session_stats(&turns),
+            add_unplaced_usage_to_total(compute_session_stats(&turns), &unplaced),
             parsed.last_step_input_side,
             max_tokens,
         );
@@ -385,6 +392,9 @@ struct SessionParse {
     message_count: u32,
     /// Content-bearing records — whether the session is worth listing at all.
     content_events: u32,
+    /// Spend no turn's own step usage carries: `(when, usage)` — compaction
+    /// summaries, and steps of a turn that rendered nothing.
+    spend_elsewhere: Vec<(Option<DateTime<Utc>>, TurnUsage)>,
 }
 
 /// The physical encoding of one session log: Zstandard frames (upstream's
@@ -823,8 +833,12 @@ fn parse_session_events(text: &str, attachments: Option<&Path>) -> SessionParse 
     // context injected while the summary runs may sit between the pair, and
     // nothing in the log format promises the brackets never interleave.
     let mut open_compactions: HashMap<String, OpenCompaction> = HashMap::new();
+    // What a seeded session (a fork) copied from its parent: see
+    // `SeedCut`. Each copied step's usage is the parent's spend, which the
+    // parent's own conversation counts.
+    let seed = SeedCut::of(text);
 
-    for line in text.lines() {
+    for (line_idx, line) in text.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -879,6 +893,7 @@ fn parse_session_events(text: &str, attachments: Option<&Path>) -> SessionParse 
                     &mut pending_usage,
                     None,
                     turn_started_at,
+                    &mut sp.spend_elsewhere,
                 );
                 turn_started_at = ts;
             }
@@ -889,6 +904,7 @@ fn parse_session_events(text: &str, attachments: Option<&Path>) -> SessionParse 
                     &mut pending_usage,
                     ts,
                     turn_started_at,
+                    &mut sp.spend_elsewhere,
                 );
                 turn_started_at = None;
             }
@@ -978,10 +994,12 @@ fn parse_session_events(text: &str, attachments: Option<&Path>) -> SessionParse 
                             .input_tokens
                             .saturating_add(usage.cache_read_input_tokens),
                     );
-                    pending_usage = Some(match pending_usage.take() {
-                        Some(prev) => add_usage(prev, usage.clone()),
-                        None => usage.clone(),
-                    });
+                    if !seed.inherits(line_idx, &value, sp.created_at) {
+                        pending_usage = Some(match pending_usage.take() {
+                            Some(prev) => add_usage(prev, usage.clone()),
+                            None => usage.clone(),
+                        });
+                    }
                 }
                 let message = data.get("message");
                 let source_model = message
@@ -1193,10 +1211,18 @@ fn parse_session_events(text: &str, attachments: Option<&Path>) -> SessionParse 
                 // this compaction bought.
                 entry.pre_tokens = data.get("shadowedTokenCount").and_then(Value::as_u64);
                 entry.post_tokens = data.pointer("/usage/outputTokens").and_then(Value::as_u64);
+                // That request was billed too, and no step carries it.
+                if let Some(usage) = usage_from_step(data.get("usage")) {
+                    if !seed.inherits(line_idx, &value, sp.created_at) {
+                        sp.spend_elsewhere.push((ts, usage));
+                    }
+                }
             }
             "compaction/end" => {
                 let Some(data) = data else { continue };
-                let Some(id) = compaction_id(data) else { continue };
+                let Some(id) = compaction_id(data) else {
+                    continue;
+                };
                 let entry = open_compactions.remove(&id).unwrap_or_default();
                 let error = data
                     .get("error")
@@ -1284,6 +1310,7 @@ fn parse_session_events(text: &str, attachments: Option<&Path>) -> SessionParse 
         &mut pending_usage,
         None,
         turn_started_at,
+        &mut sp.spend_elsewhere,
     );
     sp
 }
@@ -1327,13 +1354,20 @@ fn finalize_assistant(
     pending_usage: &mut Option<TurnUsage>,
     ended_at: Option<DateTime<Utc>>,
     started_at: Option<DateTime<Utc>>,
+    spend_elsewhere: &mut Vec<(Option<DateTime<Utc>>, TurnUsage)>,
 ) {
+    // A turn with nothing to show still spent what its steps report.
+    let mut set_aside = |pending: &mut Option<TurnUsage>| {
+        if let Some(usage) = pending.take() {
+            spend_elsewhere.push((ended_at.or(started_at), usage));
+        }
+    };
     let Some(idx) = open_assistant.take() else {
-        *pending_usage = None;
+        set_aside(pending_usage);
         return;
     };
     let Some(turn) = turns.get_mut(idx) else {
-        *pending_usage = None;
+        set_aside(pending_usage);
         return;
     };
     if let Some(usage) = pending_usage.take() {
@@ -1349,6 +1383,85 @@ fn finalize_assistant(
             if ms > 0 {
                 turn.duration_ms = Some(ms as u64);
             }
+        }
+    }
+}
+
+/// Where a seeded session's copy of its parent's history ends.
+///
+/// A fork's log opens with a SEED — the parent's events copied up to the fork
+/// point, original timestamps and usage included — and a parent forked three
+/// times billed its history four times over when that was read as each
+/// fork's own. The format declares the cut
+/// (`dsh-session-persistence-jsonl`, `dsh-session-format-v3-to-v4`):
+///
+/// * current logs mark the header `isSeeded` and end the seed at the LAST
+///   `session/end-seed` whose `data.inherited` is true — an earlier marker can
+///   itself be part of the copy, and an untagged one (a resume seed, in a
+///   session that is no fork) defines no inheritance;
+/// * historical logs carry the inherited event count as the header's
+///   `seedLength`, so an event with `seq` below it is inherited.
+///
+/// A seeded log missing its tagged marker (a fork killed while seeding) is
+/// told apart by time instead: a session spent nothing before it existed.
+enum SeedCut {
+    /// Not seeded: nothing inherited.
+    None,
+    /// Inherited lines are the ones before this line index.
+    BeforeLine(usize),
+    /// Inherited events are the ones whose `seq` is below this.
+    BeforeSeq(u64),
+    /// Seeded, but no cut found: anything older than the session's creation.
+    BeforeCreation,
+}
+
+impl SeedCut {
+    fn of(text: &str) -> Self {
+        let mut lines = text
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| !line.trim().is_empty());
+        let Some(header) = lines
+            .next()
+            .and_then(|(_, line)| serde_json::from_str::<Value>(line.trim()).ok())
+            .filter(|header| header.get("type").and_then(Value::as_str) == Some("session"))
+        else {
+            return Self::None;
+        };
+        if let Some(count) = header
+            .get("seedLength")
+            .and_then(Value::as_u64)
+            .filter(|count| *count > 0)
+        {
+            return Self::BeforeSeq(count);
+        }
+        if header.get("isSeeded").and_then(Value::as_bool) != Some(true) {
+            return Self::None;
+        }
+        lines
+            .filter(|(_, line)| line.contains("\"session/end-seed\""))
+            .filter_map(|(idx, line)| {
+                let value: Value = serde_json::from_str(line.trim()).ok()?;
+                (value.get("type").and_then(Value::as_str) == Some("session/end-seed")
+                    && value.pointer("/data/inherited").and_then(Value::as_bool) == Some(true))
+                .then_some(idx)
+            })
+            .last()
+            .map_or(Self::BeforeCreation, Self::BeforeLine)
+    }
+
+    /// Whether the event on `line_idx` is part of the copy.
+    fn inherits(&self, line_idx: usize, event: &Value, created_at: Option<DateTime<Utc>>) -> bool {
+        match self {
+            Self::None => false,
+            Self::BeforeLine(cut) => line_idx < *cut,
+            Self::BeforeSeq(count) => event
+                .get("seq")
+                .and_then(Value::as_u64)
+                .is_some_and(|seq| seq < *count),
+            Self::BeforeCreation => event_millis(event)
+                .zip(created_at)
+                .is_some_and(|(at, created)| at < created),
         }
     }
 }
@@ -2962,6 +3075,109 @@ mod tests {
         }
     }
 
+    /// One turn: a prompt and a text reply whose step reports `input` tokens.
+    fn billed_turn(turn: u64, seq: u64, time: i64, input: u64) -> Vec<String> {
+        vec![
+            event("turn/start", seq, time, json!({"turn": turn})),
+            event(
+                "user/message",
+                seq + 1,
+                time + 1,
+                json!({"content": [{"type": "text", "text": format!("q{turn}")}],
+                       "source": {"kind": "user"}, "role": "user", "id": format!("u-{turn}")}),
+            ),
+            event(
+                "assistant/message",
+                seq + 2,
+                time + 2,
+                json!({"turn": turn, "step": 1,
+                       "message": {"role": "assistant", "content": [{"type": "text", "text": format!("a{turn}")}],
+                                   "source": {"kind": "model", "model": "deepseek-v4-flash"}, "id": format!("a-{turn}")},
+                       "usage": {"inputTokens": input, "outputTokens": 0, "cacheReadTokens": 0}}),
+            ),
+            event("turn/end", seq + 3, time + 3, json!({"turn": turn})),
+        ]
+    }
+
+    fn turn_input(sp: &SessionParse) -> u64 {
+        sp.turns
+            .iter()
+            .filter_map(|t| t.usage.as_ref())
+            .map(|u| u.input_tokens)
+            .sum::<u64>()
+            + sp.spend_elsewhere
+                .iter()
+                .map(|(_, u)| u.input_tokens)
+                .sum::<u64>()
+    }
+
+    /// A fork's log opens with its parent's history copied up to the fork
+    /// point; that seed renders, but its steps are the parent's spend. Where
+    /// it ends is the format's own declaration, never the first marker seen.
+    #[test]
+    fn a_forks_seed_is_not_billed_to_the_fork() {
+        let header = |extra: Value| {
+            let mut header = json!({"type": "session", "version": 0, "id": "fork-1",
+                "createdAt": 1_786_708_800_000_i64, "cwd": "/w",
+                "parentSession": "parent-1", "delegationDepth": 0});
+            for (key, value) in extra.as_object().expect("object") {
+                header[key] = value.clone();
+            }
+            header.to_string()
+        };
+
+        // Historical: `seedLength` counts the inherited events by `seq`. The
+        // copy holds the parent's own (resume) marker, and an event after it.
+        let mut lines = vec![header(json!({"seedLength": 10}))];
+        lines.extend(billed_turn(1, 1, 1_786_708_700_000, 7_000));
+        lines.push(event("session/end-seed", 5, 1_786_708_700_010, json!({})));
+        lines.extend(
+            billed_turn(2, 6, 1_786_708_700_020, 900)
+                .into_iter()
+                .take(3),
+        );
+        lines.extend(billed_turn(3, 10, 1_786_708_810_000, 40));
+        let sp = parse_session_events(&lines.join("\n"), None);
+        assert_eq!(turn_input(&sp), 40);
+
+        // Current: `isSeeded`, cut at the LAST marker tagged `inherited` — the
+        // parent's own fork marker inside the copy does not end it.
+        let mut lines = vec![header(json!({"isSeeded": true}))];
+        lines.extend(billed_turn(1, 1, 1_786_708_700_000, 7_000));
+        lines.push(event(
+            "session/end-seed",
+            5,
+            1_786_708_700_010,
+            json!({"inherited": true}),
+        ));
+        lines.extend(billed_turn(2, 6, 1_786_708_700_020, 900));
+        lines.push(event(
+            "session/end-seed",
+            10,
+            1_786_708_700_030,
+            json!({"inherited": true}),
+        ));
+        lines.extend(billed_turn(3, 11, 1_786_708_810_000, 40));
+        let sp = parse_session_events(&lines.join("\n"), None);
+        assert_eq!(sp.turns.len(), 6, "the seed still renders");
+        assert_eq!(turn_input(&sp), 40);
+
+        // Seeded but killed before its marker: told apart by time.
+        let mut lines = vec![header(json!({"isSeeded": true}))];
+        lines.extend(billed_turn(1, 1, 1_786_708_700_000, 7_000));
+        lines.extend(billed_turn(2, 10, 1_786_708_810_000, 40));
+        let sp = parse_session_events(&lines.join("\n"), None);
+        assert_eq!(turn_input(&sp), 40);
+
+        // A session that is no fork keeps a resume seed's spend: it is its own.
+        let mut lines = vec![header_line("/w")];
+        lines.extend(billed_turn(1, 1, 1_786_708_737_000, 7_000));
+        lines.push(event("session/end-seed", 9, 1_786_708_737_010, json!({})));
+        lines.extend(billed_turn(2, 10, 1_786_708_810_000, 40));
+        let sp = parse_session_events(&lines.join("\n"), None);
+        assert_eq!(turn_input(&sp), 7_040);
+    }
+
     // ── 0.6.0: context compaction ───────────────────────────────────────
 
     fn compaction_log(end_data: Value, with_summary: bool) -> String {
@@ -3041,6 +3257,8 @@ mod tests {
         // `compaction/end` at 2400 closes a `compaction/start` from 1100.
         assert_eq!(marker["durationMs"], json!(1_300));
         assert!(marker.get("error").is_none());
+        // The summarization request was billed, and no step carries it.
+        assert_eq!(turn_input(&sp), 51_777);
 
         // The pair must be well-formed: an unpaired ToolUse reads as a call
         // still running.

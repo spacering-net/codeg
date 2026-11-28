@@ -32,7 +32,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -81,6 +81,34 @@ const BACKFILL_DAYS: i64 = 14;
 const SIGNAL_DAYS: i64 = 30;
 /// Where the board scan is up to.
 const BOARD_CURSOR_KEY: &str = "personal_agent.board_scan_at";
+
+/// Where the board's scan is: the last task read, by `(updated_at, id)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BoardCursor {
+    at: DateTime<Utc>,
+    id: i32,
+}
+
+impl BoardCursor {
+    /// As stored: `<time>|<id>`; a time alone (as written before) is at its
+    /// first task.
+    fn parse(s: &str) -> Option<Self> {
+        let (at, id) = match s.split_once('|') {
+            Some((at, id)) => (at, id.parse().ok()?),
+            None => (s, 0),
+        };
+        Some(Self {
+            at: DateTime::parse_from_rfc3339(at).ok()?.with_timezone(&Utc),
+            id,
+        })
+    }
+}
+
+impl std::fmt::Display for BoardCursor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}|{}", self.at.to_rfc3339(), self.id)
+    }
+}
 /// Failing checks named on a card.
 const FAILING_MAX: usize = 10;
 /// Board tasks read per scan.
@@ -538,10 +566,24 @@ pub(super) async fn signal(
     }
 }
 
-/// A board task's state, as a coding event: once per state of each run.
+/// A board task's state, as a coding event: once per state of each run. A
+/// canceled one says who stopped its work, from the board's own record of
+/// the cancel (its run's latest): this scan may read it before any
+/// assistant's sync, and the event is written once.
 async fn task_signal(db: &crate::db::AppDatabase, t: &work_task::Model) {
     let status = serde_json::to_value(t.status).unwrap_or(Value::Null);
     let (pr_url, pr_number) = super::ladder::pr_of(t);
+    let stopped_by = if t.status == WorkTaskStatus::Canceled {
+        crate::db::service::work_task_service::latest_cancel_of_run(&db.conn, t.id, t.run_seq)
+            .await
+            .ok()
+            .flatten()
+            .as_ref()
+            .and_then(super::stop::board_stop_of)
+            .map(|b| b.key())
+    } else {
+        None
+    };
     signal(
         db,
         "task_status",
@@ -564,6 +606,7 @@ async fn task_signal(db: &crate::db::AppDatabase, t: &work_task::Model) {
             "deferred": t.deferred_at.is_some(),
             "pr_url": pr_url,
             "pr_number": pr_number,
+            "stopped_by": stopped_by,
         }),
     )
     .await;
@@ -688,8 +731,7 @@ impl EngineHost {
             .await
             .ok()
             .flatten()
-            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-            .map(|d| d.with_timezone(&Utc));
+            .and_then(|s| BoardCursor::parse(&s));
         let Some(cursor) = cursor else {
             let now = Utc::now();
             let recent = work_task::Entity::find()
@@ -702,28 +744,84 @@ impl EngineHost {
             for t in recent {
                 self.watch_task(&t, true).await;
             }
-            let _ = meta::upsert_value(&self.db.conn, BOARD_CURSOR_KEY, &now.to_rfc3339()).await;
+            let start = BoardCursor { at: now, id: 0 };
+            let _ = meta::upsert_value(&self.db.conn, BOARD_CURSOR_KEY, &start.to_string()).await;
             return;
         };
-        let tasks = work_task::Entity::find()
-            .filter(work_task::Column::UpdatedAt.gte(cursor - Duration::seconds(2)))
-            .order_by_asc(work_task::Column::UpdatedAt)
-            .limit(SCAN_BATCH)
-            .all(&self.db.conn)
-            .await
-            .unwrap_or_default();
-        let mut newest = cursor;
-        for t in tasks {
-            newest = newest.max(t.updated_at);
-            if t.deleted_at.is_some() {
-                self.unwatch_task(t.id, "deleted").await;
-                continue;
+        // Page after page in `(updated_at, id)` order, to the end: a board
+        // sort that stamps hundreds of tasks with one time is read past, not
+        // read again forever. The cursor passes only rows written more than
+        // two seconds ago — one written later is read again next time (its
+        // event once, by its key) — so a row stamped before a scan and
+        // committed after it is not skipped.
+        let settled_before = Utc::now() - Duration::seconds(2);
+        let mut after = cursor;
+        let mut advanced = cursor;
+        loop {
+            let tasks = work_task::Entity::find()
+                .filter(
+                    Condition::any()
+                        .add(work_task::Column::UpdatedAt.gt(after.at))
+                        .add(
+                            Condition::all()
+                                .add(work_task::Column::UpdatedAt.eq(after.at))
+                                .add(work_task::Column::Id.gt(after.id)),
+                        ),
+                )
+                .order_by_asc(work_task::Column::UpdatedAt)
+                .order_by_asc(work_task::Column::Id)
+                .limit(SCAN_BATCH)
+                .all(&self.db.conn)
+                .await
+                .unwrap_or_default();
+            let full = tasks.len() as u64 == SCAN_BATCH;
+            for t in tasks {
+                after = BoardCursor { at: t.updated_at, id: t.id };
+                if t.updated_at < settled_before {
+                    advanced = after;
+                }
+                self.board_task_seen(&t).await;
             }
-            task_signal(&self.db, &t).await;
-            self.watch_task(&t, false).await;
+            if !full {
+                break;
+            }
         }
-        if newest > cursor {
-            let _ = meta::upsert_value(&self.db.conn, BOARD_CURSOR_KEY, &newest.to_rfc3339()).await;
+        if advanced != cursor {
+            let _ = meta::upsert_value(&self.db.conn, BOARD_CURSOR_KEY, &advanced.to_string()).await;
+        }
+    }
+
+    /// One board task the scan read: its coding event, its pull request —
+    /// and, a dispatch's task canceled, the dispatch's sync: the owner's
+    /// cancel of a task that failed days ago is no longer polled for.
+    async fn board_task_seen(&self, t: &work_task::Model) {
+        if t.status == WorkTaskStatus::Canceled {
+            if let Some(d) = t.personal_agent_dispatch_id {
+                self.sync_dispatch_of(d).await;
+            }
+        }
+        if t.deleted_at.is_some() {
+            self.unwatch_task(t.id, "deleted").await;
+            return;
+        }
+        task_signal(&self.db, t).await;
+        self.watch_task(t, false).await;
+    }
+
+    /// Dispatch `id`'s board task looked at again by the engine of its
+    /// assistant (when it runs here).
+    async fn sync_dispatch_of(&self, id: i32) {
+        let Some(bot) = svc::get_dispatch(&self.db.conn, id).await.ok().flatten().and_then(|d| d.bot_id)
+        else {
+            return;
+        };
+        let engine = if self.primary.serves(bot).await {
+            Some(self.primary.clone())
+        } else {
+            self.existing_worker(bot).await
+        };
+        if let Some(engine) = engine {
+            engine.sync_task_dispatch(id).await;
         }
     }
 
@@ -1196,6 +1294,10 @@ impl PersonalAgentEngine {
                     ItemStatus::Dropped
                 }),
                 waits_for: Some(None),
+                closing: Some(crate::db::service::personal_agent_service::Closing::new(
+                    crate::db::service::personal_agent_service::Closer::Codeg,
+                    if merged { "merged" } else { "dropped" },
+                )),
                 ..Default::default()
             },
         )

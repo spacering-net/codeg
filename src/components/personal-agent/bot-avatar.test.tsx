@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
+
 import { act, cleanup, render } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -9,7 +12,7 @@ vi.mock("@/hooks/use-chat-motion", () => ({
 import { syncedDelay } from "@/lib/motion/synced-spin"
 import type { BotAvatar as BotAvatarValue } from "@/lib/types"
 
-import { BotAvatar } from "./bot-avatar"
+import { BotAvatar, faceColorOf } from "./bot-avatar"
 import {
   __activeFacesForTests,
   __resetFaceMotionForTests,
@@ -268,6 +271,50 @@ describe("the pointer over a face", () => {
     expect(el.hasAttribute("data-hover")).toBe(false)
   })
 
+  it("turns to it where WebKit never sees a group inside an SVG on screen", () => {
+    // WebKit's IntersectionObserver: an element inside an SVG (the `<g>` a
+    // face is drawn into) has an empty box and never intersects; the `<svg>`
+    // itself, and any other box, does.
+    const watched: Element[] = []
+    class WebKitObserver {
+      constructor(private readonly cb: IntersectionObserverCallback) {}
+      observe(target: Element) {
+        watched.push(target)
+        const inSvg = target.parentElement instanceof SVGElement
+        // Its first report comes later, as a real one's does.
+        setTimeout(() =>
+          this.cb(
+            [{ target, isIntersecting: !inSvg } as IntersectionObserverEntry],
+            this as unknown as IntersectionObserver
+          )
+        )
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("IntersectionObserver", WebKitObserver)
+    try {
+      const { container } = render(
+        <BotAvatar avatar={face} name="Dev" size={28} look="idle" />
+      )
+      const el = root(container)
+      const still = art(el).innerHTML
+      boxed(el)
+      frames(1)
+      expect(watched.map((t) => t.tagName.toLowerCase())).toEqual(["svg"])
+      pointer("pointerenter", el, 128, 114)
+      // Settled on it, so what follows is its answer to the move alone.
+      frames(120)
+      const right = art(el).innerHTML
+      expect(right).not.toBe(still)
+      pointer("pointermove", el, 0, 0)
+      frames(10)
+      expect(art(el).innerHTML).not.toBe(right)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it("wakes it up when asleep, and lets it sleep again once it leaves", () => {
     const { container } = render(
       <BotAvatar avatar={face} name="Dev" size={28} look="sleeping" />
@@ -482,6 +529,24 @@ describe("a picture or a monogram for a face", () => {
     expect(el.querySelector("[data-bot-dot='unread']")).not.toBeNull()
   })
 
+  it("moves whole with its look, the ring and the dot staying put", () => {
+    const { container } = render(
+      <BotAvatar
+        avatar={{ kind: "monogram", text: "D", color: "blue" } as never}
+        name="Dev"
+        size={16}
+        look="thinking"
+        dot="unread"
+      />
+    )
+    const el = root(container)
+    expect(el.getAttribute("data-bot-look")).toBe("thinking")
+    const pic = el.querySelector(":scope > .pa-face-pic")!
+    expect(pic.querySelector("[data-slot='assistant-avatar']")).not.toBeNull()
+    expect(pic.querySelector(".pa-face-ring")).toBeNull()
+    expect(pic.querySelector("[data-bot-dot]")).toBeNull()
+  })
+
   it("is drawn as it always was when it has nothing to show", () => {
     const { container } = render(
       <BotAvatar
@@ -494,6 +559,68 @@ describe("a picture or a monogram for a face", () => {
     expect(
       container.querySelector("[data-slot='assistant-avatar']")
     ).not.toBeNull()
+  })
+})
+
+describe("the motion of a reply (globals.css)", () => {
+  const css = readFileSync(
+    resolve(process.cwd(), "src/app/globals.css"),
+    "utf8"
+  ).replace(/\/\*[\s\S]*?\*\//g, "")
+  const animated = (selector: string): string | null => {
+    const at = css.indexOf(`${selector} {`)
+    if (at < 0) return null
+    const body = css.slice(at, css.indexOf("}", at))
+    return /animation:\s*([\w-]+)/.exec(body)?.[1] ?? null
+  }
+
+  it("moves a face's body all the while it replies, thinking too", () => {
+    expect(animated('.pa-face[data-bot-look="thinking"] .pa-face-body')).toBe(
+      "pa-face-ponder"
+    )
+    expect(animated('.pa-face[data-bot-look="working"] .pa-face-body')).toBe(
+      "pa-face-bob"
+    )
+    expect(animated('.pa-face[data-bot-look="done"] .pa-face-body')).toBe(
+      "pa-face-hop"
+    )
+  })
+
+  it("moves a picture's too, and hops it once done", () => {
+    for (const [look, name] of [
+      ["thinking", "pa-pic-ponder"],
+      ["working", "pa-pic-bob"],
+      ["done", "pa-pic-hop"],
+      ["failed", "pa-pic-shake"],
+    ]) {
+      expect(animated(`.pa-face[data-bot-look="${look}"] > .pa-face-pic`)).toBe(
+        name
+      )
+      expect(css).toContain(`@keyframes ${name} {`)
+    }
+  })
+})
+
+describe("the colour an assistant's conversation takes", () => {
+  it("is its face's, or its text avatar's — the nearest face colour for an old one", () => {
+    expect(faceColorOf(face)).toBe("teal")
+    expect(faceColorOf({ kind: "monogram", color: "magenta" })).toBe("magenta")
+    expect(faceColorOf({ kind: "emoji", emoji: "🦊", color: "yellow" })).toBe(
+      "yellow"
+    )
+    expect(faceColorOf({ kind: "monogram", color: "red" })).toBe("red")
+    expect(faceColorOf({ kind: "monogram", color: "violet" })).toBe("purple")
+    expect(faceColorOf({ kind: "emoji", emoji: "🦊", color: "sky" })).toBe(
+      "blue"
+    )
+    expect(faceColorOf({ kind: "monogram", color: "slate" })).toBe("gray")
+  })
+
+  it("is none for a picture or no avatar", () => {
+    expect(
+      faceColorOf({ kind: "image", data_url: "data:image/png;base64,AA" })
+    ).toBeNull()
+    expect(faceColorOf(null)).toBeNull()
   })
 })
 

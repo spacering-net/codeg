@@ -18,7 +18,7 @@
  * - Output: what it made, newest first — the work that ended (tasks, the
  *   reports of the rest) and the documents it wrote in its working
  *   directory — filtered by kind.
- * - Workspace: the work running now, each as a small live view of its
+ * - Workspace: the work running now, each as a card with the way to its
  *   session; a screen with its face asleep on it when nothing runs.
  * - Stats: how it runs, as Session Details shows a conversation — what it
  *   runs on, its state, model and mode, its session (which opens), its

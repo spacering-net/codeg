@@ -151,6 +151,76 @@ const TOP_CONVERSATIONS: usize = 8;
 ///   the official Claude adapter's prompt response. See
 ///   `parsers::acp_native::project_turns`. (`8` is skipped: preview builds of
 ///   an earlier proposal wrote it.)
+/// * `10` — sub-agent transcripts found at any depth under `subagents/`, and
+///   CodeBuddy's counted at all. Claude Code files a Workflow run's agents in
+///   `subagents/workflows/<runId>/agent-<id>.jsonl`; only the top level was
+///   read, so every workflow agent's spend was missing (a reported session:
+///   60 files, 3,148 calls). Qoder shares the walk. CodeBuddy's sub-agent
+///   transcripts carry real usage that its parser never read, though the
+///   parent's `Agent` result carries none. Totals grow for unchanged
+///   transcripts. See `parsers::subagent_transcript_paths`.
+/// * `11` — Codex sub-agent threads counted, and forks no longer billed for
+///   the history they inherit. A `spawn_agent` child runs a rollout of its own
+///   that is never a conversation, so its spend was missing (one real session:
+///   111.5M recorded, 79M more in its three workers); each is now folded into
+///   the thread that spawned it, every generation down. A by-reference fork
+///   splices in its base's `token_count`s and its counter continues from them,
+///   so the fork re-counted its base's spend. See
+///   `parsers::codex::CodexParser::attribute_subagent_usage` and
+///   `rollout_lines_tagged`.
+/// * `12` — Kimi sub-agent spend counted, and forks no longer billed for what
+///   they copied. Each `usage.record` goes to the wire of the agent that made
+///   the call, so a sub-agent's spend was only in its `agents/<id>/wire.jsonl`,
+///   read for tool calls alone. A fork copies every wire, its source's spend
+///   included, up to a `forked` record. See
+///   `parsers::kimi_code::attribute_subagent_usage` and `inherited_lines`.
+/// * `13` — a Hermes session's total spans its delegated sessions, the
+///   sessions a compression continued it in, and every one's auxiliary calls
+///   (`session_model_usage` rows whose `task` is neither empty nor the
+///   `voice_chat` turn route, both of which the columns already hold), not
+///   only its own columns. See
+///   `parsers::hermes::LINEAGE_CTE`.
+/// * `14` — Pi counted the way pi's own session total is: over every entry of
+///   the file, so replies on abandoned branches, `usage` entries (cache
+///   warming), compaction / branch-summary generation, tools' nested model
+///   work and calls that rendered nothing all count, where only the rendered
+///   branch's assistant replies did. See `parsers::pi::spend_off_the_rendered_path`.
+/// * `15` — OpenCode sub-agent child sessions and OpenCode 2 compactions
+///   counted, and forks no longer billed for the messages they clone. A
+///   `task` child session is never a conversation; its tokens were never read.
+///   A compaction row's tokens are its summary request's, left off the
+///   transcript for the context gauge's sake. `Session.fork` clones every
+///   message, tokens and creation time included, into a session with no
+///   parent link. See `parsers::opencode::spend_beyond_the_transcript` and
+///   `disown_copied_history`.
+/// * `16` — Gemini subagent sessions counted (`chats/<parentSessionId>/…`,
+///   never conversations of their own), and every billed reply a chat file
+///   records counts — not only those its replay still shows: one rewound away,
+///   compacted away, or with nothing to render kept its tokens in the file.
+///   See `parsers::gemini::GeminiParser::billed_replies` and `subagent_spend`.
+/// * `17` — DeepSeek forks no longer billed for their seed, and compaction
+///   summaries counted. A fork's log opens with its parent's history copied up
+///   to `session/end-seed`, usage included (one real parent forked three times
+///   recorded the same 116,029 tokens four times); a `compaction/summary`'s
+///   usage is its summarization request's, which no step carried; and a turn
+///   that rendered nothing keeps its steps' usage. See
+///   `parsers::deepseek::parse_session_events`.
+/// * `18` — Cline: a 3.x session's sub-agent and agent-team teammate
+///   transcripts (`sessions/<id>/<agent>.messages.json`) counted, and a reply
+///   that rendered nothing keeps its tokens; a pre-3.x task's spend is the
+///   requests cline itself recorded (`ui_messages.json` `api_req_started`), so
+///   one that left no stored reply counts and cache writes are no longer
+///   filed as reads. See `parsers::cline::ui_request_spend` and
+///   `ClineParser::teammate_spend`.
+/// * `19` — Grok: a prompt's `turn_completed` usage is kept when no reply is
+///   open to carry it (a prompt that got no reply, or whose reply a mid-turn
+///   user chunk already closed). Folded spend older than every reply now
+///   rides the FIRST reply rather than the last, and turns are matched by
+///   timestamp rather than transcript order. See
+///   `parsers::add_usage_to_turn_current_at`.
+/// * `20` — Antigravity: a turn that rendered nothing keeps its steps' usage,
+///   and a failing step's own call counts, where both were dropped. See
+///   `parsers::antigravity::PendingAssistant::unshown_spend`.
 ///
 /// Only the accounting stored in `token_usage_turn` counts: the four token
 /// counters, the duration and the timestamp. A conversation's context WINDOW is
@@ -165,7 +235,7 @@ const TOP_CONVERSATIONS: usize = 8;
 /// counters predate it, since a custom/BYO model has always exposed them and
 /// the parser reads every session under `~/.qoder/projects`, not just the ones
 /// codeg launched.
-pub(crate) const FACT_SCHEMA_VERSION: &str = "9";
+pub(crate) const FACT_SCHEMA_VERSION: &str = "20";
 
 pub(crate) const FACT_SCHEMA_VERSION_KEY: &str = "token_usage_fact_schema_version";
 

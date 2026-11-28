@@ -29,7 +29,10 @@ import {
   useAcpEvent,
 } from "@/contexts/acp-connections-context"
 import { ActivityLiveProvider } from "@/components/message/activity/activity-live-context"
-import { SelectionAskComposer } from "@/components/message/selection-ask-composer"
+import {
+  SelectionAskComposer,
+  type SelectionAskLiveSelectors,
+} from "@/components/message/selection-ask-composer"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { useAskConversationDrawerStore } from "@/stores/ask-conversation-drawer-store"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
@@ -99,6 +102,7 @@ import {
   createConversation,
   getFolderConversation,
   openSettingsWindow,
+  type PromptRewindTarget,
 } from "@/lib/api"
 import { isWindowedDetail } from "@/lib/turn-window"
 import {
@@ -329,6 +333,8 @@ const ConversationTabView = memo(function ConversationTabView({
   const {
     appendOptimisticTurn,
     removeOptimisticTurn,
+    truncateAtTurn,
+    markOptimisticUnsent,
     appendViewerUserTurn,
     completeTurn,
     refetchDetail,
@@ -397,6 +403,32 @@ const ConversationTabView = memo(function ConversationTabView({
   // docked one — so a single slot can serve both.
   const [composerInject, setComposerInject] =
     useState<ComposerInjectContent | null>(null)
+  // An edited message is between its rewind and its send (see
+  // `handleEditUserTurn`). Nothing else may reach the agent meanwhile — it
+  // would take the cut session's first turn — so a direct send waits in the
+  // queue and the queue's auto-flush holds until the edited message is out.
+  const [editInFlight, setEditInFlight] = useState(false)
+  const editInFlightRef = useRef(false)
+  // Drafts handed back to the composer and not yet taken in. The composer has
+  // one inject slot, taken on its next frame; two hand-backs before then would
+  // overwrite each other, so they accumulate and go in together.
+  const handBackRef = useRef<PromptInputBlock[]>([])
+  const handBackToComposer = useCallback((blocks: PromptInputBlock[]) => {
+    const pending = handBackRef.current
+    const last = pending[pending.length - 1]
+    const first = blocks[0]
+    // Two texts meet as two paragraphs (a whitespace-only block of its own
+    // would be dropped by the composer and glue them together).
+    handBackRef.current =
+      last?.type === "text" && first?.type === "text"
+        ? [
+            ...pending.slice(0, -1),
+            { type: "text", text: `${last.text}\n\n${first.text}` },
+            ...blocks.slice(1),
+          ]
+        : [...pending, ...blocks]
+    setComposerInject({ handBack: handBackRef.current })
+  }, [])
 
   const hasPersistedConversation = dbConversationId != null
 
@@ -969,12 +1001,14 @@ const ConversationTabView = memo(function ConversationTabView({
     // A row being inserted into the (just-ended) turn is still queued; sending
     // it now would deliver it twice. See `queueSteerInFlight`.
     if (queueSteerInFlight) return
+    if (editInFlight) return
     if (msgQueue.length === 0) return
     // setTimeout (not microtask) so a COMPLETE_TURN commit settles first AND so
     // a just-bounced retry waits out the backoff window before re-sending.
     const wait = flushRetryDelayMs(Date.now(), lastFlushBounceAtRef.current)
     const timer = setTimeout(() => {
       if (!connectionReadyRef.current) return
+      if (editInFlightRef.current) return
       const next = autoSendQueueRef.current()
       if (next) {
         // Mark this as the queue auto-flush: it sends the dequeued head now and,
@@ -995,7 +1029,13 @@ const ConversationTabView = memo(function ConversationTabView({
     return () => clearTimeout(timer)
     // `connectionReady` subsumes connStatus, the connection's cwd and its agent,
     // so it is the only connection dependency this effect needs.
-  }, [connectionReady, runtimeSyncState, msgQueue.length, queueSteerInFlight])
+  }, [
+    connectionReady,
+    runtimeSyncState,
+    msgQueue.length,
+    queueSteerInFlight,
+    editInFlight,
+  ])
 
   // Mirror the connection's liveMessage into the runtime session OUTSIDE React.
   // The connection dispatch invokes this sink synchronously whenever liveMessage
@@ -1157,8 +1197,34 @@ const ConversationTabView = memo(function ConversationTabView({
       // input send (no flag) must NOT jump ahead of already-queued items: when
       // a queue exists it tail-enqueues instead of sending, and on a bounce it
       // re-queues at the TAIL.
-      opts?: { fromQueueFlush?: boolean }
-    ) => {
+      //
+      // `onSendFailed` runs after the rollback below when the send fails for
+      // good — for a caller whose draft lives nowhere else (an edited message:
+      // its editor is closed by then). `fromEdit` is that edited message's
+      // own send, the one send an edit in flight lets through.
+      opts?: {
+        fromQueueFlush?: boolean
+        fromEdit?: boolean
+        onSendFailed?: () => void
+        /** The id the optimistic turn (and so the prompt's
+         *  `clientMessageId`) takes, for a caller that must know it up front:
+         *  the edited message cuts the view to keep exactly it. */
+        clientMessageId?: string
+        /** An edited message's rewind, done by the backend in the same step
+         *  as the send (`acpPrompt`). Persisted conversations only. */
+        rewind?: PromptRewindTarget
+        /** The agent declined `rewind`: nothing changed, nothing was sent. */
+        onRewindRefused?: (reason: string) => void
+        /** Replaces the busy bounce's re-queue: a caller that cannot let its
+         *  message go out later as an ordinary prompt (an edited message
+         *  without its rewind) settles it itself. */
+        onTurnInProgress?: () => void
+        /** Leave the list where it is (no scroll to the new message): the
+         *  edited message's editor must stay mounted until the edit is
+         *  answered. The caller scrolls once it went through. */
+        noScroll?: boolean
+      }
+    ): Promise<unknown> | void => {
       // Capture the tab's chat-draft state + eager scratch dir synchronously,
       // before any await. A folderless chat draft is NOT special-cased here:
       // its first send takes the exact same gated, inline path as a normal new
@@ -1178,6 +1244,13 @@ const ConversationTabView = memo(function ConversationTabView({
       // deliver to the wrong workspace. Same predicate the flush effect uses.
       if (!connectionReady) return
 
+      // While an edited message is on its way nothing else is sent or queued:
+      // if the edit does not go through, a follow-up typed meanwhile must not
+      // run ahead of it on its own. The composer takes the draft back whole.
+      if (editInFlightRef.current && !opts?.fromEdit) {
+        handBackToComposer(draft.blocks)
+        return
+      }
       const fromQueueFlush = opts?.fromQueueFlush ?? false
       // Preserve FIFO: a direct send issued while the queue is non-empty joins
       // the tail rather than racing ahead of the queued items. Read the
@@ -1204,16 +1277,19 @@ const ConversationTabView = memo(function ConversationTabView({
         return
       }
 
-      const optimisticTurn = buildOptimisticUserTurnFromDraft(
+      const builtTurn = buildOptimisticUserTurnFromDraft(
         draft,
         sharedT("attachedResources")
       )
+      const optimisticTurn = opts?.clientMessageId
+        ? { ...builtTurn, id: opts.clientMessageId }
+        : builtTurn
       appendOptimisticTurn(
         effectiveConversationId,
         optimisticTurn,
         optimisticTurn.id
       )
-      setSendSignal((prev) => prev + 1)
+      if (!opts?.noScroll) setSendSignal((prev) => prev + 1)
       setSyncState(effectiveConversationId, "awaiting_persist")
       setHasSentMessage(true)
 
@@ -1224,6 +1300,11 @@ const ConversationTabView = memo(function ConversationTabView({
       // turn completes, identical to enqueuing while already prompting. Stamp
       // the bounce so the flush backs off instead of immediately retrying.
       const onTurnInProgress = () => {
+        if (opts?.onTurnInProgress) {
+          removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
+          opts.onTurnInProgress()
+          return
+        }
         lastFlushBounceAtRef.current = Date.now()
         removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
         // FIFO: the auto-flush draft WAS the queue head → return it to the
@@ -1244,7 +1325,15 @@ const ConversationTabView = memo(function ConversationTabView({
       // bounce): a deterministic failure would retry — and toast — forever.
       const onSendFailed = () => {
         removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
+        opts?.onSendFailed?.()
       }
+
+      // Nothing went out: there was no connection to send on by the time the
+      // send got to it (a reconnect removed it). The bubble stays where it is,
+      // as it always has; the store only notes that it never went out, so an
+      // edit does not wait on it (see `handleEditUserTurn`).
+      const onNotSent = () =>
+        markOptimisticUnsent(effectiveConversationId, optimisticTurn.id)
 
       // Pin the tab if it was a temporary preview (single-click opened)
       if (ownTab && !ownTab.isPinned) {
@@ -1256,18 +1345,27 @@ const ConversationTabView = memo(function ConversationTabView({
         // Existing-tab path: row already exists, send immediately with the
         // conversation_id pinned so the backend reuses our row instead of
         // creating a duplicate.
-        lifecycleSend(draft, selectedModeIdArg, {
+        return lifecycleSend(draft, selectedModeIdArg, {
           folderId,
           conversationId: persistedId,
           // The backend echoes this as the broadcast UserMessage's message_id,
           // so viewers' synthesized user turn dedups against our own optimistic
           // turn by exact id (and never suppresses a different sender's prompt).
           clientMessageId: optimisticTurn.id,
+          rewind: opts?.rewind,
+          onRewindRefused: opts?.onRewindRefused
+            ? (reason: string) => {
+                removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
+                opts.onRewindRefused?.(reason)
+              }
+            : undefined,
+          onNotSent,
           onTurnInProgress,
           onSendFailed,
         })
-        return
       }
+      // Only a persisted conversation has a message to edit.
+      if (opts?.rewind) return
 
       // New-tab path: create the DB row first, then send with the new id
       // pinned. This prevents the backend's send_prompt_linked from racing
@@ -1396,6 +1494,7 @@ const ConversationTabView = memo(function ConversationTabView({
             folderId: sendFolderId,
             conversationId: newConversationId,
             clientMessageId: optimisticTurn.id,
+            onNotSent,
             onTurnInProgress,
             onSendFailed,
           })
@@ -1431,6 +1530,8 @@ const ConversationTabView = memo(function ConversationTabView({
       })()
     },
     [
+      markOptimisticUnsent,
+      handBackToComposer,
       appendOptimisticTurn,
       removeOptimisticTurn,
       mqEnqueue,
@@ -1483,6 +1584,10 @@ const ConversationTabView = memo(function ConversationTabView({
     async (turnId: string) => {
       const connectionId = conn.connectionId
       if (!connectionId || connStatusRef.current !== "connected") return
+      // An edited message is between its rewind and its send: a fork now
+      // would move the connection off the session it was cut on (the backend
+      // turns it away too, see `RewindHold`).
+      if (editInFlightRef.current) return
       // Snapshot which live turns belong to the PRE-fork session, before the
       // await. The fork RPC is a window in which a send can still start — a
       // queued auto-flush, a fast typist, another client — and such a turn
@@ -1559,6 +1664,185 @@ const ConversationTabView = memo(function ConversationTabView({
       refetchDetail,
       refreshConversations,
       setExternalId,
+      t,
+    ]
+  )
+
+  /**
+   * Edit a sent message and send it again in its place. The edited text goes
+   * out through the ordinary send path carrying a `rewind` target: the backend
+   * cuts the agent's session back to just before the message (checked against
+   * a fresh parse) and admits the prompt in the same step, then the view is
+   * cut the same way. The original message's images go with it: the editor
+   * edits only the text.
+   *
+   * Resolves whether the edit went through; the inline editor stays open
+   * otherwise, with what the user typed.
+   */
+  // The composer queues by itself while a turn runs. During an edit nothing
+  // is queued (see `editInFlight`): the draft goes back to the composer.
+  const handleComposerEnqueue = useCallback(
+    (draft: PromptDraft, modeId?: string | null) => {
+      if (editInFlightRef.current) {
+        handBackToComposer(draft.blocks)
+        return
+      }
+      mqEnqueue(draft, modeId ?? null)
+    },
+    [mqEnqueue, handBackToComposer]
+  )
+
+  const handleEditUserTurn = useCallback(
+    async (turnId: string, text: string): Promise<boolean> => {
+      const connectionId = conn.connectionId
+      if (!connectionId || connStatusRef.current !== "connected") return false
+      // The same readiness the send itself gates on (a connection still in
+      // the folder a conversation was moved out of reads "connected").
+      if (!connectionReadyRef.current || !dbConvIdRef.current) return false
+      if (editInFlightRef.current) return false
+      // A send of this tab still on its way: its turn would complete into the
+      // middle of the edit (busy otherwise when it reaches the agent).
+      const pending = useConversationRuntimeStore
+        .getState()
+        .byConversationId.get(effectiveConversationId)
+      // A bubble whose send never went out (`onNotSent`) is not one — it
+      // stays where it is, as it always has.
+      const unsentIds = new Set(pending?.unsentOptimisticIds ?? [])
+      const optimistic = pending?.optimisticTurns ?? []
+      if (optimistic.some((turn) => !unsentIds.has(turn.id))) {
+        notify({
+          level: "warning",
+          key: `edit-message-busy:${connectionId}`,
+          title: t("editMessageBusy"),
+        })
+        return false
+      }
+      // A queued message would go out on the cut history ahead of the edited
+      // one, so the order the user typed in would not survive the edit.
+      if (mqGetQueueLength() > 0) {
+        notify({
+          level: "warning",
+          key: `edit-message-queued:${connectionId}`,
+          title: t("editMessageQueued"),
+        })
+        return false
+      }
+      const target = getTimelineTurns(effectiveConversationId)
+        .map((entry) => entry.turn)
+        .find((turn) => turn.id === turnId)
+      // The agent's own id for the message: the parser's, or the one the
+      // post-turn reparse put on a message this session sent.
+      const agentMessageId = target?.agent_message_id
+      if (!target || target.role !== "user" || !agentMessageId) return false
+      const originalText = target.blocks
+        .flatMap((block) => (block.type === "text" ? [block.text] : []))
+        .join("\n")
+      const images = target.blocks.flatMap((block) =>
+        block.type === "image"
+          ? [
+              {
+                type: "image" as const,
+                data: block.data,
+                mime_type: block.mime_type,
+                uri: block.uri ?? null,
+              },
+            ]
+          : []
+      )
+      const clientMessageId = `optimistic-${randomUUID()}`
+      const staleLiveTurnIds = (
+        useConversationRuntimeStore
+          .getState()
+          .byConversationId.get(effectiveConversationId)?.localTurns ?? []
+      ).map((turn) => turn.id)
+      // Written by the send's callbacks (an object, so the reads below are not
+      // narrowed to the initial value).
+      const result: {
+        outcome: "sent" | "refused" | "busy" | "failed"
+        reason: string
+      } = { outcome: "sent", reason: "other" }
+      editInFlightRef.current = true
+      setEditInFlight(true)
+      try {
+        // One request: the backend cuts the agent's session back to just
+        // before the message and admits the edited prompt in the same step,
+        // under the prompt lock every other prompt, fork and rewind takes —
+        // nothing can come between the cut and the edited message.
+        const sending = handleSend(
+          { blocks: [{ type: "text", text }, ...images], displayText: text },
+          selectedModeIdRef.current,
+          {
+            fromEdit: true,
+            noScroll: true,
+            // Not behind anything typed while this was on its way.
+            fromQueueFlush: true,
+            clientMessageId,
+            rewind: { agentMessageId, text: originalText },
+            onRewindRefused: (reason) => {
+              result.outcome = "refused"
+              result.reason = reason
+            },
+            onTurnInProgress: () => {
+              result.outcome = "busy"
+            },
+            // The lifecycle has toasted the failure; the editor keeps the text.
+            onSendFailed: () => {
+              result.outcome = "failed"
+            },
+          }
+        )
+        // No send started at all (a gate in `handleSend` turned it away).
+        if (!sending) return false
+        await sending
+        if (result.outcome === "refused") {
+          notify({
+            level: "warning",
+            key: `edit-message-refused:${connectionId}`,
+            title: t("editMessageRefused", { reason: result.reason }),
+          })
+          return false
+        }
+        if (result.outcome === "busy") {
+          notify({
+            level: "warning",
+            key: `edit-message-busy:${connectionId}`,
+            title: t("editMessageBusy"),
+          })
+          return false
+        }
+        if (result.outcome === "failed") return false
+        // Sent: the agent's session is cut and the edited message is its turn.
+        // Cut the view the same way, keeping the new prompt, and anchor the
+        // new batch on what is left (the reparse that names its reply — "fork
+        // from here" — pairs from there). Should a reload have renamed the
+        // message out from under us, the history comes back from the
+        // transcript instead and the batch re-anchors on it.
+        const cut = truncateAtTurn(effectiveConversationId, {
+          turnId,
+          agentMessageId,
+          keepFromTurnId: clientMessageId,
+          staleLiveTurnIds,
+        })
+        if (!cut) {
+          // The store drops the stale live turns and re-anchors the batch on
+          // whichever load lands next; this one makes sure there is one.
+          void refetchDetail(effectiveConversationId, { preserveLive: true })
+        }
+        // Now the edited message is where the conversation goes on.
+        setSendSignal((prev) => prev + 1)
+        return true
+      } finally {
+        editInFlightRef.current = false
+        setEditInFlight(false)
+      }
+    },
+    [
+      conn.connectionId,
+      effectiveConversationId,
+      handleSend,
+      mqGetQueueLength,
+      refetchDetail,
+      truncateAtTurn,
       t,
     ]
   )
@@ -1720,6 +2004,9 @@ const ConversationTabView = memo(function ConversationTabView({
           // re-queues at the front.)
           mqEnqueue(draft, null)
         },
+        // Nothing went out (no connection): noted, as on the composer path.
+        onNotSent: () =>
+          markOptimisticUnsent(effectiveConversationId, optimisticTurn.id),
         // Any other failure: settle the optimistic state (the lifecycle hook
         // already toasted). No re-queue — deterministic failures would loop.
         onSendFailed: () => {
@@ -1728,6 +2015,7 @@ const ConversationTabView = memo(function ConversationTabView({
       })
     },
     [
+      markOptimisticUnsent,
       appendOptimisticTurn,
       removeOptimisticTurn,
       mqEnqueue,
@@ -1794,6 +2082,9 @@ const ConversationTabView = memo(function ConversationTabView({
             removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
             mqEnqueue(draft, null)
           },
+          // Nothing went out (no connection): noted, as on the composer path.
+          onNotSent: () =>
+            markOptimisticUnsent(effectiveConversationId, optimisticTurn.id),
           // Any other failure: settle the optimistic state (the lifecycle
           // hook already toasted). No re-queue — deterministic failures loop.
           onSendFailed: () => {
@@ -1804,6 +2095,7 @@ const ConversationTabView = memo(function ConversationTabView({
       return result
     },
     [
+      markOptimisticUnsent,
       acpActions,
       tabId,
       connStatus,
@@ -1859,6 +2151,7 @@ const ConversationTabView = memo(function ConversationTabView({
   }, [])
 
   const handleComposerInjectConsumed = useCallback(() => {
+    handBackRef.current = []
     setComposerInject(null)
   }, [])
 
@@ -1878,18 +2171,24 @@ const ConversationTabView = memo(function ConversationTabView({
    * neither derails nor pollutes the thread the user is reading. It is linked
    * to this one, listed under its Session Details rather than in the sidebar.
    *
-   * The ask is pinned to THIS conversation's agent — the answer is a
-   * continuation of what that agent just said — and runs in this
-   * conversation's folder. It needs a persisted row: that is what the mention
-   * names and what the ask is linked to.
+   * The ask starts on THIS conversation's agent — the answer is usually a
+   * continuation of what that agent just said — but the composer lets the user
+   * pick another, and that agent's settings, as the new-task dialog does. It
+   * runs in this conversation's folder, and needs a persisted row: that is
+   * what the mention names and what the ask is linked to.
    */
   // Depends on primitives, not the folder OBJECT: branch polling rewrites that
   // row regularly, and the render prop has to stay referentially stable (it is
   // a MessageListView prop).
   const askFolderId = folder?.id ?? null
   const askMainTitle = ownTab?.title ?? null
-  const askPromptCapabilities = conn.promptCapabilities
-  const askModes = effectiveModes?.available_modes ?? null
+  const askLive = useMemo<SelectionAskLiveSelectors>(
+    () => ({
+      availableCommands: connectionCommands,
+      promptCapabilities: conn.promptCapabilities,
+    }),
+    [conn.promptCapabilities, connectionCommands]
+  )
   const openAskDrawer = useAskConversationDrawerStore((s) => s.openNew)
   const canAskSelection =
     askFolderId != null &&
@@ -1907,18 +2206,18 @@ const ConversationTabView = memo(function ConversationTabView({
               formatConversationTitle(askMainTitle).trim() ||
               `#${dbConversationId}`,
           }}
-          agentType={selectedAgent}
-          promptCapabilities={askPromptCapabilities}
-          modes={askModes}
+          defaultAgentType={selectedAgent}
+          live={askLive}
           defaultPath={workingDirForConnection}
           onClose={close}
-          onSubmit={(draft, modeId) => {
+          onSubmit={(draft, pick) => {
             const opened = openAskDrawer({
               parentConversationId: dbConversationId,
-              agentType: selectedAgent,
+              agentType: pick.agentType,
               folderId: askFolderId,
               workingDir: workingDirForConnection ?? null,
-              initialSend: { draft, modeId },
+              initialSend: { draft, modeId: pick.modeId },
+              configValues: pick.configValues,
             })
             // The drawer still holds another ask's unsent first message:
             // keep this one in the bubble rather than dropping either.
@@ -1931,9 +2230,8 @@ const ConversationTabView = memo(function ConversationTabView({
     },
     [
       askFolderId,
+      askLive,
       askMainTitle,
-      askModes,
-      askPromptCapabilities,
       dbConversationId,
       openAskDrawer,
       selectedAgent,
@@ -2294,6 +2592,15 @@ const ConversationTabView = memo(function ConversationTabView({
               ? handleForkFromTurn
               : undefined
           }
+          // Same gate as fork: a turn in flight greys the button out.
+          onEditUserTurn={
+            (connStatus === "connected" || connStatus === "prompting") &&
+            hasPersistedConversation &&
+            conn.supportsRewind &&
+            !conn.isViewer
+              ? handleEditUserTurn
+              : undefined
+          }
         />
       </ActivityLiveProvider>
     </GoalControlProvider>
@@ -2467,7 +2774,7 @@ const ConversationTabView = memo(function ConversationTabView({
       isActive={isActive}
       showActiveFlow={showActiveFlow}
       queue={msgQueue}
-      onEnqueue={mqEnqueue}
+      onEnqueue={handleComposerEnqueue}
       onQueueReorder={mqReorder}
       onQueueEdit={handleQueueEdit}
       onQueueDelete={mqRemove}

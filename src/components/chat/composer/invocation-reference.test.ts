@@ -118,8 +118,8 @@ describe("diskSkillTrigger", () => {
     expect(diskSkillTrigger("codex")).toBe("$")
   })
 
-  // Antigravity's server advertises only /plan, /logout and /usage, so its
-  // skills can only come from disk.
+  // `agy acp` advertises its skills as commands, but only once connected;
+  // the disk list fills the `/` menu before that.
   it("lists Antigravity's disk skills under `/`", () => {
     expect(diskSkillTrigger("antigravity")).toBe("/")
   })

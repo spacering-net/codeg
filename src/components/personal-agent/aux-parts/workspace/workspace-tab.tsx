@@ -1,14 +1,11 @@
 "use client"
 
-/** The workspace tab: the work running now, each a window with its live
- *  view. */
+/** The workspace tab: the work running now, each a card — who runs it, where
+ *  it stands, and the way to its session. */
 
-import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 import { Monitor } from "lucide-react"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
-import { LiveTranscriptView } from "@/components/message/live-transcript-view"
-import { TaskTranscriptView } from "@/components/tasks/task-transcript-dialog"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import {
@@ -20,8 +17,6 @@ import {
 } from "@/components/ui/empty"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useAcpActions } from "@/contexts/acp-connections-context"
-import { useTasksView } from "@/contexts/tasks-view-context"
 import type {
   DispatchInfo,
   DispatchState,
@@ -29,7 +24,6 @@ import type {
 } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
 import { cn } from "@/lib/utils"
-import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { PANEL_SURFACE, PanelBar } from "../../panel-section"
 import {
@@ -47,55 +41,15 @@ import { useWork, useNow } from "../use-work"
 /** Its face on the workspace's empty screen, in px at 100% zoom. */
 const WORKSPACE_FACE = 44
 
-/** The states a dispatch's conversation streams in. */
-const STREAMING: ReadonlySet<DispatchState> = new Set([
+/** The states a dispatch counts as running in. */
+const RUNNING: ReadonlySet<DispatchState> = new Set([
   "running",
   "waiting_input",
 ])
 
-/** A chat or session dispatch's conversation, live: its connection
- *  attached (hydrated, forward only) while the preview is shown, as the work
- *  drawer does. */
-function ConversationPreview({ d }: { d: DispatchInfo }) {
-  const { attachDelegationChild, detachDelegationChild } = useAcpActions()
-  const agentType = d.work.agent_type
-  const liveId = STREAMING.has(d.state) ? d.connection_id : null
-  const [attachId, setAttachId] = useState<string | null>(liveId)
-  if (liveId !== null && liveId !== attachId) setAttachId(liveId)
-  useEffect(() => {
-    if (attachId == null || agentType == null) return
-    attachDelegationChild({
-      connectionId: attachId,
-      parentConnectionId: attachId,
-      parentToolUseId: `personal-agent-dispatch-${d.id}`,
-      agentType,
-      hydrate: true,
-    })
-    return () => detachDelegationChild(attachId)
-  }, [attachId, agentType, d.id, attachDelegationChild, detachDelegationChild])
-  if (d.conversation_id == null || agentType == null) return null
-  return (
-    <LiveTranscriptView
-      conversationId={d.conversation_id}
-      connectionId={attachId}
-      agentType={agentType}
-    />
-  )
-}
-
-/** A task dispatch's session, live, from the board's task. */
-function TaskPreview({ taskId }: { taskId: number }) {
-  const { tasks } = useTasksView()
-  const task = tasks.find((x) => x.id === taskId) ?? null
-  if (!task || task.conversation_id == null) return null
-  return <TaskTranscriptView task={task} />
-}
-
-/** The work running now, each a window with a small live view of its
- *  session — its head who runs it and where it stands, the way to open it,
- *  the view itself opening it too; an empty window, its face asleep in it,
- *  when nothing runs. While the drawer shows one of them, the previews
- *  stand aside: one surface follows a connection at a time. */
+/** The work running now, each a card — who runs it and where it stands, and
+ *  a button that opens its session; an empty window, its face asleep in it,
+ *  when nothing runs. The session itself is not shown here. */
 export function WorkspaceTab({
   snapshot,
   work,
@@ -110,10 +64,9 @@ export function WorkspaceTab({
   const now = useNow()
   const agent = snapshot.agent
   const name = agent?.name?.trim() || tPage("title")
-  const drawerOpen = usePersonalAgentUi((s) => s.workOpen)
   const running = (work?.open ?? [])
     .map((m) => m.dispatch)
-    .filter((d): d is DispatchInfo => d != null && STREAMING.has(d.state))
+    .filter((d): d is DispatchInfo => d != null && RUNNING.has(d.state))
   if (work == null) {
     return (
       <div className="px-4 pt-1" aria-hidden>
@@ -162,7 +115,7 @@ export function WorkspaceTab({
   }
   return (
     <ScrollArea className="h-full">
-      <div className="flex flex-col gap-4 px-4 pt-1 pb-6">
+      <div className="flex flex-col gap-2 px-4 pt-1 pb-6">
         {running.map((d) => {
           const target = workTargetOf(d)
           const canOpen = canOpenWork(target)
@@ -172,7 +125,7 @@ export function WorkspaceTab({
               data-pa-workspace-item={d.id}
               className={cn(PANEL_SURFACE, "min-w-0 gap-0 py-0 ring-0")}
             >
-              <WindowBar className="h-auto items-start gap-2.5 py-2">
+              <div className="flex min-w-0 items-start gap-2.5 px-3 py-2.5">
                 <WorkGlyph mode={d.mode} size={ROW_AVATAR_SIZE} />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[0.8125rem] leading-5 font-medium">
@@ -199,44 +152,13 @@ export function WorkspaceTab({
                     size="xs"
                     variant="outline"
                     className="shrink-0"
+                    data-pa-workspace-open={d.id}
                     onClick={() => openWork(target)}
                   >
-                    {t("open")}
+                    {t("viewSession")}
                   </Button>
                 ) : null}
-              </WindowBar>
-              {drawerOpen ? null : (
-                <div className="relative">
-                  <div
-                    data-pa-workspace-preview={d.id}
-                    className="pointer-events-none h-56 overflow-hidden text-xs [&_*]:select-none"
-                  >
-                    {d.mode === "task" ? (
-                      d.work_task_id != null ? (
-                        <TaskPreview taskId={d.work_task_id} />
-                      ) : null
-                    ) : (
-                      <ConversationPreview d={d} />
-                    )}
-                  </div>
-                  {/* The view fades out at its foot, and opens the work
-                      as its button does. */}
-                  <div
-                    aria-hidden
-                    className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-card to-transparent"
-                  />
-                  {canOpen ? (
-                    <button
-                      type="button"
-                      tabIndex={-1}
-                      aria-hidden
-                      data-pa-workspace-open={d.id}
-                      className="absolute inset-0 cursor-pointer outline-none"
-                      onClick={() => openWork(target)}
-                    />
-                  ) : null}
-                </div>
-              )}
+              </div>
             </Card>
           )
         })}

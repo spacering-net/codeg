@@ -4,7 +4,9 @@
 //! by a per-launch token alone, and `--features` is a string in the agent's
 //! MCP config, so any connection's companion could send one of these frames.
 //! Only the personal agent's current connection gets an answer. Every tool
-//! returns at once — none waits for a turn or a person.
+//! returns at once — none waits for a turn or a person — but
+//! `dispatch_wait`, which waits a bounded while for news of the assistant's
+//! own work, changing nothing (the listener drops it when its caller goes).
 //!
 //! A refusal is an answer (`ok: false`), not an error: the model reads why and
 //! corrects the call.
@@ -50,6 +52,15 @@ impl ToolOutcome {
             ok: false,
             text: text.into(),
             data: Value::Null,
+        }
+    }
+
+    /// Refused, with what the structure says of it.
+    pub fn refused_with(text: impl Into<String>, data: Value) -> Self {
+        Self {
+            ok: false,
+            text: text.into(),
+            data,
         }
     }
 }
@@ -112,6 +123,21 @@ pub async fn call(parent_connection_id: &str, tool: &str, args: Value) -> ToolOu
         );
     };
     answer(&engine, tool, args).await
+}
+
+/// A row's data as the assistant reads it back: a reply's earlier runs
+/// (`texts`) and the run a line was written after (`turn.said`) taken out —
+/// what it said on the way, which its conclusion may have put right. The
+/// conclusion is the row's text; where a line went in its turn (`turn.n`)
+/// stays.
+pub(super) fn without_process_talk(mut data: Value) -> Value {
+    if let Some(map) = data.as_object_mut() {
+        map.remove("texts");
+        if let Some(turn) = map.get_mut("turn").and_then(Value::as_object_mut) {
+            turn.remove("said");
+        }
+    }
+    data
 }
 
 /// A card's data as an assistant reads it: every field about an executor
@@ -310,6 +336,16 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             }
         }
         "dispatch_answer" => engine.dispatch_answer_call(&args).await,
+        "dispatch_wait" => {
+            let Some(id) = int(&args, "dispatch_id").and_then(as_i32) else {
+                return ToolOutcome::refused("`dispatch_id` is required");
+            };
+            // Not told: as long as one call waits. 0: a look, no wait.
+            let wait = int(&args, "wait_ms")
+                .map(|ms| std::time::Duration::from_millis(ms.max(0) as u64));
+            engine.dispatch_wait(id, wait).await
+        }
+        "dispatch_stop" => engine.dispatch_stop_call(&args).await,
         "acceptance_decide" => engine.acceptance_decide_call(&args).await,
         "prefs_update" => engine.prefs_update_call(&args).await,
         "bot_create" => engine.bot_create_call(&args).await,
@@ -650,6 +686,12 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                                 summary,
                                 on_done: on_done.map(Some),
                                 time: time.clone(),
+                                closing: match status {
+                                    Some(ItemStatus::Done) => Some(svc::Closing::new(svc::Closer::Agent, "done")),
+                                    Some(ItemStatus::Dropped) => Some(svc::Closing::new(svc::Closer::Agent, "dropped")),
+                                    _ => None,
+                                },
+                                answer: None,
                             },
                             card,
                             None,
@@ -742,6 +784,15 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                         (None, Some(_)) => Some(WaitsFor::Time),
                         (w, _) => w,
                     };
+                    // A question comes from the reply that asks it; any other
+                    // matter from what the owner wrote.
+                    let origin = match kind {
+                        ItemKind::Question => match engine.turn_reply_row().await {
+                            Some(r) => Some(r),
+                            None => engine.turn_owner_row().await,
+                        },
+                        _ => engine.turn_owner_row().await,
+                    };
                     match svc::create_item_timed(
                         &db.conn,
                         bot,
@@ -751,7 +802,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                         waits_for,
                         summary,
                         on_done,
-                        engine.turn_owner_row().await,
+                        origin,
                         time,
                     )
                     .await
@@ -804,7 +855,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     "kind": row.kind,
                     "at": row.created_at,
                     "text": body,
-                    "data": row.data.map(without_executors),
+                    "data": row.data.map(without_executors).map(without_process_talk),
                 }));
             }
             let mut text = if lines.is_empty() {

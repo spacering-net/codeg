@@ -1996,12 +1996,22 @@ export type BotColor =
   | "magenta"
   | "gray"
 
+/** A text avatar's colour on an assistant: one of the faces' colours (what
+ *  the face editor offers), or one of the ten the collaboration settings'
+ *  assistants had, which the avatars made before carry. */
+export type AvatarTextColor = BotColor | AssistantAvatarColor
+
 /** An assistant's avatar: a face (shape and colour), or one of the avatars
  *  the collaboration settings' assistants had, which the assistants made
- *  before 1.6 carry. */
+ *  before 1.6 carry — a monogram or an emoji now in a face's colour. */
 export type BotAvatar =
   | { kind: "face"; shape: BotShape; color: BotColor }
-  | AssistantAvatar
+  | { kind: "monogram"; color: AvatarTextColor }
+  | { kind: "emoji"; emoji: string; color: AvatarTextColor }
+  | { kind: "image"; data_url: string }
+
+/** Any avatar but a face: what `AssistantAvatar` draws. */
+export type DiscAvatar = Exclude<BotAvatar, { kind: "face" }>
 
 export interface PersonalAgentInfo {
   id: number
@@ -2161,10 +2171,20 @@ export type ReplyStep =
       awaiting?: boolean
     }
 
-/** The reply in flight, as a snapshot carries it. */
+/** One text run of a reply's turn: its step's ordinal, and what it says. */
+export interface ReplyText {
+  n: number
+  text: string
+}
+
+/** The reply in flight, as a snapshot carries it: the step it is on, every
+ *  text run so far (the one being written last), and the version of that
+ *  copy — a later copy of the same reply has a greater one. */
 export interface LiveReply {
   row_id: number
   current: ReplyStep | null
+  texts: ReplyText[]
+  ver: number
 }
 
 export interface SegmentInfo {
@@ -2308,6 +2328,9 @@ export interface DispatchInfo {
   check_round?: number | null
   /** The routine whose run handed it out (6.9). */
   routine_id?: number | null
+  /** Stopped: who stopped it, and the assistant's reason. */
+  stopped_by?: StoppedBy
+  stop_reason?: string
 }
 
 /** Where a round of acceptance stands (7.5). */
@@ -2723,6 +2746,9 @@ export interface PrFacts {
 export interface TaskFacts {
   task_id: number
   status: WorkTaskStatus
+  /** Its run and version, as a card's [Stop] read them. */
+  run_seq: number
+  updated_at: string
   /** The project it belongs to. */
   folder_id: number
   branch: string | null
@@ -2805,6 +2831,91 @@ export interface ItemInfo {
   fired_at: string | null
   /** A `when_mentioned` matter's keywords and how it comes up (6.8). */
   mention?: ItemMention | null
+  /** When it was settled, by whom and how: none while open, and for one
+   *  settled before this was kept. */
+  closed_at?: string | null
+  closed_by?: ItemClosedBy | null
+  closed_how?: ItemClosedHow | null
+  /** A question's: the owner's message answering it, and how it stands
+   *  (`linked`: the assistant has it; `interrupted`: its turn did not
+   *  finish). */
+  answer_row_id?: number | null
+  answer_state?: "linked" | "interrupted" | null
+  /** A message's: the assistant it waits on. */
+  peer?: ItemPeer | null
+  /** A message's: what was written, from its line (not codeg's summary of
+   *  it), and which way it went. Absent for an older read: show `summary`. */
+  written?: string
+  direction?: "in" | "out"
+}
+
+/** Who stopped a piece of work: the owner on its card or in the
+ *  conversation, in its own session, on the board; or its assistant. */
+export type StoppedBy =
+  | "owner"
+  | "owner_in_session"
+  | "owner_on_board"
+  | "agent"
+
+/** What a [Stop] came to. */
+export interface StopReply {
+  outcome:
+    | "stopped"
+    | "already_stopped"
+    | "past_stopping"
+    | "board_refused"
+    | "changed"
+  by?: StoppedBy
+  reason?: string
+  state?: DispatchState
+  /** The dispatch as the stop wrote it. */
+  updated_at?: string
+}
+
+/** Who settled a matter. */
+export type ItemClosedBy = "owner" | "agent" | "codeg"
+
+/** How a matter was settled. */
+export type ItemClosedHow =
+  | "done"
+  | "skipped"
+  | "stopped"
+  | "dropped"
+  | "withdrawn"
+  | "stopped_waiting"
+  | "plan_canceled"
+  | "answered"
+  | "replied"
+  | "gone"
+  | "used_up"
+  | "expired"
+  | "merged"
+  | "replaced"
+
+/** The assistant a message's matter waits on (its name when it was
+ *  deleted, `gone`). */
+export interface ItemPeer {
+  id: number
+  name: string | null
+  avatar: unknown
+  gone: boolean
+}
+
+/** The owner's act on a matter: the matter as it is now, what takes the
+ *  panel's act back, and — a message's dropped — whether the message was
+ *  taken back. */
+export interface ItemActResult {
+  item: ItemInfo
+  undo: number | null
+  withdrawn: boolean | null
+}
+
+/** What an owner's message answering a question keeps on its row
+ *  (`data.answers_item`). */
+export interface OwnerAnswersItem {
+  id: number
+  summary: string
+  linked_at: string
 }
 
 /** How a matter that comes up when the owner mentions something does. */
@@ -3223,6 +3334,8 @@ export type TodayRowKind =
   // matter gone quiet, a new project.
   | "rule"
   | "routine_report"
+  /** A matter settled today, with who did it and how. */
+  | "matter_closed"
 
 export interface TodayRow {
   /** The same thing keeps the same key across reads. */
@@ -3264,6 +3377,19 @@ export interface TodayRow {
   round?: number | null
   /** An acceptance waiting on the owner whose task is queued to merge. */
   queued?: boolean
+  /** A matter settled today (`matter_closed`): who settled it and how;
+   *  the matter's kind is `state`. */
+  closed_by?: ItemClosedBy | null
+  closed_how?: ItemClosedHow | null
+  /** ... a message's: the assistant it waited on. */
+  peer?: ItemPeer | null
+  /** ... what takes the owner's act on the panel back
+   *  (`personalAgentItemUndo`), while it still can be. */
+  matter_undo?: number | null
+  /** ... a message's: what was written, from its line, and which way it
+   *  went. */
+  written?: string
+  direction?: "in" | "out"
 }
 
 /** "Today": every assistant's, in four groups. */
@@ -3299,6 +3425,8 @@ export interface ActivityRow {
   routine: Routine | null
   /** The card of a matter's latest firing with no "today" row. */
   card_row_id: number | null
+  /** Its reminder card while it is open: what [Hand to ...] answers. */
+  card_notice_id?: number | null
 }
 
 /** The activity tab's one list (C1). */
@@ -4086,7 +4214,14 @@ export interface PersonalAgentStats {
  *  it is about (0: the primary, before it is set up). */
 export type PersonalAgentChange = { bot_id?: number } & (
   | { kind: "timeline"; rows: TimelineRow[] }
-  | { kind: "reply"; row_id: number; current: ReplyStep | null }
+  | {
+      kind: "reply"
+      row_id: number
+      current: ReplyStep | null
+      /** Every text run so far, whole (not what changed). */
+      texts: ReplyText[]
+      ver: number
+    }
   | { kind: "status" }
   | { kind: "agent" }
   | { kind: "dispatch"; id: number }
@@ -5370,6 +5505,12 @@ export interface RemoteControlInfo {
   /** The remote session's claude.ai/code URL; `null` when Claude Code turned
    *  Remote Control on without returning one. */
   session_url: string | null
+  /** Remote Control started with the session on its own
+   *  (`remoteControlAtStartup`, or a rollout the user may never have chosen;
+   *  claude-agent-acp 0.113.0) rather than by the user's `/remote-control`.
+   *  Nobody handed the session over, so it does not keep the connection from
+   *  the idle teardown (`isConnectionBusy`). Absent when false. */
+  at_startup?: boolean
 }
 
 export interface SessionUsageUpdateInfo {
@@ -5600,6 +5741,12 @@ export type AcpEvent =
     }
   | {
       type: "fork_supported"
+      supported: boolean
+    }
+  | {
+      /** Whether the agent offers `_session/rewind`, behind a sent message's
+       *  "edit and resend" (claude-agent-acp 0.112.0, codex-acp 2.12.0). */
+      type: "rewind_supported"
       supported: boolean
     }
   | {
@@ -6379,6 +6526,8 @@ export interface LiveSessionSnapshot {
    *  event). Absent when it is off. */
   remote_control?: RemoteControlInfo | null
   fork_supported: boolean
+  /** See the `rewind_supported` event. Omitted when false. */
+  rewind_supported?: boolean
   available_commands: AvailableCommandInfo[]
   selectors_ready: boolean
   /** The composer's pending mode pick (see the `composer_mode_changed`

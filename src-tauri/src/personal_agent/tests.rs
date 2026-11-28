@@ -213,6 +213,36 @@ async fn an_interrupted_delivery_offers_its_messages_again_and_puts_events_back_
     assert!(svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap().is_empty());
 }
 
+/// A restart finds a delivery still running from before: its answer, and
+/// an answer claimed for it and never folded in, are interrupted — their
+/// questions back with the owner, each with its time.
+#[tokio::test]
+async fn a_restart_gives_back_the_answers_of_a_turn_it_cut_short() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let config = serde_json::to_string(&brain(AgentType::ClaudeCode)).unwrap();
+    let seg = svc::create_segment(&engine.db.conn, bot, "claude_code", config, SegmentReason::First)
+        .await
+        .unwrap();
+    let delivered = a_question(&engine, Some("3h")).await;
+    let claimed = a_question(&engine, Some("5h")).await;
+    let due = (matter_of(&engine, delivered).await.due_at, matter_of(&engine, claimed).await.due_at);
+    let batch = svc::create_batch(&engine.db.conn, bot, seg.id, BatchKind::Delivery, None).await.unwrap();
+    let a = engine.send_from_page("Friday.".into(), Vec::new(), None, Some(delivered)).await.unwrap();
+    svc::move_owner_rows(&engine.db.conn, &[a.id], &[OwnerStatus::Queued], OwnerStatus::Delivered, Some(batch.id), Some(seg.id), svc::ReadMark::Read)
+        .await
+        .unwrap();
+    let b = engine.send_from_page("Monday.".into(), Vec::new(), None, Some(claimed)).await.unwrap();
+    assert!(matter_svc::claim_owner_row_for_steering(&engine.db.conn, b.id, batch.id, seg.id).await.unwrap());
+    engine.boot_for_test().await;
+    for (row, q, due) in [(a.id, delivered, due.0), (b.id, claimed, due.1)] {
+        let r = svc::get_row(&engine.db.conn, row).await.unwrap().unwrap();
+        assert_eq!(r.status, Some(OwnerStatus::Interrupted));
+        let m = matter_of(&engine, q).await;
+        assert_eq!((m.waits_for, m.answer_state.as_deref(), m.due_at), (Some(WaitsFor::Owner), Some("interrupted"), due));
+    }
+}
+
 #[tokio::test]
 async fn an_interrupted_compaction_leaves_the_messages_queued() {
     let (engine, _tmp) = configured().await;
@@ -1984,6 +2014,270 @@ async fn a_reply_reports_the_cards_its_body_names_or_the_one_it_was_given() {
     assert_ne!(reply4.id, reply3.id);
     let covers = data_of(reply4)["covers"].clone();
     assert!(covers.is_null() || covers == json!([]), "{:?}", reply4.data);
+}
+
+/// The owner asks for work's result in this reply: the assistant hands it
+/// out and waits within its turn (`dispatch_wait`). News that comes in
+/// meanwhile is handed to the turn numbered, stays pending while it runs,
+/// and is settled with it only when the reply said in full it reported it
+/// (its marker) — no second turn tells it again. A reply that does not mark
+/// it, or a turn that does not finish, leaves it to go out as an event.
+#[tokio::test]
+async fn news_waited_for_within_a_turn_is_settled_with_the_reply_that_reports_it() {
+    use std::time::Duration;
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let bot = engine.bot().await;
+    let event_of = |id: i32| {
+        let engine = engine.clone();
+        async move {
+            svc::latest_event_of_coalesce(&engine.db.conn, &format!("dispatch:{id}"))
+                .await
+                .unwrap()
+                .unwrap()
+        }
+    };
+
+    // No turn running: nothing to wait in.
+    let early = session_dispatch(&engine, DispatchState::Running, "conn-w0").await;
+    let out = engine.dispatch_wait(early, Some(Duration::ZERO)).await;
+    assert!(!out.ok, "{}", out.text);
+
+    // 1. Waited for, reported with its marker: settled with the turn.
+    let (mut rx, state) = live_connection(&engine, seg, "pa-w1").await;
+    engine
+        .send_owner_message("have it checked, then tell me".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let id = session_dispatch(&engine, DispatchState::Running, "conn-w1").await;
+    // Still running: the wait ends with how it stands.
+    let out = engine.dispatch_wait(id, Some(Duration::ZERO)).await;
+    assert!(out.ok && out.data["waiting"] == "timed_out", "{}", out.text);
+    // Another assistant's work is not this one's to wait for.
+    let out = engine.dispatch_wait(id + 1000, Some(Duration::ZERO)).await;
+    assert!(!out.ok, "{}", out.text);
+    svc::update_dispatch(
+        &engine.db.conn,
+        id,
+        None,
+        DispatchWrite { state: Some(DispatchState::Completed), ..Default::default() },
+    )
+    .await
+    .unwrap();
+    let d = dispatch_state(&engine, id).await;
+    engine.record_progress(&d, Some("The title was never changed.".into()), None, "turn").await;
+    let card = svc::latest_result_row(&engine.db.conn, id).await.unwrap().unwrap();
+    let out = engine.dispatch_wait(id, Some(Duration::from_secs(5))).await;
+    assert!(out.ok && out.data["waiting"] == "news", "{}", out.text);
+    assert!(out.text.contains(&format!("[#{}] Dispatch #{id}", card.id)), "{}", out.text);
+    assert!(out.text.contains(&format!("[[quote:#{}]]", card.id)), "{}", out.text);
+    // Handed, not taken: pending while the turn runs.
+    assert_eq!(event_of(id).await.state, EventState::Pending);
+    emit(
+        &engine,
+        &state,
+        "pa-w1",
+        text(&format!("[[quote:#{}]] Not accepted: nothing was changed.", card.id)),
+        true,
+    )
+    .await;
+    emit(&engine, &state, "pa-w1", turn_complete("end_turn"), true).await;
+    let reply = svc::page(&engine.db.conn, bot, None, 100)
+        .await
+        .unwrap()
+        .0
+        .into_iter()
+        .rfind(|r| r.kind == TimelineKind::Reply)
+        .unwrap();
+    assert_eq!(data_of(&reply)["covers"], json!([card.id]));
+    assert_eq!(reply.reply_to, None, "news newer than the reply is not its quote");
+    let e = event_of(id).await;
+    assert_eq!(e.state, EventState::Done);
+    assert_eq!(e.batch_id, reply.batch_id, "settled with the turn that reported it");
+    let card_now = svc::get_row(&engine.db.conn, card.id).await.unwrap().unwrap();
+    assert!(card_now.read_at.is_some());
+    // Nothing left to tell: no second turn.
+    engine.pump().await;
+    assert!(rx.try_recv().is_err(), "the reported news is not delivered again");
+    // Its news reached the assistant: waiting again says so at once.
+    let (mut rx, state) = live_connection(&engine, seg, "pa-w1b").await;
+    engine.send_owner_message("and?".into(), Vec::new(), None).await.unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let out = engine.dispatch_wait(id, Some(Duration::ZERO)).await;
+    assert!(out.ok && out.data["waiting"] == "told", "{}", out.text);
+    emit(&engine, &state, "pa-w1b", text("Told you."), true).await;
+    emit(&engine, &state, "pa-w1b", turn_complete("end_turn"), true).await;
+
+    // 2. Handed but not marked: it goes out as an event.
+    let (mut rx, state) = live_connection(&engine, seg, "pa-w2").await;
+    engine.send_owner_message("check another".into(), Vec::new(), None).await.unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let id2 = session_dispatch(&engine, DispatchState::Completed, "conn-w2").await;
+    let d2 = dispatch_state(&engine, id2).await;
+    engine.record_progress(&d2, Some("Done.".into()), None, "turn").await;
+    let card2 = svc::latest_result_row(&engine.db.conn, id2).await.unwrap().unwrap();
+    let out = engine.dispatch_wait(id2, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "news", "{}", out.text);
+    emit(&engine, &state, "pa-w2", text("It is done."), true).await;
+    emit(&engine, &state, "pa-w2", turn_complete("end_turn"), true).await;
+    assert_eq!(event_of(id2).await.state, EventState::Pending);
+    engine.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    assert!(prompt.contains(&format!("[#{}]", card2.id)), "{prompt}");
+    start_prompt(&state, Some(&token)).await;
+    emit(&engine, &state, "pa-w2", text("Done."), true).await;
+    emit(&engine, &state, "pa-w2", turn_complete("end_turn"), true).await;
+
+    // 3. Marked, but the turn was stopped: nothing settled, it goes out.
+    let (mut rx, state) = live_connection(&engine, seg, "pa-w3").await;
+    engine.send_owner_message("one more".into(), Vec::new(), None).await.unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let id3 = session_dispatch(&engine, DispatchState::Completed, "conn-w3").await;
+    let d3 = dispatch_state(&engine, id3).await;
+    engine.record_progress(&d3, Some("Done.".into()), None, "turn").await;
+    let card3 = svc::latest_result_row(&engine.db.conn, id3).await.unwrap().unwrap();
+    let out = engine.dispatch_wait(id3, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "news", "{}", out.text);
+    emit(&engine, &state, "pa-w3", text(&format!("[[quote:#{}]] Half", card3.id)), true).await;
+    emit(&engine, &state, "pa-w3", turn_complete("cancelled"), true).await;
+    let e3 = event_of(id3).await;
+    assert_eq!(e3.state, EventState::Pending, "a stopped turn settles nothing it waited for");
+    assert_eq!(e3.batch_id, None);
+    let card3_now = svc::get_row(&engine.db.conn, card3.id).await.unwrap().unwrap();
+    assert!(card3_now.read_at.is_none(), "unread until a delivery takes it");
+
+    // The turn over, the wait is too.
+    let out = engine.dispatch_wait(id3, Some(Duration::ZERO)).await;
+    assert!(!out.ok, "{}", out.text);
+}
+
+/// News of a round that was never told, then a follow-up: waiting for the
+/// follow-up does not hand the earlier round's news as its own — not while
+/// it runs, nor once it ended (the same state) before its news is written.
+#[tokio::test]
+async fn waiting_after_a_follow_up_hands_only_the_news_of_its_round() {
+    use std::time::Duration;
+    let (engine, _tmp) = configured().await;
+    owner_turn(&engine, "pa-wf").await;
+    let id = session_dispatch(&engine, DispatchState::Completed, "conn-wf").await;
+    let d = dispatch_state(&engine, id).await;
+    engine.record_progress(&d, Some("First answer.".into()), None, "turn").await;
+    // A follow-up goes out: the round under way has no news yet.
+    svc::update_dispatch(
+        &engine.db.conn,
+        id,
+        None,
+        DispatchWrite { state: Some(DispatchState::Running), ..Default::default() },
+    )
+    .await
+    .unwrap();
+    let out = engine.dispatch_wait(id, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "timed_out", "{}", out.text);
+    // It asks something (the same round number as the first's news): it
+    // waits on that, and the first's news is not handed as its own.
+    svc::update_dispatch(
+        &engine.db.conn,
+        id,
+        None,
+        DispatchWrite { state: Some(DispatchState::WaitingInput), ..Default::default() },
+    )
+    .await
+    .unwrap();
+    let out = engine.dispatch_wait(id, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "input", "{}", out.text);
+    // It ends as the first did; its news is not written yet.
+    let d = svc::update_dispatch(
+        &engine.db.conn,
+        id,
+        None,
+        DispatchWrite { state: Some(DispatchState::Completed), bump_turns: true, ..Default::default() },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let out = engine.dispatch_wait(id, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "timed_out", "{}", out.text);
+    // Written: that is the news handed.
+    engine.record_progress(&d, Some("Second answer.".into()), None, "turn").await;
+    let out = engine.dispatch_wait(id, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "news", "{}", out.text);
+    assert!(out.text.contains("Second answer."), "{}", out.text);
+}
+
+/// The owner writes again while `dispatch_wait` waits in the turn carrying
+/// their message (folded into it, or left for after it): the wait stops at
+/// once, not after its whole budget. What they wrote before a wait began
+/// does not stop it.
+#[tokio::test]
+async fn a_wait_stops_when_the_owner_writes_again() {
+    use std::time::Duration;
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-ws").await;
+    engine
+        .send_owner_message("have it checked, then tell me".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let id = session_dispatch(&engine, DispatchState::Running, "conn-ws").await;
+    let started = std::time::Instant::now();
+    let (out, ()) = tokio::join!(engine.dispatch_wait(id, Some(Duration::from_secs(20))), async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        engine
+            .send_owner_message("and the footer too".into(), Vec::new(), None)
+            .await
+            .unwrap();
+    });
+    assert_eq!(out.data["waiting"], "stopped", "{}", out.text);
+    assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+    // Written before this wait: it waits as ever.
+    let out = engine.dispatch_wait(id, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "timed_out", "{}", out.text);
+}
+
+/// An event turn carried one card; `dispatch_wait` handed it another. The
+/// first is no longer all it was given: a reply marking only the second
+/// reports only that one.
+#[tokio::test]
+async fn a_card_a_wait_handed_ends_the_sole_card_rule() {
+    use std::time::Duration;
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let bot = engine.bot().await;
+    let first = session_dispatch(&engine, DispatchState::Completed, "conn-s1").await;
+    let d = dispatch_state(&engine, first).await;
+    engine.record_progress(&d, Some("Done.".into()), None, "turn").await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-s1").await;
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let second = session_dispatch(&engine, DispatchState::Completed, "conn-s2").await;
+    let d = dispatch_state(&engine, second).await;
+    engine.record_progress(&d, Some("Not accepted.".into()), None, "turn").await;
+    let card = svc::latest_result_row(&engine.db.conn, second).await.unwrap().unwrap();
+    let out = engine.dispatch_wait(second, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "news", "{}", out.text);
+    emit(&engine, &state, "pa-s1", text(&format!("[[quote:#{}]] Not accepted.", card.id)), true).await;
+    emit(&engine, &state, "pa-s1", turn_complete("end_turn"), true).await;
+    let reply = svc::page(&engine.db.conn, bot, None, 100)
+        .await
+        .unwrap()
+        .0
+        .into_iter()
+        .rfind(|r| r.kind == TimelineKind::Reply)
+        .unwrap();
+    assert_eq!(data_of(&reply)["covers"], json!([card.id]));
 }
 
 /// Interrupted: a put-back event's card is unread again; one put back once
@@ -3802,9 +4096,9 @@ async fn workers_have_their_own_git_repositories_and_no_owner_file() {
     assert!(!workdir::skill_md(false, Default::default()).contains("You have no `USER.md`"));
 }
 
-/// The skill says how a result is reported (A3): the card above the reply
-/// says what the work is and how it stands, the reply what it means, a
-/// marker for each result reported — with many findings, in the shape the
+/// The skill says how a result is reported (A3, P6): the reply names each
+/// piece of work and its result, a marker for each result reported in its
+/// conclusion — with many findings, in the shape the
 /// owner's preference for cards asks.
 #[test]
 fn the_skill_says_how_a_result_is_reported_under_each_preference_for_cards() {
@@ -3813,9 +4107,10 @@ fn the_skill_says_how_a_result_is_reported_under_each_preference_for_cards() {
         let skill = workdir::skill_md(false, cards);
         for want in [
             "### Reporting a result",
-            "Lead with the conclusion and what the owner needs to do",
-            "do not link\n  the work's session",
+            "Name each piece of work and its result, then say what the owner needs to\n  do",
+            "Do not link\n  the work's session",
             "Write `[[quote:#N]]` for each result you report",
+            "in your conclusion: the text after\n  your last tool call",
             "but for the results of work you report (below)",
             "so do not say it was merged",
             "reply\n  `[[silent]]` alone",
@@ -4295,7 +4590,7 @@ async fn a_message_folds_into_a_turn_carrying_an_earlier_one_when_the_agent_take
     // The connection loop's part: take the steer.
     let taken = tokio::spawn(async move {
         match rx.recv().await {
-            Some(ConnectionCommand::Steer { blocks, reply }) => {
+            Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
                 let _ = reply.send(Ok(SteerOutcome::Injected));
                 (blocks, rx)
             }
@@ -4395,7 +4690,7 @@ async fn a_folded_message_with_attachments_leads_with_its_text() {
     engine.set_turn_owner_rows_for_test(vec![first.id]).await;
     let taken = tokio::spawn(async move {
         match rx.recv().await {
-            Some(ConnectionCommand::Steer { blocks, reply }) => {
+            Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
                 let _ = reply.send(Ok(SteerOutcome::Injected));
                 blocks
             }
@@ -4679,6 +4974,139 @@ async fn a_message_sent_in_a_turn_keeps_the_text_the_turn_wrote_before_it() {
     assert!(data_of(last).get("turn").is_none(), "{:?}", last.data);
 }
 
+/// Work a turn hands out says where it went in the turn, as a message does
+/// (P6): the step it was handed out at and the text written before it. The
+/// reply keeps every run it said, its body still the last; what the
+/// assistant reads back leaves out what it said on the way.
+#[tokio::test]
+async fn work_a_turn_hands_out_keeps_its_place_and_the_reply_every_run() {
+    let (primary, tmp) = configured().await;
+    role_assistant(&primary, "Coder", true).await;
+    let (other, mut drx, _dst, _) =
+        live_session_dispatch(&primary, &tmp, "x-p6", DispatchState::Completed).await;
+    let p = primary.bot().await;
+    let seg = open_segment(&primary).await;
+    let (mut rx, state) = live_connection(&primary, seg, "pa-p6").await;
+    primary
+        .send_owner_message("research X, and nudge the investigation".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    primary.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    emit(&primary, &state, "pa-p6", text("I'll hand X out."), true).await;
+    emit(&primary, &state, "pa-p6", tool("t1", "dispatch"), true).await;
+    let made = call(
+        &primary,
+        "dispatch",
+        json!({ "mode": "chat", "title": "Research X", "prompt": "Find out X." }),
+    )
+    .await;
+    assert!(made.ok, "{}", made.text);
+    emit(&primary, &state, "pa-p6", text("Now the investigation."), true).await;
+    emit(&primary, &state, "pa-p6", tool("t2", "dispatch_followup"), true).await;
+    let sent = call(
+        &primary,
+        "dispatch_followup",
+        json!({ "dispatch_id": other, "message": "and check the tests" }),
+    )
+    .await;
+    assert!(sent.ok, "{}", sent.text);
+    take_followup(&mut drx);
+    let cards = rows_of(&primary, p, TimelineKind::Dispatch).await;
+    let card = cards
+        .iter()
+        .find(|r| data_of(r).get("followup").is_none())
+        .expect("the dispatch's card");
+    let turn = data_of(card)["turn"].clone();
+    assert_eq!(turn["n"], 2, "{turn}");
+    assert_eq!(turn["said"], json!({ "n": 1, "text": "I'll hand X out." }));
+    let pill = cards
+        .iter()
+        .find(|r| data_of(r)["followup"] == json!(true))
+        .expect("the follow-up's pill");
+    let turn = data_of(pill)["turn"].clone();
+    assert_eq!(turn["n"], 4, "{turn}");
+    assert_eq!(turn["said"]["text"], "Now the investigation.", "{turn}");
+    // The reply: every run, its body the last.
+    emit(&primary, &state, "pa-p6", text("Both are moving."), true).await;
+    emit(&primary, &state, "pa-p6", turn_complete("end_turn"), true).await;
+    let reply = reply_of(&primary, card.batch_id.expect("handed out in the delivery")).await;
+    assert_eq!(reply.body, "Both are moving.");
+    let data = data_of(&reply);
+    assert_eq!(data["last_text_n"], 5);
+    assert_eq!(
+        data["texts"],
+        json!([
+            { "n": 1, "text": "I'll hand X out." },
+            { "n": 3, "text": "Now the investigation." },
+            { "n": 5, "text": "Both are moving." },
+        ])
+    );
+    // Read back by the assistant: the conclusion, and where each line went.
+    let read = call(&primary, "timeline_read", json!({})).await;
+    assert!(read.ok, "{}", read.text);
+    let rows = read.data["rows"].as_array().unwrap();
+    let of = |id: i32| {
+        rows.iter()
+            .find(|r| r["id"] == json!(id))
+            .unwrap_or_else(|| panic!("row {id} read back"))["data"]
+            .clone()
+    };
+    assert!(of(reply.id).get("texts").is_none(), "{}", of(reply.id));
+    assert!(!read.text.contains("I'll hand X out."), "{}", read.text);
+    for line in [card.id, pill.id] {
+        let turn = of(line)["turn"].clone();
+        assert!(turn.get("said").is_none() && turn["n"].is_number(), "{turn}");
+    }
+}
+
+#[test]
+fn what_the_assistant_reads_back_keeps_no_process_talk() {
+    let reply = super::tools::without_process_talk(json!({
+        "texts": [{ "n": 1, "text": "maybe config" }],
+        "last_text_n": 3,
+    }));
+    assert_eq!(reply, json!({ "last_text_n": 3 }));
+    let line = super::tools::without_process_talk(json!({
+        "turn": { "n": 2, "said": { "n": 1, "text": "maybe config" } },
+        "peer": "Dev",
+    }));
+    assert_eq!(line, json!({ "turn": { "n": 2 }, "peer": "Dev" }));
+    assert_eq!(super::tools::without_process_talk(json!(null)), json!(null));
+}
+
+/// A reply's checkpoints, written in tasks of their own, never put an older
+/// copy over a newer one.
+#[tokio::test]
+async fn an_older_checkpoint_never_lands_over_a_newer_one() {
+    let (engine, _tmp) = configured().await;
+    let (seg, batch) = owner_turn(&engine, "pa-ck").await;
+    let row = svc::insert_row(&engine.db.conn, engine.bot().await, {
+        let mut r = NewRow::new(TimelineKind::Reply, String::new());
+        r.segment_id = Some(seg);
+        r.batch_id = Some(batch);
+        r.data = Some(json!({ "state": "running" }));
+        r
+    })
+    .await
+    .unwrap();
+    let write = |ver: u64, text: &str| {
+        svc::checkpoint_reply_row(
+            &engine.db.conn,
+            row.id,
+            json!({ "state": "running", "ver": ver, "texts": [{ "n": 1, "text": text }] }),
+            ver,
+        )
+    };
+    assert!(write(7, "newer").await.unwrap());
+    assert!(!write(5, "older").await.unwrap(), "an older copy is not written");
+    assert!(!write(7, "same").await.unwrap());
+    let now = svc::get_row(&engine.db.conn, row.id).await.unwrap().unwrap();
+    assert_eq!(data_of(&now)["texts"][0]["text"], "newer");
+    assert!(write(9, "newest").await.unwrap());
+}
+
 /// The message a line is of (`m<id>`).
 fn sent_id_of_line(row: &crate::db::entities::personal_agent_timeline::Model) -> i32 {
     row.ref_id
@@ -4737,6 +5165,82 @@ async fn a_message_wakes_its_receiver_and_its_answer_closes_the_wait() {
         svc::list_items(&worker.db.conn, w, &[ItemStatus::Waiting], 10).await.unwrap().is_empty(),
         "an answer that wants none leaves the replier nothing to wait for"
     );
+}
+
+/// "Done today" reads its matters in the same number of queries whether one
+/// closed or fifty, and says of each what it said reading them one at a
+/// time: a replied message (going to the reply), one taken back (with its
+/// [Undo]), the owner's own acts (with theirs), an answered question.
+#[tokio::test]
+async fn done_today_reads_in_a_fixed_number_of_queries() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let p = primary.bot().await;
+    // Replied.
+    let id = sent_id(&say(&primary, json!({ "to": w.to_string(), "text": "Fix the login." })).await);
+    say(&worker, json!({ "reply_to": format!("m{id}"), "text": "Fixed." })).await;
+    // Taken back by the owner, undoable.
+    let id2 = sent_id(&say(&primary, json!({ "to": w.to_string(), "text": "Check the logs." })).await);
+    let line = msvc::lines_of_message(&primary.db.conn, id2)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|l| l.bot_id == Some(p))
+        .unwrap();
+    let waiting = msvc::waiting_item_of_line(&primary.db.conn, p, line.id).await.unwrap().unwrap();
+    primary.settle_item_from(waiting.id, "drop", None, OpSource::Panel).await.unwrap();
+    // An answered question the owner dropped while its answer waited.
+    let q = call(&primary, "item_update", json!({ "kind": "question", "summary": "Friday?" })).await;
+    let q = q.data["item_id"].as_i64().unwrap() as i32;
+    primary.send_from_page("Yes.".into(), Vec::new(), None, Some(q)).await.unwrap();
+    primary.settle_item_from(q, "drop", None, OpSource::Panel).await.unwrap();
+    // The owner's own, undoable and not.
+    let close = |n: usize| {
+        let primary = primary.clone();
+        async move {
+            for k in 0..n {
+                let out = call(&primary, "item_update", json!({ "kind": "reminder", "summary": format!("Errand {k}") })).await;
+                let id = out.data["item_id"].as_i64().unwrap() as i32;
+                let act = if k % 2 == 0 { "done" } else { "drop" };
+                primary.settle_item_from(id, act, None, OpSource::Panel).await.unwrap();
+            }
+        }
+    };
+    let counted = |db: &crate::db::AppDatabase, hits: Arc<AtomicUsize>| {
+        let mut conn = db.conn.clone();
+        conn.set_metric_callback(move |_| {
+            hits.fetch_add(1, Ordering::SeqCst);
+        });
+        crate::db::AppDatabase { conn }
+    };
+    let day = chrono::Utc::now() - chrono::Duration::days(1);
+    let read = |n: Arc<AtomicUsize>| {
+        let db = counted(&primary.db, n);
+        async move { super::today::closed_matters(&db, &[p, w], day, chrono::Utc::now()).await }
+    };
+    close(1).await;
+    let one = Arc::new(AtomicUsize::new(0));
+    let rows = read(one.clone()).await;
+    close(49).await;
+    let fifty = Arc::new(AtomicUsize::new(0));
+    let many = read(fifty.clone()).await;
+    assert_eq!(many.len(), rows.len() + 49);
+    assert!(one.load(Ordering::SeqCst) > 0, "queries are counted");
+    assert_eq!(one.load(Ordering::SeqCst), fifty.load(Ordering::SeqCst), "the same number of queries");
+    // As one at a time said it.
+    let now = chrono::Utc::now();
+    let batched = super::today::closed_matters(&primary.db, &[p, w], day, now).await;
+    let single = super::today::closed_matters_one_by_one(&primary.db, &[p, w], day, now).await;
+    assert_eq!(serde_json::to_value(&batched).unwrap(), serde_json::to_value(&single).unwrap());
+    let replied = batched.iter().find(|r| r.closed_how.as_deref() == Some("replied")).unwrap();
+    let origin = svc::get_item(&primary.db.conn, replied.item_id.unwrap()).await.unwrap().unwrap().origin_timeline_id;
+    assert!(replied.row_id.is_some() && replied.row_id != origin, "goes to the reply");
+    let withdrawn = batched.iter().find(|r| r.closed_how.as_deref() == Some("withdrawn")).unwrap();
+    assert!(withdrawn.matter_undo.is_some());
+    assert_eq!(withdrawn.written.as_deref(), Some("Check the logs."));
+    assert!(batched.iter().filter(|r| r.closed_by.as_deref() == Some("owner")).all(|r| r.matter_undo.is_some()));
 }
 
 #[tokio::test]
@@ -5197,8 +5701,8 @@ async fn a_dispatch_stopped_while_its_agent_starts_is_stopped_where_it_runs_now(
         .unwrap();
     assert!(primary.stop_dispatch_for_test(&read).await);
     assert!(
-        matches!(rx.try_recv(), Ok(ConnectionCommand::Cancel)),
-        "the turn on the connection it has now is stopped"
+        matches!(rx.try_recv(), Ok(ConnectionCommand::StopWork)),
+        "the turn on the connection it has now is stopped, its sub-agents with it"
     );
     // And a launch that checks now does not send the work.
     assert!(primary.was_stopped(d).await);
@@ -6727,8 +7231,8 @@ async fn a_hand_over_and_a_round_opening_take_turns_on_the_route() {
     drop(held);
     opening.await.unwrap();
     deleting.await.unwrap().unwrap();
-    let route = primary.state.lock().await.dispatch_conns.get("c-race").copied();
-    assert!(route.is_some_and(|c| c.round_since.is_some()), "the primary routes it with its round open: {route:?}");
+    let route = primary.state.lock().await.dispatch_conns.get("c-race").cloned();
+    assert!(route.as_ref().is_some_and(|c| c.round_since.is_some()), "the primary routes it with its round open: {route:?}");
     assert!(!worker.owns_connection("c-race").await);
 }
 
@@ -6968,6 +7472,37 @@ async fn running_work_is_busy_for_a_while_and_a_face_says_how_it_ended() {
     assert!(left.num_seconds() <= 8 && left.num_seconds() >= 7, "{left}");
     host.live.flash(engine.bot().await, FaceState::Failed);
     assert_eq!(host.live_of(&primary_row(&host).await).await.flash.unwrap().face, FaceState::Failed);
+}
+
+#[tokio::test]
+async fn a_turn_begun_within_the_last_ones_face_shows_itself() {
+    let (host, _w, _tmp) = hosted().await;
+    let engine = host.primary();
+    host.live.flash(engine.bot().await, FaceState::Done);
+    let live = host.live_of(&primary_row(&host).await).await;
+    assert_eq!(live.flash.unwrap().face, FaceState::Done, "the last turn just ended");
+
+    // The owner writes again at once: the new turn moves the face.
+    let seg = open_segment(&engine).await;
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
+        .await
+        .unwrap();
+    engine
+        .begin_turn_for_test("pa-conn", seg, batch.id, BatchKind::Delivery, false, false)
+        .await;
+    let live = host.live_of(&primary_row(&host).await).await;
+    assert!(live.flash.is_none(), "no smile held over a turn running");
+    assert_eq!(live.face, FaceState::Thinking);
+
+    // Once that turn has ended (with no face of its own: the owner
+    // stopped it), the last one's does not come back — a turn registered
+    // ends it.
+    engine.clear_turn_for_test().await;
+    let live = host.live_of(&primary_row(&host).await).await;
+    assert!(live.flash.is_some(), "the test's turn was only put on record");
+    engine.end_face_flash().await;
+    let live = host.live_of(&primary_row(&host).await).await;
+    assert!(live.flash.is_none());
 }
 
 #[tokio::test]
@@ -7412,11 +7947,13 @@ async fn code_work_is_done_when_merged_and_a_pull_request_waits_for_its_merge() 
     // The owner stops one piece from its card: just that one.
     let one = session_dispatch(&engine, DispatchState::Running, "c-one").await;
     let other = session_dispatch(&engine, DispatchState::Running, "c-other").await;
-    assert!(engine.stop_one(one).await.unwrap());
+    use super::stop::{StopOutcome, StoppedBy};
+    let stop = |id| engine.stop_one(id, StoppedBy::Owner, Default::default());
+    assert!(matches!(stop(one).await.unwrap(), StopOutcome::Stopped { by: StoppedBy::Owner, .. }));
     assert_eq!(dispatch_state(&engine, one).await.state, DispatchState::Canceled);
     assert_eq!(dispatch_state(&engine, other).await.state, DispatchState::Running);
-    assert!(!engine.stop_one(one).await.unwrap(), "past stopping");
-    assert!(engine.stop_one(99_999).await.is_err());
+    assert_eq!(stop(one).await.unwrap(), StopOutcome::AlreadyStopped { by: StoppedBy::Owner }, "stopped already");
+    assert!(stop(99_999).await.is_err());
 }
 
 #[tokio::test]
@@ -9213,6 +9750,87 @@ async fn a_missed_reminder_comes_once_late_and_a_repeating_one_goes_on_from_its_
     assert!(item_notes(&engine).await.iter().any(|n| n.summary.contains("done for this time")));
 }
 
+/// "Skip this time" on a repeating matter: on to its next time; the last
+/// time skipped ends it as skipped, said so; only a repeating one skips;
+/// an undo, read by the assistant or not, says what it takes back.
+#[tokio::test]
+async fn skipping_a_repeating_matter_goes_on_or_ends_it_as_skipped() {
+    let (engine, _tmp) = configured().await;
+    engine.fire_due_at(super::clock::now()).await;
+    let (first, first_at) = local_day(&engine, 1, "09:00").await;
+    let out = call(
+        &engine,
+        "item_update",
+        json!({ "kind": "reminder", "summary": "Stand-up", "due": first, "repeat": { "every": "daily" } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let daily = out.data["item_id"].as_i64().unwrap() as i32;
+    let skipped = engine
+        .settle_item_from(daily, "skip", None, super::reminders::OpSource::Panel)
+        .await
+        .unwrap();
+    assert_eq!(skipped.item.status, ItemStatus::Open);
+    assert_eq!(skipped.item.due_at, Some(first_at + chrono::Duration::days(1)), "the next day's");
+    assert!(item_notes(&engine).await.iter().any(|n| n.summary.contains("skipped") && n.summary.contains("this time")));
+    // Taken back after the assistant read the note: it is told so.
+    let notes: Vec<i32> = item_notes(&engine).await.iter().map(|n| n.id).collect();
+    let seg = open_segment(&engine).await;
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None).await.unwrap().id;
+    svc::mark_events_delivered(&engine.db.conn, &notes, batch).await.unwrap();
+    engine.undo_item(daily, skipped.undo.unwrap()).await.unwrap();
+    assert_eq!(matter_of(&engine, daily).await.due_at, Some(first_at));
+    assert!(item_notes(&engine).await.iter().any(|n| n.summary.contains("took back skipping it")));
+
+    // Its last time: over, as skipped.
+    let until = (first_at.with_timezone(&engine.owner_tz().await).date_naive()).to_string();
+    let out = call(
+        &engine,
+        "item_update",
+        json!({ "kind": "reminder", "summary": "Course", "due": first, "repeat": { "every": "daily", "until": until } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let last = out.data["item_id"].as_i64().unwrap() as i32;
+    let ended = engine.settle_item(last, "skip", None).await.unwrap();
+    assert_eq!((ended.status, ended.closed_how.as_deref()), (ItemStatus::Done, Some("skipped")));
+    assert!(item_notes(&engine).await.iter().any(|n| n.summary.contains("skipped the last time")));
+
+    // A one-off has no "this time" to skip.
+    let once = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Dentist", "due": first })).await;
+    let once = once.data["item_id"].as_i64().unwrap() as i32;
+    let e = engine.settle_item(once, "skip", None).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::SKIP_NOT_REPEATING));
+    assert_eq!(matter_of(&engine, once).await.status, ItemStatus::Open);
+}
+
+/// A reminder card whose row is gone is still opened again by an undo of
+/// the act that closed it.
+#[tokio::test]
+async fn an_undo_opens_a_reminder_card_whose_row_is_gone() {
+    use sea_orm::EntityTrait;
+    let (engine, _tmp) = configured().await;
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Pay rent", "due": "1m" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    engine.fire_due_at(super::clock::now() + chrono::Duration::minutes(2)).await;
+    let rows = reminder_rows(&engine, id).await;
+    assert_eq!(rows.len(), 1);
+    let notice = notice_of_row(&rows[0]);
+    crate::db::entities::personal_agent_timeline::Entity::delete_by_id(rows[0].id)
+        .exec(&engine.db.conn)
+        .await
+        .unwrap();
+    let acted = engine
+        .settle_item_from(id, "done", None, super::reminders::OpSource::Panel)
+        .await
+        .unwrap();
+    let closed = svc::get_notice(&engine.db.conn, notice).await.unwrap().unwrap();
+    assert_ne!(closed.state, crate::db::entities::personal_agent_notice::NoticeState::Open);
+    engine.undo_item(id, acted.undo.unwrap()).await.unwrap();
+    let opened = svc::get_notice(&engine.db.conn, notice).await.unwrap().unwrap();
+    assert_eq!(opened.state, crate::db::entities::personal_agent_notice::NoticeState::Open);
+}
+
 #[tokio::test]
 async fn a_matter_the_assistant_is_to_do_wakes_it_with_what_to_do() {
     let (engine, _tmp) = configured().await;
@@ -9307,13 +9925,15 @@ async fn the_owner_puts_a_matter_off_or_aside_without_the_brain() {
     // Garbage and the past are refused.
     assert!(engine.settle_item(f.id, "snooze", Some("whenever")).await.is_err());
     assert!(engine.settle_item(f.id, "snooze", Some("2020-01-01 09:00")).await.is_err());
-    // Snooze without a time is "later": no new time.
-    let i = engine.settle_item(f.id, "snooze", None).await.unwrap();
+    // Snooze without a time is "later" — refused for one set for later
+    // (it would keep its time, saying otherwise).
+    let e = engine.settle_item(f.id, "snooze", None).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::HAS_TIME));
+    let i = matter_of(&engine, f.id).await;
     assert_eq!(i.waits_for, Some(WaitsFor::Time));
     let notes = item_notes(&engine).await;
     assert!(notes.iter().all(|n| !n.wake), "the brain is not woken for them");
     assert!(notes.iter().any(|n| n.summary.contains(&format!("The owner put #{} \"Reply to Ana\" off until", f.id))));
-    assert!(notes.iter().any(|n| n.summary.contains("set #") && n.summary.contains("aside")));
     // Fired and set aside: no longer due.
     engine.fire_due_at(i.due_at.unwrap() + chrono::Duration::minutes(1)).await;
     let i = engine.settle_item(f.id, "later", None).await.unwrap();
@@ -9629,11 +10249,19 @@ async fn a_new_zone_moves_a_repeating_matter_to_its_clock_time_there() {
     let once = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Dentist", "due": first })).await;
     let once = once.data["item_id"].as_i64().unwrap() as i32;
     // The owner puts a daily 09:00 one off to tomorrow morning — 09:00
-    // too, by the clock: still a moment of their own.
+    // too, by the clock: still a moment of their own. (Put off, never
+    // sooner: it is due tomorrow at 09:00 itself.) "Tomorrow" as the
+    // snooze reads it — in the small hours that is this morning, not
+    // the calendar's next day.
+    let (tz, mornings) = engine.owner_day().await;
+    let tomorrow = super::due::morning(tz, super::clock::now(), mornings)
+        .with_timezone(&tz)
+        .format("%Y-%m-%d %H:%M")
+        .to_string();
     let pills = call(
         &engine,
         "item_update",
-        json!({ "kind": "reminder", "summary": "Pills", "due": first, "repeat": { "every": "daily" } }),
+        json!({ "kind": "reminder", "summary": "Pills", "due": tomorrow, "repeat": { "every": "daily" } }),
     )
     .await;
     let pills = pills.data["item_id"].as_i64().unwrap() as i32;
@@ -11108,7 +11736,7 @@ async fn reminders_due_today_wait_on_the_owner_and_the_rest_of_the_day_is_its_sc
     assert_eq!(keys(&view.schedule), vec![format!("item:{}", later.id)]);
     assert_eq!(view.schedule[0].state.as_deref(), Some("reminder:notify"));
 
-    engine.item_op(came.id, super::reminders::ItemOp::Done).await.unwrap();
+    engine.item_op(came.id, super::reminders::ItemOp::Done, super::reminders::OpSource::Panel).await.unwrap();
     assert!(today_now(&engine).await.needs.is_empty());
 }
 
@@ -11547,6 +12175,60 @@ async fn bump_run(engine: &PersonalAgentEngine, task: i32) {
     let mut am: work_task_entity::ActiveModel = t.into();
     am.run_seq = Set(seq + 1);
     am.update(&engine.db.conn).await.unwrap();
+}
+
+/// Code work in review that codeg checks first: `dispatch_wait` does not
+/// hand its "being checked" news as a result, nor wait for the check — the
+/// verdict comes as an acceptance after the turn — and leaves that news to
+/// go out with it.
+#[tokio::test]
+async fn waiting_on_code_work_under_acceptance_says_it_is_being_checked() {
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    let conn = &engine.db.conn;
+    owner_turn(&engine, "pa-wa").await;
+    engine.record_progress(&w.d, None, None, "task").await;
+    let out = engine.dispatch_wait(w.d.id, Some(std::time::Duration::ZERO)).await;
+    assert!(out.ok, "{}", out.text);
+    assert_eq!(out.data["waiting"], "checking", "{}", out.text);
+    let review = svc::latest_event_of_coalesce(conn, &format!("dispatch:{}", w.d.id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(review.state, EventState::Pending, "left to go out with the verdict");
+}
+
+/// Code work whose check of the version there now concluded — accepted, or
+/// voided (checked again only when the owner asks) — has no verdict on its
+/// way: `dispatch_wait` does not say it is being checked.
+#[tokio::test]
+async fn waiting_on_code_work_whose_check_concluded_does_not_promise_a_verdict() {
+    for void in [false, true] {
+        let (engine, tmp) = configured().await;
+        let w = work_in_review(&engine, &tmp).await;
+        engine.acceptance_tick().await;
+        let check = rounds_of(&engine, w.d.id).await[0].check_dispatch_id.unwrap();
+        if void {
+            // The worktree changes while it is checked: void.
+            std::fs::write(w.wt.join("new.txt"), "x").unwrap();
+        }
+        finish_check(&engine, check, "VERDICT: PASS").await;
+        if !void {
+            let out =
+                call(&engine, "acceptance_decide", json!({ "dispatch_id": w.d.id, "decision": "accept" })).await;
+            assert!(out.ok, "{}", out.text);
+        }
+        owner_turn(&engine, "pa-wc").await;
+        // Its review's news, written when the check was to come, is not
+        // handed as where it stands.
+        engine.record_progress(&dispatch_state(&engine, w.d.id).await, None, None, "task").await;
+        let out = engine.dispatch_wait(w.d.id, Some(std::time::Duration::ZERO)).await;
+        assert!(out.ok, "void {void}: {}", out.text);
+        assert_ne!(out.data["waiting"], "checking", "void {void}: {}", out.text);
+        if void {
+            assert_eq!(out.data["waiting"], "changed", "{}", out.text);
+        }
+    }
 }
 
 #[tokio::test]
@@ -12382,6 +13064,8 @@ mod against_a_forge {
         /// The next reads of a pull request answered 429 (retry after 120 s).
         limited: usize,
         pull_reads: usize,
+        /// Reads of a pull request begun (a slow one counts as it starts).
+        pull_reads_begun: usize,
         /// The next reads of a pull request answered with these statuses.
         fail_with: Vec<u16>,
         /// Each read of a pull request takes this long.
@@ -12455,7 +13139,11 @@ mod against_a_forge {
             .route(
                 "/api/v3/repos/acme/app/pulls/{n}",
                 get(|State(s): State<Shared>, UrlPath(n): UrlPath<i64>| async move {
-                    let slow = s.lock().unwrap().slow_ms;
+                    let slow = {
+                        let mut f = s.lock().unwrap();
+                        f.pull_reads_begun += 1;
+                        f.slow_ms
+                    };
                     if slow > 0 {
                         tokio::time::sleep(std::time::Duration::from_millis(slow)).await;
                     }
@@ -12567,6 +13255,14 @@ mod against_a_forge {
             .id
     }
 
+    /// The owner lets the assistants act on the forge and fix watched pull
+    /// requests by themselves; by default each is put to them first.
+    async fn acts_on_its_own(engine: &Arc<PersonalAgentEngine>) {
+        for (k, v) in [("forge_comment", "auto"), ("issue_close", "auto"), ("pr_merge", "auto"), ("ci_failure", "fix"), ("pr_conflict", "auto")] {
+            set_pref(engine, k, json!(v)).await;
+        }
+    }
+
     async fn in_data_dir<F: std::future::Future<Output = ()>>(tmp: &tempfile::TempDir, f: impl FnOnce() -> F) {
         let data = tmp.path().join("data");
         std::fs::create_dir_all(&data).unwrap();
@@ -12583,6 +13279,7 @@ mod against_a_forge {
         let state_ref = &state;
         in_data_dir(&tmp, || async move {
             let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(engine_ref).await;
             // At once, with a card holding the full text and its link.
             let out = call_tool(engine_ref, "forge_comment", json!({ "project_id": project, "number": 7, "kind": "pr", "body": "Fixed in abc." })).await;
             assert!(out.ok, "{}", out.text);
@@ -12629,7 +13326,7 @@ mod against_a_forge {
         let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
         in_data_dir(&tmp, || async move {
             let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
-            set_pref(engine_ref, "forge_comment", json!("ask")).await;
+            // Nothing set: a comment is put to the owner first.
             let out = call_tool(engine_ref, "forge_comment", json!({ "project_id": project, "number": 3, "kind": "issue", "body": "On it." })).await;
             assert!(out.ok && out.data["state"] == "awaiting_owner", "{}", out.text);
             assert_eq!(state_ref.lock().unwrap().posts, 0, "nothing posted yet");
@@ -12645,6 +13342,7 @@ mod against_a_forge {
             assert_eq!(data_of(&last_card(engine_ref, "forge").await)["state"], "done");
 
             // Closing an issue: at once; one closed meanwhile is not closed again.
+            set_pref(engine_ref, "issue_close", json!("auto")).await;
             let out = call_tool(engine_ref, "issue_close", json!({ "project_id": project, "number": 3 })).await;
             assert!(out.ok, "{}", out.text);
             assert_eq!(state_ref.lock().unwrap().closes, 1);
@@ -12730,6 +13428,7 @@ mod against_a_forge {
         let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
         in_data_dir(&tmp, || async move {
             let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(engine_ref).await;
             let remote = crate::commands::forge::folder_forge_remote_core(&engine_ref.db, project).await.unwrap().unwrap();
             let coder = role_assistant(engine_ref, "Coder", true).await;
             let delivery = json!({
@@ -12801,7 +13500,7 @@ mod against_a_forge {
         let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
         in_data_dir(&tmp, || async move {
             let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
-            set_pref(engine_ref, "pr_merge", json!("ask")).await;
+            // Nothing set: a merge is put to the owner first.
             let out = call_tool(engine_ref, "pr_merge", json!({ "project_id": project, "number": 9, "method": "squash" })).await;
             assert!(out.ok && out.data["state"] == "awaiting_owner", "{}", out.text);
             let card = last_card(engine_ref, "forge").await;
@@ -12824,6 +13523,7 @@ mod against_a_forge {
         let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
         in_data_dir(&tmp, || async move {
             let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(engine_ref).await;
             state_ref.lock().unwrap().comment_mode = Some("lost");
             let out = call_tool(engine_ref, "forge_comment", json!({ "project_id": project, "number": 7, "kind": "pr", "body": "Cut off." })).await;
             assert_eq!(out.data["state"], "unknown", "{}", out.text);
@@ -12849,6 +13549,7 @@ mod against_a_forge {
         let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
         in_data_dir(&tmp, || async move {
             let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(engine_ref).await;
             // 150 checks, one page read: not the whole answer.
             state_ref.lock().unwrap().checks_total = Some(150);
             let out = call_tool(engine_ref, "pr_merge", json!({ "project_id": project, "number": 5 })).await;
@@ -12937,6 +13638,7 @@ mod against_a_forge {
         let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
         in_data_dir(&tmp, || async move {
             let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(primary_ref).await;
             let worker = host_ref.engine_for(Some(w)).await.unwrap();
             let coder = role_assistant(primary_ref, "Coder", true).await;
             // The first scan marks where it starts.
@@ -13111,6 +13813,7 @@ mod against_a_forge {
         let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
         in_data_dir(&tmp, || async move {
             let a = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(engine_ref).await;
             // A second checkout of the same repository.
             let dir = tmp_ref.path().join("app2");
             std::fs::create_dir_all(&dir).unwrap();
@@ -13313,6 +14016,7 @@ mod against_a_forge {
         let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
         in_data_dir(&tmp, || async move {
             let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(primary_ref).await;
             let worker = host_ref.engine_for(Some(w)).await.unwrap();
             // The worker works with it: its read starts the fixing round.
             let coder = role_assistant(&worker, "Coder", true).await;
@@ -13322,10 +14026,21 @@ mod against_a_forge {
             host_ref.board_tick().await;
             let x = wsvc::of_tasks(&primary_ref.db.conn, &[t.id]).await.unwrap().remove(&t.id).unwrap();
             assert_eq!(x.bot_id, w);
-            // The worker's read is slow; the owner deletes it meanwhile.
-            state_ref.lock().unwrap().slow_ms = 800;
+            // The worker's read is slow; the owner deletes it meanwhile —
+            // once the read is under way, however busy the machine is.
+            let begun = {
+                let mut f = state_ref.lock().unwrap();
+                f.slow_ms = 800;
+                f.pull_reads_begun
+            };
             worker.spawn_watch_tick();
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            for _ in 0..500 {
+                if state_ref.lock().unwrap().pull_reads_begun > begun {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            assert!(state_ref.lock().unwrap().pull_reads_begun > begun, "the read never began");
             primary_ref
                 .delete_bot(w, &BotDeleteOptions { hand_over: true, ..Default::default() }, Some(worker.clone()))
                 .await
@@ -13335,6 +14050,29 @@ mod against_a_forge {
             // Nothing more is read as the deleted one's.
             state_ref.lock().unwrap().slow_ms = 0;
             worker.watch_tick().await;
+            // The round's task is under way, as the board would have it: no
+            // task engine runs here, so its start fails on its own — let it,
+            // then put the round where a running board puts it (else the
+            // test races that start, and loses on a busy machine).
+            let (round, _) = rounds_of(primary_ref).await.pop().expect("the round was handed over");
+            let mut settled = false;
+            for _ in 0..500 {
+                let d = svc::get_dispatch(&primary_ref.db.conn, round.id).await.unwrap().unwrap();
+                if d.state == DispatchState::Failed {
+                    settled = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            assert!(settled, "the round's start never settled");
+            svc::update_dispatch(
+                &primary_ref.db.conn,
+                round.id,
+                None,
+                DispatchWrite { state: Some(DispatchState::Running), error: Some(None), ..Default::default() },
+            )
+            .await
+            .unwrap();
             // The primary is told where it stands, and woken.
             read_now(primary_ref, x.id).await;
             let cards = pr_cards(primary_ref).await;
@@ -13420,6 +14158,7 @@ mod against_a_forge {
         let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
         in_data_dir(&tmp, || async move {
             let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(primary_ref).await;
             let coder = role_assistant(primary_ref, "Coder", true).await;
             host_ref.board_tick().await;
             // A plan's code step, carried out by a board task that delivered
@@ -13541,6 +14280,7 @@ mod against_a_forge {
         let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
         in_data_dir(&tmp, || async move {
             let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(primary_ref).await;
             let coder = role_assistant(primary_ref, "Coder", true).await;
             host_ref.board_tick().await;
             let task = delivered(primary_ref, project, "Fix login", 7).await;
@@ -13633,7 +14373,7 @@ mod against_a_forge {
             host_ref.board_tick().await;
             let watch = wsvc::of_tasks(&primary_ref.db.conn, &[task.id]).await.unwrap().remove(&task.id).unwrap();
             read_now(primary_ref, watch.id).await;
-            set_pref(primary_ref, "ci_failure", json!("ask")).await;
+            // Nothing set: a red head is put to the owner first.
             state_ref.lock().unwrap().checks = vec![failed("build")];
             read_now(primary_ref, watch.id).await;
             assert!(rounds_of(primary_ref).await.is_empty());
@@ -13655,8 +14395,7 @@ mod against_a_forge {
             read_now(primary_ref, watch.id).await;
             assert_eq!(rounds_of(primary_ref).await.len(), 1);
             assert_eq!(data_of(&last_card(primary_ref, "pr").await)["fix"]["state"], "told");
-            // Asked about a head that moved on: nothing is started.
-            set_pref(primary_ref, "pr_conflict", json!("ask")).await;
+            // Asked (by default) about a head that moved on: nothing is started.
             state_ref.lock().unwrap().head = "h3".into();
             state_ref.lock().unwrap().conflict = true;
             read_now(primary_ref, watch.id).await;
@@ -13679,6 +14418,7 @@ mod against_a_forge {
         let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
         in_data_dir(&tmp, || async move {
             let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            acts_on_its_own(primary_ref).await;
             host_ref.board_tick().await;
             // The owner's own pull request: no acceptance, its green head.
             let task = delivered(primary_ref, project, "Docs", 7).await;
@@ -14218,23 +14958,28 @@ async fn a_routine_made_in_words_runs_at_once_then_on_its_schedule_and_says_noth
     assert!(events[0].wake);
     assert_eq!(runs[0].event_id, Some(events[0].id));
 
-    // Its turn says which run it is and that codeg keeps the rhythm; with
-    // nothing to say, nothing is shown.
+    // Its turn says which run it is and that codeg keeps the rhythm; the
+    // owner started it, so it says what it found even when nothing is new.
     let (mut rx, state) = live_connection(&engine, seg, "pa-ro1").await;
     engine.pump().await;
     let (prompt, token) = take_prompt(&mut rx);
     assert!(prompt.contains(&format!("Routine #{id} \"Night CI\" — run 1")), "{prompt}");
     assert!(prompt.contains("do not schedule it yourself"), "{prompt}");
     assert!(prompt.contains("a routine of yours came round"), "{prompt}");
+    assert!(prompt.contains("even when nothing is new"), "{prompt}");
+    assert!(!prompt.contains("codeg then shows nothing"), "{prompt}");
     let batch = rsvc::get_run(&engine.db.conn, runs[0].id).await.unwrap().unwrap().batch_id.expect("on its way");
     let b = svc::get_batch(&engine.db.conn, batch).await.unwrap().unwrap();
     assert_eq!(b.trigger, Some(crate::db::entities::personal_agent_batch::BatchTrigger::Routine));
     start_prompt(&state, Some(&token)).await;
     emit(&engine, &state, "pa-ro1", text("[[silent]]"), true).await;
     emit(&engine, &state, "pa-ro1", turn_complete("end_turn"), true).await;
+    // Quiet all the same: "no change", the reply tagged as the owner's run
+    // (the page shows it, saying nothing was new).
     let reply = svc::reply_row_of_batch(&engine.db.conn, batch).await.unwrap().unwrap();
-    assert!(svc::is_discarded(&reply), "not shown: {:?}", reply.data);
+    assert!(svc::is_discarded(&reply), "not counted: {:?}", reply.data);
     assert_eq!(data_of(&reply)["routine"]["id"], id);
+    assert_eq!(data_of(&reply)["routine"]["trigger"], "trial");
     let run = rsvc::get_run(&engine.db.conn, runs[0].id).await.unwrap().unwrap();
     assert_eq!(run.outcome, RunOutcome::Silent);
     let unseen = svc::count_unseen(&engine.db.conn, engine.bot().await).await.unwrap();
@@ -14255,6 +15000,9 @@ async fn a_routine_made_in_words_runs_at_once_then_on_its_schedule_and_says_noth
     engine.pump().await;
     let (prompt, token) = take_prompt(&mut rx);
     assert!(prompt.contains("run 2"), "{prompt}");
+    // Come round by itself: it may stay quiet.
+    assert!(prompt.contains("codeg then shows nothing"), "{prompt}");
+    assert!(!prompt.contains("even when nothing is new"), "{prompt}");
     start_prompt(&state, Some(&token)).await;
     emit(&engine, &state, "pa-ro1", text("Two jobs are red on main."), true).await;
     emit(&engine, &state, "pa-ro1", turn_complete("end_turn"), true).await;
@@ -14263,6 +15011,7 @@ async fn a_routine_made_in_words_runs_at_once_then_on_its_schedule_and_says_noth
     let reply = svc::reply_row_of_batch(&engine.db.conn, run.batch_id.unwrap()).await.unwrap().unwrap();
     assert!(!svc::is_discarded(&reply));
     assert_eq!(data_of(&reply)["routine"]["seq"], 2);
+    assert_eq!(data_of(&reply)["routine"]["trigger"], "schedule");
     // The page reads it with its latest runs.
     let views = super::routines::routines_of(&engine.db, Some(engine.bot().await)).await.unwrap();
     assert_eq!(views[0].last[0].outcome, RunOutcome::Reported);
@@ -14383,7 +15132,11 @@ async fn a_dispatch_routine_hands_out_its_work_itself_or_asks_first_when_the_own
 #[tokio::test]
 async fn three_failed_runs_in_a_row_or_a_work_agent_turned_off_pause_a_routine() {
     let (engine, _tmp) = configured().await;
-    role_assistant(&engine, "Researcher", true).await;
+    let bot = role_assistant(&engine, "Researcher", true).await;
+    // The slots are taken, so each run's work stays queued and the test
+    // fails it itself — not codeg launching it on a real agent, whose own
+    // failure (not installed) would race the test's "boom".
+    slots_taken(&engine, bot).await;
     let out = call(
         &engine,
         "routine_create",
@@ -14395,7 +15148,8 @@ async fn three_failed_runs_in_a_row_or_a_work_agent_turned_off_pause_a_routine()
     let id = out.data["routine"]["id"].as_i64().unwrap() as i32;
     for i in 0..3 {
         let run = rsvc::runs_of(&engine.db.conn, id, 1).await.unwrap().remove(0);
-        let d = settled(&engine, run.dispatch_id.unwrap()).await;
+        let d = dispatch_state(&engine, run.dispatch_id.unwrap()).await;
+        assert_eq!(d.state, DispatchState::Queued, "never launched");
         engine
             .routine_dispatch_ended(&crate::db::entities::personal_agent_dispatch::Model {
                 state: DispatchState::Failed,
@@ -15043,6 +15797,9 @@ async fn a_session_waiting_on_the_owner_gets_a_card_unless_they_are_in_it() {
     host.rules_tick_at(now + chrono::Duration::minutes(6)).await;
     let cards = rule_cards(&primary, "session").await;
     assert_eq!(cards.len(), 2);
+    // Each card says the look that raised it: another look, another.
+    assert_eq!(data_of(&cards[1])["scan"], (now + chrono::Duration::minutes(6)).to_rfc3339());
+    assert_ne!(data_of(&cards[0])["scan"], data_of(&cards[1])["scan"]);
     let row = primary.act_on_notice(notice_id_of(&cards[1]), "open").await.unwrap();
     assert_eq!(row.data.unwrap()["state"], "opened");
 }
@@ -15093,10 +15850,17 @@ async fn work_waiting_long_for_review_and_a_branch_behind_with_conflicts_go_to_i
     let behind = rule_cards(&worker, "behind").await;
     assert_eq!(behind.len(), 1, "a branch behind main with a conflict");
     assert_eq!(data_of(&behind[0])["facts"]["base"], "main");
+    // The cards one look raised say the same look (the timeline draws a
+    // run of one rule's of one look as one card).
+    for card in [&review[0], &own[0], &behind[0]] {
+        assert_eq!(data_of(card)["scan"], now.to_rfc3339());
+    }
     // [Remind me]: the owner's reminder for tomorrow morning.
     let row = primary.act_on_notice(notice_id_of(&own[0]), "remind").await.unwrap();
     let data = row.data.unwrap();
     assert_eq!(data["state"], "reminding");
+    // A step keeps the look on the card.
+    assert_eq!(data["scan"], now.to_rfc3339());
     let item = svc::get_item(&primary.db.conn, data["item_id"].as_i64().unwrap() as i32).await.unwrap().unwrap();
     assert_eq!(item.kind, ItemKind::Reminder);
     assert!(item.due_at.unwrap() > chrono::Utc::now());
@@ -15154,7 +15918,7 @@ async fn changes_left_uncommitted_and_a_quiet_matter() {
         facts: json!({ "folder_id": app }),
         text: "app".into(),
     };
-    primary.raise_rule_card(&old, &primary.prefs().await, false).await.unwrap();
+    primary.raise_rule_card(&old, &primary.prefs().await, false, t0).await.unwrap();
     let cards = rule_cards(&primary, "new_project").await;
     assert_eq!(data_of(&cards[0])["state"], "open");
     host.rules_tick_at(t0 + chrono::Duration::hours(27)).await;
@@ -15466,7 +16230,7 @@ async fn another_assistants_reminder_says_whose_and_one_past_its_days_is_dropped
     let m = super::mentions::Mention::of(&svc::get_item(&worker.db.conn, id).await.unwrap().unwrap()).unwrap();
     assert_eq!((m.keywords.len(), m.times, m.max_times), (2, 1, 5));
     // A reminder on a mention is put off to no time from the page either.
-    assert!(worker.item_op(id, super::reminders::ItemOp::Later).await.is_err());
+    assert!(worker.item_op(id, super::reminders::ItemOp::Later, super::reminders::OpSource::Panel).await.is_err());
 
     // Its days over: dropped.
     host.mention_tick().await;
@@ -16454,7 +17218,7 @@ fn next_prompt(
 fn cancel_sent(rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>) -> bool {
     loop {
         match rx.try_recv() {
-            Ok(ConnectionCommand::Cancel) => return true,
+            Ok(ConnectionCommand::Cancel | ConnectionCommand::StopWork) => return true,
             Ok(_) => continue,
             Err(_) => return false,
         }
@@ -21837,4 +22601,1202 @@ async fn an_assistant_is_deleted_with_no_primary_to_hand_to() {
         .await
         .unwrap();
     assert!(svc::get_bot(&engine.db.conn, id).await.unwrap().is_none());
+}
+
+// ── C1: the owner's acts on a matter, taken back; a question's answer ───────
+
+use super::reminders::OpSource;
+use crate::db::service::personal_agent_matter_service as matter_svc;
+
+async fn matter_of(engine: &PersonalAgentEngine, id: i32) -> crate::db::entities::personal_agent_item::Model {
+    svc::get_item(&engine.db.conn, id).await.unwrap().unwrap()
+}
+
+async fn new_matter(
+    engine: &PersonalAgentEngine,
+    kind: ItemKind,
+    waits_for: Option<WaitsFor>,
+    summary: &str,
+) -> crate::db::entities::personal_agent_item::Model {
+    svc::create_item(
+        &engine.db.conn,
+        engine.bot().await,
+        kind,
+        None,
+        ItemStatus::Open,
+        waits_for,
+        summary.into(),
+        None,
+        None,
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn putting_off_never_moves_a_matter_sooner_nor_one_someone_else_has() {
+    let (engine, _tmp) = configured().await;
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Pay rent", "due": "3h" })).await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    let due = matter_of(&engine, id).await.due_at.unwrap();
+    // G1: an earlier time is refused; a later one is not.
+    let e = engine.settle_item(id, "snooze", Some("15m")).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::NOT_EARLIER));
+    assert_eq!(e.params.get("when"), Some(&due.to_rfc3339()));
+    assert_eq!(matter_of(&engine, id).await.due_at, Some(due), "nothing written");
+    // G2: "with no time" for one set for later says so.
+    let e = engine.settle_item(id, "later", None).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::HAS_TIME));
+    assert!(engine.settle_item(id, "snooze", Some("tomorrow")).await.is_ok() || due > super::clock::now() + chrono::Duration::hours(20));
+    // G3: one in the assistant's hands, or outside codeg's, waits on no time.
+    for (waits, key) in [
+        (WaitsFor::Agent, super::refusal::keys::IN_OTHER_HANDS),
+        (WaitsFor::External, super::refusal::keys::WAITS_OUTSIDE),
+    ] {
+        let f = new_matter(&engine, ItemKind::Followup, Some(waits), "Chase the vendor").await;
+        for (act, until) in [("snooze", Some("1h")), ("later", None)] {
+            let e = engine.settle_item(f.id, act, until).await.unwrap_err();
+            assert_eq!(e.key, Some(key), "{act} {waits:?}");
+        }
+        assert_eq!(matter_of(&engine, f.id).await.waits_for, Some(waits));
+    }
+    // A time it cannot read, in the owner's words.
+    let f = new_matter(&engine, ItemKind::Followup, Some(WaitsFor::Owner), "Reply").await;
+    let e = engine.settle_item(f.id, "snooze", Some("whenever")).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::BAD_TIME));
+    let e = engine.settle_item(999_999, "done", None).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::GONE));
+}
+
+#[tokio::test]
+async fn the_panels_act_is_taken_back_whole_and_once() {
+    let (engine, _tmp) = configured().await;
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Renew the domain", "due": "1m" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    engine.fire_due_at(super::clock::now() + chrono::Duration::minutes(2)).await;
+    let before = matter_of(&engine, id).await;
+    let card = reminder_rows(&engine, id).await.remove(0);
+    assert_eq!(data_of(&card)["state"], "open");
+    let acted = engine
+        .settle_item_from(id, "done", None, OpSource::Panel)
+        .await
+        .unwrap();
+    let token = acted.undo.expect("the panel's act can be taken back");
+    let done = matter_of(&engine, id).await;
+    assert_eq!(done.status, ItemStatus::Done);
+    assert_eq!((done.closed_by.as_deref(), done.closed_how.as_deref()), (Some("owner"), Some("done")));
+    assert!(done.closed_at.is_some());
+    let card_now = svc::get_row(&engine.db.conn, card.id).await.unwrap().unwrap();
+    assert_eq!(data_of(&card_now)["state"], "done");
+    // "Done today" offers it back.
+    let rows = super::today::closed_matters(&engine.db, &[engine.bot().await], before.created_at - chrono::Duration::days(1), super::clock::now()).await;
+    let row = rows.iter().find(|r| r.item_id == Some(id)).expect("done today");
+    assert_eq!((row.closed_by.as_deref(), row.closed_how.as_deref()), (Some("owner"), Some("done")));
+    assert_eq!(row.matter_undo, Some(token));
+    // Taken back: as it was, its card open again, and the assistant never
+    // reads either line (the note was never handed out).
+    let back = engine.undo_item(id, token).await.unwrap();
+    assert_eq!(
+        (back.status, back.waits_for, back.due_at, back.fired_at, back.closed_at, back.closed_by.clone()),
+        (before.status, before.waits_for, before.due_at, before.fired_at, None, None)
+    );
+    let card_back = svc::get_row(&engine.db.conn, card.id).await.unwrap().unwrap();
+    assert_eq!(data_of(&card_back)["state"], "open");
+    let notice = svc::get_notice(&engine.db.conn, notice_of_row(&card)).await.unwrap().unwrap();
+    assert_eq!(notice.state, NoticeState::Open);
+    assert!(
+        item_notes(&engine).await.iter().all(|n| !n.summary.contains("marked") && !n.summary.contains("took back")),
+        "{:?}",
+        item_notes(&engine).await
+    );
+    let rows = super::today::closed_matters(&engine.db, &[engine.bot().await], before.created_at - chrono::Duration::days(1), super::clock::now()).await;
+    assert!(rows.iter().all(|r| r.item_id != Some(id)), "no longer done today");
+    // Once.
+    let e = engine.undo_item(id, token).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::UNDO_CHANGED));
+}
+
+#[tokio::test]
+async fn an_undo_after_a_change_from_a_card_or_too_late_is_refused() {
+    let (engine, _tmp) = configured().await;
+    let f = new_matter(&engine, ItemKind::Followup, Some(WaitsFor::Owner), "Send the invoice").await;
+    let acted = engine.settle_item_from(f.id, "drop", None, OpSource::Panel).await.unwrap();
+    let token = acted.undo.unwrap();
+    // Changed since (the assistant reworded it): refused, nothing written.
+    svc::update_item(&engine.db.conn, f.id, svc::ItemWrite { summary: Some("Send invoice #2".into()), ..Default::default() })
+        .await
+        .unwrap();
+    let e = engine.undo_item(f.id, token).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::UNDO_CHANGED));
+    assert_eq!(matter_of(&engine, f.id).await.status, ItemStatus::Dropped);
+    // A card's act: nothing to take back from the panel.
+    let g = new_matter(&engine, ItemKind::Followup, Some(WaitsFor::Owner), "Book the room").await;
+    let acted = engine.settle_item_from(g.id, "done", None, OpSource::AssistantCard).await.unwrap();
+    assert_eq!(acted.undo, None);
+    let note = item_notes(&engine).await.into_iter().max_by_key(|n| n.id).unwrap();
+    let e = engine.undo_item(g.id, note.id).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::UNDO_NONE));
+    let g = matter_of(&engine, g.id).await;
+    assert_eq!((g.closed_by.as_deref(), g.closed_how.as_deref()), (Some("owner"), Some("done")));
+    // Ten minutes on.
+    let h = new_matter(&engine, ItemKind::Followup, Some(WaitsFor::Owner), "Call back").await;
+    let token = engine.settle_item_from(h.id, "done", None, OpSource::Panel).await.unwrap().undo.unwrap();
+    let old = chrono::Utc::now() - chrono::Duration::minutes(11);
+    crate::db::entities::personal_agent_event::Entity::update_many()
+        .col_expr(crate::db::entities::personal_agent_event::Column::CreatedAt, sea_orm::sea_query::Expr::value(old))
+        .filter(crate::db::entities::personal_agent_event::Column::Id.eq(token))
+        .exec(&engine.db.conn)
+        .await
+        .unwrap();
+    let e = engine.undo_item(h.id, token).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::UNDO_EXPIRED));
+    // A write made from an older read never lands (the panel's CAS).
+    let i = new_matter(&engine, ItemKind::Followup, Some(WaitsFor::Owner), "Pay").await;
+    svc::update_item(&engine.db.conn, i.id, svc::ItemWrite { summary: Some("Pay now".into()), ..Default::default() })
+        .await
+        .unwrap();
+    let stale = svc::update_item_with(
+        &engine.db.conn,
+        engine.bot().await,
+        i.id,
+        svc::ItemChange {
+            write: svc::ItemWrite { status: Some(ItemStatus::Done), ..Default::default() },
+            expect_updated: Some(i.updated_at),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(stale.is_none());
+}
+
+#[tokio::test]
+async fn an_undo_the_assistant_may_have_read_is_told_to_it() {
+    let (engine, _tmp) = configured().await;
+    let f = new_matter(&engine, ItemKind::Followup, Some(WaitsFor::Owner), "Water the plants").await;
+    let token = engine.settle_item_from(f.id, "done", None, OpSource::Panel).await.unwrap().undo.unwrap();
+    // Handed out in a turn that was interrupted and put it back: read.
+    crate::db::entities::personal_agent_event::Entity::update_many()
+        .col_expr(crate::db::entities::personal_agent_event::Column::Requeues, sea_orm::sea_query::Expr::value(1))
+        .filter(crate::db::entities::personal_agent_event::Column::Id.eq(token))
+        .exec(&engine.db.conn)
+        .await
+        .unwrap();
+    engine.undo_item(f.id, token).await.unwrap();
+    let notes = item_notes(&engine).await;
+    assert!(
+        notes.iter().any(|n| n.summary.contains("took back marking it done") && n.summary.contains(&format!("#{}", f.id))),
+        "{notes:?}"
+    );
+}
+
+#[tokio::test]
+async fn dropping_a_message_takes_it_back_while_it_waits_and_undoing_sends_it_again() {
+    let (engine, tmp) = ready().await;
+    let made = engine.create_bot(BotSpec::named("Developer")).await.unwrap();
+    let w = made.bot.id;
+    let _worker = engine_of(&engine, &tmp, w);
+    let primary = engine.bot().await;
+    let sent = engine
+        .send_message(super::messages::MessageCall {
+            to: Some(w.to_string()),
+            text: "review the login fix".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let line = msvc::lines_of_message(&engine.db.conn, sent.message.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|l| l.bot_id == Some(primary))
+        .unwrap();
+    let item = msvc::waiting_item_of_line(&engine.db.conn, primary, line.id).await.unwrap().unwrap();
+    // Its peer, for the page — and what was written, which way, from the
+    // same line (not codeg's summary of it).
+    let source = super::today::message_source(&engine.db, &item).await;
+    let peer = source.peer.unwrap();
+    assert_eq!((peer["id"].as_i64(), peer["gone"].as_bool()), (Some(w as i64), Some(false)));
+    assert_eq!(
+        (source.written.as_deref(), source.direction.as_deref()),
+        (Some("review the login fix"), Some("out"))
+    );
+    // Snoozing it says whose reply it waits on.
+    let e = engine.settle_item(item.id, "snooze", Some("1h")).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::MESSAGE_NO_TIME));
+    assert_eq!(e.params.get("peer").map(String::as_str), Some("Developer"));
+    let acted = engine.settle_item_from(item.id, "drop", None, OpSource::Panel).await.unwrap();
+    assert_eq!(acted.withdrawn, Some(true));
+    let m = msvc::get_message(&engine.db.conn, sent.message.id).await.unwrap().unwrap();
+    assert_eq!(m.state, MessageState::Stopped);
+    assert!(svc::pending_events(&engine.db.conn, w).await.unwrap().iter().all(|e| e.kind != msvc::MESSAGE_EVENT));
+    let dropped = matter_of(&engine, item.id).await;
+    assert_eq!((dropped.status, dropped.closed_how.as_deref()), (ItemStatus::Dropped, Some("withdrawn")));
+    // Taken back: the message waits for its receiver again.
+    engine.undo_item(item.id, acted.undo.unwrap()).await.unwrap();
+    let m = msvc::get_message(&engine.db.conn, sent.message.id).await.unwrap().unwrap();
+    assert_eq!(m.state, MessageState::Queued);
+    assert!(svc::pending_events(&engine.db.conn, w).await.unwrap().iter().any(|e| e.kind == msvc::MESSAGE_EVENT));
+    assert_eq!(matter_of(&engine, item.id).await.status, ItemStatus::Waiting);
+    // Handed out meanwhile: dropping only stops waiting; its answer later
+    // keeps it from being taken back.
+    msvc::move_messages(&engine.db.conn, &[sent.message.id], &[MessageState::Queued], MessageState::Delivered)
+        .await
+        .unwrap();
+    let acted = engine.settle_item_from(item.id, "drop", None, OpSource::Panel).await.unwrap();
+    assert_eq!(acted.withdrawn, Some(false));
+    assert_eq!(matter_of(&engine, item.id).await.closed_how.as_deref(), Some("stopped_waiting"));
+    let worker = engine_of(&engine, &tmp, w);
+    worker
+        .send_message(super::messages::MessageCall {
+            to: Some(primary.to_string()),
+            text: "looks good".into(),
+            reply_to: Some(format!("m{}", sent.message.id)),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let e = engine.undo_item(item.id, acted.undo.unwrap()).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::UNDO_REPLIED));
+    // Settled by the owner first, a later write keeps who settled it.
+    assert_eq!(matter_of(&engine, item.id).await.closed_by.as_deref(), Some("owner"));
+}
+
+#[tokio::test]
+async fn who_settled_a_matter_is_kept_from_the_first_settling() {
+    let (engine, _tmp) = configured().await;
+    // The assistant's own.
+    let out = call(&engine, "item_update", json!({ "kind": "followup", "summary": "Ping Ana" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    call(&engine, "item_update", json!({ "item_id": id, "status": "done" })).await;
+    let m = matter_of(&engine, id).await;
+    assert_eq!((m.closed_by.as_deref(), m.closed_how.as_deref()), (Some("agent"), Some("done")));
+    let first = m.closed_at;
+    // Written settled again: the first settling stands.
+    svc::update_item(
+        &engine.db.conn,
+        id,
+        svc::ItemWrite {
+            status: Some(ItemStatus::Dropped),
+            closing: Some(svc::Closing::new(svc::Closer::Codeg, "gone")),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let m = matter_of(&engine, id).await;
+    assert_eq!((m.closed_by.as_deref(), m.closed_how.as_deref(), m.closed_at), (Some("agent"), Some("done"), first));
+    // Opened again: none.
+    call(&engine, "item_update", json!({ "item_id": id, "status": "open" })).await;
+    let m = matter_of(&engine, id).await;
+    assert_eq!((m.closed_at, m.closed_by), (None, None));
+    // One the assistant wrote dropped from the start is not "done today".
+    let out = call(&engine, "item_update", json!({ "kind": "followup", "summary": "Nothing", "status": "dropped" })).await;
+    let born = out.data["item_id"].as_i64().unwrap() as i32;
+    let rows = super::today::closed_matters(&engine.db, &[engine.bot().await], chrono::Utc::now() - chrono::Duration::days(1), chrono::Utc::now()).await;
+    assert!(rows.iter().all(|r| r.item_id != Some(born)));
+}
+
+/// The owner's answer to one of the assistant's questions, linked to it:
+/// the turn that reads it closes it; one that does not finish gives it back.
+async fn a_question(engine: &Arc<PersonalAgentEngine>, due: Option<&str>) -> i32 {
+    let mut args = json!({ "kind": "question", "summary": "Move the release to Friday?" });
+    if let Some(d) = due {
+        args["due"] = json!(d);
+    }
+    let out = call(engine, "item_update", args).await;
+    assert!(out.ok, "{}", out.text);
+    out.data["item_id"].as_i64().unwrap() as i32
+}
+
+#[tokio::test]
+async fn an_answer_closes_its_question_once_the_turn_that_read_it_finishes() {
+    let (engine, _tmp) = configured().await;
+    let q = a_question(&engine, Some("3h")).await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-q1").await;
+    let row = engine
+        .send_from_page("Yes, Friday.".into(), Vec::new(), None, Some(q))
+        .await
+        .unwrap();
+    assert_eq!(row.data.as_ref().unwrap()["answers_item"]["id"], q);
+    let linked = matter_of(&engine, q).await;
+    assert_eq!(
+        (linked.status, linked.waits_for, linked.answer_state.as_deref(), linked.answer_row_id, linked.due_at),
+        (ItemStatus::Waiting, Some(WaitsFor::Agent), Some("linked"), Some(row.id), None),
+        "linked, its time cleared"
+    );
+    // Answered already: a second answer is refused.
+    let e = engine.send_from_page("No.".into(), Vec::new(), None, Some(q)).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::ANSWER_CHANGED));
+    engine.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    assert!(prompt.contains(&format!("<codeg-answer matter=\"{q}\" linked=\"yes\">Question #{q}: Move the release to Friday? When your turn ends normally")), "{prompt}");
+    start_prompt(&state, Some(&token)).await;
+    emit(&engine, &state, "pa-q1", text("Noted."), true).await;
+    emit(&engine, &state, "pa-q1", turn_complete("end_turn"), true).await;
+    let closed = matter_of(&engine, q).await;
+    assert_eq!(
+        (closed.status, closed.closed_by.as_deref(), closed.closed_how.as_deref(), closed.answer_row_id),
+        (ItemStatus::Done, Some("codeg"), Some("answered"), Some(row.id))
+    );
+    let rows = super::today::closed_matters(&engine.db, &[engine.bot().await], chrono::Utc::now() - chrono::Duration::days(1), chrono::Utc::now()).await;
+    let done = rows.iter().find(|r| r.item_id == Some(q)).unwrap();
+    assert_eq!(done.row_id, Some(row.id), "goes to the answer");
+}
+
+/// Every way a turn ends short gives the question back to the owner — with
+/// the time it had before the answer cleared it.
+#[tokio::test]
+async fn an_answer_whose_turn_did_not_finish_gives_the_question_back() {
+    let (engine, _tmp) = configured().await;
+    for stop in ["cancelled", "rejected", "lost"] {
+        let q = a_question(&engine, Some("3h")).await;
+        let due = matter_of(&engine, q).await.due_at;
+        assert!(due.is_some());
+        let seg = open_segment(&engine).await;
+        let conn = format!("pa-q2-{stop}");
+        let (mut rx, state) = live_connection(&engine, seg, &conn).await;
+        let row = engine.send_from_page("Friday.".into(), Vec::new(), None, Some(q)).await.unwrap();
+        assert_eq!(matter_of(&engine, q).await.due_at, None, "cleared while answered");
+        engine.pump().await;
+        let (_, token) = take_prompt(&mut rx);
+        start_prompt(&state, Some(&token)).await;
+        let end = if stop == "lost" {
+            AcpEvent::StatusChanged { status: ConnectionStatus::Disconnected }
+        } else {
+            turn_complete(stop)
+        };
+        emit(&engine, &state, &conn, end, true).await;
+        let back = matter_of(&engine, q).await;
+        assert_eq!(back.waits_for, Some(WaitsFor::Owner), "{stop}");
+        assert_eq!(back.answer_state.as_deref(), Some("interrupted"), "{stop}");
+        assert_eq!(back.status, ItemStatus::Waiting);
+        assert_eq!((back.due_at, back.fired_at), (due, None), "{stop}: its time back");
+        let _ = row;
+    }
+    // Stranded by a crash, settled at the start: the same.
+    let q = a_question(&engine, Some("3h")).await;
+    let due = matter_of(&engine, q).await.due_at;
+    let row = engine.send_from_page("Friday.".into(), Vec::new(), None, Some(q)).await.unwrap();
+    svc::move_owner_rows(&engine.db.conn, &[row.id], &[OwnerStatus::Queued], OwnerStatus::Interrupted, None, None, svc::ReadMark::Keep)
+        .await
+        .unwrap();
+    matter_svc::settle_stranded_owner_rows(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert_eq!(matter_of(&engine, q).await.due_at, due, "at the start");
+}
+
+/// The time put back when an answer's turn does not finish is the time the
+/// question would have now: as it was while it has not come; the rule's
+/// next one once it went by; none for a one-off gone by or a rule ended.
+#[test]
+fn an_answered_question_s_time_comes_back_as_it_would_stand_now() {
+    use chrono::TimeZone;
+    let tz: chrono_tz::Tz = "Asia/Shanghai".parse().unwrap();
+    let at = |d: u32, h: u32| tz.with_ymd_and_hms(2026, 11, d, h, 0, 0).unwrap().with_timezone(&chrono::Utc);
+    let prior = |due_at, repeat: Option<&str>| matter_svc::AnswerPrior {
+        due_at: Some(due_at),
+        repeat: repeat.map(str::to_string),
+        at_due: Some("remind".into()),
+        act_spec: None,
+        tz: tz.name().to_string(),
+    };
+    let daily = r#"{"every":"daily","at":"09:00"}"#;
+    // Monday 23rd, 10:00.
+    let now = at(23, 10);
+    // From Wednesday 9:00, every day: Wednesday, not Tuesday.
+    assert_eq!(prior(at(25, 9), Some(daily)).due_again(now).map(|t| t.0), Some(at(25, 9)));
+    // Every day at 9:00, today's gone by: tomorrow's.
+    let (next, rule) = prior(at(23, 9), Some(daily)).due_again(now).unwrap();
+    assert_eq!(next, at(24, 9));
+    assert!(!rule.unwrap().contains("\"moment\":true"));
+    // A daily one put off to Friday: Friday.
+    let put_off = r#"{"every":"daily","at":"09:00","moment":true}"#;
+    assert_eq!(prior(at(27, 15), Some(put_off)).due_again(now).map(|t| t.0), Some(at(27, 15)));
+    // A one-off gone by: none; one still to come: as it was.
+    assert_eq!(prior(at(23, 8), None).due_again(now), None);
+    assert_eq!(prior(at(23, 18), None).due_again(now), Some((at(23, 18), None)));
+    // A rule that ended: none.
+    let ended = r#"{"every":"daily","at":"09:00","until":"2026-11-22"}"#;
+    assert_eq!(prior(at(22, 9), Some(ended)).due_again(now), None);
+}
+
+/// A time set by hand while the question waited on the answer stands: a
+/// turn that then does not finish does not bring back the old one.
+#[tokio::test]
+async fn a_time_set_while_the_answer_waited_is_not_undone_by_its_turn() {
+    let (engine, _tmp) = configured().await;
+    let q = a_question(&engine, Some("3h")).await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-prior-clear").await;
+    let row = engine.send_from_page("Friday.".into(), Vec::new(), None, Some(q)).await.unwrap();
+    assert!(data_of(&svc::get_row(&engine.db.conn, row.id).await.unwrap().unwrap()).get(matter_svc::ANSWER_PRIOR).is_some());
+    let out = call(&engine, "item_update", json!({ "item_id": q, "clear_due": true })).await;
+    assert!(out.ok, "{}", out.text);
+    assert!(data_of(&svc::get_row(&engine.db.conn, row.id).await.unwrap().unwrap()).get(matter_svc::ANSWER_PRIOR).is_none());
+    // A new time alone (which also sets what it waits for, ending the link):
+    // the old time is off its answer too.
+    let q3 = a_question(&engine, Some("3h")).await;
+    let row3 = engine.send_from_page("Later.".into(), Vec::new(), None, Some(q3)).await.unwrap();
+    let out = call(&engine, "item_update", json!({ "item_id": q3, "due": "2h" })).await;
+    assert!(out.ok, "{}", out.text);
+    assert!(data_of(&svc::get_row(&engine.db.conn, row3.id).await.unwrap().unwrap()).get(matter_svc::ANSWER_PRIOR).is_none());
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    emit(&engine, &state, "pa-prior-clear", turn_complete("cancelled"), true).await;
+    let m = matter_of(&engine, q).await;
+    assert_eq!((m.answer_state.as_deref(), m.due_at), (Some("interrupted"), None), "no time back");
+    // Closed by its answer: the time it had is done with.
+    let q2 = a_question(&engine, Some("3h")).await;
+    let row2 = engine.send_from_page("Yes.".into(), Vec::new(), None, Some(q2)).await.unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    emit(&engine, &state, "pa-prior-clear", turn_complete("end_turn"), true).await;
+    assert_eq!(matter_of(&engine, q2).await.status, ItemStatus::Done);
+    assert!(data_of(&svc::get_row(&engine.db.conn, row2.id).await.unwrap().unwrap()).get(matter_svc::ANSWER_PRIOR).is_none());
+}
+
+/// Dropped on the panel after it was answered, the answer's turn then cut
+/// short, the drop taken back: the question is the owner's again, with its
+/// time. Taken back while the answer still waits: the time goes back on
+/// the answer, and comes back if that turn is cut short.
+#[tokio::test]
+async fn taking_back_a_drop_of_an_answered_question_brings_its_time_back() {
+    let (engine, _tmp) = configured().await;
+    let q = a_question(&engine, Some("3h")).await;
+    let due = matter_of(&engine, q).await.due_at;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-prior-undo").await;
+    let row = engine.send_from_page("Friday.".into(), Vec::new(), None, Some(q)).await.unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let acted = engine.settle_item_from(q, "drop", None, super::reminders::OpSource::Panel).await.unwrap();
+    assert!(data_of(&svc::get_row(&engine.db.conn, row.id).await.unwrap().unwrap()).get(matter_svc::ANSWER_PRIOR).is_none());
+    emit(&engine, &state, "pa-prior-undo", turn_complete("cancelled"), true).await;
+    assert_eq!(matter_of(&engine, q).await.status, ItemStatus::Dropped);
+    let back = engine.undo_item(q, acted.undo.unwrap()).await.unwrap();
+    assert_eq!(
+        (back.status, back.waits_for, back.answer_state.as_deref(), back.due_at),
+        (ItemStatus::Waiting, Some(WaitsFor::Owner), Some("interrupted"), due)
+    );
+
+    // Taken back while its answer still waits.
+    let q2 = a_question(&engine, Some("3h")).await;
+    let due2 = matter_of(&engine, q2).await.due_at;
+    let row2 = engine.send_from_page("Monday.".into(), Vec::new(), None, Some(q2)).await.unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let acted = engine.settle_item_from(q2, "drop", None, super::reminders::OpSource::Panel).await.unwrap();
+    let back = engine.undo_item(q2, acted.undo.unwrap()).await.unwrap();
+    assert_eq!(back.answer_state.as_deref(), Some("linked"));
+    assert!(data_of(&svc::get_row(&engine.db.conn, row2.id).await.unwrap().unwrap()).get(matter_svc::ANSWER_PRIOR).is_some());
+    emit(&engine, &state, "pa-prior-undo", turn_complete("cancelled"), true).await;
+    assert_eq!(matter_of(&engine, q2).await.due_at, due2);
+}
+
+/// A button that read the matter before its last write is refused, and
+/// does nothing: an act, and a hand-over from its reminder card (which
+/// would otherwise go out before the matter is written).
+#[tokio::test]
+async fn a_stale_button_on_a_matter_does_nothing() {
+    let (engine, _tmp) = configured().await;
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Call the bank", "due": "1h" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    let seen = matter_of(&engine, id).await.updated_at;
+    call(&engine, "item_update", json!({ "item_id": id, "summary": "Call the bank today" })).await;
+    let e = engine
+        .settle_item_seen(id, "done", None, super::reminders::OpSource::Panel, Some(seen))
+        .await
+        .unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::CHANGED));
+    assert_eq!(matter_of(&engine, id).await.status, ItemStatus::Open);
+    // As read now: done.
+    let now = matter_of(&engine, id).await.updated_at;
+    let acted = engine
+        .settle_item_seen(id, "done", None, super::reminders::OpSource::Panel, Some(now))
+        .await
+        .unwrap();
+    assert_eq!(acted.item.status, ItemStatus::Done);
+    assert!(acted.item.updated_at >= now);
+}
+
+/// Two sends again of one interrupted message at once: one copy, its
+/// answer linked once, handed over once.
+#[tokio::test]
+async fn two_sends_again_at_once_make_one_copy() {
+    let (engine, _tmp) = configured().await;
+    let q = a_question(&engine, None).await;
+    let row = engine.send_from_page("Friday.".into(), Vec::new(), None, Some(q)).await.unwrap();
+    svc::move_owner_rows(&engine.db.conn, &[row.id], &[OwnerStatus::Queued], OwnerStatus::Interrupted, None, None, svc::ReadMark::Keep)
+        .await
+        .unwrap();
+    matter_svc::settle_stranded_owner_rows(&engine.db.conn, engine.bot().await).await.unwrap();
+    let (a, b) = tokio::join!(engine.resend(row.id), engine.resend(row.id));
+    let (a, b) = (a.unwrap(), b.unwrap());
+    assert_eq!(a.id, b.id, "the same copy");
+    let queued = svc::queued_owner_rows(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert_eq!(queued.iter().map(|r| r.id).collect::<Vec<_>>(), vec![a.id]);
+    assert_eq!(matter_of(&engine, q).await.answer_row_id, Some(a.id));
+    let first = svc::get_row(&engine.db.conn, row.id).await.unwrap().unwrap();
+    assert_eq!(data_of(&first)["resent_as"], a.id);
+    // Once more: still that copy.
+    assert_eq!(engine.resend(row.id).await.unwrap().id, a.id);
+    // A plain message too.
+    let plain = engine.send_owner_message("hello".into(), Vec::new(), None).await.unwrap();
+    svc::move_owner_rows(&engine.db.conn, &[plain.id], &[OwnerStatus::Queued], OwnerStatus::Interrupted, None, None, svc::ReadMark::Keep)
+        .await
+        .unwrap();
+    let (a, b) = tokio::join!(engine.resend(plain.id), engine.resend(plain.id));
+    assert_eq!(a.unwrap().id, b.unwrap().id);
+}
+
+
+#[tokio::test]
+async fn an_answer_the_assistant_took_over_is_left_as_it_made_it() {
+    let (engine, _tmp) = configured().await;
+    let q = a_question(&engine, None).await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-q3").await;
+    engine.send_from_page("Maybe.".into(), Vec::new(), None, Some(q)).await.unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    // It asks more, within its turn.
+    call(&engine, "item_update", json!({ "item_id": q, "waits_for": "owner", "summary": "Friday or Monday?" })).await;
+    emit(&engine, &state, "pa-q3", turn_complete("end_turn"), true).await;
+    let m = matter_of(&engine, q).await;
+    assert_eq!((m.status, m.waits_for, m.answer_state.clone()), (ItemStatus::Waiting, Some(WaitsFor::Owner), None));
+    // Only the summary changed: the link stands, and settles.
+    let q2 = a_question(&engine, None).await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-q3b").await;
+    engine.send_from_page("Yes.".into(), Vec::new(), None, Some(q2)).await.unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    call(&engine, "item_update", json!({ "item_id": q2, "summary": "Release on Friday?" })).await;
+    emit(&engine, &state, "pa-q3b", turn_complete("end_turn"), true).await;
+    assert_eq!(matter_of(&engine, q2).await.status, ItemStatus::Done);
+}
+
+#[tokio::test]
+async fn a_resent_answer_links_again_or_goes_as_a_plain_copy() {
+    let (engine, _tmp) = configured().await;
+    let q = a_question(&engine, None).await;
+    let row = engine.send_from_page("Friday.".into(), Vec::new(), None, Some(q)).await.unwrap();
+    // Its turn interrupted (a restart): the row is offered again, the
+    // question back with the owner.
+    svc::move_owner_rows(&engine.db.conn, &[row.id], &[OwnerStatus::Queued], OwnerStatus::Interrupted, None, None, svc::ReadMark::Keep)
+        .await
+        .unwrap();
+    let back = matter_svc::settle_stranded_owner_rows(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert!(back.items.contains(&q));
+    assert_eq!(matter_of(&engine, q).await.answer_state.as_deref(), Some("interrupted"));
+    let copy = engine.resend(row.id).await.unwrap();
+    assert_eq!(copy.data.as_ref().unwrap()["answers_item"]["id"], q, "linked again");
+    assert_eq!(matter_of(&engine, q).await.answer_row_id, Some(copy.id));
+    // The question dropped meanwhile: the words go again, linked to nothing.
+    svc::move_owner_rows(&engine.db.conn, &[copy.id], &[OwnerStatus::Queued], OwnerStatus::Interrupted, None, None, svc::ReadMark::Keep)
+        .await
+        .unwrap();
+    engine.settle_item(q, "drop", None).await.unwrap();
+    let plain = engine.resend(copy.id).await.unwrap();
+    assert!(plain.data.as_ref().and_then(|d| d.get("answers_item")).is_none());
+    assert_eq!(matter_of(&engine, q).await.status, ItemStatus::Dropped);
+}
+
+#[tokio::test]
+async fn a_question_handed_to_the_assistant_at_its_time_is_not_answered_over() {
+    let (engine, _tmp) = configured().await;
+    let out = call(
+        &engine,
+        "item_update",
+        json!({ "kind": "question", "summary": "Pick a venue?", "due": "1m", "at_due": "act", "act_spec": { "what": "ask again" } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let q = out.data["item_id"].as_i64().unwrap() as i32;
+    engine.fire_due_at(super::clock::now() + chrono::Duration::minutes(2)).await;
+    let e = engine.send_from_page("The park.".into(), Vec::new(), None, Some(q)).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::ANSWER_QUEUED));
+    assert!(e.params.contains_key("bot"));
+}
+
+#[tokio::test]
+async fn a_folded_answer_settles_as_its_turn_did_and_an_unconfirmed_one_never_closes() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let q = a_question(&engine, None).await;
+    let seg = open_segment(&engine).await;
+    let batch = svc::create_batch(&engine.db.conn, bot, seg, BatchKind::Delivery, None).await.unwrap().id;
+    // Written as the page writes it, then claimed for the turn in flight.
+    let row = engine.send_from_page("Friday.".into(), Vec::new(), None, Some(q)).await.unwrap();
+    assert!(matter_svc::claim_owner_row_for_steering(&engine.db.conn, row.id, batch, seg).await.unwrap());
+    let claimed = svc::get_row(&engine.db.conn, row.id).await.unwrap().unwrap();
+    assert_eq!(claimed.status, Some(OwnerStatus::Delivered));
+    assert_eq!(data_of(&claimed)[matter_svc::STEER_CLAIM], batch);
+    // The turn ends before the fold is known: not closed.
+    svc::finish_batch(&engine.db.conn, batch, BatchStatus::Completed, None, None, None).await.unwrap();
+    matter_svc::move_owner_rows_settling(
+        &engine.db.conn,
+        &[row.id],
+        &[OwnerStatus::Delivered],
+        OwnerStatus::Answered,
+        None,
+        None,
+        svc::ReadMark::Keep,
+        matter_svc::AnswerMove::Close,
+        Some(batch),
+    )
+    .await
+    .unwrap();
+    assert_eq!(matter_of(&engine, q).await.answer_state.as_deref(), Some("linked"), "not known to have been read");
+    // The fold worked: closed as its turn did.
+    matter_svc::settle_steer(&engine.db.conn, row.id, batch, true).await.unwrap();
+    let m = matter_of(&engine, q).await;
+    assert_eq!((m.status, m.closed_how.as_deref()), (ItemStatus::Done, Some("answered")));
+    let r = svc::get_row(&engine.db.conn, row.id).await.unwrap().unwrap();
+    assert_eq!(data_of(&r)[matter_svc::MERGED], true);
+    assert!(data_of(&r).get(matter_svc::STEER_CLAIM).is_none());
+
+    // Not folded: back in the queue, the question still waiting on it.
+    let q2 = a_question(&engine, None).await;
+    let batch2 = svc::create_batch(&engine.db.conn, bot, seg, BatchKind::Delivery, None).await.unwrap().id;
+    let row2 = engine.send_from_page("Monday.".into(), Vec::new(), None, Some(q2)).await.unwrap();
+    matter_svc::claim_owner_row_for_steering(&engine.db.conn, row2.id, batch2, seg).await.unwrap();
+    matter_svc::settle_steer(&engine.db.conn, row2.id, batch2, false).await.unwrap();
+    let r2 = svc::get_row(&engine.db.conn, row2.id).await.unwrap().unwrap();
+    assert_eq!(r2.status, Some(OwnerStatus::Queued));
+    assert_eq!(matter_of(&engine, q2).await.answer_state.as_deref(), Some("linked"));
+
+    // A crash left one claimed and never folded in a finished turn: at the
+    // start it is interrupted, its question back with the owner — and once
+    // more changes nothing.
+    let q3 = a_question(&engine, None).await;
+    let batch3 = svc::create_batch(&engine.db.conn, bot, seg, BatchKind::Delivery, None).await.unwrap().id;
+    let row3 = engine.send_from_page("Sunday.".into(), Vec::new(), None, Some(q3)).await.unwrap();
+    matter_svc::claim_owner_row_for_steering(&engine.db.conn, row3.id, batch3, seg).await.unwrap();
+    svc::finish_batch(&engine.db.conn, batch3, BatchStatus::Completed, None, None, None).await.unwrap();
+    matter_svc::settle_stranded_owner_rows(&engine.db.conn, bot).await.unwrap();
+    let r3 = svc::get_row(&engine.db.conn, row3.id).await.unwrap().unwrap();
+    assert_eq!(r3.status, Some(OwnerStatus::Interrupted));
+    let m3 = matter_of(&engine, q3).await;
+    assert_eq!((m3.waits_for, m3.answer_state.as_deref()), (Some(WaitsFor::Owner), Some("interrupted")));
+    let again = matter_svc::settle_stranded_owner_rows(&engine.db.conn, bot).await.unwrap();
+    assert!(again.items.is_empty() && again.rows.is_empty());
+    // A confirmed one left "delivered" by a finished turn: answered, closed.
+    let q4 = a_question(&engine, None).await;
+    let batch4 = svc::create_batch(&engine.db.conn, bot, seg, BatchKind::Delivery, None).await.unwrap().id;
+    let row4 = engine.send_from_page("Saturday.".into(), Vec::new(), None, Some(q4)).await.unwrap();
+    svc::move_owner_rows(&engine.db.conn, &[row4.id], &[OwnerStatus::Queued], OwnerStatus::Delivered, Some(batch4), Some(seg), svc::ReadMark::Read)
+        .await
+        .unwrap();
+    svc::finish_batch(&engine.db.conn, batch4, BatchStatus::Completed, None, None, None).await.unwrap();
+    matter_svc::settle_stranded_owner_rows(&engine.db.conn, bot).await.unwrap();
+    assert_eq!(svc::get_row(&engine.db.conn, row4.id).await.unwrap().unwrap().status, Some(OwnerStatus::Answered));
+    assert_eq!(matter_of(&engine, q4).await.status, ItemStatus::Done);
+}
+
+/// What a delivery tells the assistant about an answer is what its turn's
+/// end does with the question: closed only while it still waits on that
+/// answer. One the assistant moved before the delivery is told "no" and is
+/// left be; of two answers to one question in one delivery, only the later
+/// is the one it waits on.
+#[tokio::test]
+async fn an_answer_says_whether_its_turn_s_end_closes_its_question() {
+    let (engine, _tmp) = configured().await;
+    let q = a_question(&engine, None).await;
+    let moved = a_question(&engine, None).await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-linked").await;
+    let first = engine.send_from_page("Friday.".into(), Vec::new(), None, Some(q)).await.unwrap();
+    // The assistant asks again before it reads the answer (its turn ran on
+    // something else); the owner answers again.
+    call(&engine, "item_update", json!({ "item_id": q, "waits_for": "owner", "summary": "Friday or Monday?" })).await;
+    let second = engine.send_from_page("Monday.".into(), Vec::new(), None, Some(q)).await.unwrap();
+    let other = engine.send_from_page("Yes.".into(), Vec::new(), None, Some(moved)).await.unwrap();
+    call(&engine, "item_update", json!({ "item_id": moved, "waits_for": "owner" })).await;
+    engine.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    let tag = |row: i32, item: i32, linked: &str| {
+        let at = prompt.find(&format!("[#{row}]")).unwrap_or_else(|| panic!("{prompt}"));
+        let line = &prompt[at..];
+        let line = &line[..line[1..].find("\n[#").map_or(line.len(), |e| e + 1)];
+        line.contains(&format!("<codeg-answer matter=\"{item}\" linked=\"{linked}\">"))
+    };
+    assert!(tag(first.id, q, "no"), "{prompt}");
+    assert!(tag(second.id, q, "yes"), "{prompt}");
+    assert!(tag(other.id, moved, "no"), "{prompt}");
+    assert!(prompt.contains("codeg leaves #"), "{prompt}");
+    start_prompt(&state, Some(&token)).await;
+    emit(&engine, &state, "pa-linked", turn_complete("end_turn"), true).await;
+    let m = matter_of(&engine, q).await;
+    assert_eq!((m.status, m.answer_row_id), (ItemStatus::Done, Some(second.id)), "closed on the later answer");
+    let left = matter_of(&engine, moved).await;
+    assert_eq!((left.status, left.waits_for), (ItemStatus::Waiting, Some(WaitsFor::Owner)), "left as moved");
+}
+
+/// A message folded into the turn in flight says the same of its answer.
+#[tokio::test]
+async fn a_folded_answer_says_whether_its_question_closes() {
+    let (engine, _tmp) = configured().await;
+    let q = a_question(&engine, None).await;
+    let seg = open_segment(&engine).await;
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
+        .await
+        .unwrap()
+        .id;
+    let first = engine.send_owner_message("first".into(), Vec::new(), None).await.unwrap();
+    svc::move_owner_rows(&engine.db.conn, &[first.id], &[OwnerStatus::Queued], OwnerStatus::Delivered, Some(batch), Some(seg), svc::ReadMark::Read)
+        .await
+        .unwrap();
+    let mut rx = engine.manager.insert_test_connection_live("c", AgentType::ClaudeCode, None, EventEmitter::Noop).await;
+    {
+        let state = engine.manager.get_state("c").await.unwrap();
+        let mut s = state.write().await;
+        s.native_steering_available = true;
+        s.turn_in_flight = true;
+        s.agent_info = Some(("codex-acp".into(), "2.5.0".into()));
+    }
+    engine.begin_turn_for_test("c", seg, batch, BatchKind::Delivery, false, false).await;
+    engine.set_turn_owner_rows_for_test(vec![first.id]).await;
+    let taken = tokio::spawn(async move {
+        match rx.recv().await {
+            Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
+                let _ = reply.send(Ok(SteerOutcome::Injected));
+                blocks
+            }
+            _ => panic!("expected a steer"),
+        }
+    });
+    engine.send_from_page("Friday.".into(), Vec::new(), None, Some(q)).await.unwrap();
+    let blocks = taken.await.unwrap();
+    let text = match &blocks[0] {
+        crate::acp::types::PromptInputBlock::Text { text } => text.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert!(text.contains(&format!("<codeg-answer matter=\"{q}\" linked=\"yes\">")), "{text}");
+}
+
+/// A message the turn in flight has among its own already is the turn's
+/// as it is; one another delivery took meanwhile is not claimed, not
+/// counted among this turn's, and not steered in — the delivery that has
+/// it sends it, once.
+#[tokio::test]
+async fn a_message_not_claimed_for_the_turn_in_flight_is_not_folded_into_it() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let seg = open_segment(&engine).await;
+    let batch = svc::create_batch(&engine.db.conn, bot, seg, BatchKind::Delivery, None).await.unwrap().id;
+    let other = svc::create_batch(&engine.db.conn, bot, seg, BatchKind::Delivery, None).await.unwrap().id;
+    let first = engine.send_owner_message("first".into(), Vec::new(), None).await.unwrap();
+    let taken = engine.send_owner_message("second".into(), Vec::new(), None).await.unwrap();
+    let held = engine.send_owner_message("third".into(), Vec::new(), None).await.unwrap();
+    svc::move_owner_rows(&engine.db.conn, &[first.id], &[OwnerStatus::Queued], OwnerStatus::Delivered, Some(batch), Some(seg), svc::ReadMark::Read)
+        .await
+        .unwrap();
+    // Another delivery has "second".
+    svc::move_owner_rows(&engine.db.conn, &[taken.id], &[OwnerStatus::Queued], OwnerStatus::Delivered, Some(other), Some(seg), svc::ReadMark::Read)
+        .await
+        .unwrap();
+    let mut rx = engine.manager.insert_test_connection_live("c", AgentType::ClaudeCode, None, EventEmitter::Noop).await;
+    {
+        let state = engine.manager.get_state("c").await.unwrap();
+        let mut s = state.write().await;
+        s.native_steering_available = true;
+        s.turn_in_flight = true;
+        s.agent_info = Some(("codex-acp".into(), "2.5.0".into()));
+    }
+    engine.begin_turn_for_test("c", seg, batch, BatchKind::Delivery, false, false).await;
+    engine.set_turn_owner_rows_for_test(vec![first.id, held.id]).await;
+    let row = svc::to_row(svc::get_row(&engine.db.conn, taken.id).await.unwrap().unwrap());
+    engine.give_way_for_test(row).await;
+    let row = svc::to_row(svc::get_row(&engine.db.conn, held.id).await.unwrap().unwrap());
+    engine.give_way_for_test(row).await;
+    assert!(rx.try_recv().is_err(), "nothing steered in");
+    assert_eq!(engine.turn_owner_rows_for_test().await, vec![first.id, held.id], "neither counted again");
+    let r = svc::get_row(&engine.db.conn, taken.id).await.unwrap().unwrap();
+    assert_eq!((r.status, r.batch_id), (Some(OwnerStatus::Delivered), Some(other)));
+    assert!(data_of(&r).get(matter_svc::STEER_CLAIM).is_none());
+    let h = svc::get_row(&engine.db.conn, held.id).await.unwrap().unwrap();
+    assert_eq!(h.status, Some(OwnerStatus::Queued), "goes with the next delivery");
+    // This turn ends: the other delivery's message is not this turn's.
+    engine.set_turn_owner_rows_for_test(vec![first.id, taken.id]).await;
+    engine.feed_for_test("c", 1, turn_complete("end_turn")).await;
+    let r = svc::get_row(&engine.db.conn, taken.id).await.unwrap().unwrap();
+    assert_eq!((r.status, r.batch_id), (Some(OwnerStatus::Delivered), Some(other)), "left to its own batch");
+    let f = svc::get_row(&engine.db.conn, first.id).await.unwrap().unwrap();
+    assert_eq!(f.status, Some(OwnerStatus::Answered));
+}
+
+/// A row another batch claimed or folded in is left alone by an older
+/// batch's settling and by its late hand-over outcome.
+#[tokio::test]
+async fn an_older_batch_neither_moves_nor_settles_a_row_another_batch_has() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let q = a_question(&engine, None).await;
+    let seg = open_segment(&engine).await;
+    let old = svc::create_batch(&engine.db.conn, bot, seg, BatchKind::Delivery, None).await.unwrap().id;
+    let new = svc::create_batch(&engine.db.conn, bot, seg, BatchKind::Delivery, None).await.unwrap().id;
+    let row = engine.send_from_page("Friday.".into(), Vec::new(), None, Some(q)).await.unwrap();
+    assert!(matter_svc::claim_owner_row_for_steering(&engine.db.conn, row.id, new, seg).await.unwrap());
+    for (to, how) in [(OwnerStatus::Interrupted, matter_svc::AnswerMove::Revert), (OwnerStatus::Answered, matter_svc::AnswerMove::Close)] {
+        let moved = matter_svc::move_owner_rows_settling(&engine.db.conn, &[row.id], &[OwnerStatus::Delivered], to, None, None, svc::ReadMark::Keep, how, Some(old))
+            .await
+            .unwrap();
+        assert!(moved.rows.is_empty() && moved.items.is_empty());
+    }
+    let late = matter_svc::settle_steer(&engine.db.conn, row.id, old, false).await.unwrap();
+    assert!(late.rows.is_empty() && late.items.is_empty());
+    let r = svc::get_row(&engine.db.conn, row.id).await.unwrap().unwrap();
+    assert_eq!((r.status, data_of(&r)[matter_svc::STEER_CLAIM].as_i64()), (Some(OwnerStatus::Delivered), Some(new as i64)));
+    // Folded into the new batch: still not the old one's.
+    matter_svc::settle_steer(&engine.db.conn, row.id, new, true).await.unwrap();
+    let moved = matter_svc::move_owner_rows_settling(&engine.db.conn, &[row.id], &[OwnerStatus::Delivered], OwnerStatus::Interrupted, None, None, svc::ReadMark::Keep, matter_svc::AnswerMove::Revert, Some(old))
+        .await
+        .unwrap();
+    assert!(moved.rows.is_empty());
+    assert_eq!(matter_of(&engine, q).await.answer_state.as_deref(), Some("linked"));
+    // The new batch's end settles it.
+    svc::finish_batch(&engine.db.conn, new, BatchStatus::Completed, None, None, None).await.unwrap();
+    let moved = matter_svc::move_owner_rows_settling(&engine.db.conn, &[row.id], &[OwnerStatus::Delivered], OwnerStatus::Answered, None, None, svc::ReadMark::Keep, matter_svc::AnswerMove::Close, Some(new))
+        .await
+        .unwrap();
+    assert_eq!(moved.items, vec![q]);
+}
+
+#[tokio::test]
+async fn dropping_an_answered_question_is_taken_back_as_its_answer_stands() {
+    let (engine, _tmp) = configured().await;
+    let q = a_question(&engine, None).await;
+    let row = engine.send_from_page("Friday.".into(), Vec::new(), None, Some(q)).await.unwrap();
+    // Still queued: back to waiting on it, and it settles as usual.
+    let token = engine.settle_item_from(q, "drop", None, OpSource::Panel).await.unwrap().undo.unwrap();
+    assert_eq!(matter_of(&engine, q).await.answer_state, None);
+    engine.undo_item(q, token).await.unwrap();
+    let m = matter_of(&engine, q).await;
+    assert_eq!((m.waits_for, m.answer_state.as_deref(), m.answer_row_id), (Some(WaitsFor::Agent), Some("linked"), Some(row.id)));
+    // Read by a turn that finished: not taken back.
+    let seg = open_segment(&engine).await;
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None).await.unwrap().id;
+    let token = engine.settle_item_from(q, "drop", None, OpSource::Panel).await.unwrap().undo.unwrap();
+    svc::move_owner_rows(&engine.db.conn, &[row.id], &[OwnerStatus::Queued], OwnerStatus::Answered, Some(batch), Some(seg), svc::ReadMark::Read)
+        .await
+        .unwrap();
+    svc::finish_batch(&engine.db.conn, batch, BatchStatus::Completed, None, None, None).await.unwrap();
+    let e = engine.undo_item(q, token).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::UNDO_ANSWER_READ));
+    let item = matter_of(&engine, q).await;
+    assert_eq!(matter_svc::item_undo_token(&engine.db.conn, &item, chrono::Utc::now()).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_question_comes_from_the_reply_that_asks_it() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-q9").await;
+    engine.send_owner_message("Plan the release".into(), Vec::new(), None).await.unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let reply = engine.turn_reply_row().await.expect("a reply row");
+    let q = a_question(&engine, None).await;
+    assert_eq!(matter_of(&engine, q).await.origin_timeline_id, Some(reply));
+    emit(&engine, &state, "pa-q9", turn_complete("end_turn"), true).await;
+}
+
+// ── stopping work (4.10, P5) ────────────────────────────────────────────────
+
+/// What a stop of dispatch `id` left: its stop card's data, its matter.
+async fn stop_card_of(engine: &PersonalAgentEngine, id: i32) -> Option<serde_json::Value> {
+    let rows = svc::rows_since(&engine.db.conn, engine.bot().await, chrono::Utc::now() - chrono::Duration::hours(1))
+        .await
+        .unwrap();
+    rows.iter()
+        .rfind(|r| r.kind == TimelineKind::Result && r.dispatch_id == Some(id))
+        .map(data_of)
+        .filter(|d| d["cause"] == "stopped")
+}
+
+/// Stopped by the assistant itself: canceled with its reason, its card and
+/// matter say who and why, its coding event carries it, nobody is woken —
+/// and a second stop finds it stopped.
+#[tokio::test]
+async fn the_assistant_stops_its_own_work_and_nobody_is_woken() {
+    use super::stop::{StopOutcome, StoppedBy};
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-own").await;
+    let item = svc::create_item(&engine.db.conn, bot, ItemKind::Dispatch, Some(id), ItemStatus::Open, None, "work".into(), None, None)
+        .await
+        .unwrap();
+    let woken_before = svc::pending_events(&engine.db.conn, bot).await.unwrap().iter().filter(|e| e.wake).count();
+    let out = call(&engine, "dispatch_stop", json!({ "dispatch_id": id, "reason": "the owner moved to plan B" })).await;
+    assert!(out.ok, "{}", out.text);
+    assert_eq!(out.data["stop"]["outcome"], "stopped");
+    let d = dispatch_state(&engine, id).await;
+    assert_eq!(d.state, DispatchState::Canceled);
+    assert_eq!(
+        super::stop::stopped_by_of(&d),
+        Some(StoppedBy::Agent { reason: "the owner moved to plan B".into() })
+    );
+    let card = stop_card_of(&engine, id).await.expect("a stop card");
+    assert_eq!((card["stopped_by"].as_str(), card["reason"].as_str()), (Some("agent"), Some("the owner moved to plan B")));
+    let m = svc::get_item(&engine.db.conn, item.id).await.unwrap().unwrap();
+    assert_eq!((m.status, m.closed_by.as_deref(), m.closed_how.as_deref()), (ItemStatus::Dropped, Some("agent"), Some("stopped")));
+    let woken = svc::pending_events(&engine.db.conn, bot).await.unwrap().iter().filter(|e| e.wake).count();
+    assert_eq!(woken, woken_before, "nobody woken");
+    let signals = crate::db::service::personal_agent_watch_service::signals_after(&engine.db.conn, 0, 100).await.unwrap();
+    let ended = signals.iter().find(|s| s.kind == "dispatch_ended").expect("its coding event");
+    assert!(ended.facts.contains("\"stopped_by\":\"agent\""), "{}", ended.facts);
+    // Again: stopped already, by itself.
+    let again = engine.stop_one(id, StoppedBy::Owner, Default::default()).await.unwrap();
+    assert_eq!(again, StopOutcome::AlreadyStopped { by: StoppedBy::Agent { reason: "the owner moved to plan B".into() } });
+    // `dispatch_wait` says so at once.
+    owner_turn(&engine, "pa-own-wait").await;
+    let wait = engine.dispatch_wait(id, Some(std::time::Duration::ZERO)).await;
+    assert_eq!(wait.data["waiting"], "work_stopped", "{}", wait.text);
+    // A reason is required; done work is past stopping; another's is theirs.
+    let e = call(&engine, "dispatch_stop", json!({ "dispatch_id": id, "reason": "  " })).await;
+    assert!(!e.ok);
+    let done = session_dispatch(&engine, DispatchState::Completed, "c-done").await;
+    let past = call(&engine, "dispatch_stop", json!({ "dispatch_id": done, "reason": "no" })).await;
+    assert!(!past.ok && past.data["stop"]["outcome"] == "past_stopping", "{}", past.text);
+    let queued = session_dispatch(&engine, DispatchState::Queued, "c-queued").await;
+    let q = call(&engine, "dispatch_stop", json!({ "dispatch_id": queued, "reason": "not needed" })).await;
+    assert!(q.ok, "{}", q.text);
+    assert_eq!(dispatch_state(&engine, queued).await.state, DispatchState::Canceled);
+}
+
+/// A card's [Stop] that read the work before it changed (another window
+/// followed it up meanwhile) stops nothing.
+#[tokio::test]
+async fn a_stale_card_stops_nothing_new() {
+    use super::stop::{StopExpect, StopOutcome, StoppedBy};
+    let (engine, _tmp) = configured().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-stale").await;
+    let seen = dispatch_state(&engine, id).await.updated_at;
+    // Written since (a follow-up's round, say).
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    svc::update_dispatch(&engine.db.conn, id, None, DispatchWrite { bump_turns: true, ..Default::default() })
+        .await
+        .unwrap();
+    let out = engine
+        .stop_one(id, StoppedBy::Owner, StopExpect { updated_at: Some(seen), ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(out, StopOutcome::Changed);
+    assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::Running);
+    let now = dispatch_state(&engine, id).await.updated_at;
+    let out = engine
+        .stop_one(id, StoppedBy::Owner, StopExpect { updated_at: Some(now), ..Default::default() })
+        .await
+        .unwrap();
+    assert!(matches!(out, StopOutcome::Stopped { .. }));
+}
+
+/// A follow-up queued and not sent yet when its work is stopped is never
+/// sent: its entry is taken back.
+#[tokio::test]
+async fn a_queued_follow_up_is_taken_back_by_the_stop() {
+    use super::stop::StoppedBy;
+    let (engine, tmp) = configured().await;
+    engine
+        .save(PersonalAgentDraft {
+            settings: Some(PersonalAgentSettings { dispatch_concurrency: 1, ..Default::default() }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (id, _rx, _st, _) = live_session_dispatch(&engine, &tmp, "x-stopq", DispatchState::Completed).await;
+    let _busy = session_dispatch(&engine, DispatchState::Running, "x-stopq-busy").await;
+    owner_turn(&engine, "pa-stopq").await;
+    let out = call(&engine, "dispatch_followup", json!({ "dispatch_id": id, "message": "and the footer" })).await;
+    assert!(out.text.contains("slots are busy"), "{}", out.text);
+    let op_id = round_op(&engine, id).await.op_id.unwrap();
+    engine.stop_one(id, StoppedBy::Owner, Default::default()).await.unwrap();
+    let op = svc::get_op(&engine.db.conn, &op_id).await.unwrap().unwrap();
+    assert_eq!(op.state, ActionState::NotExecuted);
+    let d = dispatch_state(&engine, id).await;
+    assert_eq!((d.state, d.followup.as_deref()), (DispatchState::Canceled, None));
+}
+
+/// The board will not cancel a merging task: nothing is written anywhere.
+/// The owner canceled it on the board first: the assistant's stop after
+/// says it was theirs, and so does everything else.
+#[tokio::test]
+async fn a_board_task_s_stop_follows_the_board() {
+    use super::stop::{StopOutcome, StoppedBy};
+    let (engine, tmp) = configured().await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let coder = 0;
+    let merging = board_task(&engine, project, "Land", WorkTaskStatus::Merging, |_| {}).await;
+    let d = task_dispatch(&engine, coder, project, merging.id, "Land", DispatchState::Running).await;
+    let out = engine.stop_one(d.id, StoppedBy::Owner, Default::default()).await.unwrap();
+    assert_eq!(out, StopOutcome::BoardRefused);
+    assert_eq!(dispatch_state(&engine, d.id).await.state, DispatchState::Running);
+    let t = crate::db::service::work_task_service::get_model(&engine.db.conn, merging.id).await.unwrap();
+    assert_eq!(t.status, WorkTaskStatus::Merging);
+    assert!(stop_card_of(&engine, d.id).await.is_none());
+    // On the board first.
+    let running = board_task(&engine, project, "Fix", WorkTaskStatus::Running, |_| {}).await;
+    let d2 = task_dispatch(&engine, coder, project, running.id, "Fix", DispatchState::Running).await;
+    assert!(crate::db::service::work_task_service::cancel(&engine.db.conn, running.id, None).await.unwrap());
+    let out = engine
+        .stop_one(d2.id, StoppedBy::Agent { reason: "done another way".into() }, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(out, StopOutcome::AlreadyStopped { by: StoppedBy::OwnerOnBoard });
+    let now = dispatch_state(&engine, d2.id).await;
+    assert_eq!(super::stop::stopped_by_of(&now), Some(StoppedBy::OwnerOnBoard));
+    assert_eq!(stop_card_of(&engine, d2.id).await.unwrap()["stopped_by"], "owner_on_board");
+}
+
+/// The owner cancels a task on the board — one that failed days ago too:
+/// their stop, booked by the sync, its matter given up, nobody woken. The
+/// board's scan says who stopped it in its event.
+#[tokio::test]
+async fn the_owner_canceling_on_the_board_is_their_stop() {
+    let (engine, tmp) = configured().await;
+    let bot = engine.bot().await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let failed = board_task(&engine, project, "Old", WorkTaskStatus::Failed, |_| {}).await;
+    let d = task_dispatch(&engine, 0, project, failed.id, "Old", DispatchState::Failed).await;
+    let item = svc::create_item(&engine.db.conn, bot, ItemKind::Dispatch, Some(d.id), ItemStatus::Open, None, "old".into(), None, None)
+        .await
+        .unwrap();
+    let woken_before = svc::pending_events(&engine.db.conn, bot).await.unwrap().iter().filter(|e| e.wake).count();
+    assert!(crate::db::service::work_task_service::cancel(&engine.db.conn, failed.id, None).await.unwrap());
+    engine.sync_task_dispatch(d.id).await;
+    let now = dispatch_state(&engine, d.id).await;
+    assert_eq!(
+        (now.state, super::stop::stopped_by_of(&now)),
+        (DispatchState::Canceled, Some(super::stop::StoppedBy::OwnerOnBoard))
+    );
+    let m = svc::get_item(&engine.db.conn, item.id).await.unwrap().unwrap();
+    assert_eq!((m.status, m.closed_how.as_deref()), (ItemStatus::Dropped, Some("stopped")));
+    let woken = svc::pending_events(&engine.db.conn, bot).await.unwrap().iter().filter(|e| e.wake).count();
+    assert_eq!(woken, woken_before, "nobody woken");
+    // Booked once: another look changes nothing.
+    engine.sync_task_dispatch(d.id).await;
+    let rows = svc::rows_since(&engine.db.conn, bot, chrono::Utc::now() - chrono::Duration::hours(1)).await.unwrap();
+    assert_eq!(rows.iter().filter(|r| r.kind == TimelineKind::Result && r.dispatch_id == Some(d.id)).count(), 1);
+}
+
+/// A board task made for work stopped before it was made is not made.
+#[tokio::test]
+async fn work_stopped_before_its_task_is_made_makes_none() {
+    let (engine, tmp) = configured().await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let t = board_task(&engine, project, "Seed", WorkTaskStatus::Todo, |_| {}).await;
+    let d = task_dispatch(&engine, 0, project, t.id, "Seed", DispatchState::Queued).await;
+    svc::update_dispatch(&engine.db.conn, d.id, None, DispatchWrite { state: Some(DispatchState::Canceled), ..Default::default() })
+        .await
+        .unwrap();
+    let draft = crate::models::WorkTaskDraft {
+        folder_id: project,
+        title: "Again".into(),
+        config: serde_json::json!({ "display_text": "x", "prompt_blocks": [{ "type": "text", "text": "x" }] }),
+    };
+    let made = crate::db::service::work_task_service::create_for_personal_agent(&engine.db.conn, draft, d.id)
+        .await
+        .unwrap();
+    assert!(matches!(made, crate::db::service::work_task_service::CreateForDispatch::Stopped));
+}
+
+/// The owner stops codeg's acceptance check: the call is theirs, on their
+/// acceptance card — no acceptance event wakes the assistant.
+#[tokio::test]
+async fn the_owner_stopping_an_acceptance_check_puts_it_to_them() {
+    use crate::db::entities::personal_agent_verification::{CheckVerdict, VerificationState};
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    let bot = engine.bot().await;
+    engine.record_progress(&w.d, None, None, "task").await;
+    engine.acceptance_tick().await;
+    let r = rounds_of(&engine, w.d.id).await;
+    assert_eq!(r[0].state, VerificationState::Checking);
+    let check = r[0].check_dispatch_id.unwrap();
+    let out = engine
+        .stop_one(check, super::stop::StoppedBy::Owner, Default::default())
+        .await
+        .unwrap();
+    assert!(matches!(out, super::stop::StopOutcome::Stopped { .. }), "{out:?}");
+    let r = rounds_of(&engine, w.d.id).await;
+    assert_eq!((r[0].state, r[0].check_verdict), (VerificationState::Asked, Some(CheckVerdict::Unverified)));
+    assert!(r[0].notice_id.is_some(), "the owner's acceptance card");
+    let ev = svc::pending_events(&engine.db.conn, bot).await.unwrap();
+    assert!(ev.iter().all(|e| e.kind != super::acceptance::ACCEPT_EVENT), "no acceptance event");
+}
+
+/// The board's scan reads past hundreds of tasks stamped with one time (a
+/// sort), on to an old failed task the owner canceled since: its work is
+/// their stop, and the scan's event says so.
+#[tokio::test]
+async fn the_board_scan_reads_past_one_time_on_to_a_cancel() {
+    use sea_orm::Set;
+    let (host, _w, tmp) = hosted().await;
+    let engine = host.primary();
+    let dir = tmp.path().join("proj");
+    std::fs::create_dir_all(&dir).unwrap();
+    let project = crate::db::service::folder_service::add_folder(&engine.db.conn, &dir.to_string_lossy())
+        .await
+        .unwrap()
+        .id;
+    let sorted = chrono::Utc::now() - chrono::Duration::hours(1);
+    for k in 0..501 {
+        board_task(&engine, project, &format!("Sorted {k}"), WorkTaskStatus::Todo, |t| {
+            t.updated_at = Set(sorted);
+        })
+        .await;
+    }
+    let failed = board_task(&engine, project, "Old failure", WorkTaskStatus::Failed, |t| {
+        t.updated_at = Set(chrono::Utc::now() - chrono::Duration::days(5));
+    })
+    .await;
+    let d = task_dispatch(&engine, 0, project, failed.id, "Old failure", DispatchState::Failed).await;
+    // The scan is where it was before the sort.
+    crate::db::service::app_metadata_service::upsert_value(
+        &engine.db.conn,
+        "personal_agent.board_scan_at",
+        &(sorted - chrono::Duration::seconds(10)).to_rfc3339(),
+    )
+    .await
+    .unwrap();
+    assert!(crate::db::service::work_task_service::cancel(&engine.db.conn, failed.id, None).await.unwrap());
+    host.board_tick().await;
+    let now = dispatch_state(&engine, d.id).await;
+    assert_eq!(super::stop::stopped_by_of(&now), Some(super::stop::StoppedBy::OwnerOnBoard));
+    let signals = crate::db::service::personal_agent_watch_service::signals_after(&engine.db.conn, 0, 1000).await.unwrap();
+    let canceled = signals
+        .iter()
+        .find(|s| s.kind == "task_status" && s.key.starts_with(&format!("task:{}:", failed.id)))
+        .expect("its event");
+    assert!(canceled.facts.contains("\"stopped_by\":\"owner_on_board\""), "{}", canceled.facts);
+}
+
+/// A question the executor asked as its work was stopped, handled only
+/// after the stop: no card, nothing woken — and the stopped work is not
+/// written back to waiting for input.
+#[tokio::test]
+async fn a_question_of_stopped_work_raises_no_card() {
+    let (engine, _tmp) = configured().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-late-q").await;
+    let (_rx, _st) = exec_conn(&engine, "c-late-q").await;
+    engine.open_round("c-late-q", id).await;
+    engine
+        .stop_one(id, super::stop::StoppedBy::Owner, Default::default())
+        .await
+        .unwrap();
+    let _reg = exec_asks(&engine, "c-late-q", vec![ask_spec("q1", "Approach", &["A", "B"])]).await;
+    assert!(ask_cards(&engine).await.is_empty(), "no card");
+    let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
+    assert!(events.iter().all(|e| e.kind != svc::ASK_EVENT), "nothing woken");
+    assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::Canceled);
 }

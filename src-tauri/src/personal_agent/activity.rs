@@ -39,7 +39,7 @@ pub struct Names {
 
 static OWN_TOOL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)(?:^|[\s_.:/-])(dispatch_followup|dispatch|bot_message|plan_create|plan_update)(?:$|[\s(:)])",
+        r"(?i)(?:^|[\s_.:/-])(dispatch_followup|dispatch_stop|dispatch|bot_message|plan_create|plan_update)(?:$|[\s(:)])",
     )
         .expect("valid regex")
 });
@@ -280,6 +280,11 @@ fn own_tool(
         }
         "dispatch_followup" => {
             line.kind = "followup".into();
+            line.dispatch_id = input.and_then(|i| i.get("dispatch_id")).and_then(as_i32);
+        }
+        // Stopping one of its own pieces of work: "stopping …".
+        "dispatch_stop" => {
+            line.kind = "stop".into();
             line.dispatch_id = input.and_then(|i| i.get("dispatch_id")).and_then(as_i32);
         }
         // Laying out or changing a plan (7.6): "drawing up a plan".
@@ -793,6 +798,17 @@ mod tests {
             &names,
         );
         assert_eq!((l.kind.as_str(), l.dispatch_id), ("followup", Some(7)));
+        let l = line_of(
+            &raw(
+                "other",
+                "mcp__codeg__dispatch_stop",
+                json!({ "dispatch_id": 7, "reason": "no longer needed" }),
+                None,
+                "completed",
+            ),
+            &names,
+        );
+        assert_eq!((l.kind.as_str(), l.dispatch_id), ("stop", Some(7)));
     }
 
     #[test]

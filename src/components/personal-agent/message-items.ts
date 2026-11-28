@@ -20,24 +20,42 @@
  *
  * The lines codeg writes for messages between assistants ("sent a message
  * to …", "message from …") sit in the middle, as a time line does; a run of
- * them is one line that opens to each. Those a turn wrote while it ran sit
- * where the turn wrote them: after the text it had written before sending
- * (kept and drawn there, though a reply's body is only its last text), and
- * before the reply's body — or after it, when the turn sent the message once
- * it had written its last word. A line that cannot say where (one written
- * before lines recorded it) comes right before the reply: the reply is the
- * conclusion. A question or permission request another assistant's brain
- * raised for something that began here (a mirror) is a card of its own.
+ * them is one line that opens to each. Those a turn wrote while it ran cut
+ * the turn into parts, where it wrote them (P6): every text the turn said,
+ * and the work it handed out, in the order it came — the part with its
+ * conclusion (its body) is its reply, each other part with something in it
+ * a bubble of its own (`said`). Work handed out
+ * makes way for its news once that came (the news draws its pill), but for
+ * the newest pill of work under way. Lines that cannot say where (written
+ * before lines recorded it) come first. A question or permission request
+ * another assistant's brain raised for something that began here (a mirror)
+ * is a card of its own. A run of one proposal rule's cards raised together
+ * (right after one another, of one look of the rule's) is one card.
  *
  * Pure, so it can be tested on rows alone.
  */
 
-import type { TimelineRow } from "@/lib/types"
+import type { ReplyText, TimelineRow } from "@/lib/types"
+
+import {
+  conclusionOf,
+  turnMarkOf,
+  turnTexts,
+  WHOLE_TURN,
+  type TurnPart,
+} from "./turn-texts"
+
+export { turnMarkOf, type TurnMark } from "./turn-texts"
 
 /** Rows a turn's bubble holds rather than drawing on their own. */
 const GROUPED_KINDS = new Set(["question", "permission", "dispatch"])
 /** A gap longer than this between two messages gets a time line. */
 export const TIME_GAP_MS = 5 * 60 * 1000
+/** A card written before cards said the look that raised them (`scan`):
+ *  how far after the first of a run of one rule's cards another may come
+ *  and still be of the run (`ruleOfRow`) — one look writes its cards at
+ *  once, and the rules look every minute. */
+export const RULE_RUN_MS = 30 * 1000
 
 /** The room above a message: close under the one before on its side
  *  (whoever spoke it), or after the other side — under the actions the last
@@ -74,9 +92,16 @@ export type MessageItem =
       attached: TimelineRow[]
       /** The owner messages the turn carried. */
       owners: TimelineRow[]
-      /** The ordinals of the turn's texts drawn before its lines (`said`
-       *  items): while it runs, its bubble does not draw them again. */
-      saidNs: number[]
+      /** The work it draws as pills: its part's, and what its turn handed
+       *  out at no recorded step — not work whose news draws it. */
+      pills: TimelineRow[]
+      /** Its part's pills before any made way, in the order they came
+       *  (`partEntries`). */
+      partPills: TimelineRow[]
+      /** Its part of the turn: the texts it draws. */
+      part: TurnPart
+      /** It draws the turn's quote: the first of the turn's parts drawn. */
+      quote: boolean
     })
   | (ItemBase & {
       kind: "event"
@@ -91,17 +116,34 @@ export type MessageItem =
        *  check and what the check found, and the card of a round its
        *  assistant accepted on a pass — `null` for none on the page. */
       acceptance: AcceptanceFold | null
+      /** The pills of its work that made way for it (`yieldedPills`): the
+       *  card draws them — what done looks like — instead. */
+      pills: TimelineRow[]
     })
   /** A native card codeg wrote itself (a proposal): on the assistants'
-   *  side, standing alone. */
-  | (ItemBase & { kind: "notice"; row: TimelineRow })
+   *  side, standing alone. `rules`: a run of one proposal rule's cards
+   *  raised together (`ruleOfRow`), drawn as one card — `row` is the first
+   *  of them; absent on any other card. */
+  | (ItemBase & { kind: "notice"; row: TimelineRow; rules?: TimelineRow[] })
   /** Messages between assistants, in the middle: `row` is the first of
    *  `rows`, a run of lines with nothing between them. */
   | (ItemBase & { kind: "exchange"; row: TimelineRow; rows: TimelineRow[] })
-  /** What a turn wrote before a message it sent (its line comes right
-   *  under it), on the assistant's side: `row` is the line, which keeps the
-   *  text — the turn's reply keeps only its last. */
-  | (ItemBase & { kind: "said"; row: TimelineRow; text: string })
+  /** A part of a turn that is not its reply's (P6): what it said and the
+   *  work it handed out between the lines it wrote, on the assistant's side.
+   *  `row` is the line next to it — the one after it, or for the turn's
+   *  last part the one before; `reply` the turn's reply. */
+  | (ItemBase & {
+      kind: "said"
+      row: TimelineRow
+      reply: TimelineRow
+      batchId: number
+      pills: TimelineRow[]
+      partPills: TimelineRow[]
+      part: TurnPart
+      /** Something to draw: a text, or a pill that has not made way. */
+      shown: boolean
+      quote: boolean
+    })
   /** Another assistant's question or permission request, shown where what
    *  it is for began. */
   | (ItemBase & { kind: "mirror"; row: TimelineRow })
@@ -118,6 +160,35 @@ export interface AcceptanceFold {
   /** Every row folded in — earlier rounds' too: a jump to any lands on
    *  the head. */
   rows: TimelineRow[]
+}
+
+/** The proposal rule a card one of codeg's rules raised is of (6.7);
+ *  `null` for any other row. */
+export function ruleOfRow(row: TimelineRow): string | null {
+  if (row.kind !== "notice" || row.data?.notice !== "rule") return null
+  const rule = row.data.rule
+  return typeof rule === "string" && rule !== "" ? rule : null
+}
+
+/** The rows a notice item draws: a run of rule cards' every one, or its
+ *  own. */
+export function noticeRowsOf(
+  item: Extract<MessageItem, { kind: "notice" }>
+): TimelineRow[] {
+  return item.rules ?? [item.row]
+}
+
+/** Whether rule card `row` is of the same run as `first`, its run's
+ *  first, raised `ms` before it: the same look of the rule's (`scan`), or
+ *  — neither saying one (written before cards did) — within
+ *  `RULE_RUN_MS`. */
+function sameRuleRun(first: TimelineRow, row: TimelineRow, ms: number) {
+  const scanOf = (r: TimelineRow) =>
+    typeof r.data?.scan === "string" ? r.data.scan : null
+  const a = scanOf(first)
+  const b = scanOf(row)
+  if (a != null || b != null) return a === b
+  return ms <= RULE_RUN_MS
 }
 
 function numIn(row: TimelineRow, key: string): number | null {
@@ -156,50 +227,26 @@ export function replyState(row: TimelineRow): string | null {
   return typeof s === "string" ? s : null
 }
 
-/** Where a line a turn wrote stands among the turn's steps, as the line
- *  records it (`data.turn`): the step the turn was on when it sent the
- *  message, and the text it had written last before — `null` for a line
- *  written outside a turn, or before lines recorded it. */
-export interface TurnMark {
-  n: number
-  said: { n: number; text: string } | null
-}
-
-export function turnMarkOf(row: TimelineRow): TurnMark | null {
-  const turn = row.data?.turn
-  if (!turn || typeof turn !== "object") return null
-  const t = turn as Record<string, unknown>
-  if (typeof t.n !== "number" || !Number.isFinite(t.n)) return null
-  const s =
-    t.said && typeof t.said === "object"
-      ? (t.said as Record<string, unknown>)
+/** A routine's run the owner started — the trial right after it was made,
+ *  or one they ran now (`data.routine.trigger`): they wait to see what it
+ *  finds, nothing new too. */
+export function ownerStartedRun(row: TimelineRow): boolean {
+  const routine = row.data?.routine
+  const trigger =
+    routine && typeof routine === "object"
+      ? (routine as { trigger?: unknown }).trigger
       : null
-  const said =
-    s &&
-    typeof s.n === "number" &&
-    Number.isFinite(s.n) &&
-    typeof s.text === "string" &&
-    s.text.trim() !== ""
-      ? { n: s.n, text: s.text }
-      : null
-  return { n: t.n, said }
-}
-
-/** The ordinal of a settled reply's body (its last text), or `null` — a
- *  turn still running, one that wrote no text, or a row that never
- *  recorded it. */
-function bodyOrdinal(row: TimelineRow): number | null {
-  if (replyState(row) === "running" || row.body.trim() === "") return null
-  const n = row.data?.last_text_n
-  return typeof n === "number" && Number.isFinite(n) ? n : null
+  return trigger === "trial" || trigger === "now"
 }
 
 /** A reply whose prompt never reached the agent — or a routine's that had
- *  nothing to say (`[[silent]]`, 6.9): as if it never was. */
+ *  nothing to say (`[[silent]]`, 6.9), on a run that came round by itself:
+ *  as if it never was. One the owner started shows, saying nothing was
+ *  new. */
 export function isDiscarded(row: TimelineRow): boolean {
   if (row.kind !== "reply") return false
   const state = replyState(row)
-  return state === "discarded" || state === "silent"
+  return state === "discarded" || (state === "silent" && !ownerStartedRun(row))
 }
 
 /** New to the owner, as the server counts it: a result card, a native card,
@@ -250,6 +297,8 @@ function quotableIds(item: MessageItem): number[] {
     case "exchange":
       return item.rows.map((r) => r.id)
     default:
+      // A run of rule cards is the first of them: a quote of another is
+      // shown as one, which of them saying.
       return [item.row.id]
   }
 }
@@ -264,7 +313,76 @@ function sameDay(a: number, b: number): boolean {
   )
 }
 
-export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
+/** A pill that can make way for its work's news: a plain one, or a
+ *  follow-up's that went out — not a check's or a pull request round's,
+ *  which say more than the news does, nor one that never went out. */
+function givesWay(r: TimelineRow): boolean {
+  return (
+    r.kind === "dispatch" &&
+    r.dispatch_id != null &&
+    !isMirror(r) &&
+    numIn(r, "check_for") == null &&
+    r.data?.pr_fix == null &&
+    r.data?.failed !== true
+  )
+}
+
+/**
+ * The pills that make way for their work's news (P6.3 5): a piece of work
+ * shows once, not as a pill and its news side by side. Each makes way for
+ * the latest news of its work that came after it and is drawn on its own
+ * (no check's, nothing folded into a work's head) — wherever either is;
+ * a follow-up's pill only for news after it. Work under way (`live`:
+ * queued or running) keeps its newest pill, which shows it moving and can
+ * stop it — it has news only once it ended, so news before it is an
+ * earlier round's.
+ *
+ * `pillsOf` maps a news row to the pills it draws; `yielded` holds them.
+ */
+function yieldedPills(
+  rows: readonly TimelineRow[],
+  foldedIds: ReadonlySet<number>,
+  live: ReadonlySet<number>
+): { pillsOf: Map<number, TimelineRow[]>; yielded: Set<number> } {
+  const kept = new Map<number, number>()
+  const latest = new Map<number, number>()
+  for (const r of rows) {
+    if (r.dispatch_id == null || foldedIds.has(r.id)) continue
+    if (givesWay(r) && live.has(r.dispatch_id)) {
+      const held = kept.get(r.dispatch_id)
+      if (held == null || held < r.id) kept.set(r.dispatch_id, r.id)
+    } else if (r.kind === "result" && numIn(r, "check_for") == null) {
+      const held = latest.get(r.dispatch_id)
+      if (held == null || held < r.id) latest.set(r.dispatch_id, r.id)
+    }
+  }
+  const pillsOf = new Map<number, TimelineRow[]>()
+  const yielded = new Set<number>()
+  for (const r of rows) {
+    if (!givesWay(r) || foldedIds.has(r.id)) continue
+    const work = r.dispatch_id!
+    if (kept.get(work) === r.id) continue
+    const news = latest.get(work)
+    if (news == null || news < r.id) continue
+    yielded.add(r.id)
+    const list = pillsOf.get(news) ?? []
+    list.push(r)
+    pillsOf.set(news, list)
+  }
+  return { pillsOf, yielded }
+}
+
+/** No work under way. */
+const NO_WORK: ReadonlySet<number> = new Set()
+
+/**
+ * The list's items. `liveWork`: the work queued or running now (by
+ * dispatch id) — its newest pill stays (`yieldedPills`).
+ */
+export function buildMessageItems(
+  rows: readonly TimelineRow[],
+  liveWork: ReadonlySet<number> = NO_WORK
+): MessageItem[] {
   // The head of each piece of work on the page: its latest news — not a
   // check's. What its acceptance wrote folds into it (A4); with no head
   // here (another page), it stands on its own.
@@ -318,6 +436,9 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
     if (!Array.isArray(covers)) continue
     for (const id of covers) if (typeof id === "number") covered.add(id)
   }
+  const { pillsOf, yielded } = yieldedPills(rows, foldedIds, liveWork)
+  const drawnPill = (r: TimelineRow) =>
+    r.kind === "dispatch" && !yielded.has(r.id)
   const items: MessageItem[] = []
   let prev: { at: number; item: MessageItem } | null = null
   const place = (item: Placed) => {
@@ -331,6 +452,28 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
     const before = items[items.length - 1]
     if (item.kind === "exchange" && !timed && before?.kind === "exchange") {
       before.rows.push(...item.rows)
+      prev = { at, item: before }
+      return
+    }
+    // A run of one rule's cards raised together (a scan that found many
+    // at once — the board's backlog on the first look) is one card: right
+    // after one another, no time line between them, of one look of the
+    // rule's (`sameRuleRun`: the next look's are a card of their own).
+    const rule = item.kind === "notice" ? ruleOfRow(item.row) : null
+    if (
+      item.kind === "notice" &&
+      rule != null &&
+      !timed &&
+      before?.kind === "notice" &&
+      ruleOfRow(before.row) === rule &&
+      sameRuleRun(
+        before.row,
+        item.row,
+        at - (Date.parse(before.row.created_at) || at)
+      )
+    ) {
+      before.rules ??= [before.row]
+      before.rules.push(item.row)
       prev = { at, item: before }
       return
     }
@@ -370,42 +513,127 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
     row: list[0],
     rows: [...list],
   })
-  /** A reply and the lines its turn wrote, each where it was written: after
-   *  the text the turn had written before sending (drawn there, once for a
-   *  run of lines it came before), and before the body — or after it, for a
-   *  message sent once the last text was written. */
+  /**
+   * A reply's turn, cut by the lines it wrote (P6.3 2): its texts, the work
+   * it handed out and its lines in the order they came — by step, a text
+   * before a line at its step, two lines at one step by which was written
+   * first. The part with the conclusion is the reply (the last while it
+   * runs, or when it wrote none); every other part with anything in it is
+   * a `said` item. The turn's quote goes on the first part drawn.
+   */
   const placeTurn = (
     item: Extract<Placed, { kind: "reply" }>,
     reply: TimelineRow,
-    lines: readonly TimelineRow[]
+    lines: readonly TimelineRow[],
+    pills: readonly TimelineRow[]
   ) => {
-    const body = bodyOrdinal(reply)
-    const after: TimelineRow[] = []
-    let shown: number | null = null
-    for (const line of lines) {
-      const mark = turnMarkOf(line)
-      if (body != null && mark != null && mark.n >= body) {
-        after.push(line)
-        continue
-      }
-      const said = mark?.said
-      if (said && said.n !== shown && said.n !== body) {
-        place({
+    const marked = [...lines, ...pills].filter((r) => turnMarkOf(r) != null)
+    const texts = turnTexts(reply, undefined, marked)
+    type Entry =
+      | { n: number; text: true; row: null }
+      | { n: number; text: false; row: TimelineRow }
+    const entries: Entry[] = [
+      ...texts.map((t): Entry => ({ n: t.n, text: true, row: null })),
+      ...marked.map(
+        (r): Entry => ({ n: turnMarkOf(r)!.n, text: false, row: r })
+      ),
+    ].sort(
+      (a, b) =>
+        a.n - b.n ||
+        (a.text === b.text ? 0 : a.text ? -1 : 1) ||
+        (a.row?.id ?? 0) - (b.row?.id ?? 0)
+    )
+    interface Part {
+      lo: number
+      hi: number
+      texts: number[]
+      pills: TimelineRow[]
+      /** The line right after it; `null` for the last part. */
+      next: TimelineRow | null
+      /** The line right before it. */
+      prev: TimelineRow | null
+    }
+    const parts: Part[] = []
+    let cur: Part = {
+      lo: -Infinity,
+      hi: Infinity,
+      texts: [],
+      pills: [],
+      next: null,
+      prev: null,
+    }
+    for (const e of entries) {
+      if (e.text) cur.texts.push(e.n)
+      else if (e.row.kind === "exchange") {
+        cur.hi = e.n
+        cur.next = e.row
+        parts.push(cur)
+        cur = {
+          lo: e.n,
+          hi: Infinity,
+          texts: [],
+          pills: [],
+          next: null,
+          prev: e.row,
+        }
+      } else cur.pills.push(e.row)
+    }
+    parts.push(cur)
+    const conclusion = conclusionOf(reply)
+    const found =
+      conclusion == null
+        ? -1
+        : parts.findIndex((p) => p.texts.includes(conclusion))
+    const replyAt = found >= 0 ? found : parts.length - 1
+    const unmarkedLines = lines.filter((r) => turnMarkOf(r) == null)
+    const unmarkedPills = pills.filter((r) => turnMarkOf(r) == null)
+    const turnItems: Extract<Placed, { kind: "reply" | "said" }>[] = []
+    const before = prev?.item ?? null
+    // Lines from before lines said where: first, as they always came
+    // before the reply (a turn's lines say where, or none do).
+    for (const line of unmarkedLines) place(exchange([line]))
+    parts.forEach((p, i) => {
+      const part: TurnPart = { lo: p.lo, hi: p.hi, lines: marked }
+      if (i === replyAt) {
+        item.part = part
+        const all = [...p.pills, ...unmarkedPills]
+        item.pills = all.filter(drawnPill)
+        item.partPills = all
+        place(item)
+        turnItems.push(item)
+      } else if (p.texts.length > 0 || p.pills.length > 0) {
+        // Kept while its pills make way, drawn empty: the lines round it
+        // stay apart, and what is open on them stays open.
+        const drawn = p.pills.filter(drawnPill)
+        const line = (p.next ?? p.prev)!
+        const said: Extract<Placed, { kind: "said" }> = {
           kind: "said",
-          key: `s${line.id}`,
+          key: p.next ? `s${p.next.id}` : `sa${line.id}`,
           gap: "side",
           tail: false,
           quotesPrevious: false,
           row: line,
-          text: said.text,
-        })
-        shown = said.n
-        item.saidNs.push(said.n)
+          reply,
+          batchId: reply.batch_id!,
+          pills: drawn,
+          partPills: p.pills,
+          part,
+          shown: p.texts.length > 0 || drawn.length > 0,
+          quote: false,
+        }
+        place(said)
+        turnItems.push(said)
       }
-      place(exchange([line]))
-    }
-    place(item)
-    for (const line of after) place(exchange([line]))
+      if (p.next) place(exchange([p.next]))
+    })
+    // The turn's quote, once: on its first part drawn — left out when what
+    // it quotes is right above the turn.
+    item.quote = false
+    const first = turnItems.find((t) => t.kind === "reply" || t.shown) ?? item
+    first.quote = true
+    const quoted = reply.reply_to
+    first.quotesPrevious =
+      quoted != null && before != null && quotableIds(before).includes(quoted)
   }
   for (const r of rows) {
     let item: Placed | null = null
@@ -452,6 +680,7 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
           r.dispatch_id != null && heads.get(r.dispatch_id) === r.id
             ? foldOf(folded.get(r.dispatch_id) ?? [])
             : null,
+        pills: pillsOf.get(r.id) ?? [],
       }
     } else if (r.kind === "notice") {
       item = {
@@ -464,7 +693,8 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
       }
     } else if (r.kind === "reply") {
       const b = r.batch_id
-      item = {
+      const attached = b != null ? (attachedByBatch.get(b) ?? []) : []
+      const reply: Extract<Placed, { kind: "reply" }> = {
         kind: "reply",
         key: `r${r.id}`,
         gap: "side",
@@ -473,16 +703,34 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
         row: r,
         anchor: r,
         batchId: b,
-        attached: b != null ? (attachedByBatch.get(b) ?? []) : [],
+        attached,
         owners: b != null ? (ownersByBatch.get(b) ?? []) : [],
-        saidNs: [],
+        pills: attached.filter(drawnPill),
+        partPills: attached.filter((a) => a.kind === "dispatch"),
+        part: WHOLE_TURN,
+        quote: true,
       }
+      if (b != null) {
+        placeTurn(
+          reply,
+          r,
+          exchangesByBatch.get(b) ?? [],
+          attached.filter((a) => a.kind === "dispatch")
+        )
+      } else {
+        place(reply)
+      }
+      continue
     } else if (GROUPED_KINDS.has(r.kind)) {
       const b = r.batch_id
       // Drawn in its turn's reply, or at its turn's first card.
       if (b != null && replyByBatch.has(b)) continue
       const group = b != null ? (attachedByBatch.get(b) ?? [r]) : [r]
       if (group[0].id !== r.id) continue
+      // Without the pills that made way: drawn at the first row left — as
+      // the same item still, so what is open in it stays open.
+      const left = group.filter((g) => g.kind !== "dispatch" || drawnPill(g))
+      if (left.length === 0) continue
       item = {
         kind: "reply",
         key: `r${r.id}`,
@@ -490,24 +738,17 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
         tail: false,
         quotesPrevious: false,
         row: null,
-        anchor: r,
+        anchor: left[0],
         batchId: b,
-        attached: group,
+        attached: left,
         owners: b != null ? (ownersByBatch.get(b) ?? []) : [],
-        saidNs: [],
+        pills: left.filter((g) => g.kind === "dispatch"),
+        partPills: group.filter((g) => g.kind === "dispatch"),
+        part: WHOLE_TURN,
+        quote: true,
       }
     }
-    if (!item) continue
-    // What the turn said to other assistants, where it said it.
-    const lines =
-      item.kind === "reply" && item.row != null && item.batchId != null
-        ? exchangesByBatch.get(item.batchId)
-        : undefined
-    if (item.kind === "reply" && item.row != null && lines?.length) {
-      placeTurn(item, item.row, lines)
-    } else {
-      place(item)
-    }
+    if (item) place(item)
   }
   items.forEach((item, i) => {
     if (item.kind === "time") return
@@ -556,22 +797,82 @@ function foldOf(list: readonly TimelineRow[]): AcceptanceFold | null {
   }
 }
 
+/** One thing a part of a turn draws, in the order it came: a run, or the
+ *  work handed out between two runs — by its first pill before any made
+ *  way, which keeps its "N more" open as pills move to another part or
+ *  make way. */
+export type PartEntry =
+  | { kind: "text"; run: ReplyText }
+  | { kind: "pills"; group: number; rows: TimelineRow[] }
+
+/**
+ * What a part draws, in step order (P6.3): its runs (`texts`) and its
+ * pills (`pills`, before any made way; those drawn, `drawn`) — a run
+ * before a pill at its step. A group whose pills all made way is left out.
+ */
+export function partEntries(
+  texts: readonly ReplyText[],
+  pills: readonly TimelineRow[],
+  drawn: readonly TimelineRow[]
+): PartEntry[] {
+  const shown = new Set(drawn.map((r) => r.id))
+  const order = [
+    ...texts.map((t) => ({ n: t.n, text: t, row: null })),
+    ...pills.map((r) => ({
+      n: turnMarkOf(r)?.n ?? Infinity,
+      text: null,
+      row: r,
+    })),
+  ].sort(
+    (a, b) =>
+      a.n - b.n ||
+      (a.text ? 0 : 1) - (b.text ? 0 : 1) ||
+      (a.row?.id ?? 0) - (b.row?.id ?? 0)
+  )
+  const out: PartEntry[] = []
+  let group: Extract<PartEntry, { kind: "pills" }> | null = null
+  for (const e of order) {
+    if (e.text) {
+      group = null
+      out.push({ kind: "text", run: e.text })
+      continue
+    }
+    if (!group) {
+      group = { kind: "pills", group: e.row!.id, rows: [] }
+      out.push(group)
+    }
+    if (shown.has(e.row!.id)) group.rows.push(e.row!)
+  }
+  return out.filter((e) => e.kind === "text" || e.rows.length > 0)
+}
+
 /** The row ids an item draws (a turn's cards included): what a jump can
  *  land on. */
 export function itemRowIds(item: MessageItem): number[] {
-  // A turn's text before a line is no row of its own: the line draws it.
-  if (item.kind === "time" || item.kind === "said") return []
+  if (item.kind === "time") return []
+  // A part of a turn: the work it draws (its text is the reply's).
+  if (item.kind === "said") return item.pills.map((r) => r.id)
   if (item.kind === "reply") {
+    // Its pills only — another part's are that part's, and a pill that made
+    // way is its news's.
     return [
-      item.anchor.id,
-      ...(item.row ? [item.row.id] : []),
-      ...item.attached.map((r) => r.id),
+      ...new Set([
+        item.anchor.id,
+        ...(item.row ? [item.row.id] : []),
+        ...item.attached.filter((r) => r.kind !== "dispatch").map((r) => r.id),
+        ...item.pills.map((r) => r.id),
+      ]),
     ]
   }
   if (item.kind === "exchange") return item.rows.map((r) => r.id)
-  // A work's head draws what its acceptance folded into it (A4).
-  if (item.kind === "event" && item.acceptance) {
-    return [item.row.id, ...item.acceptance.rows.map((r) => r.id)]
+  if (item.kind === "notice") return noticeRowsOf(item).map((r) => r.id)
+  if (item.kind === "event") {
+    return [
+      item.row.id,
+      // What its acceptance folded into it (A4), and the pills it draws.
+      ...(item.acceptance ? item.acceptance.rows.map((r) => r.id) : []),
+      ...item.pills.map((r) => r.id),
+    ]
   }
   return [item.row.id]
 }
@@ -612,23 +913,39 @@ export function listRowsOf(
 }
 
 /** Where the "new messages" line goes for row `rowId`: before the item that
- *  draws it — before the time line right above that item, if one is, so the
- *  time stays with its message. `-1` when no item draws it. */
+ *  draws it — for a reply, before its turn's first part or line (and a time
+ *  line between them; a run of lines the turn's are in, whole) — and before
+ *  the time line right above, if one is, so the time stays with its
+ *  message. `-1` when no item draws it. */
 export function newLineIndex(
   items: readonly MessageItem[],
   rowId: number
 ): number {
-  const i = items.findIndex((item) =>
+  let i = items.findIndex((item) =>
     item.kind === "time" || item.kind === "said"
       ? false
       : item.kind === "reply"
         ? item.anchor.id === rowId || item.row?.id === rowId
         : item.kind === "exchange"
           ? item.rows.some((r) => r.id === rowId)
-          : item.row.id === rowId ||
-            (item.kind === "event" &&
-              (item.acceptance?.rows.some((r) => r.id === rowId) ?? false))
+          : item.kind === "notice"
+            ? noticeRowsOf(item).some((r) => r.id === rowId)
+            : item.row.id === rowId ||
+              (item.kind === "event" &&
+                (item.acceptance?.rows.some((r) => r.id === rowId) ?? false))
   )
+  const found = items[i]
+  if (found?.kind === "reply" && found.row != null && found.batchId != null) {
+    const batch = found.batchId
+    const ofTurn = (item: MessageItem | undefined) =>
+      (item?.kind === "said" && item.batchId === batch) ||
+      (item?.kind === "exchange" && item.rows.some((r) => r.batch_id === batch))
+    while (i > 0) {
+      if (ofTurn(items[i - 1])) i--
+      else if (items[i - 1].kind === "time" && ofTurn(items[i - 2])) i--
+      else break
+    }
+  }
   if (i <= 0) return i
   return items[i - 1].kind === "time" ? i - 1 : i
 }

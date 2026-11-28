@@ -585,6 +585,9 @@ pub enum AcpEvent {
     },
     /// Whether the agent supports session/fork
     ForkSupported { supported: bool },
+    /// Whether the agent offers `_session/rewind` (the "edit and resend" of a
+    /// user message; see `crate::acp::rewind`).
+    RewindSupported { supported: bool },
     /// Current session mode changed
     ModeChanged { mode_id: String },
     /// The composer's pending mode pick for this connection changed (see
@@ -757,7 +760,9 @@ pub enum AcpEvent {
     },
     /// Claude Code's Remote Control turned on (`Some`) or off (`None`) for the
     /// session, read from claude-agent-acp's reply to a `/remote-control`
-    /// prompt (0.93.0; see `connection::remote_control_reply`).
+    /// prompt (0.93.0; see `connection::remote_control_reply`), or from its
+    /// notice when Remote Control started with the session (0.113.0; see
+    /// `connection::remote_control_notice`).
     ///
     /// Current state, not an event: `SessionState::apply_event` keeps it for
     /// the snapshot, and while it is on the idle sweeps leave the connection
@@ -2583,6 +2588,19 @@ pub struct RemoteControlInfo {
     /// Remote Control on without returning one.
     #[serde(default)]
     pub session_url: Option<String>,
+    /// Remote Control started with the session on its own, as Claude Code
+    /// asks for when `remoteControlAtStartup` is on — or when a rollout or the
+    /// policy default turns it on, which the user may never have chosen
+    /// (claude-agent-acp 0.113.0, #1523; see
+    /// `connection::remote_control_notice`). The session was not handed to
+    /// another client on purpose, so unlike one the user's own
+    /// `/remote-control` turned on, it does not keep the connection from the
+    /// idle sweeps or a move (`manager::teardown_blocker`): every Claude
+    /// session, delegations and assistants' background ones too, would
+    /// otherwise stay up for good. A `/remote-control` the user sends then
+    /// clears it. Omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub at_startup: bool,
 }
 
 /// Internal reply shape from the connection loop back to `manager.fork_session`

@@ -17,10 +17,16 @@ import {
   HardDrive,
   Loader2,
   Save,
+  ShieldCheck,
   ExternalLink,
 } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  AgentPanelCard,
+  AgentPanelGroup,
+  AgentPanelSaveBar,
+} from "@/components/settings/agent-panel-layout"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -43,10 +49,8 @@ import {
   acpAntigravitySignOut,
   acpReclaimLeakedTemp,
   acpScanLeakedTemp,
-  acpSyncAntigravitySettings,
   type AntigravityLoginOutcome,
   type AntigravityLoginStart,
-  type AntigravitySyncReport,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { copyTextToClipboard } from "@/lib/utils"
@@ -59,11 +63,11 @@ import {
 } from "@/components/ui/select"
 import type { AcpAgentInfo, LeakedTempScan } from "@/lib/types"
 
-/** codeg-side knob recording the chosen auth method. The agent reads NOTHING
- * from it — its auth intent comes from `auth.type` in
- * `<GEMINI_HOME>/antigravity-acp/settings.json` — so the launch path uses it
- * twice: to write that file, and to scrub the credential vars the other
- * methods use (`apply_antigravity_env_policy` in `acp/connection.rs`). */
+/**
+ * codeg 侧记录所选认证方式的开关。`agy acp` 不会读取它，启动路径用它决定：
+ * 1) 哪些凭据环境变量允许透传给子进程（`apply_antigravity_env_policy`）；
+ * 2) 是否在握手阶段发送非交互式 `authenticate`（`gemini-api-key` / `agent-platform`）。
+ */
 const AGY_AUTH_METHOD_ENV = "AGY_AUTH_METHOD"
 /** The Gemini Developer API key, read when `auth.type = gemini-api-key`. */
 const GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
@@ -73,6 +77,10 @@ const GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
 const GOOGLE_API_KEY_ENV = "GOOGLE_API_KEY"
 const GOOGLE_CLOUD_PROJECT_ENV = "GOOGLE_CLOUD_PROJECT"
 const GOOGLE_CLOUD_LOCATION_ENV = "GOOGLE_CLOUD_LOCATION"
+/** codeg 侧权限模式启动旋钮："1" 启动 `agy acp --dangerously-skip-permissions`
+ * （Turbo 模式，自动批准所有工具权限请求），"0" 或未设置则保持默认，由会话 mode
+ * 与权限规则决定。`agy` 本身不读取该环境变量，由后端启动路径转换为 CLI 参数。 */
+const AGY_DANGEROUSLY_SKIP_PERMISSIONS_ENV = "AGY_DANGEROUSLY_SKIP_PERMISSIONS"
 
 /** Every key this panel owns, so the settings page can fold the whole set into
  * the raw env draft (see `persistEnv`'s `draftEnvPatch`). */
@@ -82,13 +90,13 @@ export const ANTIGRAVITY_ENV_KEYS = [
   GOOGLE_API_KEY_ENV,
   GOOGLE_CLOUD_PROJECT_ENV,
   GOOGLE_CLOUD_LOCATION_ENV,
+  AGY_DANGEROUSLY_SKIP_PERMISSIONS_ENV,
 ] as const
 
 /**
- * The four `auth.type` values Antigravity's ACP server accepts, in the order it
- * advertises them at `initialize`. The pre-rebrand `vertex-ai` spelling is
- * still accepted by the server but never written by codeg — a second name for
- * one method would render as two buttons.
+ * The four auth method ids `agy acp` advertises at `initialize`, in its order.
+ * The pre-rebrand `vertex-ai` spelling is still accepted by the CLI but never
+ * written by codeg — a second name for one method would render as two buttons.
  */
 export type AntigravityAuthMethod =
   | "oauth-personal"
@@ -116,8 +124,22 @@ export function inferAntigravityMethod(
   return isAuthMethod(explicit) ? explicit : "oauth-personal"
 }
 
+export type AntigravityPermissionMode = "default" | "turbo"
+
+/** 读取下次启动将使用的权限模式（与后端 `antigravity_skip_permissions_enabled` 对齐）：
+ * 仅显式 `"1"` / `"true"` 启用 Turbo 模式，其余回退为默认询问模式。 */
+export function antigravityPermissionModeFromEnv(
+  env: Record<string, string>
+): AntigravityPermissionMode {
+  const value = (env[AGY_DANGEROUSLY_SKIP_PERMISSIONS_ENV] ?? "")
+    .trim()
+    .toLowerCase()
+  return value === "1" || value === "true" ? "turbo" : "default"
+}
+
 export interface AntigravityFormValues {
   method: AntigravityAuthMethod
+  permissionMode: AntigravityPermissionMode
   geminiApiKey: string
   googleApiKey: string
   gcpProject: string
@@ -131,14 +153,13 @@ export interface AntigravityFormValues {
  * other one is DELETED rather than left behind. That matters because the
  * method and the credential are not independent here — a `GEMINI_API_KEY` left
  * over from a previous choice would authenticate the user as something they
- * did not pick, and would contradict the `auth.type` the same launch writes to
- * `settings.json`. (The launch path scrubs them again for the same reason; this
- * is the half that keeps the stored row honest.)
+ * did not pick, and would contradict the method the panel shows. (The launch
+ * path scrubs them again for the same reason; this is the half that keeps the
+ * stored row honest.)
  *
  * `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` are kept for BOTH
- * `agent-platform` (which reads them from the environment) and `oauth-business`
- * (which reads project/location from `settings.json` only — the launch path
- * copies them into the `gcp` block from these same values).
+ * `agent-platform` and `oauth-business`, which both read them from the
+ * environment.
  *
  * Unrelated keys are preserved untouched.
  */
@@ -157,6 +178,10 @@ export function buildAntigravityEnv(
   }
 
   env[AGY_AUTH_METHOD_ENV] = values.method
+  // 与 Kiro 的 `KIRO_TRUST_ALL_TOOLS` / Cursor 的 `CURSOR_FORCE` 保持一致：
+  // 两种状态都显式写入（"1" / "0"），确保原始 env 草稿同步准确。
+  env[AGY_DANGEROUSLY_SKIP_PERMISSIONS_ENV] =
+    values.permissionMode === "turbo" ? "1" : "0"
   for (const key of [
     GEMINI_API_KEY_ENV,
     GOOGLE_API_KEY_ENV,
@@ -229,22 +254,18 @@ function usesBrowserSignIn(method: AntigravityAuthMethod): boolean {
   return method === "oauth-personal" || method === "oauth-business"
 }
 
-/** A sign-in that actually produced a link and is waiting to be completed. */
-type PendingLogin = Extract<AntigravityLoginStart, { alreadySignedIn: false }>
+/** A sign-in that produced a link and is waiting to be completed. */
+type PendingLogin = AntigravityLoginStart
 
 /**
  * Sign in to Antigravity from a machine that has no browser.
  *
- * Antigravity's OAuth flow is run by the AGENT: it binds a one-shot listener on
- * `127.0.0.1:<random port>`, opens a browser, and blocks for five minutes. On a
- * headless server that browser does not exist, and `webbrowser.open` returns
- * false without raising — so the first session simply hangs and then fails,
- * with no link anywhere the user could open themselves.
- *
- * This runs that same flow out of band and splits it in two: codeg shows the
- * link, the user consents in whatever browser they do have, and codeg — which
- * IS on the machine where that port is listening — performs the redirect their
- * browser could not. See `src-tauri/src/acp/antigravity_login.rs`.
+ * The Antigravity CLI's own `agy acp --login` is already the browser-free
+ * flow: it prints a Google consent link and waits on stdin for the
+ * authorization code (or the full address the browser lands on). This drives
+ * that child from the panel — show the link, let the user consent in whatever
+ * browser they do have, then write the pasted code back to the process. See
+ * `src-tauri/src/acp/antigravity_login.rs`.
  */
 function HeadlessSignIn({
   method,
@@ -278,11 +299,8 @@ function HeadlessSignIn({
   // Synced from `pending` by the layout effect below `currentMethod`.
   const pendingRef = useRef<PendingLogin | null>(null)
 
-  // The single owner of "this attempt is over". A pending sign-in belongs to
-  // the method it was started for, and behind the handle is an agent process
-  // holding a one-shot listener open. Switching methods — or closing the
-  // settings page — has to reach the backend, because just forgetting the
-  // handle leaves that child blocked for Antigravity's full five minutes.
+  // 唯一负责放弃未完成登录的 cleanup。每个待完成登录背后都有一个等待 stdin 输入的
+  // `agy acp --login` 子进程，切换认证方式或关闭设置页时必须通知后端终止该子进程。
   useEffect(() => {
     return () => {
       const abandoned = pendingRef.current
@@ -335,30 +353,12 @@ function HeadlessSignIn({
     try {
       const started = await acpAntigravityLoginStart(startedFor)
       if (!stillOurs(startedFor)) {
-        // The panel closed, or the user picked a different method, while the
-        // agent was starting up. The handle never reached state, so neither
-        // cleanup effect knows about it — cancel it here or its child sits on
-        // a loopback listener for the full five minutes. Showing it would be
-        // worse still: the link authenticates the OLD method while the form
-        // says the new one.
-        if (!started.alreadySignedIn) {
-          void acpAntigravityLoginCancel(started.handle).catch(() => {})
-        }
+        // 面板已关闭或用户切换到其他认证方式时，立即通知后端终止刚启动的
+        // `agy acp --login` 子进程，避免遗留后台进程或展示旧认证方式的链接。
+        void acpAntigravityLoginCancel(started.handle).catch(() => {})
         return
       }
-      if (started.alreadySignedIn) {
-        // The agent still had a usable token and authenticated on the spot, so
-        // this doubles as a "am I signed in?" check. Reporting it beats letting
-        // the user wait out a link that is never coming.
-        setOutcome({
-          signedIn: true,
-          message: t("antigravity.headless.alreadySignedIn"),
-          retryable: false,
-          credentialPath: null,
-        })
-      } else {
-        setPending(started)
-      }
+      setPending(started)
     } catch (e) {
       if (!stillOurs(startedFor)) return
       // NOT `e instanceof Error`: the web transport throws the backend's
@@ -390,11 +390,11 @@ function HeadlessSignIn({
         toast.success(t("antigravity.headless.signedIn"))
       }
       if (!result.retryable) {
-        // The redirect went out, and the agent's listener answers exactly one
-        // request — so the link on screen is spent whether or not the sign-in
-        // worked. Leaving the paste box would invite a second attempt that
-        // could only fail. `retryable` marks the one case where it is still
-        // live: codeg rejected the paste before sending anything.
+        // The code went out, and `agy acp --login` consumes it and exits — so
+        // the link on screen is spent whether or not the sign-in worked.
+        // Leaving the paste box would invite a second attempt that could only
+        // fail. `retryable` marks the one case where it is still live: codeg
+        // rejected the paste before sending anything.
         pendingRef.current = null
         setPending(null)
         setRedirect("")
@@ -409,7 +409,6 @@ function HeadlessSignIn({
         // works, or the backend answers "no sign-in is waiting" in plain
         // words. Clearing it would strand a still-live attempt.
         retryable: true,
-        credentialPath: null,
       })
     } finally {
       if (mountedRef.current) setBusy(false)
@@ -439,12 +438,10 @@ function HeadlessSignIn({
   }, [pending])
 
   return (
-    <div className="space-y-2 rounded-md border border-dashed p-2.5">
+    <div className="space-y-2 border-t pt-3">
       <div>
-        <p className="text-2xs font-medium">
-          {t("antigravity.headless.title")}
-        </p>
-        <p className="mt-0.5 text-3xs text-muted-foreground">
+        <p className="text-xs font-medium">{t("antigravity.headless.title")}</p>
+        <p className="mt-0.5 text-2xs text-muted-foreground">
           {t("antigravity.headless.description")}
         </p>
       </div>
@@ -452,7 +449,7 @@ function HeadlessSignIn({
       {pending ? (
         <div className="space-y-2">
           <div className="space-y-1">
-            <p className="text-3xs text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("antigravity.headless.step1")}
             </p>
             <div className="flex items-start gap-1.5">
@@ -494,7 +491,7 @@ function HeadlessSignIn({
           </div>
 
           <div className="space-y-1">
-            <p className="text-3xs text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("antigravity.headless.step2", {
                 redirectUri: pending.redirectUri,
               })}
@@ -540,7 +537,7 @@ function HeadlessSignIn({
       ) : (
         <div className="space-y-1.5">
           {needsSave ? (
-            <p className="text-3xs text-amber-600 dark:text-amber-400">
+            <p className="text-2xs text-amber-600 dark:text-amber-400">
               {t("antigravity.headless.saveFirst")}
             </p>
           ) : null}
@@ -580,18 +577,6 @@ function HeadlessSignIn({
           {outcome.message ? (
             <p className="text-3xs text-muted-foreground">{outcome.message}</p>
           ) : null}
-          {/* The credential is a portable file, so a user with several headless
-              machines can sign in once here and copy it to the rest. */}
-          {outcome.signedIn && outcome.credentialPath ? (
-            <>
-              <p className="text-3xs text-muted-foreground">
-                {t("antigravity.headless.credentialHint")}
-              </p>
-              <code className="block overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-3xs whitespace-nowrap text-muted-foreground">
-                {outcome.credentialPath}
-              </code>
-            </>
-          ) : null}
         </div>
       ) : null}
     </div>
@@ -601,27 +586,16 @@ function HeadlessSignIn({
 /**
  * Discard the account Antigravity is signed in as.
  *
- * The other half of signing in, and not an optional one. Antigravity refreshes
- * its cached token by itself, so once a credential exists `authenticate` returns
- * without opening anything and the sign-in above can only report "already signed
- * in" — the first Google account a user picks is the last one they get. Nothing
- * they can reach from outside fixes it either: the credential is a login-keychain
- * item on macOS and a file under `GEMINI_HOME` elsewhere, so it survives
- * uninstalling the Antigravity CLI and reinstalling codeg.
+ * The other half of signing in. Antigravity refreshes its cached credential by
+ * itself, so once one exists every session silently reuses that account.
+ * Nothing the user can reach from outside codeg fixes it either: the CLI keeps
+ * it in the system keyring (or its file fallback), which survives
+ * reinstalling codeg. The backend drives the CLI's own ACP `logout`.
  *
  * Only for the two OAuth methods. The API-key methods read their credential from
- * the environment on every request, so there is nothing stored to discard — and
- * the agent's `logout` would clear the saved `auth.type` for no gain.
+ * the environment on every request, so there is nothing stored to discard.
  */
-function SignOut({
-  disabled,
-  onSignedOut,
-}: {
-  disabled: boolean
-  /** Hands back the settings.json report the sign-out produced, so the panel
-   *  can raise its standing notice when that file could not be rewritten. */
-  onSignedOut: (report: AntigravitySyncReport) => void
-}) {
+function SignOut({ disabled }: { disabled: boolean }) {
   const t = useTranslations("AcpAgentSettings")
   const [busy, setBusy] = useState(false)
   const mountedRef = useRef(true)
@@ -635,14 +609,9 @@ function SignOut({
   const signOut = useCallback(async () => {
     setBusy(true)
     try {
-      const report = await acpAntigravitySignOut()
+      await acpAntigravitySignOut()
       if (!mountedRef.current) return
-      onSignedOut(report)
-      if (report.status === "skipped") {
-        toast.warning(t("toasts.antigravitySyncSkipped"))
-      } else {
-        toast.success(t("antigravity.signOut.done"))
-      }
+      toast.success(t("antigravity.signOut.done"))
     } catch (e) {
       // NOT `String(e)`: the web transport throws the backend's `{code,
       // message}` JSON verbatim, and this is the deployment where the
@@ -651,13 +620,13 @@ function SignOut({
     } finally {
       if (mountedRef.current) setBusy(false)
     }
-  }, [onSignedOut, t])
+  }, [t])
 
   return (
-    <div className="flex items-start justify-between gap-2 rounded-md border border-dashed p-2.5">
+    <div className="flex items-start justify-between gap-2 border-t pt-3">
       <div className="min-w-0">
-        <p className="text-2xs font-medium">{t("antigravity.signOut.title")}</p>
-        <p className="mt-0.5 text-3xs text-muted-foreground">
+        <p className="text-xs font-medium">{t("antigravity.signOut.title")}</p>
+        <p className="mt-0.5 text-2xs text-muted-foreground">
           {t("antigravity.signOut.description")}
         </p>
       </div>
@@ -677,20 +646,14 @@ function SignOut({
 }
 
 /**
- * Dedicated settings panel for Google Antigravity (`agy_acp_server`).
+ * Google Antigravity (`agy acp`) 的专用配置面板。
  *
- * This panel is load-bearing, not cosmetic. Antigravity's `session/new` fails
- * outright with `Authentication required` unless
- * `<GEMINI_HOME>/antigravity-acp/settings.json` declares an `auth.type`
- * (upstream removed environment-based auth selection), and codeg does not
- * implement the ACP `authenticate` request that would otherwise set it. The
- * choice made here is what the launch path writes to that file — so without it
- * the agent cannot start a single session.
+ * 登录凭据由 Antigravity CLI 自身管理（系统钥匙串或文件回退）；此面板负责选择
+ * 认证方式、过滤/透传对应的环境变量（`GEMINI_API_KEY` / `GOOGLE_*`），并驱动
+ * `agy acp --login` 与 ACP `logout`。
  *
- * Model and session mode are deliberately absent: the server reports both as
- * standard ACP config options, so the composer's own selectors own them per
- * session. A second copy here would only create two places to disagree about
- * what a session runs on.
+ * 模型与会话模式不放在此处：`agy acp` 通过标准 ACP `configOptions` 上报，
+ * 由输入框选择器按会话独立管理。
  */
 /** Human-readable byte count. Binary units — these are disk sizes. */
 function formatBytes(bytes: number): string {
@@ -785,17 +748,11 @@ function LeakedTempSection() {
         : false
 
   return (
-    <div className="space-y-1.5 rounded-md border bg-background/60 p-2.5">
-      <div className="flex items-center gap-1.5">
-        <HardDrive className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-xs font-medium">
-          {t("antigravity.tempReclaimTitle")}
-        </span>
-      </div>
-      <p className="text-3xs text-muted-foreground">
-        {t("antigravity.tempReclaimHint")}
-      </p>
-
+    <AgentPanelCard
+      icon={HardDrive}
+      title={t("antigravity.tempReclaimTitle")}
+      description={t("antigravity.tempReclaimHint")}
+    >
       {scan ? (
         <div className="space-y-1">
           <p className="text-2xs">
@@ -807,7 +764,7 @@ function LeakedTempSection() {
                 })}
           </p>
           {scan.skipped > 0 ? (
-            <p className="text-3xs text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("antigravity.tempReclaimSkipped", { count: scan.skipped })}
             </p>
           ) : null}
@@ -933,7 +890,7 @@ function LeakedTempSection() {
           </AlertDialog>
         ) : null}
       </div>
-    </div>
+    </AgentPanelCard>
   )
 }
 
@@ -953,6 +910,10 @@ export function AntigravityConfigPanel({
   const [method, setMethod] = useState<AntigravityAuthMethod>(() =>
     inferAntigravityMethod(agent.env)
   )
+  const [permissionMode, setPermissionMode] =
+    useState<AntigravityPermissionMode>(() =>
+      antigravityPermissionModeFromEnv(agent.env)
+    )
   const [geminiApiKey, setGeminiApiKey] = useState(
     () => agent.env[GEMINI_API_KEY_ENV] ?? ""
   )
@@ -967,11 +928,6 @@ export function AntigravityConfigPanel({
   )
   const [showKey, setShowKey] = useState(false)
   const [savingForm, setSavingForm] = useState(false)
-  /** The last save whose settings.json write was REFUSED, or null. Held rather
-   *  than left to the toast: this is a standing disagreement between the form
-   *  and the file the agent reads, and it stays true until someone edits that
-   *  file — a notice that scrolls away after four seconds would not say so. */
-  const [syncSkip, setSyncSkip] = useState<AntigravitySyncReport | null>(null)
 
   const mountedRef = useRef(true)
   useEffect(() => {
@@ -991,6 +947,7 @@ export function AntigravityConfigPanel({
   const persisted = useMemo(
     () => ({
       method: inferAntigravityMethod(agent.env),
+      permissionMode: antigravityPermissionModeFromEnv(agent.env),
       geminiApiKey: agent.env[GEMINI_API_KEY_ENV] ?? "",
       googleApiKey: agent.env[GOOGLE_API_KEY_ENV] ?? "",
       gcpProject: agent.env[GOOGLE_CLOUD_PROJECT_ENV] ?? "",
@@ -1004,6 +961,7 @@ export function AntigravityConfigPanel({
     const previous = seeded.current
     const changed =
       previous.method !== persisted.method ||
+      previous.permissionMode !== persisted.permissionMode ||
       previous.geminiApiKey !== persisted.geminiApiKey ||
       previous.googleApiKey !== persisted.googleApiKey ||
       previous.gcpProject !== persisted.gcpProject ||
@@ -1012,6 +970,7 @@ export function AntigravityConfigPanel({
     seeded.current = persisted
     if (dirty.current) return
     setMethod(persisted.method)
+    setPermissionMode(persisted.permissionMode)
     setGeminiApiKey(persisted.geminiApiKey)
     setGoogleApiKey(persisted.googleApiKey)
     setGcpProject(persisted.gcpProject)
@@ -1020,6 +979,7 @@ export function AntigravityConfigPanel({
 
   const values: AntigravityFormValues = {
     method,
+    permissionMode,
     geminiApiKey,
     googleApiKey,
     gcpProject,
@@ -1031,20 +991,8 @@ export function AntigravityConfigPanel({
   })
 
   const incomplete = antigravityIncompleteReason(values)
-  // The sign-in runs against the STORED row, not this form: the backend builds
-  // the agent's environment from the database, so a project typed but not saved
-  // is a project the sign-in will not see. Gating on the draft would let a user
-  // spend a whole Google consent round trip and only then fail license
-  // resolution — the exact friction this section exists to remove.
-  //
-  // The METHOD counts as one of those values, and it is the sharper half. An
-  // unsaved switch to `oauth-personal` needs no credential, so the field check
-  // alone passes it: the sign-in then genuinely succeeds and the panel says
-  // "new sessions will use this account" — while the next launch reads the OLD
-  // method from the database and rewrites `auth.type` back to it
-  // (`sync_antigravity_settings_file`), scrubbing this method's credentials on
-  // the way. The user is returned to the five-minute failure they came here to
-  // escape, having been told they were signed in.
+  // 登录启动时后端使用的是已持久化的数据库配置，而非当前表单草稿；
+  // 如果认证方式或必填项尚未保存，先提示用户保存再开始登录。
   const persistedIncomplete =
     method !== persisted.method
       ? "unsavedMethod"
@@ -1060,31 +1008,9 @@ export function AntigravityConfigPanel({
       // anything changed since is NEWER than what was stored.
       if (valuesRef.current === submitted) dirty.current = false
 
-      // Storing the row is only half of a save. What actually authenticates
-      // Antigravity is `auth.type` in the server's settings.json, and that file
-      // is the user's — it can legitimately be Hjson with comments, or hold an
-      // `auth` key of a shape codeg refuses to overwrite — in which case the
-      // launch leaves it alone and only writes a log line. Saying "saved"
-      // regardless was claiming something that had not happened, and the
-      // consequence lands later and elsewhere: switching methods scrubs the
-      // credentials for the NEW method while the server still reads the OLD
-      // auth.type, so the next session fails with no credential for the method
-      // it believes it is using. Ask, and say so while the user is still here.
-      let report: AntigravitySyncReport | null = null
-      try {
-        report = await acpSyncAntigravitySettings()
-      } catch {
-        // The sync is a report, not the save. A transport failure leaves the
-        // row stored and the launch-time sync still to come, so it must not
-        // turn a successful save into a failed one.
-      }
-      if (mountedRef.current)
-        setSyncSkip(report?.status === "skipped" ? report : null)
-      if (report?.status === "skipped") {
-        toast.warning(t("toasts.antigravitySyncSkipped"))
-      } else {
-        toast.success(t("toasts.antigravitySaved"))
-      }
+      // Storing the row is the whole save: `agy acp` owns its credential and
+      // reads no codeg-managed settings file.
+      toast.success(t("toasts.antigravitySaved"))
       onSaved()
     } catch (e) {
       toast.error(
@@ -1095,29 +1021,17 @@ export function AntigravityConfigPanel({
     }
   }, [agent.enabled, agent.env, onSaveEnv, onSaved, t])
 
-  // A sign-out clears `auth.type` on its way out and the backend writes the
-  // saved method straight back, so its report lands in the same standing notice
-  // a save's does — and matters more here: if that write was refused the file
-  // now names no method at all, and every session fails until someone edits it.
-  const onSignedOut = useCallback((report: AntigravitySyncReport) => {
-    setSyncSkip(report.status === "skipped" ? report : null)
-  }, [])
-
   const busy = saving || savingForm
   const markDirty = () => {
     dirty.current = true
   }
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-      <div>
-        <label className="text-xs font-medium">{t("configManagement")}</label>
-        <p className="mt-1 text-2xs text-muted-foreground">
-          {t("antigravity.configDescription")}
-        </p>
-      </div>
-
-      <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
+    <AgentPanelGroup
+      title={t("configManagement")}
+      description={t("antigravity.configDescription")}
+    >
+      <AgentPanelCard>
         <div className="space-y-1">
           <label
             className="text-2xs text-muted-foreground"
@@ -1144,7 +1058,7 @@ export function AntigravityConfigPanel({
               ))}
             </SelectContent>
           </Select>
-          <p className="text-3xs text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             {t(`antigravity.methodHints.${method}`)}
           </p>
         </div>
@@ -1226,7 +1140,7 @@ export function AntigravityConfigPanel({
                 )}
               </Button>
             </div>
-            <p className="text-3xs text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("antigravity.googleApiKeyHint")}
             </p>
           </div>
@@ -1280,13 +1194,15 @@ export function AntigravityConfigPanel({
           </p>
         ) : null}
 
-        {/* Only for the browser-driven methods, and only once the form can
-            actually produce a working session — Gemini Enterprise resolves a
-            license against gcp.project/location during sign-in, so starting one
-            without them just burns an attempt. `disabled` rather than hidden:
-            the section explains the headless problem, which is exactly what a
-            user who cannot complete the flow needs to read. */}
-        {usesBrowserSignIn(method) ? (
+        {/* Only for personal Google sign-in: `agy acp --login`, which this
+            drives, signs a personal account in and nothing else, so for Gemini
+            Enterprise it would report a success that leaves the Enterprise
+            method unauthenticated (the CLI signs Enterprise in at session
+            start instead — see its method hint). `disabled` rather than hidden
+            while the stored row is not saved yet: the section explains the
+            headless problem, which is exactly what a user who cannot complete
+            the flow needs to read. */}
+        {method === "oauth-personal" ? (
           <HeadlessSignIn
             disabled={busy || persistedIncomplete !== null}
             method={method}
@@ -1298,33 +1214,11 @@ export function AntigravityConfigPanel({
             discarding a credential needs no project, no location and no key,
             and a user whose stored row is half-filled is exactly the one who
             may need to get out of the account it belongs to. */}
-        {usesBrowserSignIn(method) ? (
-          <SignOut disabled={busy} onSignedOut={onSignedOut} />
-        ) : null}
-
-        {/* The save landed in the database but not in the file the server
-            reads, so the choice above is NOT what the next session will
-            authenticate with. Names the file and the reason, because the fix
-            is to edit that file by hand — codeg will not touch it again. */}
-        {syncSkip ? (
-          <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/5 p-2">
-            <p className="text-2xs text-amber-600 dark:text-amber-400">
-              {t("antigravity.syncSkipped")}
-            </p>
-            {syncSkip.reason ? (
-              <p className="text-3xs text-muted-foreground">
-                {syncSkip.reason}
-              </p>
-            ) : null}
-            <code className="block overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-3xs whitespace-nowrap text-muted-foreground">
-              {syncSkip.path}
-            </code>
-          </div>
-        ) : null}
+        {usesBrowserSignIn(method) ? <SignOut disabled={busy} /> : null}
 
         {agent.config_file_path ? (
           <div className="space-y-1">
-            <p className="text-3xs text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("antigravity.settingsFileHint")}
             </p>
             <code className="block overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-3xs whitespace-nowrap text-muted-foreground">
@@ -1332,26 +1226,71 @@ export function AntigravityConfigPanel({
             </code>
           </div>
         ) : null}
+      </AgentPanelCard>
 
-        <LeakedTempSection />
+      <LeakedTempSection />
 
-        <div className="flex justify-end">
-          <Button
-            className="h-7 gap-1.5 px-2.5 text-xs"
-            disabled={busy}
-            onClick={() => void save()}
-            size="sm"
-            type="button"
+      {/* 权限模式（Turbo 开关）：映射为 `agy acp --dangerously-skip-permissions` */}
+      <AgentPanelCard
+        icon={ShieldCheck}
+        title={t("antigravity.permissionsTitle")}
+      >
+        <div className="space-y-1">
+          <label
+            className="text-2xs text-muted-foreground"
+            htmlFor="antigravity-permission-mode"
           >
-            {busy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Save className="h-3.5 w-3.5" />
-            )}
-            {t("antigravity.save")}
-          </Button>
+            {t("antigravity.permissionModeLabel")}
+          </label>
+          <Select
+            disabled={busy}
+            onValueChange={(value) => {
+              if (value !== "default" && value !== "turbo") return
+              markDirty()
+              setPermissionMode(value)
+            }}
+            value={permissionMode}
+          >
+            <SelectTrigger
+              aria-label={t("antigravity.permissionModeLabel")}
+              className="h-7 text-xs"
+              id="antigravity-permission-mode"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start">
+              <SelectItem value="default">
+                {t("antigravity.permissionModeDefault")}
+              </SelectItem>
+              <SelectItem value="turbo">
+                {t("antigravity.permissionModeTurbo")}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-2xs text-muted-foreground">
+            {permissionMode === "turbo"
+              ? t("antigravity.permissionModeTurboHint")
+              : t("antigravity.permissionModeDefaultHint")}
+          </p>
         </div>
-      </div>
-    </div>
+      </AgentPanelCard>
+
+      <AgentPanelSaveBar>
+        <Button
+          className="h-7 gap-1.5 px-2.5 text-xs"
+          disabled={busy}
+          onClick={() => void save()}
+          size="sm"
+          type="button"
+        >
+          {busy ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Save className="h-3.5 w-3.5" />
+          )}
+          {t("antigravity.save")}
+        </Button>
+      </AgentPanelSaveBar>
+    </AgentPanelGroup>
   )
 }

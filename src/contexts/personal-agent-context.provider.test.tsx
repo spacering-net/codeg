@@ -22,6 +22,7 @@ vi.mock("@/lib/api", () => api)
 
 const bus = vi.hoisted(() => ({
   handler: null as ((change: PersonalAgentChange) => void) | null,
+  reconnect: null as (() => void) | null,
 }))
 vi.mock("@/lib/platform", () => ({
   // The assistants' news here; the board's (`task://changed`) apart.
@@ -34,7 +35,12 @@ vi.mock("@/lib/platform", () => ({
       }
     }
   ),
-  onTransportReconnect: vi.fn(() => () => {}),
+  onTransportReconnect: vi.fn((fn: () => void) => {
+    bus.reconnect = fn
+    return () => {
+      bus.reconnect = null
+    }
+  }),
 }))
 
 import {
@@ -695,5 +701,255 @@ describe("ViewedPersonalAgentProvider", () => {
     expect(seen.switching).toBe(false)
     expect(seen.page!.botId).toBe(12)
     expect(seen.page!.snapshot?.agent?.name).toBe("bot 12")
+  })
+})
+
+describe("PersonalAgentProvider, a reply in flight (P6)", () => {
+  const T = "2026-11-25T10:00:00Z"
+  const running = row(40, "reply", T, { data: { state: "running" } })
+  const live = (ver: number, texts: string[]) => ({
+    current: null,
+    texts: texts.map((text, i) => ({ n: i * 2 + 1, text })),
+    ver,
+  })
+
+  it("keeps the newest copy, whichever way it came, and none once settled", async () => {
+    let late: ((s: PersonalAgentSnapshot) => void) | null = null
+    api.personalAgentGet.mockResolvedValueOnce(snapshot("here"))
+    api.personalAgentTimeline.mockResolvedValue(page([running]))
+    render(
+      <PersonalAgentProvider>
+        <Probe onValue={keep} />
+      </PersonalAgentProvider>
+    )
+    await act(flush)
+    await act(async () => {
+      bus.handler?.({ kind: "reply", row_id: 40, ...live(7, ["A", "B"]) })
+      await flush()
+    })
+    expect(ctx?.liveReplies.get(40)?.ver).toBe(7)
+    // A snapshot read before that push, back after it: not taken.
+    api.personalAgentGet.mockImplementationOnce(
+      () =>
+        new Promise<PersonalAgentSnapshot>((resolve) => {
+          late = resolve
+        })
+    )
+    await act(async () => {
+      bus.handler?.({ kind: "status" })
+      vi.advanceTimersByTime(200)
+      await flush()
+    })
+    await act(async () => {
+      late?.({
+        ...snapshot("here"),
+        status: {
+          ...snapshot("here").status,
+          live_reply: { row_id: 40, ...live(5, ["A"]) },
+        },
+      } as unknown as PersonalAgentSnapshot)
+      await flush()
+    })
+    expect(ctx?.liveReplies.get(40)?.texts.map((t) => t.text)).toEqual([
+      "A",
+      "B",
+    ])
+    // The same copy again: nothing new.
+    const held = ctx?.liveReplies
+    await act(async () => {
+      bus.handler?.({ kind: "reply", row_id: 40, ...live(7, ["A", "B"]) })
+      await flush()
+    })
+    expect(ctx?.liveReplies).toBe(held)
+    // Settled: a push that comes late is not taken.
+    await act(async () => {
+      bus.handler?.({
+        kind: "timeline",
+        rows: [{ ...running, body: "B", data: { state: "done" } }],
+      })
+      await flush()
+    })
+    await act(async () => {
+      bus.handler?.({ kind: "reply", row_id: 40, ...live(9, ["A", "B", "C"]) })
+      await flush()
+    })
+    expect(ctx?.liveReplies.get(40)?.ver).toBe(7)
+  })
+})
+
+describe("PersonalAgentProvider, back from a lost connection (P6)", () => {
+  it("draws a reply's copy pushed while it reads with the rows it read", async () => {
+    const T = "2026-11-25T10:00:00Z"
+    const reply = row(40, "reply", T, { data: { state: "running" } })
+    api.personalAgentGet.mockResolvedValue(snapshot("here"))
+    api.personalAgentTimeline.mockResolvedValueOnce(page([reply]))
+    api.personalAgentDispatches.mockResolvedValue([])
+    render(
+      <PersonalAgentProvider>
+        <Probe onValue={keep} />
+      </PersonalAgentProvider>
+    )
+    await act(flush)
+    // Back: the rows read meanwhile (the line the reply wrote) come late.
+    let rows: ((p: TimelinePage) => void) | null = null
+    api.personalAgentTimeline.mockImplementationOnce(
+      () =>
+        new Promise<TimelinePage>((resolve) => {
+          rows = resolve
+        })
+    )
+    const line = row(41, "exchange", T, { batch_id: 3 })
+    await act(async () => {
+      bus.reconnect?.()
+      await flush()
+    })
+    // What it wrote after that line is pushed before the line is read.
+    await act(async () => {
+      bus.handler?.({
+        kind: "reply",
+        row_id: 40,
+        current: null,
+        texts: [
+          { n: 1, text: "A" },
+          { n: 3, text: "B" },
+        ],
+        ver: 8,
+      })
+      await flush()
+    })
+    expect(ctx?.liveReplies.has(40)).toBe(false)
+    // Drawn with the rows.
+    await act(async () => {
+      rows?.(page([reply, line]))
+      await flush()
+    })
+    expect(ctx?.rows.some((r) => r.id === 41)).toBe(true)
+    expect(ctx?.liveReplies.get(40)?.ver).toBe(8)
+  })
+})
+
+describe("PersonalAgentProvider, two recoveries at once (P6)", () => {
+  it("draws the latest one's reads, and what was pushed meanwhile, once", async () => {
+    const T1 = "2026-11-25T10:00:01Z"
+    const T2 = "2026-11-25T10:00:02Z"
+    const T3 = "2026-11-25T10:00:03Z"
+    api.personalAgentGet.mockResolvedValue(snapshot("here"))
+    api.personalAgentTimeline.mockResolvedValueOnce(page([row(1, "owner", T1)]))
+    api.personalAgentDispatches.mockResolvedValue([])
+    render(
+      <PersonalAgentProvider>
+        <Probe onValue={keep} />
+      </PersonalAgentProvider>
+    )
+    await act(flush)
+    let first: ((p: TimelinePage) => void) | null = null
+    api.personalAgentTimeline.mockImplementationOnce(
+      () =>
+        new Promise<TimelinePage>((resolve) => {
+          first = resolve
+        })
+    )
+    await act(async () => {
+      bus.reconnect?.()
+      await flush()
+    })
+    // A row broadcast while it reads waits for it.
+    await act(async () => {
+      bus.handler?.({ kind: "timeline", rows: [row(2, "owner", T2)] })
+      await flush()
+    })
+    expect(ctx?.rows.map((r) => r.id)).toEqual([1])
+    // A second recovery, back first: it draws its reads and what waited.
+    api.personalAgentTimeline.mockResolvedValueOnce(
+      page([row(1, "owner", T1), row(3, "owner", T3)])
+    )
+    await act(async () => {
+      bus.reconnect?.()
+      await flush()
+    })
+    expect(ctx?.rows.map((r) => r.id)).toEqual([1, 2, 3])
+    // The first one's late page draws nothing more, and holds nothing.
+    await act(async () => {
+      first?.(page([row(1, "owner", T1)]))
+      await flush()
+    })
+    await act(async () => {
+      bus.handler?.({ kind: "timeline", rows: [row(4, "owner", T3)] })
+      await flush()
+    })
+    expect(ctx?.rows.map((r) => r.id)).toEqual([1, 2, 3, 4])
+  })
+
+  it("holds nothing back past a while when a read hangs", async () => {
+    const T1 = "2026-11-25T10:00:01Z"
+    api.personalAgentGet.mockResolvedValue(snapshot("here"))
+    api.personalAgentTimeline.mockResolvedValueOnce(page([row(1, "owner", T1)]))
+    api.personalAgentDispatches.mockResolvedValue([])
+    render(
+      <PersonalAgentProvider>
+        <Probe onValue={keep} />
+      </PersonalAgentProvider>
+    )
+    await act(flush)
+    api.personalAgentTimeline.mockImplementationOnce(
+      () => new Promise<TimelinePage>(() => {})
+    )
+    await act(async () => {
+      bus.reconnect?.()
+      await flush()
+    })
+    await act(async () => {
+      bus.handler?.({ kind: "timeline", rows: [row(2, "owner", T1)] })
+      await flush()
+    })
+    expect(ctx?.rows.map((r) => r.id)).toEqual([1])
+    await act(async () => {
+      vi.advanceTimersByTime(5_000)
+      await flush()
+    })
+    expect(ctx?.rows.map((r) => r.id)).toEqual([1, 2])
+  })
+})
+
+describe("PersonalAgentProvider, snapshots read one after another", () => {
+  it("keeps a recovery's snapshot when a later read fails", async () => {
+    const T1 = "2026-11-25T10:00:01Z"
+    api.personalAgentGet.mockResolvedValueOnce(snapshot("here"))
+    api.personalAgentTimeline.mockResolvedValueOnce(page([row(1, "owner", T1)]))
+    api.personalAgentDispatches.mockResolvedValue([])
+    render(
+      <PersonalAgentProvider>
+        <Probe onValue={keep} />
+      </PersonalAgentProvider>
+    )
+    await act(flush)
+    // Back: its snapshot (waiting on the owner now) comes at once, its page
+    // late; a status nudge's read meanwhile fails.
+    let rows: ((p: TimelinePage) => void) | null = null
+    api.personalAgentTimeline.mockImplementationOnce(
+      () =>
+        new Promise<TimelinePage>((resolve) => {
+          rows = resolve
+        })
+    )
+    api.personalAgentGet.mockResolvedValueOnce({
+      ...snapshot("here"),
+      status: { ...snapshot("here").status, pending_permission: true },
+    } as unknown as PersonalAgentSnapshot)
+    api.personalAgentGet.mockRejectedValueOnce(new Error("offline"))
+    await act(async () => {
+      bus.reconnect?.()
+      await flush()
+    })
+    await act(async () => {
+      bus.handler?.({ kind: "status" })
+      vi.advanceTimersByTime(200)
+      await flush()
+    })
+    await act(async () => {
+      rows?.(page([row(1, "owner", T1)]))
+      await flush()
+    })
+    expect(ctx?.needsOwner).toBe(true)
   })
 })

@@ -613,9 +613,30 @@ impl DelegationListener {
             BrokerMessage::CreateWorkTask(req) => {
                 authoring_response(self.process_create_work_task(req).await)?
             }
+            BrokerMessage::PersonalAgent(req) if req.tool == "dispatch_wait" => {
+                // The one personal-agent tool that waits (for news of the
+                // assistant's work, a bounded while). It changes nothing —
+                // what it hands the turn is noted, never settled, until the
+                // turn's reply says it reported it — so a companion that
+                // cancels and drops the socket just ends the wait, raced
+                // against peer-close as `Status` is.
+                let wait_fut = self.process_personal_agent(req);
+                tokio::pin!(wait_fut);
+                let mut probe = [0u8; 1];
+                let outcome = tokio::select! {
+                    biased;
+                    outcome = &mut wait_fut => outcome,
+                    _ = conn.read(&mut probe) => return Ok(()),
+                };
+                BrokerResponse {
+                    outcome: serde_json::to_value(&outcome).map_err(|e| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+                    })?,
+                }
+            }
             BrokerMessage::PersonalAgent(req) => {
                 // Bounded DB work that never waits on a turn or a person —
-                // every personal-agent tool returns at once — so, like
+                // every other personal-agent tool returns at once — so, like
                 // CreateWorkTask, no peer-close race.
                 let outcome = self.process_personal_agent(req).await;
                 BrokerResponse {

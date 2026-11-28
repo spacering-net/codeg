@@ -1,3 +1,5 @@
+import type { JSONContent } from "@tiptap/core"
+
 import { ALL_AGENT_TYPES, type AgentType } from "@/lib/types"
 import { randomUUID } from "@/lib/utils"
 
@@ -231,4 +233,27 @@ function fileBaseName(uri: string): string {
   } catch {
     return last
   }
+}
+
+/** Drop embedded-attachment reference badges from a draft document before it is
+ *  persisted: their bytes live only in the in-memory `embeddedPayloadsRef` map
+ *  (never serialized into the draft), so a restored badge would send nothing.
+ *  Identified purely by the unambiguous `codeg://embedded/…` display uri (no map
+ *  needed) — a real `file://` attachment is never matched. Stripping at save
+ *  keeps the live badge visible this session but matches the pre-existing
+ *  behavior where out-of-band pasted bytes don't survive a draft round-trip. */
+export function stripEmbeddedReferences(doc: JSONContent): JSONContent {
+  if (!doc.content) return doc
+  const content: JSONContent[] = []
+  for (const child of doc.content) {
+    if (
+      child.type === "reference" &&
+      typeof child.attrs?.uri === "string" &&
+      isEmbeddedReferenceUri(child.attrs.uri)
+    ) {
+      continue
+    }
+    content.push(stripEmbeddedReferences(child))
+  }
+  return { ...doc, content }
 }

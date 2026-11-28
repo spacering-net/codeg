@@ -24,6 +24,12 @@
  * Its own box rather than the board's `TaskMessageComposer`: no slash
  * commands (a typed `/compact` would bypass the compaction codeg keeps
  * account of), no quick messages or skills, and a quote above the line.
+ *
+ * What is typed is kept as the assistant's draft, as the conversation box
+ * keeps its own: saved a moment after the last edit (and when the box goes,
+ * on a switch to another assistant), put back when the box opens again, and
+ * dropped once it is sent. Pictures and pasted files are not kept — their
+ * bytes live in this box only.
  */
 
 import {
@@ -35,6 +41,7 @@ import {
   useState,
 } from "react"
 import { useTranslations } from "next-intl"
+import type { JSONContent } from "@tiptap/core"
 import { ArrowUp } from "lucide-react"
 import { toast } from "sonner"
 
@@ -45,7 +52,10 @@ import {
   RichComposer,
   type RichComposerHandle,
 } from "@/components/chat/composer/rich-composer"
-import { isEmbeddedReferenceUri } from "@/components/chat/composer/reference-uri"
+import {
+  isEmbeddedReferenceUri,
+  stripEmbeddedReferences,
+} from "@/components/chat/composer/reference-uri"
 import { useComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
 import { useComposerChromeFocus } from "@/components/chat/composer/use-composer-chrome-focus"
 import { useComposerMentionLabels } from "@/components/chat/composer/use-composer-mention-labels"
@@ -55,8 +65,15 @@ import { useReducedMotion } from "@/hooks/use-chat-motion"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { useBotId } from "@/contexts/personal-agent-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { personalAgentSend } from "@/lib/api"
-import { toErrorMessage } from "@/lib/app-error"
+import { extractAppCommandError } from "@/lib/app-error"
+import {
+  buildPersonalAgentDraftStorageKey,
+  clearMessageInputDraftV2,
+  loadMessageInputDraftV2,
+  saveMessageInputDraftV2,
+} from "@/lib/message-input-draft"
 import type {
   PersonalAgentInfo,
   PersonalAgentStatus,
@@ -65,6 +82,8 @@ import type {
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { AnswerBar, type AnsweringQuestion } from "./answer-bar"
+import { useMatterError } from "./matter-text"
 import { QuoteBar } from "./quote-bar"
 
 /** What the agent is assumed to accept: the engine sends the blocks as
@@ -75,6 +94,8 @@ const ASSUMED_PROMPT_CAPABILITIES: PromptCapabilitiesInfo = {
   embedded_context: true,
 }
 const HEIGHT_MS = 180
+/** How long after the last edit the draft is saved. */
+const DRAFT_SAVE_MS = 300
 
 /** The "+": a wash of the text colour — apart from the box's own surface
  *  and from the theme colour the send button carries, translucent so it
@@ -105,24 +126,45 @@ interface ComposerProps {
   status: PersonalAgentStatus
   /** The row the next message quotes. */
   quoting: number | null
+  /** The assistant's question the next message answers (never with a
+   *  quote). */
+  answering?: AnsweringQuestion | null
   /** Text to put in the box (a card's message the owner edits first); a
    *  new `n` puts it in again. */
   draft?: { text: string; n: number } | null
   onClearQuote: () => void
+  /** A message quoting `rowId` went out: its quote goes, if the page still
+   *  has it. */
+  onQuoteSent?: (rowId: number) => void
+  onClearAnswer?: () => void
   /** A message went out. */
   onSent?: () => void
 }
+
+/** Each send's own number, for the window's life: what it settles is its
+ *  own, never a later send's. */
+let lastRequest = 0
+
+/** The sends out now, by draft key, each with the boxes to tell when it
+ *  settles: a box opened again for the assistant meanwhile (the owner
+ *  switched away and back) holds the text going out, locked as the box that
+ *  sent it was, and lets it go once it went. */
+const outgoing = new Map<string, Set<() => void>>()
 
 export function PersonalAgentComposer({
   agent,
   agentName,
   status,
   quoting,
+  answering = null,
   draft,
   onClearQuote,
+  onQuoteSent,
+  onClearAnswer,
   onSent,
 }: ComposerProps) {
   const t = useTranslations("PersonalAgent.composer")
+  const errorText = useMatterError()
   const tInput = useTranslations("Folder.chat.messageInput")
   const { shortcuts } = useShortcutSettings()
   const reduced = useReducedMotion()
@@ -131,6 +173,10 @@ export function PersonalAgentComposer({
   const chromeFocus = useComposerChromeFocus(editorRef)
   const [text, setText] = useState("")
   const [sending, setSending] = useState(false)
+  const draftKey = buildPersonalAgentDraftStorageKey(agent)
+  // A send from an earlier box for this assistant is still out.
+  const [awaiting, setAwaiting] = useState(() => outgoing.has(draftKey))
+  const busy = sending || awaiting
 
   const { groupLabels, uiLabels, primaryAssistantName } =
     useComposerMentionLabels()
@@ -157,6 +203,8 @@ export function PersonalAgentComposer({
   const attach = useComposerAttachments({
     editorRef,
     containerRef,
+    // Nothing added while it sends: the box is locked until it returns.
+    disabled: status.engine !== "here" || busy,
     promptCapabilities: ASSUMED_PROMPT_CAPABILITIES,
     defaultPath: agent.workdir,
     logLabel: "PersonalAgentComposer",
@@ -189,13 +237,13 @@ export function PersonalAgentComposer({
     attach.attachments.length === 0 &&
     // eslint-disable-next-line react-hooks/refs -- the pasted files' bytes sit in a ref the editor writes; every edit re-renders, so this reads it fresh
     embeddedBlocks().length === 0
-  const canSend = !readOnly && !sending && !empty
+  const canSend = !readOnly && !busy && !empty
   const hasImages = attach.imageAttachments.length > 0
   // The text has needed a second line since the box was last empty.
   const [wrapped, setWrapped] = useState(false)
   // The editor mounts after the first render (`onReady`).
   const [editorReady, setEditorReady] = useState(false)
-  const open = wrapped || quoting != null || hasImages
+  const open = wrapped || quoting != null || answering != null || hasImages
 
   // The box is one assistant's (the page keys it by them): a send that
   // lands once it is gone — the owner switched assistants meanwhile — leaves
@@ -208,35 +256,208 @@ export function PersonalAgentComposer({
     }
   }, [])
 
+  // The draft: what the last edit left, saved a moment later (`null` clears
+  // it; `undefined` is nothing waiting). Taken at the edit, so the box going
+  // away before the save — the owner switched assistants — still saves it.
+  const pendingDraft = useRef<JSONContent | null | undefined>(undefined)
+  const draftTimer = useRef<number | null>(null)
+  const writeDraft = useCallback(() => {
+    if (draftTimer.current != null) {
+      window.clearTimeout(draftTimer.current)
+      draftTimer.current = null
+    }
+    const doc = pendingDraft.current
+    if (doc === undefined) return
+    pendingDraft.current = undefined
+    if (doc) saveMessageInputDraftV2(draftKey, doc)
+    else clearMessageInputDraftV2(draftKey)
+  }, [draftKey])
+  const noteDraft = useCallback(() => {
+    const ed = editorRef.current
+    if (!ed) return
+    // While this assistant's send is out the box is locked, so nothing here
+    // is an edit — only the restore or the clear after it. The stored draft
+    // has to stay exactly what went: the send compares against it to drop
+    // it, and a restore's round-trip (an empty paragraph left by a stripped
+    // badge reserializes differently) would keep the sent text alive.
+    if (outgoing.has(draftKey)) return
+    pendingDraft.current = ed.isEmpty()
+      ? null
+      : stripEmbeddedReferences(ed.getJSON())
+    if (draftTimer.current != null) window.clearTimeout(draftTimer.current)
+    draftTimer.current = window.setTimeout(writeDraft, DRAFT_SAVE_MS)
+  }, [draftKey, writeDraft])
+  useEffect(() => writeDraft, [writeDraft])
+
+  // The saved draft goes back in once the editor is there — before a card's
+  // message, which goes after it. Deferred a frame: a restored badge is a
+  // React node view, which must not render inside this effect. Read then,
+  // not as the box renders: a box this one replaces in the same commit (the
+  // page's layout changing) saves what it held only as it goes.
+  const [hydrated, setHydrated] = useState(false)
+  useEffect(() => {
+    if (!editorReady) return
+    const raf = requestAnimationFrame(() => {
+      const ed = editorRef.current
+      const loaded = loadMessageInputDraftV2(draftKey)
+      if (ed && loaded) {
+        if (loaded.kind === "doc") ed.setDoc(loaded.doc)
+        else ed.setText(loaded.markdown)
+        setText(ed.getText())
+      }
+      setHydrated(true)
+    })
+    return () => cancelAnimationFrame(raf)
+    // Once, for the box's own assistant (the page keys the box by it).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorReady])
+
+  // Opened while an earlier box's send is out: locked until it settles, then
+  // emptied if it went (the send drops the stored draft), kept otherwise.
+  useEffect(() => {
+    if (!awaiting) return
+    let live = true
+    const settle = () => {
+      if (!live) return
+      if (!loadMessageInputDraftV2(draftKey)) {
+        editorRef.current?.clear()
+        pendingDraft.current = null
+        writeDraft()
+        setText("")
+        setWrapped(false)
+      }
+      setAwaiting(false)
+    }
+    const waiting = outgoing.get(draftKey)
+    if (waiting) waiting.add(settle)
+    // Settled between this box's first render and now.
+    else void Promise.resolve().then(settle)
+    return () => {
+      live = false
+      waiting?.delete(settle)
+    }
+  }, [awaiting, draftKey, writeDraft])
+
+  // While it sends, the box is locked — the text, the attachments, a card's
+  // "put in the box" — so what it clears on return is exactly what went:
+  // the page reads whether this assistant's box is sending.
+  const bot = agent.id
+  useEffect(() => {
+    if (!busy) return
+    const ui = usePersonalAgentUi.getState()
+    ui.setComposerSending(bot, true)
+    return () => ui.setComposerSending(bot, false)
+  }, [bot, busy])
+  // The quote as the page has it now: one picked while a send is out is not
+  // to be undone by that send's failure.
+  const quotingNow = useRef(quoting)
+  useEffect(() => {
+    quotingNow.current = quoting
+  }, [quoting])
+  // Back to the line once it is unlocked, when it had the focus.
+  const refocus = useRef(false)
+  useEffect(() => {
+    if (sending || !refocus.current) return
+    refocus.current = false
+    editorRef.current?.focus()
+  }, [sending])
+
   const send = async () => {
     if (!canSend || !editorRef.current) return
-    if (attach.hasUploadingImage) {
+    if (attach.hasUploadingImage || attach.intakePending) {
       toast.message(t("waitForUpload"))
       return
     }
     const body = editorRef.current.getText()
+    // The stored draft is what goes: should the box be gone when it lands,
+    // that is what the send drops; a box opened again meanwhile restores it,
+    // locked until then.
+    writeDraft()
+    const sentDraft = JSON.stringify(loadMessageInputDraftV2(draftKey))
     const blocks = [...embeddedBlocks(), ...attach.imagePromptBlocks()]
+    // What this send settles, taken now — not read again from the page
+    // when it returns.
+    const sentAnswer = answering
+    const sentQuote = answering ? null : quoting
+    const requestId = ++lastRequest
+    const ui = usePersonalAgentUi.getState()
+    if (sentAnswer) {
+      ui.setAnswerSending(bot, { itemId: sentAnswer.itemId, requestId })
+    }
+    refocus.current =
+      containerRef.current?.contains(document.activeElement) ?? false
     setSending(true)
+    outgoing.set(draftKey, new Set())
     try {
-      await personalAgentSend(body, blocks, quoting, botId)
-      if (!mounted.current) return
+      await personalAgentSend(
+        body,
+        blocks,
+        sentQuote,
+        botId,
+        null,
+        sentAnswer?.itemId ?? null
+      )
+      // The answer's bar goes even when the box is gone meanwhile (the
+      // owner switched assistants): it is this assistant's, and answered.
+      ui.clearAnswerSending(bot, requestId)
+      if (sentAnswer) ui.clearPendingAnswer(bot, sentAnswer.itemId)
+      if (!mounted.current) {
+        // Gone, the box saved what it held — what went (it was locked), and
+        // a box opened for the assistant since is locked too. Unless it was
+        // written over since (from another window).
+        if (JSON.stringify(loadMessageInputDraftV2(draftKey)) === sentDraft) {
+          clearMessageInputDraftV2(draftKey)
+        }
+        return
+      }
       editorRef.current?.clear()
+      pendingDraft.current = null
+      writeDraft()
       attach.clearAttachments()
       setText("")
       setWrapped(false)
-      onClearQuote()
+      if (sentQuote != null) onQuoteSent?.(sentQuote)
       onSent?.()
     } catch (e) {
-      toast.error(toErrorMessage(e))
+      ui.clearAnswerSending(bot, requestId)
+      // What was typed stays; a question that can no longer be answered
+      // takes its bar with it, so the next send is a plain message. One
+      // that failed otherwise gets its bar back, should it have gone
+      // meanwhile — unless something else was picked since (another
+      // question, or a quote, which takes the bar's place), or the box is
+      // gone (the owner moved on; what this box saw is not the page's now).
+      const key = extractAppCommandError(e)?.i18n_key
+      if (sentAnswer) {
+        if (
+          key === "matterErrors.answerChanged" ||
+          key === "matterErrors.answerQueued"
+        ) {
+          ui.clearPendingAnswer(bot, sentAnswer.itemId)
+        } else if (
+          mounted.current &&
+          !usePersonalAgentUi.getState().pendingAnswer[bot] &&
+          quotingNow.current == null
+        ) {
+          ui.setPendingAnswer({ bot, ...sentAnswer })
+        }
+      }
+      toast.error(errorText(e))
     } finally {
       setSending(false)
+      const waiting = outgoing.get(draftKey)
+      outgoing.delete(draftKey)
+      waiting?.forEach((settle) => settle())
     }
   }
 
-  // Quoting focuses the line, ready to type the reply.
+  // Quoting focuses the line, ready to type the reply; answering too.
   useEffect(() => {
     if (quoting != null) editorRef.current?.focus()
   }, [quoting])
+  const answeringId = answering?.itemId ?? null
+  useEffect(() => {
+    if (answeringId != null) editorRef.current?.focus()
+  }, [answeringId])
 
   // A card's message to edit first: after what is already typed, never in
   // place of it.
@@ -245,7 +466,7 @@ export function PersonalAgentComposer({
   const draftApplied = useRef(draftN ?? null)
   useEffect(() => {
     const editor = editorRef.current
-    if (draftN == null || !draft || !editor) return
+    if (!hydrated || draftN == null || !draft || !editor) return
     if (draftApplied.current === draftN) return
     draftApplied.current = draftN
     const before = editor.isEmpty() ? "" : editor.getText().trimEnd()
@@ -255,7 +476,7 @@ export function PersonalAgentComposer({
     editor.focus()
     // Only a new draft puts it in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftN, editorReady])
+  }, [draftN, hydrated])
 
   // Open the box once the text wraps (the editor's own size changes with
   // every wrap, and with the box's width); `onChange` closes it once the
@@ -399,7 +620,7 @@ export function PersonalAgentComposer({
               <div className="flex" style={{ gridArea: "plus" }}>
                 <ComposerAddMenu
                   attachOnly
-                  disabled={readOnly}
+                  disabled={readOnly || busy}
                   attachments={attach}
                   // `border-0`: the button's transparent border would clip
                   // the fill a pixel short of the send button's on each side.
@@ -409,7 +630,17 @@ export function PersonalAgentComposer({
                   )}
                 />
               </div>
-              {quoting != null ? (
+              {answering ? (
+                <div className="pb-1.5" style={{ gridArea: "quote" }}>
+                  <AnswerBar
+                    question={answering}
+                    onDismiss={() => {
+                      onClearAnswer?.()
+                      editorRef.current?.focus()
+                    }}
+                  />
+                </div>
+              ) : quoting != null ? (
                 <div className="pb-1.5" style={{ gridArea: "quote" }}>
                   <QuoteBar
                     targetId={quoting}
@@ -429,6 +660,7 @@ export function PersonalAgentComposer({
                   <ComposerImageThumbnails
                     attachments={attach.imageAttachments}
                     onRemove={attach.removeAttachment}
+                    disabled={busy}
                   />
                 </div>
               ) : null}
@@ -438,7 +670,7 @@ export function PersonalAgentComposer({
                   defaultText=""
                   placeholder={placeholder}
                   ariaLabel={t("ariaLabel")}
-                  disabled={readOnly}
+                  disabled={readOnly || busy}
                   referenceSearch={referenceSearch}
                   mentionUiLabels={uiLabels}
                   tabLabels={groupLabels}
@@ -448,6 +680,7 @@ export function PersonalAgentComposer({
                   onChange={(next) => {
                     setText(next)
                     if (next.length === 0) setWrapped(false)
+                    noteDraft()
                   }}
                   onReady={() => setEditorReady(true)}
                   onSubmit={() => void send()}
@@ -477,7 +710,7 @@ export function PersonalAgentComposer({
                   title={turn ? t("queue") : t("send")}
                   aria-label={turn ? t("queue") : t("send")}
                 >
-                  {sending ? (
+                  {busy ? (
                     <SyncedSpinner small className="size-4" />
                   ) : (
                     <ArrowUp className="size-4" />

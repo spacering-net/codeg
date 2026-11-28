@@ -5,10 +5,11 @@
  * avatar" over it under the pointer — it opens under it with three pages
  * and [Reset] at the end of their row:
  *
- * - "Bot": one of the thirteen shapes, in one of the eleven colours, each
+ * - "Models": one of the thirteen shapes, in one of the eleven colours, each
  *   taken at once;
  * - "Text": a face made of a character — its name's first, or an emoji
- *   picked or typed — on one of the ten colours;
+ *   picked or typed — on one of the same eleven colours (the owner's
+ *   bubbles in its conversation take it, as they take a face's);
  * - "Upload": a picture dropped, pasted (anywhere in the bubble) or picked,
  *   framed in a round window — moved and zoomed — and [Set as avatar].
  *
@@ -21,10 +22,7 @@ import { useRef, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { Tooltip as TooltipPrimitive } from "radix-ui"
 
-import {
-  AssistantAvatar,
-  SWATCH_CLASSES,
-} from "@/components/assistants/assistant-avatar"
+import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -35,16 +33,14 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useImeGuard } from "@/hooks/use-ime-guard"
 import { avatarEmojiFrom } from "@/lib/assistant-avatar"
-import {
-  ASSISTANT_AVATAR_COLORS,
-  type AssistantAvatarColor,
-  type BotAvatar as BotAvatarValue,
-  type BotColor,
-  type BotLook,
+import type {
+  BotAvatar as BotAvatarValue,
+  BotColor,
+  BotLook,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-import { BOT_COLORS, BOT_SHAPES, BotAvatar } from "./bot-avatar"
+import { BOT_COLORS, BOT_SHAPES, BotAvatar, faceColorOf } from "./bot-avatar"
 import { shapeOf } from "./bot-shapes"
 import {
   FaceUpload,
@@ -66,21 +62,6 @@ const SWATCH: Record<BotColor, string> = {
   purple: "bg-violet-500 dark:bg-violet-400",
   magenta: "bg-fuchsia-500 dark:bg-fuchsia-400",
   gray: "bg-slate-400 dark:bg-slate-500",
-}
-
-/** A face's colour, on the "Text" page: the nearest of its ten. */
-const NEAREST: Record<BotColor, AssistantAvatarColor> = {
-  black: "slate",
-  brown: "amber",
-  red: "red",
-  orange: "orange",
-  yellow: "amber",
-  green: "green",
-  teal: "teal",
-  blue: "blue",
-  purple: "violet",
-  magenta: "pink",
-  gray: "slate",
 }
 
 /** The emoji the "Text" page offers beside the name's first
@@ -246,9 +227,57 @@ export function FaceEditor({
   )
 }
 
+/** The swatches of the eleven colours, a picked one ringed — the same row
+ *  on both pages. */
+function ColorRow({
+  value,
+  picked,
+  onPick,
+  disabled,
+  attr,
+}: {
+  value: BotColor
+  /** Whether the avatar is of this page's kind: else none is ringed. */
+  picked: boolean
+  onPick: (color: BotColor) => void
+  disabled?: boolean
+  attr: "data-pa-color" | "data-pa-make-color"
+}) {
+  const t = useTranslations("PersonalAgent.bots.face")
+  return (
+    <div
+      role="group"
+      aria-label={t("color")}
+      className="flex flex-wrap justify-center gap-x-[calc((100%-12rem-1px)/5)] gap-y-3"
+    >
+      {BOT_COLORS.map((c) => {
+        const on = picked && value === c
+        return (
+          <button
+            key={c}
+            type="button"
+            disabled={disabled}
+            {...{ [attr]: c }}
+            aria-pressed={on}
+            aria-label={t(`colors.${c}`)}
+            title={t(`colors.${c}`)}
+            onClick={() => onPick(c)}
+            className={cn(
+              "size-8 rounded-full transition-transform hover:scale-110 disabled:opacity-50",
+              SWATCH[c],
+              on && PICKED
+            )}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
 function BotPage({ value, name, onChange, disabled }: FacePickerProps) {
   const t = useTranslations("PersonalAgent.bots.face")
-  const color: BotColor = value.kind === "face" ? value.color : "blue"
+  // A text avatar's colour carries over to the face, as the face's to it.
+  const color: BotColor = faceColorOf(value) ?? "blue"
   return (
     <div className="flex flex-col gap-5">
       <div
@@ -282,39 +311,19 @@ function BotPage({ value, name, onChange, disabled }: FacePickerProps) {
           )
         })}
       </div>
-      <div
-        role="group"
-        aria-label={t("color")}
-        className="flex flex-wrap justify-center gap-x-[calc((100%-12rem-1px)/5)] gap-y-3"
-      >
-        {BOT_COLORS.map((c) => {
-          const on = value.kind === "face" && value.color === c
-          return (
-            <button
-              key={c}
-              type="button"
-              disabled={disabled}
-              data-pa-color={c}
-              aria-pressed={on}
-              aria-label={t(`colors.${c}`)}
-              title={t(`colors.${c}`)}
-              onClick={() =>
-                onChange({
-                  kind: "face",
-                  shape:
-                    value.kind === "face" ? shapeOf(value.shape) : "terminal",
-                  color: c,
-                })
-              }
-              className={cn(
-                "size-8 rounded-full transition-transform hover:scale-110 disabled:opacity-50",
-                SWATCH[c],
-                on && PICKED
-              )}
-            />
-          )
-        })}
-      </div>
+      <ColorRow
+        value={color}
+        picked={value.kind === "face"}
+        disabled={disabled}
+        attr="data-pa-color"
+        onPick={(c) =>
+          onChange({
+            kind: "face",
+            shape: value.kind === "face" ? shapeOf(value.shape) : "terminal",
+            color: c,
+          })
+        }
+      />
     </div>
   )
 }
@@ -323,12 +332,10 @@ function MakePage({ value, name, onChange, disabled }: FacePickerProps) {
   const t = useTranslations("PersonalAgent.bots.face")
   const [typed, setTyped] = useState("")
   const ime = useImeGuard()
-  const color: AssistantAvatarColor =
-    value.kind === "monogram" || value.kind === "emoji"
-      ? value.color
-      : value.kind === "face"
-        ? NEAREST[value.color]
-        : "slate"
+  // The face's colour carries over; one made before in a colour no longer
+  // offered, the nearest of these.
+  const color: BotColor = faceColorOf(value) ?? "gray"
+  const text = value.kind === "monogram" || value.kind === "emoji"
   const tile = (
     key: string,
     avatar: BotAvatarValue,
@@ -414,40 +421,19 @@ function MakePage({ value, name, onChange, disabled }: FacePickerProps) {
           {t("useIt")}
         </Button>
       </div>
-      <div
-        role="group"
-        aria-label={t("color")}
-        className="flex flex-wrap justify-center gap-x-[calc((100%-10rem-1px)/4)] gap-y-3"
-      >
-        {ASSISTANT_AVATAR_COLORS.map((c) => {
-          const on =
-            (value.kind === "monogram" || value.kind === "emoji") &&
-            value.color === c
-          return (
-            <button
-              key={c}
-              type="button"
-              disabled={disabled}
-              data-pa-make-color={c}
-              aria-pressed={on}
-              aria-label={c}
-              title={c}
-              onClick={() =>
-                onChange(
-                  value.kind === "emoji"
-                    ? { ...value, color: c }
-                    : { kind: "monogram", color: c }
-                )
-              }
-              className={cn(
-                "size-8 rounded-full transition-transform hover:scale-110 disabled:opacity-50",
-                SWATCH_CLASSES[c],
-                on && PICKED
-              )}
-            />
+      <ColorRow
+        value={color}
+        picked={text}
+        disabled={disabled}
+        attr="data-pa-make-color"
+        onPick={(c) =>
+          onChange(
+            value.kind === "emoji"
+              ? { ...value, color: c }
+              : { kind: "monogram", color: c }
           )
-        })}
-      </div>
+        }
+      />
     </div>
   )
 }

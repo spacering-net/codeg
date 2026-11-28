@@ -68,7 +68,7 @@ import {
   setShowHiddenAssistants,
 } from "./roster-filter"
 import { PageScopeContext, type PageScope } from "./shared"
-import { StatusLine, VAGUE_DELAY_MS } from "./status-line"
+import { END_LINGER_MS, StatusLine, VAGUE_DELAY_MS } from "./status-line"
 
 /** The sidebar's roster with the upkeep the page keeps for it. */
 function RosterWithUpkeep() {
@@ -499,14 +499,16 @@ describe("the roster", () => {
     expect(primary.querySelector("[data-pa-roster-line]")?.textContent).toBe(
       "All set."
     )
-    expect(primary.parentElement!.className).toContain("py-0.5")
-    // A little room between the rows.
+    expect(primary.parentElement!.className).toContain("pb-[0.0625rem]")
+    // The conversation list's room between the rows: 1px, under each.
     // (inside what folds, which itself has none, so it shuts to nothing).
     const rows = nav.querySelectorAll("[data-pa-roster-row-state] > div")
     expect(rows.length).toBe(2)
     rows.forEach((r) => {
       expect(r.className).toBe("")
-      expect((r.firstElementChild as HTMLElement).className).toContain("py-0.5")
+      expect((r.firstElementChild as HTMLElement).className).toBe(
+        "pb-[0.0625rem]"
+      )
     })
     // No [+ new] at a foot: the section's head has it.
     expect(nav.querySelector("[data-pa-roster-foot]")).toBeNull()
@@ -1119,6 +1121,264 @@ describe("the status line", () => {
     wrap(<StatusLine botId={1} name="Nova" />)
     await waitFor(() => expect(api.personalAgentBots).toHaveBeenCalled())
     await new Promise((r) => setTimeout(r, VAGUE_DELAY_MS + 100))
+    expect(document.querySelector("[data-pa-status-line]")).toBeNull()
+  })
+
+  it("stays a moment once its turn has ended, its face showing how it went", async () => {
+    api.personalAgentBots.mockResolvedValue([entry(1, "Nova", busy("edit"))])
+    const running = {
+      agent: {
+        id: 1,
+        name: "Nova",
+        avatar: { kind: "face", shape: "ring", color: "black" },
+      },
+      status: {
+        engine: "here",
+        connected: true,
+        turn: { batch_id: 5, kind: "delivery" },
+      },
+    }
+    pa.snapshot = running
+    wrap(<StatusLine botId={1} name="Nova" />)
+    await screen.findByText("Editing parser.rs")
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    // The turn ends: the snapshot first, then the push of how it went.
+    pa.snapshot = { ...running, status: { ...running.status, turn: null } }
+    act(() =>
+      usePersonalAgentRoster.getState().applyLive(
+        live(1, {
+          work: "done",
+          face: "idle",
+          flash: {
+            face: "done",
+            until: new Date(Date.now() + 8000).toISOString(),
+          },
+          updated_at: iso(200),
+        })
+      )
+    )
+    const pill = document.querySelector("[data-pa-status-pill]")!
+    expect(pill.getAttribute("data-pa-status-ended")).toBe("done")
+    const text = document.querySelector("[data-pa-status-text]")!
+    expect(text.textContent).toBe("Replied")
+    expect(text.className).not.toContain("activity-shimmer")
+    expect(document.querySelector("[data-pa-status-dots]")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Stop the reply" })).toBeNull()
+    act(() => {
+      vi.advanceTimersByTime(300)
+    })
+    expect(
+      pill
+        .querySelector("[data-slot='bot-avatar']")!
+        .getAttribute("data-bot-look")
+    ).toBe("done")
+    // Its face's turn and hops seen, it folds away.
+    act(() => {
+      vi.advanceTimersByTime(END_LINGER_MS)
+    })
+    expect(document.querySelector("[data-pa-status-line]")).toBeNull()
+    vi.useRealTimers()
+  })
+
+  it("comes back for how it went when that is pushed after it folded", async () => {
+    api.personalAgentBots.mockResolvedValue([entry(1, "Nova", busy("edit"))])
+    const running = {
+      agent: {
+        id: 1,
+        name: "Nova",
+        avatar: { kind: "face", shape: "ring", color: "black" },
+      },
+      status: {
+        engine: "here",
+        connected: true,
+        turn: { batch_id: 5, kind: "delivery" },
+      },
+    }
+    pa.snapshot = running
+    wrap(<StatusLine botId={1} name="Nova" />)
+    await screen.findByText("Editing parser.rs")
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    // The turn ends with no face pushed yet: still busy-looking, it stays…
+    pa.snapshot = { ...running, status: { ...running.status, turn: null } }
+    act(() =>
+      usePersonalAgentRoster
+        .getState()
+        .applyLive(busy("edit", { updated_at: iso(150) }))
+    )
+    expect(document.querySelector("[data-pa-status-ended]")).not.toBeNull()
+    // …and folds once its time is up.
+    act(() => {
+      vi.advanceTimersByTime(END_LINGER_MS + 10)
+    })
+    expect(document.querySelector("[data-pa-status-line]")).toBeNull()
+    // How it went, pushed late: back for its own moment, whole.
+    act(() =>
+      usePersonalAgentRoster.getState().applyLive(
+        live(1, {
+          work: "done",
+          face: "idle",
+          flash: {
+            face: "done",
+            until: new Date(Date.now() + 8000).toISOString(),
+          },
+          updated_at: iso(300),
+        })
+      )
+    )
+    expect(
+      document
+        .querySelector("[data-pa-status-pill]")!
+        .getAttribute("data-pa-status-ended")
+    ).toBe("done")
+    expect(document.querySelector("[data-pa-status-text]")!.textContent).toBe(
+      "Replied"
+    )
+    act(() => {
+      vi.advanceTimersByTime(END_LINGER_MS - 200)
+    })
+    expect(document.querySelector("[data-pa-status-line]")).not.toBeNull()
+    act(() => {
+      vi.advanceTimersByTime(400)
+    })
+    expect(document.querySelector("[data-pa-status-line]")).toBeNull()
+    vi.useRealTimers()
+  })
+
+  it("says the work is done, not a reply, for work handed out", async () => {
+    const working = busy("edit", {
+      activity: {
+        step: {
+          n: 2,
+          kind: "edit",
+          target: "parser.rs",
+          started_at: iso(0),
+          status: "in_progress",
+        },
+        work: { dispatch_id: 9, title: "Fix the parser" },
+      },
+    })
+    api.personalAgentBots.mockResolvedValue([entry(1, "Nova", working)])
+    pa.snapshot = {
+      agent: {
+        id: 1,
+        name: "Nova",
+        avatar: { kind: "face", shape: "ring", color: "black" },
+      },
+      status: { engine: "here", connected: true, turn: null },
+    }
+    wrap(<StatusLine botId={1} name="Nova" />)
+    await waitFor(() =>
+      expect(document.querySelector("[data-pa-status-line]")).not.toBeNull()
+    )
+    act(() =>
+      usePersonalAgentRoster.getState().applyLive(
+        live(1, {
+          work: "done",
+          face: "idle",
+          flash: {
+            face: "done",
+            until: new Date(Date.now() + 8000).toISOString(),
+          },
+          updated_at: iso(200),
+        })
+      )
+    )
+    expect(document.querySelector("[data-pa-status-text]")!.textContent).toBe(
+      "Work done"
+    )
+  })
+
+  it("is not brought back by another piece of work ending after a stopped turn", async () => {
+    api.personalAgentBots.mockResolvedValue([entry(1, "Nova", busy("edit"))])
+    const running = {
+      agent: {
+        id: 1,
+        name: "Nova",
+        avatar: { kind: "face", shape: "ring", color: "black" },
+      },
+      status: {
+        engine: "here",
+        connected: true,
+        turn: { batch_id: 5, kind: "delivery" },
+      },
+    }
+    pa.snapshot = running
+    wrap(<StatusLine botId={1} name="Nova" />)
+    await screen.findByText("Editing parser.rs")
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    pa.snapshot = { ...running, status: { ...running.status, turn: null } }
+    act(() =>
+      usePersonalAgentRoster
+        .getState()
+        .applyLive(
+          live(1, { work: "done", face: "idle", updated_at: iso(150) })
+        )
+    )
+    expect(document.querySelector("[data-pa-status-line]")).toBeNull()
+    // Within what would have been its stay, too.
+    act(() => {
+      vi.advanceTimersByTime(1000)
+    })
+    act(() =>
+      usePersonalAgentRoster.getState().applyLive(
+        live(1, {
+          work: "done",
+          face: "idle",
+          flash: {
+            face: "done",
+            until: new Date(Date.now() + 7000).toISOString(),
+          },
+          updated_at: iso(200),
+        })
+      )
+    )
+    expect(document.querySelector("[data-pa-status-line]")).toBeNull()
+    act(() => {
+      vi.advanceTimersByTime(1900)
+    })
+    // Work handed out ends a little later: not this turn's face.
+    act(() =>
+      usePersonalAgentRoster.getState().applyLive(
+        live(1, {
+          work: "done",
+          face: "idle",
+          flash: {
+            face: "done",
+            until: new Date(Date.now() + 8000).toISOString(),
+          },
+          updated_at: iso(300),
+        })
+      )
+    )
+    expect(document.querySelector("[data-pa-status-line]")).toBeNull()
+    vi.useRealTimers()
+  })
+
+  it("folds at once for a turn the owner stopped", async () => {
+    api.personalAgentBots.mockResolvedValue([entry(1, "Nova", busy("edit"))])
+    const running = {
+      agent: {
+        id: 1,
+        name: "Nova",
+        avatar: { kind: "face", shape: "ring", color: "black" },
+      },
+      status: {
+        engine: "here",
+        connected: true,
+        turn: { batch_id: 5, kind: "delivery" },
+      },
+    }
+    pa.snapshot = running
+    wrap(<StatusLine botId={1} name="Nova" />)
+    await screen.findByText("Editing parser.rs")
+    pa.snapshot = { ...running, status: { ...running.status, turn: null } }
+    act(() =>
+      usePersonalAgentRoster
+        .getState()
+        .applyLive(
+          live(1, { work: "done", face: "idle", updated_at: iso(200) })
+        )
+    )
     expect(document.querySelector("[data-pa-status-line]")).toBeNull()
   })
 

@@ -944,7 +944,7 @@ impl super::engine::PersonalAgentEngine {
                 facts,
                 text,
             };
-            if let Err(e) = self.raise_rule_card(&found, prefs, false).await {
+            if let Err(e) = self.raise_rule_card(&found, prefs, false, now).await {
                 tracing::warn!("[personal-agent] the weekly review's question was not raised: {e}");
             }
         }

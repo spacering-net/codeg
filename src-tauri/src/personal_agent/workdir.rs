@@ -406,6 +406,80 @@ pub fn default_workdir_of_bot(data_dir: &Path, row: &crate::db::entities::person
     }
 }
 
+/// Where the page's rendered faces are kept: the notification icons and the
+/// menu bar's strips. A cache beside the working directories, never inside
+/// one — a directory has to be empty to be made a working directory
+/// ([`init_workdir_with`]), and a cache written into it first would keep it
+/// from ever being made.
+pub fn avatars_dir(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join("cache")
+        .join("personal-agent")
+        .join("avatars")
+}
+
+/// Whether `name` is one of the pictures the page hands over for an
+/// assistant: `<bot>.png` or `<bot>-tray.png`, or one of them half written
+/// (`.png.tmp`, an interrupted write's leftover).
+fn is_avatar_png(name: &str) -> bool {
+    let name = name.strip_suffix(".tmp").unwrap_or(name);
+    let Some(stem) = name.strip_suffix(".png") else {
+        return false;
+    };
+    let bot = stem.strip_suffix("-tray").unwrap_or(stem);
+    !bot.is_empty() && bot.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Take the face cache an older build wrote into the primary's default
+/// working directory (`<data dir>/personal-agent/avatars`) out to
+/// [`avatars_dir`], so a directory that was never made can still be made.
+/// Only what is this cache — a folder of the page's `<bot>.png` and
+/// `<bot>-tray.png` pictures and nothing else: anything else is the
+/// owner's, and stays where it is. Nothing once the directory is a working
+/// directory: it is the owner's then, whatever it holds.
+pub fn adopt_legacy_avatar_cache(data_dir: &Path) -> Option<PathBuf> {
+    let workdir = default_workdir(data_dir);
+    if is_workdir(&workdir) {
+        return None;
+    }
+    let legacy = workdir.join("avatars");
+    // A real folder only: a link's target is not this cache's to move or
+    // empty.
+    if !std::fs::symlink_metadata(&legacy).ok()?.is_dir() {
+        return None;
+    }
+    for entry in std::fs::read_dir(&legacy).ok()? {
+        let entry = entry.ok()?;
+        if !entry.file_type().ok()?.is_file()
+            || !is_avatar_png(&entry.file_name().to_string_lossy())
+        {
+            return None;
+        }
+    }
+    let target = avatars_dir(data_dir);
+    if let Some(parent) = target.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // None of this cache kept yet: the whole folder goes over, in one step
+    // where it can (not across volumes).
+    if !target.exists() && std::fs::rename(&legacy, &target).is_ok() {
+        return Some(target);
+    }
+    // Kept already, or the folder would not go over whole (another volume,
+    // or no cache folder to be had): picture by picture. The page draws these again on every start, so one that will
+    // not move only has to stop blocking the directory.
+    let _ = std::fs::create_dir_all(&target);
+    for entry in std::fs::read_dir(&legacy).ok()? {
+        let entry = entry.ok()?;
+        let to = target.join(entry.file_name());
+        if to.exists() || std::fs::rename(entry.path(), &to).is_err() {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    std::fs::remove_dir(&legacy).ok()?;
+    Some(target)
+}
+
 /// Every claim of a working directory — an assistant made, its directory
 /// moved, an assistant deleted with its directory — one at a time across
 /// all assistants: what is looked at is what is taken.
@@ -3796,6 +3870,13 @@ turn ends only the LAST thing you wrote stays as your reply.
 - `dispatch` opens a work session for a piece of your work. It returns at
   once; results come back to you later as events, and the owner sees a result
   card immediately.
+  - When the owner wants the result in this very reply ("have it checked,
+    then tell me") and the work should take a few minutes at most, wait for
+    it with `dispatch_wait` — never sleep and poll its session with
+    `get_session_info`. It hands you the news numbered as an event would be
+    (`[#N] …`): report it in this reply with `[[quote:#N]]`, and it does not
+    come to you again. If it is still running when you stop waiting, say it
+    is under way and end your reply: the result comes to you as an event.
   - `task`: anything that changes code. It runs in the project's own worktree
     and lands as the board's settings say: merged on its own when the project
     has auto-merge on, by the owner otherwise. Use `deliverable: "report"` when
@@ -3822,6 +3903,13 @@ turn ends only the LAST thing you wrote stays as your reply.
   verify round for a task in review, a retry for a failed or interrupted task,
   or the next message for an idle chat or session. Once the owner writes in a
   dispatched conversation themselves it is theirs: leave it alone.
+- `dispatch_stop` stops one of your dispatches where it is, with a `reason`
+  the owner reads on its card: when the owner asks you to, or when the work is
+  no longer needed (its direction turned out wrong, new work replaced it).
+  Never only because it is slow. Its matter is given up and nobody is woken;
+  the answer says how to go on with it later (a follow-up, or `dispatch` with
+  `replaces`). Work the owner stopped (on its card, in its session, on the
+  board) stays stopped: do not start it again unless they ask.
 - Retrying failed work with a new dispatch instead (another approach, a
   fresh start): pass `replaces` with the failed dispatch's id. Its matter is
   handed to the new work and the old failure leaves "needs you", so the
@@ -4083,6 +4171,21 @@ to close a matter.
   `replaces` and codeg closes the failed one's matter for you; when you did
   not, close that matter with `item_update`.
 
+- A matter's `summary` is the title the owner sees on their activity page:
+  write it in the owner's language, as what it is to them — a question as
+  the question itself ("Move the release to Friday?"), a reminder as the
+  thing to do ("Reply to Zhang San's email"). Not "the owner ...", no ids,
+  no notes to yourself.
+
+- A message of the owner's that carries `<codeg-answer matter="N">` answers
+  your question #N: they answered it from the activity page. With
+  `linked="yes"`, when your turn ends normally and #N still waits on you
+  with this answer, codeg closes #N for you; a change you or the owner make
+  to #N before then stands. With `linked="no"`, #N changed after they
+  answered, and codeg leaves it as it is. If the answer is not enough and
+  you need to ask more, keep it open with `item_update` (`waits_for:
+  owner`) and ask in your reply.
+
 - "Next time I mention X, remind me of Y": a matter of kind
   `when_mentioned` — Y as its summary, and `when_mentioned: { "keywords":
   [...] }` with the words that bring it up: the owner's own words for X, in
@@ -4157,6 +4260,8 @@ pauses, resumes, deletes or runs it now.
   Each run says which run it is.
 - When a run finds nothing worth telling the owner, reply with exactly
   `[[silent]]` and nothing else: codeg shows nothing and records "no change".
+  Not on a run the owner started — the trial right after it is made, or one
+  they ran now: say briefly what you checked and found, nothing new too.
 - A `precheck` lets codeg look first without waking you: new commits on a
   branch, a new issue or pull request, matters waiting more than so many
   hours, a project's working tree that changed. Nothing new: the run is
@@ -4234,17 +4339,24 @@ they need to do.
 
 ### Reporting a result
 
-The owner already sees the result card right above your reply: the work's
-title, how it stands, and the way to its session. Your reply is what it
-means.
+The owner sees each result on the timeline. One you report folds to a
+line — its title and how it stands — that opens to the whole card, and the
+card opens the work's session. Once work has a result, the pill it had
+under your words makes way for it: only work still going shows a pill.
 
-- Lead with the conclusion and what the owner needs to do. Do not say the
-  title or the state again ("The analysis of my-app is done"), do not link
-  the work's session, and do not repeat what the card shows.
+- Name each piece of work and its result, then say what the owner needs to
+  do. Do not link
+  the work's session: the pill and card of work you dispatched open it
+  already. That holds in any reply, not only one to an event, so never
+  link it.
+- Say a result once. One `dispatch_wait` handed you and you reported (with
+  its `[[quote:#N]]`) does not come back as an event.
 - Write `[[quote:#N]]` for each result you report, `N` its number in the
-  events (or in an acceptance's check). The owner sees the first as a quote;
-  codeg folds away the cards you reported, so one you report and do not mark
-  stays open beside your words.
+  events (or in an acceptance's check), in your conclusion: the text after
+  your last tool call. Only those mark a result reported — one you mark in
+  what you said before a tool call, or do not mark, stays a whole card
+  beside your words. The owner sees the first marker as a quote, which may
+  not name every piece: name each yourself.
 - Work the owner merged ("The owner merged it."): they did it themselves and
   were told, so do not say it was merged. Say only what follows from it —
   what you planned for when it is done, a follow-up, a problem they must
@@ -4456,6 +4568,123 @@ mod tests {
         std::fs::write(dir.join(SOUL_FILE), "mine").unwrap();
         assert!(!ensure_initialized(&dir, AppLocale::En).await.unwrap());
         assert_eq!(read_text(&dir, SOUL_FILE), "mine");
+    }
+
+    /// A face cache an older build left in the primary's default directory
+    /// keeps it from ever being made: it is not empty. Out it goes first,
+    /// and then the directory is made as any other.
+    #[tokio::test]
+    async fn the_face_cache_an_older_build_left_moves_out_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path();
+        let dir = default_workdir(data);
+        let legacy = dir.join("avatars");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("3.png"), b"png").unwrap();
+        std::fs::write(legacy.join("3-tray.png"), b"png").unwrap();
+        // Left as it was, the directory cannot be made.
+        assert!(ensure_initialized(&dir, AppLocale::En).await.is_err());
+        assert!(adopt_legacy_avatar_cache(data).is_some());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read(avatars_dir(data).join("3-tray.png")).unwrap(),
+            b"png"
+        );
+        assert!(ensure_initialized(&dir, AppLocale::En).await.unwrap());
+        assert!(is_workdir(&dir));
+    }
+
+    /// Anything beside the pictures is the owner's: nothing moves, and the
+    /// directory stays as it was.
+    #[tokio::test]
+    async fn a_directory_of_more_than_the_cache_is_left_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path();
+        let legacy = default_workdir(data).join("avatars");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("3.png"), b"png").unwrap();
+        std::fs::write(legacy.join("notes.md"), b"mine").unwrap();
+        assert!(adopt_legacy_avatar_cache(data).is_none());
+        assert!(legacy.join("notes.md").exists());
+        assert!(!avatars_dir(data).exists());
+        assert!(ensure_initialized(&default_workdir(data), AppLocale::En)
+            .await
+            .is_err());
+    }
+
+    /// Some of the cache kept already (a newer build ran, then an older
+    /// one): what is new goes over, what is kept stays, and the folder is
+    /// gone — a half-written picture too.
+    #[tokio::test]
+    async fn a_face_cache_kept_already_takes_the_rest_over() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path();
+        let dir = default_workdir(data);
+        let legacy = dir.join("avatars");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("3.png"), b"old").unwrap();
+        std::fs::write(legacy.join("4-tray.png"), b"tray").unwrap();
+        std::fs::write(legacy.join("5.png.tmp"), b"half").unwrap();
+        std::fs::create_dir_all(avatars_dir(data)).unwrap();
+        std::fs::write(avatars_dir(data).join("3.png"), b"new").unwrap();
+        assert!(adopt_legacy_avatar_cache(data).is_some());
+        assert!(!legacy.exists());
+        assert_eq!(
+            std::fs::read(avatars_dir(data).join("3.png")).unwrap(),
+            b"new"
+        );
+        assert_eq!(
+            std::fs::read(avatars_dir(data).join("4-tray.png")).unwrap(),
+            b"tray"
+        );
+        assert!(ensure_initialized(&dir, AppLocale::En).await.unwrap());
+    }
+
+    /// A linked `avatars` is not this cache: what it points at is left
+    /// alone, link and all.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_face_folder_is_left_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("data");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("3.png"), b"mine").unwrap();
+        std::fs::create_dir_all(default_workdir(&data)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, default_workdir(&data).join("avatars")).unwrap();
+        std::fs::create_dir_all(avatars_dir(&data)).unwrap();
+        std::fs::write(avatars_dir(&data).join("3.png"), b"new").unwrap();
+        assert!(adopt_legacy_avatar_cache(&data).is_none());
+        assert_eq!(std::fs::read(elsewhere.join("3.png")).unwrap(), b"mine");
+        assert!(default_workdir(&data).join("avatars").exists());
+    }
+
+    /// No cache folder to be had (a file where it would go): the old
+    /// pictures are dropped all the same, and the directory can be made.
+    #[tokio::test]
+    async fn a_face_cache_with_nowhere_to_go_is_dropped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path();
+        let dir = default_workdir(data);
+        std::fs::create_dir_all(dir.join("avatars")).unwrap();
+        std::fs::write(dir.join("avatars").join("3.png"), b"png").unwrap();
+        std::fs::write(data.join("cache"), b"").unwrap();
+        assert!(adopt_legacy_avatar_cache(data).is_some());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        assert!(ensure_initialized(&dir, AppLocale::En).await.unwrap());
+    }
+
+    /// Once made, the directory is the owner's: what is in it stays.
+    #[test]
+    fn a_workdir_already_made_keeps_its_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path();
+        let dir = default_workdir(data);
+        std::fs::create_dir_all(dir.join("avatars")).unwrap();
+        std::fs::write(dir.join("avatars").join("3.png"), b"png").unwrap();
+        std::fs::write(dir.join(MARKER_FILE), b"{}").unwrap();
+        assert!(adopt_legacy_avatar_cache(data).is_none());
+        assert!(dir.join("avatars").join("3.png").exists());
     }
 
     /// Every file a new working directory starts with, in the owner's

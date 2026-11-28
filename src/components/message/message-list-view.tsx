@@ -91,12 +91,14 @@ import {
   CheckIcon,
   CopyIcon,
   Loader2,
+  PencilIcon,
   Plus,
   RefreshCw,
   ListTodo,
 } from "lucide-react"
 import { useCreateTaskFromMessage } from "./use-create-task-from-message"
 import { Button } from "@/components/ui/button"
+import { Textarea } from "@/components/ui/textarea"
 import { useTranslations } from "next-intl"
 import {
   buildPlanKey,
@@ -247,6 +249,16 @@ interface MessageListViewProps {
    * (see `forkBusy`) rather than making every reply's footer flicker.
    */
   onForkFromTurn?: (turnId: string) => void
+  /**
+   * Edit one of the user's sent messages and send it again in its place
+   * ("edit and resend": the session is cut back to just before it, see
+   * `PromptRewindTarget`). Resolves whether it went through, so the inline editor
+   * knows to close. Undefined hides the affordance — pass it only where the
+   * connection can rewind (`supportsRewind`).
+   *
+   * Like fork, a turn in flight greys the button out rather than hiding it.
+   */
+  onEditUserTurn?: (turnId: string, text: string) => Promise<boolean>
   /**
    * The connection's work that can outlive a turn, for the "N running" chip
    * on the live activity row above the composer (see `LiveRunsChip`). Every
@@ -1279,6 +1291,122 @@ export function markThreadTail(items: ThreadRenderItem[]): void {
 }
 
 /**
+ * Whether a user message can be edited and resent in place. The agent names a
+ * rewind point by the message's own record, which the parser puts on the turn
+ * as `agent_message_id`; a message this session sent gets it from the
+ * post-turn reparse (`computeTurnMetadataPatches`), so its edit appears once
+ * the transcript has caught up with it. The first message has nothing before
+ * it to rewind to — both adapters refuse it. Exported for tests.
+ */
+export function isEditableUserTurn(
+  turn: MessageTurn | null | undefined,
+  firstUserTurnId: string | null
+): boolean {
+  if (!turn || turn.role !== "user") return false
+  if (turn.id === firstUserTurnId) return false
+  return !!turn.agent_message_id
+}
+
+const UserMessageEditButton = memo(function UserMessageEditButton({
+  disabled,
+  onClick,
+}: {
+  disabled: boolean
+  onClick: () => void
+}) {
+  const t = useTranslations("Folder.chat.messageList")
+  return (
+    <MessageAction
+      tooltip={disabled ? t("editMessageBusy") : t("editMessage")}
+      className="opacity-0 group-hover/user-msg:opacity-100 transition-opacity self-end"
+      onClick={disabled ? undefined : onClick}
+      aria-disabled={disabled || undefined}
+      size="icon-xs"
+    >
+      <PencilIcon size={12} />
+    </MessageAction>
+  )
+})
+
+/**
+ * The inline editor a sent message turns into. Enter sends (Shift+Enter is a
+ * new line, and an IME composition is never cut short), Escape cancels. The
+ * send stays pending until the rewind answered, and the editor stays open when
+ * it did not go through, so nothing the user typed is lost.
+ */
+function UserMessageEditor({
+  initialText,
+  disabled,
+  onCancel,
+  onSubmit,
+}: {
+  initialText: string
+  disabled: boolean
+  onCancel: () => void
+  onSubmit: (text: string) => Promise<void>
+}) {
+  const t = useTranslations("Folder.chat.messageList")
+  const [text, setText] = useState(initialText)
+  const [pending, setPending] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  }, [])
+  const canSend = !disabled && !pending && text.trim().length > 0
+  const submit = async () => {
+    if (!canSend) return
+    setPending(true)
+    try {
+      await onSubmit(text)
+    } finally {
+      setPending(false)
+    }
+  }
+  return (
+    <div className="ml-auto flex w-full max-w-[min(100%,42rem)] flex-col gap-2">
+      <Textarea
+        ref={textareaRef}
+        value={text}
+        aria-label={t("editMessage")}
+        className="max-h-80 overflow-y-auto"
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault()
+            onCancel()
+            return
+          }
+          if (
+            e.key === "Enter" &&
+            !e.shiftKey &&
+            !e.nativeEvent.isComposing &&
+            e.keyCode !== 229
+          ) {
+            e.preventDefault()
+            void submit()
+          }
+        }}
+      />
+      <div className="flex items-center justify-end gap-2">
+        <span className="mr-auto text-xs text-muted-foreground">
+          {t("editMessageHint")}
+        </span>
+        <Button variant="ghost" size="sm" onClick={onCancel} disabled={pending}>
+          {t("editMessageCancel")}
+        </Button>
+        <Button size="sm" onClick={() => void submit()} disabled={!canSend}>
+          {pending ? <Loader2 className="size-3.5 animate-spin" /> : null}
+          {t("editMessageSend")}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/**
  * Whether forking at this reply would land somewhere other than where the user
  * pointed — so the affordance greys out until it wouldn't.
  *
@@ -1321,6 +1449,9 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   isThreadTail = false,
   previousUserGroup = null,
   checkKey,
+  onEditUserTurn,
+  editable = false,
+  editDisabled = false,
 }: {
   group: ResolvedMessageGroup
   dimmed?: boolean
@@ -1342,11 +1473,18 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   /** The reply's key in the thread: a selection in it is checked as a
    *  sentence of it (10.3). */
   checkKey?: string
+  /** See `MessageListViewProps.onEditUserTurn`. */
+  onEditUserTurn?: (turnId: string, text: string) => Promise<boolean>
+  /** Whether this user message can be edited (`isEditableUserTurn`). */
+  editable?: boolean
+  /** A turn is in flight: the edit button greys out. */
+  editDisabled?: boolean
 }) {
   // A message the user has just sent rises into the thread. Decided once, as
   // it mounts on its way (`dimmed`): the virtual list bringing a stored one
   // back never replays it.
   const [risesIn] = useState(dimmed && group.role === "user")
+  const [editing, setEditing] = useState(false)
   const checks = useMessageChecks()
   if (group.role === "system") {
     // A failed turn's line is the agent's account of the failure, not a
@@ -1369,6 +1507,10 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
       : ""
   const askedOf = () =>
     previousUserGroup ? askedTextOf(previousUserGroup) : null
+  // A user group is one turn; it is what "edit" names.
+  const editTurn =
+    group.role === "user" && sourceTurns?.length ? sourceTurns[0] : null
+  const canEdit = !!onEditUserTurn && editable && !dimmed && editTurn !== null
 
   return (
     // Dimmed while the message is on its way (not yet stored); it brightens
@@ -1388,9 +1530,26 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
         {group.role === "user" && group.images.length > 0 ? (
           <UserImageAttachments images={group.images} className="self-end" />
         ) : null}
-        {group.role === "user" ? (
+        {group.role === "user" && editing && editTurn && onEditUserTurn ? (
+          <UserMessageEditor
+            initialText={unescapeComposerText(
+              extractTextFromParts(group.parts)
+            )}
+            disabled={editDisabled}
+            onCancel={() => setEditing(false)}
+            onSubmit={async (text) => {
+              if (await onEditUserTurn(editTurn.id, text)) setEditing(false)
+            }}
+          />
+        ) : group.role === "user" ? (
           <div className="group/user-msg flex w-fit ml-auto max-w-full items-start gap-1">
             <UserMessageTaskButton parts={group.parts} />
+            {canEdit ? (
+              <UserMessageEditButton
+                disabled={editDisabled}
+                onClick={() => setEditing(true)}
+              />
+            ) : null}
             <UserMessageCopyButton parts={group.parts} />
             <MessageContent>
               <CollapsibleUserMessage parts={group.parts} />
@@ -1498,50 +1657,33 @@ const PendingReply = memo(function PendingReply() {
   )
 })
 
-type LiveStatsMessage = ComponentProps<typeof LiveTurnStats>["message"]
-
-interface LiveActivityContent {
-  /** The running turn, `null` when none runs. */
-  message: LiveStatsMessage
-  runs: LiveRunsList
-}
-
 /**
  * The live activity row above the composer: the running turn's figures and the
- * "N running" chip. While it shows (`show`) it draws what is live — so a turn
- * that ends with work still running leaves the chip alone on the row. While it
- * slides away it keeps its last content, so that leaves with the row instead
- * of blanking it first. Mounted only while the row is, so a new turn starts
- * from its own.
+ * "N running" chip — what is live, so a turn that ends with work still running
+ * leaves the chip alone on the row. Mounted only while the row is, so a new
+ * turn starts from its own.
  */
-function HeldLiveActivityBar({
-  show,
+function LiveActivityBar({
   message,
   runs,
   onStopAsyncTask,
   agentName,
-}: LiveActivityContent & {
-  show: boolean
+}: {
+  /** The running turn, `null` when none runs. */
+  message: ComponentProps<typeof LiveTurnStats>["message"]
+  runs: LiveRunsList
   onStopAsyncTask?: (taskId: string) => Promise<boolean>
   agentName?: string
 }) {
-  const [held, setHeld] = useState<LiveActivityContent>(() => ({
-    message,
-    runs,
-  }))
-  if (show && (held.message !== message || held.runs !== runs)) {
-    setHeld({ message, runs })
-  }
-  const shown = show ? { message, runs } : held
-  if (!shown.message && shown.runs.count === 0) return <div className="h-8" />
+  if (!message && runs.count === 0) return <div className="h-8" />
   return (
     <LiveTurnStats
-      message={shown.message}
+      message={message}
       trailing={
-        shown.runs.count > 0 ? (
+        runs.count > 0 ? (
           <LiveRunsChip
-            runs={shown.runs}
-            interactive={show}
+            runs={runs}
+            interactive
             onStopAsyncTask={onStopAsyncTask}
             agentName={agentName}
           />
@@ -1601,6 +1743,7 @@ export function MessageListView({
   checksOpenInDrawer = false,
   onSaveNoteSelection,
   onForkFromTurn,
+  onEditUserTurn,
   liveRuns = null,
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
@@ -1922,6 +2065,16 @@ export function MessageListView({
   // its gate in `conversation-detail-panel`), and every reply's footer says
   // "not right now" instead of dropping its button and shifting the icon row.
   const forkBusy = connStatus === "prompting"
+  // The conversation's first user message is the one no rewind can reach.
+  // Only knowable while the window starts at the top: a paged window's first
+  // user turn is not the conversation's.
+  const firstUserTurnId = useMemo(() => {
+    if (!onEditUserTurn) return null
+    if (isWindowedDetail(detail) && detail.turns_offset > 0) return null
+    return (
+      timelineTurns.find((entry) => entry.turn.role === "user")?.turn.id ?? null
+    )
+  }, [onEditUserTurn, detail, timelineTurns])
 
   const renderThreadItem = useCallback(
     (item: ThreadRenderItem) => {
@@ -1959,6 +2112,12 @@ export function MessageListView({
                 isThreadTail={item.isThreadTail}
                 previousUserGroup={item.previousUserGroup}
                 checkKey={item.key}
+                onEditUserTurn={onEditUserTurn}
+                editable={
+                  item.group.role === "user" &&
+                  isEditableUserTurn(item.sourceTurns?.[0], firstUserTurnId)
+                }
+                editDisabled={forkBusy}
               />
             </div>
           )
@@ -1994,6 +2153,8 @@ export function MessageListView({
       handleRoundOpenChange,
       onForkFromTurn,
       forkBusy,
+      onEditUserTurn,
+      firstUserTurnId,
     ]
   )
 
@@ -2369,14 +2530,16 @@ export function MessageListView({
   )
   const activityShown = turnLive || liveRunList.count > 0
   // Slides in over the composer as a turn starts or work starts running past
-  // one, and out once neither is left, so the transcript above eases up and
-  // back instead of jumping. Drawn under the loading and load-error states
-  // too: what runs is the connection's, not the transcript's, and its stop
-  // must not wait on the history loading.
+  // one, so the transcript above eases up instead of jumping. Goes at once
+  // when neither is left, in the same commit the composer turns idle: a slide
+  // shut is drawn and timed on the main thread, so whatever stalls that thread
+  // as a turn ends left the row and its figures up over a composer that had
+  // already finished. Drawn under the loading and load-error states too:
+  // what runs is the connection's, not the transcript's, and its stop must not
+  // wait on the history loading.
   const activityRow = (
-    <SlideSlot className="shrink-0" show={activityShown}>
-      <HeldLiveActivityBar
-        show={activityShown}
+    <SlideSlot className="shrink-0" show={activityShown} closeAtOnce>
+      <LiveActivityBar
         message={turnLive ? liveMessage : null}
         runs={liveRunList}
         onStopAsyncTask={liveRuns?.onStopAsyncTask}

@@ -45,6 +45,11 @@ export interface MessageActionsSpec {
   live?: boolean
   /** `false`: nothing to quote (text that is no row of its own). */
   quote?: boolean
+  /** Rows the message draws parts of its own for, each marked
+   *  `data-pa-part-row` with its id (a run of rule cards drawn as one),
+   *  and what copy copies of each: a right-click on one opens the menu on
+   *  it — quote and copy it, not the whole. */
+  parts?: Readonly<Record<number, string>>
 }
 
 /** `14:32`, `昨天 09:10`, `11月3日 18:05` — how the list writes a time, in

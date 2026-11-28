@@ -61,7 +61,7 @@ export interface ReplyView {
   slot: SlotView | null
   ending: ReplyEnding | null
   answered: AnsweredLine[]
-  /** The turn's dispatch and follow-up cards, in order. */
+  /** The dispatch and follow-up pills it draws, in order. */
   dispatches: TimelineRow[]
   /** Interrupted messages of the turn that can be sent again. */
   resend: number[]
@@ -75,6 +75,9 @@ export interface ReplyViewInput {
   live: ReplyStep | null | undefined
   attached: readonly TimelineRow[]
   owners: readonly TimelineRow[]
+  /** The pills it draws (its part's, not those that made way); the turn's
+   *  dispatches in `attached` when not given. */
+  pills?: readonly TimelineRow[]
 }
 
 function str(data: Record<string, unknown> | null, key: string): string | null {
@@ -214,8 +217,11 @@ export function replyView({
   live,
   attached,
   owners,
+  pills,
 }: ReplyViewInput): ReplyView {
-  const dispatches = attached.filter((r) => r.kind === "dispatch")
+  // What it handed out — all the turn's, for what it did instead of text.
+  const handedOut = attached.filter((r) => r.kind === "dispatch")
+  const dispatches = pills ? [...pills] : handedOut
   const answered = answeredLines(attached)
   const state = row ? replyState(row) : null
   const running = state === "running"
@@ -256,12 +262,12 @@ export function replyView({
   } else if (ending == null || ending.kind === "truncated") {
     // Ended well but wrote nothing: say what it did.
     const fresh = new Set(
-      dispatches
+      handedOut
         .filter((d) => d.data?.followup !== true)
         .map((d) => d.dispatch_id ?? d.id)
     )
     const continued = new Set(
-      dispatches
+      handedOut
         .filter((d) => d.data?.followup === true)
         .map((d) => d.dispatch_id ?? d.id)
     )

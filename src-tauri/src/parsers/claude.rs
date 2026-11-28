@@ -8,8 +8,9 @@ use regex::Regex;
 
 use crate::models::*;
 use crate::parsers::{
-    folder_name_from_path, is_safe_subagent_id, title_from_user_text, truncate_str, AgentEnv,
-    AgentParser, ParseError,
+    add_usage_to_turn_current_at, folder_name_from_path, is_safe_subagent_id,
+    subagent_transcript_paths, title_from_user_text, truncate_str, AgentEnv, AgentParser,
+    ParseError,
 };
 
 /// Regex that matches Claude Code system-injected XML tags and their content.
@@ -2376,6 +2377,15 @@ impl ClaudeRecordAccumulator {
                     }
                 }
 
+                // A typed prompt's rewind point: claude-agent-acp 0.112.0 names
+                // the spot just before a user message `before:<record uuid>`
+                // (`_session/rewind`, see `crate::acp::rewind`). Tool results
+                // are absorbed into the reply before them and never become a
+                // user turn, so they need no exclusion here.
+                let agent_message_id = (matches!(role, MessageRole::User)
+                    && !uuid.is_empty()
+                    && value.get("isSidechain").and_then(|v| v.as_bool()) != Some(true))
+                .then(|| uuid.clone());
                 messages.push(UnifiedMessage {
                     id: uuid,
                     role,
@@ -2385,7 +2395,7 @@ impl ClaudeRecordAccumulator {
                     duration_ms: None,
                     model: None,
                     completed_at: Some(timestamp),
-                agent_message_id: None,
+                    agent_message_id,
                 });
             }
             "assistant" => {
@@ -2902,13 +2912,21 @@ impl ClaudeParser {
         let bytes = fs::read(path)?;
         let transcript_watermark = bytes.len() as u64;
 
+        // Mirror `BufReader::lines()`: a line that isn't valid UTF-8 is
+        // skipped (the old loop's per-line `Err(_) => continue`).
+        let lines: Vec<&str> = bytes
+            .split(|b| *b == b'\n')
+            .filter_map(|chunk| std::str::from_utf8(chunk).ok())
+            .collect();
+        // A rewound branch is still in the file; Claude Code no longer reads
+        // it, and neither does this (see `claude_rewind`).
+        let pending_drop = super::claude_rewind::pending_rewind_drop(path);
+        let rewound = super::claude_rewind::rewound_lines(&lines, pending_drop.as_deref());
         let mut acc = ClaudeRecordAccumulator::new(path.clone());
-        for chunk in bytes.split(|b| *b == b'\n') {
-            // Mirror `BufReader::lines()`: a line that isn't valid UTF-8 is
-            // skipped (the old loop's per-line `Err(_) => continue`).
-            let Ok(line) = std::str::from_utf8(chunk) else {
+        for (idx, line) in lines.iter().enumerate() {
+            if rewound.as_ref().is_some_and(|mask| mask[idx]) {
                 continue;
-            };
+            }
             acc.feed_line(line);
         }
         acc.finalize_background_lifecycle();
@@ -3659,10 +3677,13 @@ fn extract_agent_execution_stats(tur: &serde_json::Value) -> AgentExecutionStats
 /// assistant messages with tool_use blocks, followed by user messages
 /// with tool_result blocks. We pair them by tool_use_id and produce
 /// a compact list of `AgentToolCall` records.
-/// Fold what this session's `Task` sub-agents spent into its own messages.
+/// Fold what this session's sub-agents spent into its own messages.
 ///
 /// A sub-agent runs its own conversation with the model and writes it to
-/// `<session>/subagents/agent-<id>.jsonl`. Session discovery only globs the
+/// `<session>/subagents/agent-<id>.jsonl` — or, for a Workflow run's agents,
+/// `<session>/subagents/workflows/<runId>/agent-<id>.jsonl`, which is why the
+/// directory is walked to any depth (see [`subagent_transcript_paths`]).
+/// Session discovery only globs the
 /// session-level transcripts, so those files are never a conversation anyone
 /// can open — and their tokens were counted nowhere at all: 4.9 % of all Claude
 /// spend in a real transcript tree, concentrated in exactly the sessions that
@@ -3691,54 +3712,11 @@ fn extract_agent_execution_stats(tur: &serde_json::Value) -> AgentExecutionStats
 /// window has been read: delegated tokens are this session's *spend*, but they
 /// never occupied this session's prompt.
 fn attribute_subagent_usage(session_path: &Path, turns: &mut [MessageTurn]) {
-    let subagent_dir = session_path.with_extension("").join("subagents");
-    let Ok(entries) = fs::read_dir(&subagent_dir) else {
-        return;
-    };
-
-    let mut transcripts: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
-        .collect();
-    // Directory order is filesystem-defined; sort so attribution is identical
-    // on every parse of the same session.
-    transcripts.sort();
-
-    for transcript in transcripts {
+    for transcript in subagent_transcript_paths(session_path) {
         let (_, _, usage, started_at, _) = parse_subagent_tool_calls(&transcript);
         let Some(extra) = usage else { continue };
-
-        // The turn that was speaking when the sub-agent began. Falling back to
-        // the last assistant message keeps the tokens in the session even when
-        // the transcript carries no usable timestamp.
-        let target = started_at
-            .and_then(|start| {
-                turns
-                    .iter()
-                    .rposition(|t| matches!(t.role, TurnRole::Assistant) && t.timestamp <= start)
-            })
-            .or_else(|| {
-                turns
-                    .iter()
-                    .rposition(|t| matches!(t.role, TurnRole::Assistant))
-            });
-        let Some(launcher) = target.and_then(|i| turns.get_mut(i)) else {
-            continue;
-        };
-        launcher.usage = Some(match launcher.usage {
-            Some(ref own) => TurnUsage {
-                input_tokens: own.input_tokens.saturating_add(extra.input_tokens),
-                output_tokens: own.output_tokens.saturating_add(extra.output_tokens),
-                cache_creation_input_tokens: own
-                    .cache_creation_input_tokens
-                    .saturating_add(extra.cache_creation_input_tokens),
-                cache_read_input_tokens: own
-                    .cache_read_input_tokens
-                    .saturating_add(extra.cache_read_input_tokens),
-            },
-            None => extra,
-        });
+        // The turn that was speaking when the sub-agent began.
+        add_usage_to_turn_current_at(turns, started_at, &extra);
     }
 }
 
@@ -4281,7 +4259,8 @@ pub(crate) fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-            agent_message_id: None,
+                // The prompt record's uuid: what `_session/rewind` names it by.
+                agent_message_id: msg.agent_message_id.clone(),
             });
             i += 1;
         }
@@ -5570,6 +5549,87 @@ mod tests {
         ClaudeParser::with_base_dir(dir.path().to_path_buf())
             .get_conversation(name)
             .unwrap()
+    }
+
+    /// The shape claude-agent-acp 0.112.0 leaves after `_session/rewind` of the
+    /// second of three prompts and an edited prompt sent in its place (t605
+    /// live capture, trimmed): the old branch stays in the file, the new
+    /// prompt hangs off the entry before it.
+    #[test]
+    fn a_rewound_branch_is_not_rendered_and_prompts_carry_their_record_uuid() {
+        let user = |uuid: &str, parent: Option<&str>, text: &str| {
+            json!({"type": "user", "uuid": uuid, "parentUuid": parent,
+                   "timestamp": "2026-11-24T23:37:59.000Z", "sessionId": "s-rw",
+                   "message": {"role": "user", "content": text}})
+            .to_string()
+        };
+        let assistant = |uuid: &str, parent: &str, id: &str, text: &str| {
+            json!({"type": "assistant", "uuid": uuid, "parentUuid": parent,
+                   "timestamp": "2026-11-24T23:38:00.000Z", "sessionId": "s-rw",
+                   "message": {"id": id, "role": "assistant", "model": "claude-sonnet-5-5",
+                               "content": [{"type": "text", "text": text}]}})
+            .to_string()
+        };
+        let lines = vec![
+            user("u1", None, "first question"),
+            assistant("a1", "u1", "msg_1", "answer one"),
+            user("u2", Some("a1"), "second question"),
+            assistant("a2", "u2", "msg_2", "answer two"),
+            user("u3", Some("a2"), "third question"),
+            assistant("a3", "u3", "msg_3", "answer three"),
+            user("u4", Some("a1"), "edited question"),
+            assistant("a4", "u4", "msg_4", "answer four"),
+        ];
+        let detail = parse_lines("s-rw", &lines);
+        assert_eq!(
+            turn_shapes(&detail),
+            vec![
+                "User:first questi",
+                "Assistant:answer one",
+                "User:edited quest",
+                "Assistant:answer four",
+            ]
+        );
+        let user_ids: Vec<Option<&str>> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .map(|t| t.agent_message_id.as_deref())
+            .collect();
+        assert_eq!(user_ids, vec![Some("u1"), Some("u4")]);
+    }
+
+    /// Before the edited prompt arrives, only `rewind.json` says the last
+    /// prompt was dropped.
+    #[test]
+    fn a_pending_rewind_point_hides_its_prompt_before_a_new_one_is_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().join("-Users-test-proj");
+        std::fs::create_dir_all(proj.join("s-pend")).unwrap();
+        let lines = [
+            json!({"type": "user", "uuid": "u1", "parentUuid": null, "timestamp": "2026-11-24T23:37:59.000Z",
+                   "message": {"role": "user", "content": "first question"}}),
+            json!({"type": "assistant", "uuid": "a1", "parentUuid": "u1", "timestamp": "2026-11-24T23:38:00.000Z",
+                   "message": {"id": "msg_1", "role": "assistant", "content": [{"type": "text", "text": "answer one"}]}}),
+            json!({"type": "user", "uuid": "u2", "parentUuid": "a1", "timestamp": "2026-11-24T23:38:01.000Z",
+                   "message": {"role": "user", "content": "second question"}}),
+            json!({"type": "assistant", "uuid": "a2", "parentUuid": "u2", "timestamp": "2026-11-24T23:38:02.000Z",
+                   "message": {"id": "msg_2", "role": "assistant", "content": [{"type": "text", "text": "answer two"}]}}),
+        ]
+        .map(|v| v.to_string());
+        std::fs::write(proj.join("s-pend.jsonl"), lines.join("\n") + "\n").unwrap();
+        std::fs::write(
+            proj.join("s-pend").join("rewind.json"),
+            r#"{"resumeSessionAt":"a1","droppedPromptUuid":"u2"}"#,
+        )
+        .unwrap();
+        let detail = ClaudeParser::with_base_dir(dir.path().to_path_buf())
+            .get_conversation("s-pend")
+            .unwrap();
+        assert_eq!(
+            turn_shapes(&detail),
+            vec!["User:first questi", "Assistant:answer one"]
+        );
     }
 
     /// One line per turn: role plus either its text or the tool it carries.
@@ -7631,7 +7691,12 @@ mod tests {
         let dir = stem.join("subagents");
         fs::create_dir_all(&dir).expect("create subagents dir");
         for (agent_id, agent_lines) in subagents {
-            let mut f = fs::File::create(dir.join(format!("agent-{agent_id}.jsonl")))
+            // `workflows/<runId>/<id>` files the transcript in a subdirectory,
+            // the way Claude Code lays out a Workflow run's agents.
+            let (subdir, agent_id) = agent_id.rsplit_once('/').unwrap_or(("", agent_id));
+            let agent_dir = dir.join(subdir);
+            fs::create_dir_all(&agent_dir).expect("create subagent subdir");
+            let mut f = fs::File::create(agent_dir.join(format!("agent-{agent_id}.jsonl")))
                 .expect("create subagent jsonl");
             for line in agent_lines {
                 writeln!(f, "{line}").unwrap();
@@ -7716,6 +7781,36 @@ mod tests {
             )],
         );
         assert_eq!(total_usage_tokens(&detail), 8_000);
+    }
+
+    #[test]
+    fn a_workflow_runs_agents_in_nested_subdirectories_are_counted() {
+        // Claude Code files a Workflow run's agents under
+        // `subagents/workflows/<runId>/`, not flat in `subagents/` — reading
+        // only the top level dropped all of their spend.
+        let detail = parse_with_subagents(
+            &session_launching("abc", 1),
+            &[
+                (
+                    "abc",
+                    vec![subagent_line(
+                        "s1",
+                        "msg_sub",
+                        "2026-03-01T10:02:00Z",
+                        7_000,
+                    )],
+                ),
+                (
+                    "workflows/wf_run1/w1",
+                    vec![subagent_line("w1", "msg_w1", "2026-03-01T10:03:00Z", 300)],
+                ),
+                (
+                    "workflows/wf_run1/w2",
+                    vec![subagent_line("w2", "msg_w2", "2026-03-01T10:04:00Z", 20)],
+                ),
+            ],
+        );
+        assert_eq!(total_usage_tokens(&detail), 8_320);
     }
 
     #[test]

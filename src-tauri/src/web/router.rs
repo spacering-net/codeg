@@ -476,6 +476,10 @@ pub fn build_router_with_srn(
             post(handlers::personal_agent::personal_agent_item_act),
         )
         .route(
+            "/personal_agent_item_undo",
+            post(handlers::personal_agent::personal_agent_item_undo),
+        )
+        .route(
             "/personal_agent_presence",
             post(handlers::personal_agent::personal_agent_presence),
         )
@@ -1571,10 +1575,6 @@ pub fn build_router_with_srn(
         .route(
             "/acp_validate_pi_command",
             post(handlers::acp::acp_validate_pi_command),
-        )
-        .route(
-            "/acp_sync_antigravity_settings",
-            post(handlers::acp::acp_sync_antigravity_settings),
         )
         .route(
             "/acp_antigravity_login_start",

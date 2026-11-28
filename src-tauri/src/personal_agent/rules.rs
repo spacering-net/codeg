@@ -710,7 +710,7 @@ impl EngineHost {
                 Some(e) => e,
                 None => self.primary.clone(),
             };
-            if let Err(e) = engine.raise_rule_card(&f, &look.prefs, lowered).await {
+            if let Err(e) = engine.raise_rule_card(&f, &look.prefs, lowered, look.now).await {
                 tracing::warn!("[personal-agent] rule {rule}: no card for {}: {e}", f.object);
             }
         }
@@ -1382,12 +1382,15 @@ fn data_of_row(raw: Option<&str>) -> Value {
 
 impl PersonalAgentEngine {
     /// Put what a rule found in front of the owner: the card, its news,
-    /// and a line for the assistant.
+    /// and a line for the assistant. `scan`: the look that found it — the
+    /// cards one look raised carry the same, and the timeline draws a run
+    /// of one rule's of one look as one card.
     pub(super) async fn raise_rule_card(
         &self,
         f: &Found,
         prefs: &Prefs,
         lowered: bool,
+        scan: DateTime<Utc>,
     ) -> Result<i32, String> {
         let bot = self.bot().await;
         let kind = news_kind(f.rule, lowered);
@@ -1402,6 +1405,7 @@ impl PersonalAgentEngine {
             "since": f.since,
             "lowered": lowered,
             "facts": f.facts,
+            "scan": scan.to_rfc3339(),
         }));
         let (notice, card) = svc::create_notice_with_row(
             &self.db.conn,
@@ -1677,9 +1681,10 @@ impl PersonalAgentEngine {
             ("session", "open") | ("uncommitted", "open") => Ok(("opened".into(), json!({}))),
             ("idle", "close") => {
                 let item = id_of("item_id").ok_or("the card names no matter")?;
-                self.settle_item(item, "drop", None)
+                self.settle_item_from(item, "drop", None, super::reminders::OpSource::RuleCard)
                     .await
                     .map(|_| ("closed".into(), json!({ "item_id": item })))
+                    .map_err(String::from)
             }
             ("behind", "rebase") => self.rebase_behind(&facts).await,
             ("undo", "ask_first") => self
@@ -1838,7 +1843,7 @@ impl PersonalAgentEngine {
 
     /// Whether a conversation's dispatch has a session to go on in: a live
     /// connection, or one its conversation can resume.
-    async fn resumable(&self, d: &dispatch_entity::Model) -> bool {
+    pub(super) async fn resumable(&self, d: &dispatch_entity::Model) -> bool {
         let Some(conversation) = d.conversation_id else {
             return false;
         };

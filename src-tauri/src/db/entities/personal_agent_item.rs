@@ -87,6 +87,21 @@ pub struct Model {
     /// `personal_agent::mentions::Mention`).
     #[sea_orm(column_type = "Text", nullable)]
     pub mention: Option<String>,
+    /// When it went from open or waiting to done or dropped; none while it
+    /// is open, and for one settled before this was kept.
+    pub closed_at: Option<DateTimeUtc>,
+    /// Who settled it: `owner`, `agent` or `codeg` (`Closer`).
+    #[sea_orm(column_type = "Text", nullable)]
+    pub closed_by: Option<String>,
+    /// How (`ClosedHow`): `done`, `dropped`, `withdrawn`, ...
+    #[sea_orm(column_type = "Text", nullable)]
+    pub closed_how: Option<String>,
+    /// A question's: the owner's message answering it.
+    pub answer_row_id: Option<i32>,
+    /// How that answer stands: `linked` (the assistant has it) or
+    /// `interrupted` (the turn that had it did not finish).
+    #[sea_orm(column_type = "Text", nullable)]
+    pub answer_state: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

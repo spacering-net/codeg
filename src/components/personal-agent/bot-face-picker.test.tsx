@@ -84,12 +84,12 @@ describe("the face editor's bubble", () => {
   it("has its three pages and [Reset] in a row, open on the page its face is from", () => {
     editor(BLOB)
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
-      "Bot",
+      "Models",
       "Text",
       "Upload",
     ])
     expect(
-      screen.getByRole("tab", { name: "Bot" }).getAttribute("aria-selected")
+      screen.getByRole("tab", { name: "Models" }).getAttribute("aria-selected")
     ).toBe("true")
     cleanup()
     editor({ kind: "monogram", color: "red" })
@@ -135,10 +135,10 @@ describe("the face editor's bubble", () => {
     expect(screen.queryByRole("button", { name: "Reset" })).toBeNull()
   })
 
-  it("makes a face of its name's first character or an emoji, on one of the ten colours", () => {
+  it("makes a face of its name's first character or an emoji, on one of the faces' colours", () => {
     const { onChange } = editor(BLOB)
     openPage("Text")
-    // The colour carried over from the face: the nearest of the ten.
+    // The colour carried over from the face, as it is.
     fireEvent.click(screen.getByRole("button", { name: "Name's first letter" }))
     expect(onChange).toHaveBeenLastCalledWith({
       kind: "monogram",
@@ -201,11 +201,51 @@ describe("the face editor's bubble", () => {
 
   it("recolours what it made, keeping the emoji", () => {
     const { onChange } = editor({ kind: "emoji", emoji: "🦊", color: "red" })
-    fireEvent.click(screen.getByRole("button", { name: "violet" }))
+    fireEvent.click(screen.getByRole("button", { name: "Purple" }))
     expect(onChange).toHaveBeenLastCalledWith({
       kind: "emoji",
       emoji: "🦊",
-      color: "violet",
+      color: "purple",
+    })
+  })
+
+  it("offers the text the same eleven colours as the faces", () => {
+    editor({ kind: "monogram", color: "magenta" })
+    const swatches = [
+      ...document.querySelectorAll<HTMLElement>("[data-pa-make-color]"),
+    ]
+    expect(swatches.map((b) => b.dataset.paMakeColor)).toEqual([
+      "black",
+      "brown",
+      "red",
+      "orange",
+      "yellow",
+      "green",
+      "teal",
+      "blue",
+      "purple",
+      "magenta",
+      "gray",
+    ])
+    expect(
+      screen
+        .getByRole("button", { name: "Magenta" })
+        .getAttribute("aria-pressed")
+    ).toBe("true")
+  })
+
+  it("reads a text avatar made in one of the old ten as the nearest face colour", () => {
+    const { onChange } = editor({ kind: "emoji", emoji: "🦊", color: "sky" })
+    expect(
+      screen.getByRole("button", { name: "Blue" }).getAttribute("aria-pressed")
+    ).toBe("true")
+    // And carries it to a face.
+    openPage("Models")
+    fireEvent.click(screen.getByRole("button", { name: "Bug" }))
+    expect(onChange).toHaveBeenLastCalledWith({
+      kind: "face",
+      shape: "bug",
+      color: "blue",
     })
   })
 

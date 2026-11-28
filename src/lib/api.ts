@@ -21,6 +21,7 @@ import {
   DEFAULT_FORGE_PAGE_SIZE,
 } from "./forge-list-prefs"
 import { TurnBusyError, isTurnInProgressRejection } from "./turn-busy"
+import { asRewindRefusedError } from "./rewind-refused"
 import { asConversationMovedError } from "./conversation-moved"
 import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
@@ -40,6 +41,7 @@ import type {
   ConversationTarget,
   DispatchInfo,
   DispatchMode,
+  ItemActResult,
   ItemInfo,
   PersonalAgentDraft,
   PersonalAgentFile,
@@ -266,6 +268,7 @@ import type {
   OfficecliInfo,
   OfficecliSkill,
   SkillSyncReport,
+  StopReply,
   TokenUsageFacets,
   TokenUsageFilter,
   TokenUsageReport,
@@ -393,12 +396,23 @@ export function stripUploadedImagePayloads(
   })
 }
 
+/** An edited message's rewind target, riding on its own prompt: the backend
+ *  cuts the agent's session back to just before the message it replaces and
+ *  admits the prompt in the same step ("edit and resend", claude-agent-acp
+ *  0.112.0 / codex-acp 2.12.0; see `crate::acp::rewind`). The message is
+ *  named by the agent's id for it and checked by its text. */
+export interface PromptRewindTarget {
+  agentMessageId: string
+  text: string
+}
+
 export async function acpPrompt(
   connectionId: string,
   blocks: PromptInputBlock[],
   folderId: number | null = null,
   conversationId: number | null = null,
-  clientMessageId: string | null = null
+  clientMessageId: string | null = null,
+  rewind: PromptRewindTarget | null = null
 ): Promise<void> {
   try {
     await getTransport().call("acp_prompt", {
@@ -412,10 +426,11 @@ export async function acpPrompt(
       folderId,
       conversationId,
       clientMessageId,
+      ...(rewind ? { rewind } : {}),
     })
   } catch (e) {
     if (isTurnInProgressRejection(e)) throw new TurnBusyError()
-    throw asConversationMovedError(e) ?? e
+    throw asConversationMovedError(e) ?? asRewindRefusedError(e) ?? e
   }
 }
 
@@ -1111,64 +1126,25 @@ export type PiProjectTrustState = {
 }
 
 /**
- * What one settings.json sync did. Mirrors `AntigravitySyncReport` in
- * src-tauri/src/acp/connection.rs.
- *
- * `skipped` is the one that matters: the file was left as it was, so the
- * agent's auth is NOT what the panel now shows, and `reason` says why in the
- * same words the log uses.
- */
-export type AntigravitySyncReport = {
-  path: string
-  status: "written" | "already_current" | "skipped"
-  reason: string | null
-}
-
-/**
- * Write the saved Antigravity auth choice into the ACP server's settings.json
- * and report what happened.
- *
- * Call it right after saving the env row. The row is not what authenticates
- * Antigravity — `<GEMINI_HOME>/antigravity-acp/settings.json` is — and the file
- * can legitimately refuse to be rewritten (Hjson with comments, an `auth` key
- * that is not an object). Reporting "saved" without asking would be claiming
- * something that never happened: the launch would go on using the OLD
- * auth.type with the NEW method's credentials scrubbed out from under it.
- */
-export async function acpSyncAntigravitySettings(): Promise<AntigravitySyncReport> {
-  return getTransport().call("acp_sync_antigravity_settings", {})
-}
-
-/**
  * Step one of a browser-free Antigravity sign-in. Mirrors
- * `AntigravityLoginStart` in src-tauri/src/acp/antigravity_login.rs, as a union
- * on `alreadySignedIn` — the agent may hold a still-usable token, in which case
- * it authenticates on the spot and there is no link and nothing to complete.
+ * `AntigravityLoginStart` in src-tauri/src/acp/antigravity_login.rs.
+ * `agy acp --login` always asks for consent, so there is always a link.
  */
-export type AntigravityLoginStart =
-  | {
-      alreadySignedIn: true
-      handle: null
-      authUrl: null
-      redirectUri: null
-      methodId: string
-      expiresInSecs: number
-    }
-  | {
-      alreadySignedIn: false
-      /** Opaque id for this attempt; pass it back to finish/cancel. */
-      handle: string
-      /** The Google consent URL — open it in any browser, on any machine. */
-      authUrl: string
-      /**
-       * Where the browser will be redirected and fail to connect. Shown so the
-       * dead page reads as an expected step rather than a broken login.
-       */
-      redirectUri: string
-      methodId: string
-      /** Antigravity stops waiting after this many seconds. */
-      expiresInSecs: number
-    }
+export type AntigravityLoginStart = {
+  /** Opaque id for this attempt; pass it back to finish/cancel. */
+  handle: string
+  /** The Google consent URL — open it in any browser, on any machine. */
+  authUrl: string
+  /**
+   * Where the browser lands after consent. The CLI asks the user to paste
+   * that address (or the code) back, so the panel shows it as the expected
+   * next step.
+   */
+  redirectUri: string
+  methodId: string
+  /** codeg ends the waiting sign-in after this many seconds. */
+  expiresInSecs: number
+}
 
 /** Step two's answer. Mirrors `AntigravityLoginOutcome` in the same file. */
 export type AntigravityLoginOutcome = {
@@ -1177,32 +1153,26 @@ export type AntigravityLoginOutcome = {
   message: string | null
   /**
    * Whether the same link still works. True only when codeg rejected the paste
-   * itself — the agent never saw it, so the consent already given is still good
-   * and only the paste needs fixing. False once the redirect went out: the
-   * agent's listener answers exactly one request.
+   * itself — the CLI never saw it, so the consent already given is still good
+   * and only the paste needs fixing. False once the code went out:
+   * `agy acp --login` consumes it and exits.
    */
   retryable: boolean
-  /** Where the credential landed, when codeg can name the file. */
-  credentialPath: string | null
 }
 
 /**
  * Begin signing in to Antigravity on a machine with no browser.
  *
- * Antigravity authenticates through a loopback browser flow the AGENT runs, so
- * on a headless server (codeg deployed on Linux, no desktop) the first session
- * opens a browser that does not exist and then blocks for five minutes. This
- * runs the same flow out of band and hands back the link, so the consent can
- * happen in whatever browser the user does have.
+ * `agy acp --login` prints a Google consent URL and waits on stdin for the
+ * authorization code. The backend spawns that child, scrapes the link, and
+ * hands it back so the consent can happen in whatever browser the user has.
  */
 export async function acpAntigravityLoginStart(
   methodId: string
 ): Promise<AntigravityLoginStart> {
-  // The backend spawns the agent and waits for it: up to 60s for `initialize`
-  // (CPython inside a PAR, unpacked on first run) plus 90s for the printed
-  // link. The transport defaults — 60s on web, 30s through the remote-desktop
-  // proxy — would abort with "Request timed out" while that child is still
-  // starting, so the ceiling has to clear the backend's own with a margin.
+  // The backend spawns `agy acp --login` and waits up to 20s for the printed
+  // link. The remote-desktop proxy's 30s default leaves little margin on a
+  // loaded machine, so the ceiling clears the backend's own generously.
   return getTransport().call(
     "acp_antigravity_login_start",
     { methodId },
@@ -1211,21 +1181,17 @@ export async function acpAntigravityLoginStart(
 }
 
 /**
- * Finish that sign-in with the address the browser was redirected to.
- *
- * That address points at `127.0.0.1` on the *server*, which the user's browser
- * cannot reach — codeg can, so it performs the redirect on their behalf. Only
- * the OAuth parameters are taken from the paste; the target itself comes from
- * the link codeg issued.
+ * Finish that sign-in with the authorization code (or the full address the
+ * browser landed on). The backend writes it to the `agy acp --login` child's
+ * stdin and waits for the CLI to exchange it and store the credential.
  */
 export async function acpAntigravityLoginFinish(
   handle: string,
   redirect: string
 ): Promise<AntigravityLoginOutcome> {
-  // 20s to deliver the redirect plus 180s for the agent's token exchange and
-  // onboarding round-trips. Timing out under that would be the worst case
-  // available: the attempt is already spent, so the sign-in cannot be retried,
-  // and its result would be lost with it.
+  // Up to 180s for the CLI's token exchange. Timing out under that would be the
+  // worst case available: the attempt is already spent, so the sign-in cannot
+  // be retried, and its result would be lost with it.
   return getTransport().call(
     "acp_antigravity_login_finish",
     { handle, redirect },
@@ -1239,24 +1205,14 @@ export async function acpAntigravityLoginCancel(handle: string): Promise<void> {
 }
 
 /**
- * Clear the credential Antigravity is holding, so the next sign-in can reach a
- * different Google account.
- *
- * Without it a signed-in Antigravity cannot switch accounts at all: the agent
- * refreshes its cached token silently, so `acpAntigravityLoginStart` answers
- * `alreadySignedIn` and never produces a consent link.
- *
- * Returns the settings.json sync report rather than a success flag. Signing out
- * removes `auth.type` from that file, so the backend writes the saved method
- * straight back — and a `skipped` report is the warning that it could not, and
- * that every later session will fail with "Authentication required" until the
- * user edits the file themselves.
+ * Clear the credential Antigravity is holding (through the CLI's ACP
+ * `logout`), so the next sign-in can reach a different Google account.
+ * Running Antigravity sessions end first, since they would write it back.
  */
-export async function acpAntigravitySignOut(): Promise<AntigravitySyncReport> {
-  // The backend spawns the agent and puts two requests to it: up to 60s for
-  // `initialize` (CPython inside a PAR, unpacked on first run) plus 60s for the
-  // sign-out itself. The transport defaults — 60s on web, 30s through the
-  // remote-desktop proxy — would abort while that child is still starting.
+export async function acpAntigravitySignOut(): Promise<void> {
+  // The backend spawns `agy acp` and puts two requests to it, 30s each, after
+  // ending any sign-in still exchanging a code. The transport defaults — 60s
+  // on web, 30s through the remote-desktop proxy — could abort mid-way.
   return getTransport().call(
     "acp_antigravity_sign_out",
     {},
@@ -2577,7 +2533,9 @@ export async function personalAgentSend(
   replyTo?: number | null,
   bot?: number | null,
   /** The button of the quoted reply's card it came from (9.2). */
-  card?: CardClick | null
+  card?: CardClick | null,
+  /** The assistant's question it answers (`ItemInfo.id`). */
+  answersItem?: number | null
 ): Promise<TimelineRow> {
   return getTransport().call("personal_agent_send", {
     text,
@@ -2585,6 +2543,7 @@ export async function personalAgentSend(
     replyTo: replyTo ?? null,
     botId: bot ?? null,
     card: card ?? null,
+    answersItem: answersItem ?? null,
   })
 }
 
@@ -2673,14 +2632,36 @@ export async function personalAgentTurnSteps(
 export async function personalAgentItemAct(
   botId: number | null | undefined,
   itemId: number,
-  act: "done" | "drop" | "later" | "snooze",
-  until?: "15m" | "1h" | "tomorrow" | (string & {})
-): Promise<ItemInfo> {
+  act: "done" | "skip" | "drop" | "later" | "snooze",
+  until?: "15m" | "1h" | "tomorrow" | (string & {}),
+  /** Where the owner did it: the activity panel (taken back with the
+   *  result's `undo`) or a card the assistant drew. */
+  from: "panel" | "card" = "panel",
+  /** The matter's `updated_at` as the button read it: refused
+   *  (`matterErrors.changed`) when it was written since. */
+  expectUpdatedAt: string | null = null
+): Promise<ItemActResult> {
   return getTransport().call("personal_agent_item_act", {
     botId,
     itemId,
     act,
     until: until ?? null,
+    from,
+    expectUpdatedAt,
+  })
+}
+
+/** Take back the owner's act on a matter from the panel (`undo`, the token
+ *  the act gave): within ten minutes, while nothing changed since. */
+export async function personalAgentItemUndo(
+  botId: number | null | undefined,
+  itemId: number,
+  undo: number
+): Promise<ItemInfo> {
+  return getTransport().call("personal_agent_item_undo", {
+    botId,
+    itemId,
+    undo,
   })
 }
 
@@ -2857,15 +2838,25 @@ export async function personalAgentHistoryRebuild(): Promise<PersonalAgentHistor
   return getTransport().call("personal_agent_history_rebuild", {})
 }
 
-/** Stop one piece of handed-out work from its card (8.5). False when it
- *  is past stopping. */
+/** Stop one piece of handed-out work from its card (8.5), with what the
+ *  card read: the dispatch's version and, for a board task's, the task's
+ *  run and version — a card that read it before it changed is told
+ *  `changed`, and nothing is stopped. */
 export async function personalAgentDispatchStop(
   botId: number | null | undefined,
-  dispatchId: number
-): Promise<boolean> {
+  dispatchId: number,
+  expect: {
+    updatedAt?: string | null
+    runSeq?: number | null
+    taskUpdatedAt?: string | null
+  } = {}
+): Promise<StopReply> {
   return getTransport().call("personal_agent_dispatch_stop", {
     botId,
     dispatchId,
+    expectUpdatedAt: expect.updatedAt ?? null,
+    expectRunSeq: expect.runSeq ?? null,
+    expectTaskUpdatedAt: expect.taskUpdatedAt ?? null,
   })
 }
 
@@ -3050,13 +3041,18 @@ export async function personalAgentNoticeAct(
   bot?: number | null,
   /** `hand_over` and `hand`: the owner's words, posted as their message
    *  quoting the card. */
-  text?: string
+  text?: string,
+  /** `hand_over` from a matter's row: the matter's `updated_at` as the
+   *  button read it — refused (`matterErrors.changed`), nothing handed
+   *  over, when it was written since. */
+  expectUpdatedAt: string | null = null
 ): Promise<TimelineRow> {
   return getTransport().call("personal_agent_notice_act", {
     noticeId,
     action,
     botId: bot ?? null,
     text: text ?? null,
+    expectUpdatedAt,
   })
 }
 

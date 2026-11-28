@@ -344,6 +344,10 @@ pub struct TimelineChanges {
 pub struct LiveReply {
     pub row_id: i32,
     pub current: Option<crate::acp::reply_turn::ReplyStep>,
+    /// Every text run of the turn so far, the one being written last, and
+    /// the version of this copy (`ver`: newer copies are greater).
+    pub texts: Vec<crate::acp::reply_turn::ReplyText>,
+    pub ver: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -532,6 +536,12 @@ pub struct DispatchInfo {
     pub check_round: Option<i32>,
     /// The routine whose run handed it out (6.9).
     pub routine_id: Option<i32>,
+    /// Stopped: who stopped it (`owner`, `owner_in_session`,
+    /// `owner_on_board`, `agent`), and the assistant's reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped_by: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
 }
 
 /// A round of acceptance, as a dispatch card shows it (7.5).
@@ -582,6 +592,38 @@ pub struct ItemInfo {
     /// A `when_mentioned` matter's keywords and how it comes up (6.8):
     /// `{ keywords, cooldown_hours, max_times, expires_at, times, last_at? }`.
     pub mention: Option<serde_json::Value>,
+    /// When it was settled, by whom (`owner` / `agent` / `codeg`) and how
+    /// (`done`, `dropped`, `withdrawn`, `stopped_waiting`, `answered`,
+    /// `replied`, ...): none while open, and for one settled before this was
+    /// kept.
+    pub closed_at: Option<DateTime<Utc>>,
+    pub closed_by: Option<String>,
+    pub closed_how: Option<String>,
+    /// A question's: the owner's message answering it, and how that stands
+    /// (`linked`: the assistant has it; `interrupted`: the turn that had it
+    /// did not finish).
+    pub answer_row_id: Option<i32>,
+    pub answer_state: Option<String>,
+    /// A message's: the assistant it waits on (`{ id, name, avatar, gone }`,
+    /// the name it had when it was deleted).
+    pub peer: Option<serde_json::Value>,
+    /// A message's: what was written, as its line keeps it (not codeg's
+    /// summary of it), and which way it went (`out`: this assistant sent
+    /// it; `in`: it was written to it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub written: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
+}
+
+/// The owner's act on a matter (`personal_agent_item_act`): the matter as
+/// it is now, and — for the panel's — what takes it back.
+#[derive(Debug, Clone, Serialize)]
+pub struct ItemActResult {
+    pub item: ItemInfo,
+    pub undo: Option<i32>,
+    /// A message's matter dropped: whether the message was taken back.
+    pub withdrawn: Option<bool>,
 }
 
 /// A context-occupancy reading.
@@ -782,6 +824,11 @@ pub enum PersonalAgentChange {
     Reply {
         row_id: i32,
         current: Option<crate::acp::reply_turn::ReplyStep>,
+        /// All the turn said so far — whole, not what changed: a run written
+        /// between two pushes is in the next.
+        texts: Vec<crate::acp::reply_turn::ReplyText>,
+        /// This copy's version: the page keeps the newest it saw.
+        ver: u64,
     },
     Status,
     Agent,

@@ -41,7 +41,7 @@
  * which can be run again.
  */
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   ArrowLeftRight,
@@ -91,7 +91,7 @@ import { CheckCard } from "./check-card"
 import { PlanCard } from "./plan-card"
 import { PrCard } from "./pr-card"
 import { RoutineCard } from "./routine-card"
-import { RuleCard } from "./rule-card"
+import { RuleCard, RuleGroupCard } from "./rule-card"
 import { MutedNote, MuteKindButton } from "./mute-kind"
 import {
   ChangeValue,
@@ -305,7 +305,14 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   if (kind === "forge") return <ForgeCard item={item} />
   if (kind === "pr") return <PrCard item={item} />
   if (kind === "routine") return <RoutineCard item={item} />
-  if (kind === "rule") return <RuleCard item={item} />
+  if (kind === "rule") {
+    // A run of its rule's cards raised together is one card.
+    return (item.rules?.length ?? 0) > 1 ? (
+      <RuleGroupCard item={item} />
+    ) : (
+      <RuleCard item={item} />
+    )
+  }
   if (kind === "brief") return <BriefCard item={item} />
   if (kind === "memory" || kind === "tidy") return <MemoryCard item={item} />
   if (kind === "skill") return <SkillCard item={item} />
@@ -671,6 +678,7 @@ function LoopCard({ item }: { item: NoticeItem }) {
   const [a, b] = faces(data?.bots)
   const { busy, failed, answer } = useAnswer(Number(row.ref_id))
   const [sheet, setSheet] = useState<TimelineRow | null>(null)
+  const lookRef = useRef<HTMLButtonElement | null>(null)
   const botName = useBotName()
   const names = { a: botName(a ?? null), b: botName(b ?? null) }
   const text =
@@ -745,6 +753,7 @@ function LoopCard({ item }: { item: NoticeItem }) {
           ) : null}
           {thread != null && a && b ? (
             <Button
+              ref={lookRef}
               size="sm"
               variant="secondary"
               onClick={() =>
@@ -774,7 +783,11 @@ function LoopCard({ item }: { item: NoticeItem }) {
           ) : null}
         </SheetActions>
       ) : null}
-      <ExchangeSheet row={sheet} onClose={() => setSheet(null)} />
+      <ExchangeSheet
+        row={sheet}
+        onClose={() => setSheet(null)}
+        anchor={lookRef}
+      />
     </CardFrame>
   )
 }

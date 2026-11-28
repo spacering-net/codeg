@@ -12,6 +12,8 @@ import {
 } from "vitest"
 import {
   AcpConnectionsProvider,
+  modeOptionsPointedAt,
+  modesFollowingModeOption,
   STREAM_FLUSH_FRAME_MS,
   STREAM_FLUSH_MAX_MS,
   useAcpActions,
@@ -6698,6 +6700,62 @@ describe("Claude Code's Remote Control (claude-agent-acp 0.93.0)", () => {
       vi.useRealTimers()
     }
   })
+
+  it("lets the idle sweep take Remote Control that started with the session, until the user's own /remote-control", async () => {
+    vi.useFakeTimers()
+    try {
+      const handlers = await connectOwner()
+      emitAcpEvent(handlers, {
+        seq: 1,
+        connection_id: "spawned-conn",
+        type: "turn_complete",
+        stop_reason: "end_turn",
+      } as EventEnvelope)
+      emitAcpEvent(handlers, {
+        seq: 2,
+        connection_id: "spawned-conn",
+        type: "remote_control",
+        remote_control: { session_url: SESSION_URL, at_startup: true },
+      })
+      expect(remoteControl()).toEqual({
+        session_url: SESSION_URL,
+        at_startup: true,
+      })
+      // The user's `/remote-control` hands the same remote session over.
+      emitAcpEvent(handlers, {
+        seq: 3,
+        connection_id: "spawned-conn",
+        type: "remote_control",
+        remote_control: { session_url: SESSION_URL },
+      })
+      expect(remoteControl()).toEqual({ session_url: SESSION_URL })
+      h.actions!.setActiveKey("some-other-surface")
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          CONNECTION_IDLE_TIMEOUT_MS + IDLE_SWEEP_INTERVAL_MS + 1000
+        )
+      })
+      expect(h.acpDisconnect).not.toHaveBeenCalled()
+
+      // Reported as started with the session again, the reducer follows the
+      // flag (the backend keeps a handed-over one off): an idle connection
+      // like any other.
+      emitAcpEvent(handlers, {
+        seq: 4,
+        connection_id: "spawned-conn",
+        type: "remote_control",
+        remote_control: { session_url: SESSION_URL, at_startup: true },
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          CONNECTION_IDLE_TIMEOUT_MS + IDLE_SWEEP_INTERVAL_MS + 1000
+        )
+      })
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe("global acp://event listener is mount-once", () => {
@@ -10419,6 +10477,310 @@ describe("hasPrompted: whether a turn has run on the connection", () => {
   })
 })
 
+describe("AcpConnectionsProvider conversation attention index", () => {
+  async function connectOwner(): Promise<AttachHandlers> {
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    return latestAttachHandlers()
+  }
+
+  const index = () => h.store!.getAttention()
+
+  it("marks the conversation a question is holding open", async () => {
+    const handlers = await connectOwner()
+    expect(index().size).toBe(0)
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [
+        {
+          id: "q",
+          question: "Which DB?",
+          header: "DB",
+          multi_select: false,
+          options: [],
+        },
+      ],
+    })
+    expect(index().get(42)).toBe("question")
+  })
+
+  it("clears the mark when the question is answered", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [
+        {
+          id: "q",
+          question: "Which DB?",
+          header: "DB",
+          multi_select: false,
+          options: [],
+        },
+      ],
+    })
+    expect(index().get(42)).toBe("question")
+
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "question_resolved",
+      question_id: "q-1",
+    })
+    expect(index().size).toBe(0)
+  })
+
+  it("marks a permission request too, not only a question", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "req-1",
+      tool_call: {},
+      options: [],
+    })
+    expect(index().get(42)).toBe("permission")
+  })
+
+  it("never marks a connection that serves no conversation row", async () => {
+    // A draft's first turn has no row the sidebar lists, so there is nothing to
+    // mark even though the agent really is blocked.
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+    })
+    const handlers = latestAttachHandlers()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [
+        {
+          id: "q",
+          question: "Which DB?",
+          header: "DB",
+          multi_select: false,
+          options: [],
+        },
+      ],
+    })
+    expect(index().size).toBe(0)
+  })
+
+  it("wakes whole-list subscribers only when the marks change", async () => {
+    const handlers = await connectOwner()
+    const woke = vi.fn()
+    const off = h.store!.subscribeAttention(woke)
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [
+        {
+          id: "q",
+          question: "Which DB?",
+          header: "DB",
+          multi_select: false,
+          options: [],
+        },
+      ],
+    })
+    expect(woke).toHaveBeenCalledTimes(1)
+
+    // Prose streaming moves no prompt: the sidebar must not re-render per token.
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: "thinking…",
+    } as unknown as EventEnvelope)
+    expect(woke).toHaveBeenCalledTimes(1)
+
+    off()
+  })
+
+  it("marks the PARENT conversation when its delegated sub-agent asks", async () => {
+    // The user answers a sub-agent's prompt from the parent's delegation card,
+    // so the parent's row is the one waiting on them.
+    await connectOwner()
+    act(() => {
+      h.actions!.attachDelegationChild({
+        connectionId: "child-conn",
+        parentConnectionId: "spawned-conn",
+        parentToolUseId: "tool-1",
+        agentType: "claude_code",
+        hydrate: false,
+      })
+    })
+    const child = latestAttachHandlers()
+    emitAcpEvent(child, {
+      seq: 1,
+      connection_id: "child-conn",
+      type: "permission_request",
+      request_id: "req-child",
+      tool_call: {},
+      options: [],
+    })
+    expect(index().get(42)).toBe("permission")
+
+    emitAcpEvent(child, {
+      seq: 2,
+      connection_id: "child-conn",
+      type: "permission_resolved",
+      request_id: "req-child",
+    } as unknown as EventEnvelope)
+    expect(index().size).toBe(0)
+  })
+
+  for (const order of ["tab first", "transcript viewer first"] as const) {
+    it(`keeps the parent's mark when a transcript viewer shares its connection (${order})`, async () => {
+      // A work-task transcript dialog attaches as a self-parented child under
+      // the SAME connection id as the tab; a real sub-agent's walk up must
+      // still land on the tab's row, whichever entry was added last.
+      const attachViewer = () =>
+        act(() => {
+          h.actions!.attachDelegationChild({
+            connectionId: "spawned-conn",
+            parentConnectionId: "spawned-conn",
+            parentToolUseId: "",
+            agentType: "claude_code",
+            hydrate: false,
+          })
+        })
+      h.acpFindConnectionForConversation.mockResolvedValue(null)
+      await mountProvider()
+      if (order === "transcript viewer first") attachViewer()
+      await act(async () => {
+        await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+      })
+      if (order === "tab first") attachViewer()
+
+      act(() => {
+        h.actions!.attachDelegationChild({
+          connectionId: "child-conn",
+          parentConnectionId: "spawned-conn",
+          parentToolUseId: "tool-1",
+          agentType: "claude_code",
+          hydrate: false,
+        })
+      })
+      emitAcpEvent(latestAttachHandlers(), {
+        seq: 1,
+        connection_id: "child-conn",
+        type: "permission_request",
+        request_id: "req-child",
+        tool_call: {},
+        options: [],
+      })
+      expect(index().get(42)).toBe("permission")
+    })
+  }
+
+  it("drops the mark once the connection holding the prompt is gone", async () => {
+    // Leaving a turn clears question and plan cards, but a permission survives
+    // the settle to `disconnected`; a dead prompt must not keep the row marked.
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "req-1",
+      tool_call: {},
+      options: [],
+    })
+    expect(index().get(42)).toBe("permission")
+
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "disconnected",
+    })
+    expect(h.store!.getConnection(TAB)?.pendingPermission).not.toBeNull()
+    expect(index().size).toBe(0)
+  })
+
+  it("does not revive a dead tab's mark through its transcript viewer", async () => {
+    // The tab and the task's transcript dialog share one connection, so both
+    // hold the permission. The liveness settle flips only the tab (it skips
+    // delegation children); the viewer's retained copy must not re-mark it.
+    const tab = await connectOwner()
+    act(() => {
+      h.actions!.attachDelegationChild({
+        connectionId: "spawned-conn",
+        parentConnectionId: "spawned-conn",
+        parentToolUseId: "",
+        agentType: "claude_code",
+        hydrate: false,
+      })
+    })
+    const viewer = latestAttachHandlers()
+    const permission: EventEnvelope = {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "req-1",
+      tool_call: {},
+      options: [],
+    }
+    emitAcpEvent(tab, permission)
+    emitAcpEvent(viewer, permission)
+    expect(index().get(42)).toBe("permission")
+
+    emitAcpEvent(tab, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "disconnected",
+    })
+    expect(h.store!.getConnection(TAB)?.status).toBe("disconnected")
+    expect(
+      h.store!.getConnection("spawned-conn")?.pendingPermission
+    ).not.toBeNull()
+    expect(index().size).toBe(0)
+  })
+
+  it("leaves a self-parented work-task viewer unmarked (and does not spin)", async () => {
+    // A work-task transcript viewer attaches as a child whose parent is
+    // itself: there is no parent row to attribute the prompt to.
+    await mountProvider()
+    act(() => {
+      h.actions!.attachDelegationChild({
+        connectionId: "task-conn-1",
+        parentConnectionId: "task-conn-1",
+        parentToolUseId: "work-task-9",
+        agentType: "claude_code",
+        hydrate: false,
+      })
+    })
+    emitAcpEvent(latestAttachHandlers(), {
+      seq: 1,
+      connection_id: "task-conn-1",
+      type: "permission_request",
+      request_id: "req-task",
+      tool_call: {},
+      options: [],
+    })
+    expect(h.store!.getConnection("task-conn-1")?.pendingPermission).not.toBe(
+      null
+    )
+    expect(index().size).toBe(0)
+  })
+})
+
 describe("a dispatching assistant answers for the owner (personal agent 7.3.1)", () => {
   async function connectOwner(): Promise<AttachHandlers> {
     h.acpFindConnectionForConversation.mockResolvedValue(null)
@@ -10544,5 +10906,76 @@ describe("a dispatching assistant answers for the owner (personal agent 7.3.1)",
       plan_markdown: "# Plan",
     })
     expect(h.requestWindowAttention).toHaveBeenCalledWith("permission_request")
+  })
+})
+
+describe("modesFollowingModeOption (#1309)", () => {
+  const modes = {
+    current_mode_id: "default",
+    available_modes: ["default", "auto_edit", "yolo"].map((id) => ({
+      id,
+      name: id,
+      description: null,
+    })),
+  }
+  const select = (id: string, category: string | null, value: string) => ({
+    id,
+    name: id,
+    category,
+    kind: {
+      type: "select" as const,
+      current_value: value,
+      options: [],
+      groups: [],
+    },
+  })
+
+  it("moves the session mode to the mode selector's value", () => {
+    expect(
+      modesFollowingModeOption(modes, [select("mode", "mode", "yolo")])
+        ?.current_mode_id
+    ).toBe("yolo")
+  })
+
+  it("leaves modes alone for a mode-category value that is no mode", () => {
+    expect(
+      modesFollowingModeOption(modes, [
+        select("reasoning_effort", "mode", "high"),
+      ])
+    ).toBe(modes)
+    expect(
+      modesFollowingModeOption(modes, [select("mode", "mode", "default")])
+    ).toBe(modes)
+    expect(
+      modesFollowingModeOption(null, [select("mode", "mode", "yolo")])
+    ).toBeNull()
+  })
+})
+
+describe("modeOptionsPointedAt (#1309)", () => {
+  const listing = (id: string, current: string, values: string[]) => ({
+    id,
+    name: id,
+    category: "mode",
+    kind: {
+      type: "select" as const,
+      current_value: current,
+      options: values.map((value) => ({ value, name: value })),
+      groups: [],
+    },
+  })
+
+  it("points the mode selector at a mode it lists, and nothing else", () => {
+    const options = [
+      listing("mode", "default", ["default", "yolo"]),
+      listing("reasoning_effort", "high", ["low", "high"]),
+    ]
+    const next = modeOptionsPointedAt(options, "yolo")
+    expect(
+      next.map((o) => (o.kind.type === "select" ? o.kind.current_value : null))
+    ).toEqual(["yolo", "high"])
+    expect(next[1]).toBe(options[1])
+    expect(modeOptionsPointedAt(options, "default")).toBe(options)
+    expect(modeOptionsPointedAt(options, "plan")).toBe(options)
   })
 })

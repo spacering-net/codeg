@@ -14,10 +14,11 @@ use crate::models::{
     ConversationSummary, MessageRole, MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
 };
 use crate::parsers::{
-    backfill_turn_durations, compute_session_stats, folder_name_from_path,
-    infer_context_window_max_tokens, is_safe_subagent_id, merge_context_window_stats,
-    relocate_orphaned_tool_results, resolve_patch_line_numbers, structurize_read_tool_output,
-    title_from_user_text, truncate_str, user_turn_block, AgentEnv, AgentParser, ParseError,
+    add_usage_to_turn_current_at, backfill_turn_durations, compute_session_stats,
+    folder_name_from_path, infer_context_window_max_tokens, is_safe_subagent_id,
+    merge_context_window_stats, relocate_orphaned_tool_results, resolve_patch_line_numbers,
+    structurize_read_tool_output, title_from_user_text, truncate_str, user_turn_block, AgentEnv,
+    AgentParser, ParseError,
 };
 
 /// Resolve Kimi Code's data home, honoring `KIMI_CODE_HOME`, else `~/.kimi-code`
@@ -209,6 +210,7 @@ impl KimiCodeParser {
         structurize_read_tool_output(&mut turns);
         resolve_patch_line_numbers(&mut turns, cwd.as_deref());
         backfill_turn_durations(&mut turns, &[]);
+        attribute_subagent_usage(&mut turns, &session_dir.join("agents"));
 
         let model = read_session_log_model(session_dir).or_else(|| parsed.model_alias.clone());
         // Context-window occupancy is the LATEST step's snapshot, never the
@@ -367,6 +369,14 @@ fn parse_wire(path: &Path, agents_dir: Option<&Path>) -> WireParse {
     // `promptId` of the turn in progress, to recognize a `turn.steer` that only
     // repeats it (see `steer_repeats_turn_prompt`).
     let mut turn_prompt_id: Option<String> = None;
+    // A fork's copy of its source: spend that is the source's (see
+    // `inherited_lines` and `fork_created_at`).
+    let inherited = inherited_lines(path);
+    let forked_at = path
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .and_then(fork_created_at);
 
     for (idx, line) in BufReader::new(file).lines().enumerate() {
         let Ok(line) = line else { continue };
@@ -577,6 +587,9 @@ fn parse_wire(path: &Path, agents_dir: Option<&Path>) -> WireParse {
                     // (see `WireParse::last_step_usage`), then fold it into the
                     // per-turn sum that feeds the cumulative usage meter.
                     wp.last_step_usage = Some(usage.clone());
+                    if idx < inherited || recorded_before(&value, forked_at) {
+                        continue;
+                    }
                     pending_usage = Some(match pending_usage.take() {
                         Some(prev) => add_usage(prev, usage),
                         None => usage,
@@ -957,6 +970,8 @@ pub(crate) const KIMI_EXIT_PLAN_MODE_TOOL: &str = "ExitPlanMode";
 /// `tool.result` carries `isError: true` in `wire.jsonl`, and an approved plan
 /// would show as an error. Read off the wording of the result instead, which
 /// 2.5.3 through 2.6.2 share; any other text keeps the status Kimi sent.
+/// From 2.8.0 an approved plan is recorded with `isError: false` by Kimi
+/// itself; a dismissed review still carries `isError: true`.
 pub(crate) fn kimi_plan_review_kept_ok(output: &str) -> bool {
     const OK_PREFIXES: &[&str] = &[
         "Exited plan mode.",
@@ -1126,6 +1141,114 @@ fn agent_stats_from_subagent(
         // session of its own.
         child_session_id: None,
     })
+}
+
+/// Fold what this session's sub-agents spent into its turns.
+///
+/// Kimi writes each `usage.record` to the wire of the agent that made the
+/// call (`agentId` is the emitting agent's own), so a sub-agent's spend lives
+/// only in its `agents/<agentId>/wire.jsonl` — which was read for its tool
+/// calls and nothing else. The parent's wire carries the run's total once more,
+/// on `subagent.completed.usage`, but no `usage.record` for it, so reading
+/// every sub-agent wire counts each call exactly once. Every wire other than
+/// `main` is read, referenced or not (an interrupted or background run spent
+/// its tokens too), from past what a fork copied ([`inherited_lines`]), and
+/// each record lands on the assistant turn current at its own `time`.
+///
+/// Runs on turns after the context window was read: a sub-agent's context is
+/// its own and never occupied this session's prompt.
+fn attribute_subagent_usage(turns: &mut [MessageTurn], agents_dir: &Path) {
+    let forked_at = agents_dir.parent().and_then(fork_created_at);
+    let mut wires: Vec<PathBuf> = read_subdirs(agents_dir)
+        .into_iter()
+        .filter(|dir| dir.file_name().is_some_and(|name| name != "main"))
+        .map(|dir| dir.join("wire.jsonl"))
+        .collect();
+    // Directory order is filesystem-defined; sort so attribution is identical
+    // on every parse of the same session.
+    wires.sort();
+    for wire in wires {
+        let Ok(file) = std::fs::File::open(&wire) else {
+            continue;
+        };
+        let inherited = inherited_lines(&wire);
+        for (idx, line) in BufReader::new(file).lines().enumerate() {
+            let Ok(line) = line else { continue };
+            if idx < inherited {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if value.get("type").and_then(Value::as_str) != Some("usage.record")
+                || recorded_before(&value, forked_at)
+            {
+                continue;
+            }
+            if let Some(usage) = usage_from_record(value.get("usage")) {
+                add_usage_to_turn_current_at(turns, event_millis(&value), &usage);
+            }
+        }
+    }
+}
+
+/// How many leading lines of a wire a fork copied from its source: everything
+/// up to and including its LAST `forked` record, else 0.
+///
+/// Kimi forks a session by copying every agent's wire into the new session —
+/// whole, or cut at a turn — and appending `{"type":"forked"}` to each
+/// (`copyAgentWire` / `appendForkedMarker`); a fork of a fork carries the
+/// earlier marker inside its copy. Each copied `usage.record` is spend the
+/// source made and its own conversation counts, so a fork that did nothing
+/// billed its source's whole history again.
+fn inherited_lines(wire: &Path) -> usize {
+    let Ok(file) = std::fs::File::open(wire) else {
+        return 0;
+    };
+    BufReader::new(file)
+        .lines()
+        .enumerate()
+        .filter_map(|(idx, line)| {
+            let line = line.ok()?;
+            // Cheap pre-check: a full parse of every line would double the
+            // cost of reading the wire.
+            if !line.contains("\"forked\"") {
+                return None;
+            }
+            let value: Value = serde_json::from_str(&line).ok()?;
+            (value.get("type").and_then(Value::as_str) == Some("forked")).then_some(idx + 1)
+        })
+        .last()
+        .unwrap_or(0)
+}
+
+/// When a FORKED session was created (`state.json` naming `forkedFrom`), else
+/// `None`.
+///
+/// The `forked` marker ([`inherited_lines`]) goes only on the wires of agents
+/// still registered when the fork is taken; a closed side agent (`/btw`) is
+/// dropped from the metadata but its wire stays on disk, so a whole-session
+/// fork copies it with no marker at all. A fork cannot have spent anything
+/// before it existed, though, so in a fork every record older than its
+/// creation is the source's. `createdAt` is accepted as epoch milliseconds or
+/// an RFC 3339 string, both of which Kimi has written.
+fn fork_created_at(session_dir: &Path) -> Option<DateTime<Utc>> {
+    let raw = std::fs::read_to_string(session_dir.join("state.json")).ok()?;
+    let state: Value = serde_json::from_str(&raw).ok()?;
+    state
+        .get("forkedFrom")
+        .and_then(Value::as_str)
+        .filter(|source| !source.trim().is_empty())?;
+    match state.get("createdAt")? {
+        Value::Number(ms) => DateTime::from_timestamp_millis(ms.as_i64()?),
+        Value::String(at) => at.parse::<DateTime<Utc>>().ok(),
+        _ => None,
+    }
+}
+
+/// Whether a wire record's `time` precedes `cutoff` (never, without either).
+fn recorded_before(value: &Value, cutoff: Option<DateTime<Utc>>) -> bool {
+    cutoff.is_some_and(|cutoff| event_millis(value).is_some_and(|at| at < cutoff))
 }
 
 /// Map a `usage.record.usage` object onto `TurnUsage`; `None` when all counters
@@ -1824,6 +1947,121 @@ mod tests {
             writeln!(file, "{}", serde_json::to_string(record).expect("serialize"))
                 .expect("write line");
         }
+    }
+
+    #[test]
+    fn a_sub_agents_own_spend_is_counted_against_the_session() {
+        // Each sub-agent's `usage.record`s live only in its own wire; the main
+        // wire's are the main agent's alone. `main` itself is not re-read.
+        let root = unique_root("subusage");
+        let bucket = "wd_my-app_d1a3666e54ae";
+        let sid = "session_subusage";
+        write_session(&root, bucket, sid, &json!({"title":"t"}), &sample_wire());
+        write_subagent_wire(
+            &root,
+            bucket,
+            sid,
+            "agent-1",
+            &[
+                json!({"type":"turn.prompt","input":[{"type":"text","text":"sub"}],"origin":{"kind":"agent"},"time":1782276652000i64}),
+                json!({"type":"usage.record","model":"codeg-managed","usage":{"inputOther":100,"output":10,"inputCacheRead":1000,"inputCacheCreation":5},"usageScope":"turn","time":1782276653000i64}),
+                json!({"type":"usage.record","model":"codeg-managed","usage":{"inputOther":200,"output":20,"inputCacheRead":2000,"inputCacheCreation":0},"usageScope":"turn","time":1782276654000i64}),
+            ],
+        );
+
+        let detail = KimiCodeParser::with_base_dir(root)
+            .get_conversation(sid)
+            .expect("detail");
+        let total = detail
+            .turns
+            .iter()
+            .filter_map(|t| t.usage.as_ref())
+            .fold(TurnUsage::default(), |acc, u| add_usage(acc, u.clone()));
+        assert_eq!(
+            total,
+            TurnUsage {
+                input_tokens: 7962 + 265 + 100 + 200,
+                output_tokens: 37 + 36 + 10 + 20,
+                cache_creation_input_tokens: 5,
+                cache_read_input_tokens: 9472 + 17408 + 1000 + 2000,
+            }
+        );
+    }
+
+    #[test]
+    fn a_fork_is_not_billed_for_the_wires_it_copied() {
+        // A fork copies every agent's wire and ends each copy with a `forked`
+        // record; what comes before it is the source's spend, counted there.
+        let root = unique_root("forkusage");
+        let bucket = "wd_my-app_d1a3666e54ae";
+        let sid = "session_fork";
+        let mut main = sample_wire();
+        main.push(json!({"type":"forked","agentId":"main","time":1782276670000i64}));
+        main.extend([
+            json!({"type":"turn.prompt","input":[{"type":"text","text":"and then?"}],"origin":{"kind":"user"},"time":1782276671000i64}),
+            json!({"type":"context.append_loop_event","event":{"type":"content.part","uuid":"p9","turnId":"1","step":1,"part":{"type":"text","text":"more"}},"time":1782276672000i64}),
+            json!({"type":"usage.record","model":"codeg-managed","usage":{"inputOther":40,"output":4,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1782276673000i64}),
+        ]);
+        write_session(
+            &root,
+            bucket,
+            sid,
+            &json!({"title":"t","forkedFrom":"session_src","createdAt":1782276669000i64}),
+            &main,
+        );
+        // A side agent closed before the fork: copied whole, with no marker.
+        write_subagent_wire(
+            &root,
+            bucket,
+            sid,
+            "agent-btw",
+            &[
+                json!({"type":"usage.record","model":"codeg-managed","usage":{"inputOther":7000,"output":700,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1782276655000i64}),
+            ],
+        );
+        // A worker the fork started itself, closed again: no marker either.
+        write_subagent_wire(
+            &root,
+            bucket,
+            sid,
+            "agent-new",
+            &[
+                json!({"type":"usage.record","model":"codeg-managed","usage":{"inputOther":3,"output":3,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1782276675000i64}),
+            ],
+        );
+        write_subagent_wire(
+            &root,
+            bucket,
+            sid,
+            "agent-1",
+            &[
+                json!({"type":"usage.record","model":"codeg-managed","usage":{"inputOther":100,"output":10,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1782276653000i64}),
+                json!({"type":"forked","agentId":"agent-1","time":1782276670000i64}),
+                json!({"type":"usage.record","model":"codeg-managed","usage":{"inputOther":5,"output":1,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1782276674000i64}),
+            ],
+        );
+
+        let detail = KimiCodeParser::with_base_dir(root)
+            .get_conversation(sid)
+            .expect("detail");
+        let total = detail
+            .turns
+            .iter()
+            .filter_map(|t| t.usage.as_ref())
+            .fold(TurnUsage::default(), |acc, u| add_usage(acc, u.clone()));
+        assert_eq!(
+            (total.input_tokens, total.output_tokens),
+            (40 + 5 + 3, 4 + 1 + 3)
+        );
+        assert_eq!(
+            detail
+                .turns
+                .iter()
+                .filter(|t| matches!(t.role, TurnRole::User))
+                .count(),
+            2,
+            "the copied history still renders"
+        );
     }
 
     #[test]

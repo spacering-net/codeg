@@ -21,6 +21,20 @@ export const ACTIVITY_FOLD: Record<ActivityGroup, string> = {
   done: "activity.done",
 }
 
+/** A question the owner is to answer: the assistant's (`bot`, its id),
+ *  the matter, and what it asks. */
+export interface PendingAnswer {
+  bot: number
+  itemId: number
+  summary: string
+}
+
+/** An answer on its way: the question, and the send that carries it. */
+export interface AnswerSending {
+  itemId: number
+  requestId: number
+}
+
 /** A row of the activity to bring into view once it is read: the pill's
  *  first (C6), a routine asked for (C4) — its group unfolded, shown whole,
  *  the row scrolled to and opened; `row` `null`, the group's head. */
@@ -198,6 +212,26 @@ interface PersonalAgentUiState {
    *  followed (1.13). */
   pendingJump: { bot: number; row: number } | null
   setPendingJump: (jump: { bot: number; row: number } | null) => void
+  /** The question each assistant's composer is to answer ([Answer] on the
+   *  activity, C1), by the assistant's id: taken by that assistant's page,
+   *  one assistant's never another's. */
+  pendingAnswer: Record<number, PendingAnswer>
+  /** Ask `answer.bot`'s composer to answer it (in place of any other). */
+  setPendingAnswer: (answer: PendingAnswer) => void
+  /** Clear `bot`'s question — only `itemId` when given, so a send that
+   *  lands late does not clear one picked meanwhile. */
+  clearPendingAnswer: (bot: number, itemId?: number) => void
+  /** The answer each assistant's composer is sending, by its id: the bar
+   *  goes quietly when the push of its own answer comes before the send's
+   *  return (it is not "answered already"). */
+  answerSending: Record<number, AnswerSending>
+  setAnswerSending: (bot: number, sending: AnswerSending) => void
+  /** Clear `bot`'s — only the send `requestId`'s. */
+  clearAnswerSending: (bot: number, requestId: number) => void
+  /** The assistants whose composer is sending right now (it is locked
+   *  meanwhile), by id: a card's "put in the box" waits for it. */
+  composerSending: Record<number, true>
+  setComposerSending: (bot: number, sending: boolean) => void
   /** What waits on the owner, brought into view (the primary's pill, C6):
    *  the panel open on its activity, at `first` (a row's key) when given. */
   showWaiting: (first: string | null) => void
@@ -319,6 +353,38 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
     set((s) => (s.viewing === viewing ? s : { viewing })),
   pendingJump: null,
   setPendingJump: (pendingJump) => set({ pendingJump }),
+  pendingAnswer: {},
+  setPendingAnswer: (answer) =>
+    set((s) => ({
+      pendingAnswer: { ...s.pendingAnswer, [answer.bot]: answer },
+    })),
+  clearPendingAnswer: (bot, itemId) =>
+    set((s) => {
+      const now = s.pendingAnswer[bot]
+      if (!now || (itemId != null && now.itemId !== itemId)) return s
+      const pendingAnswer = { ...s.pendingAnswer }
+      delete pendingAnswer[bot]
+      return { pendingAnswer }
+    }),
+  answerSending: {},
+  setAnswerSending: (bot, sending) =>
+    set((s) => ({ answerSending: { ...s.answerSending, [bot]: sending } })),
+  clearAnswerSending: (bot, requestId) =>
+    set((s) => {
+      if (s.answerSending[bot]?.requestId !== requestId) return s
+      const answerSending = { ...s.answerSending }
+      delete answerSending[bot]
+      return { answerSending }
+    }),
+  composerSending: {},
+  setComposerSending: (bot, sending) =>
+    set((s) => {
+      if (sending === (s.composerSending[bot] === true)) return s
+      const composerSending = { ...s.composerSending }
+      if (sending) composerSending[bot] = true
+      else delete composerSending[bot]
+      return { composerSending }
+    }),
   showWaiting: (first) => set((s) => ask(s, "needs", first, false)),
   searchOpen: false,
   setSearchOpen: (searchOpen) => set({ searchOpen }),
