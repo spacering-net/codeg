@@ -42,6 +42,8 @@ import {
   usePageScope,
 } from "./shared"
 
+import { ElsewhereImages } from "./event-card"
+
 type MirrorItem = Extract<MessageItem, { kind: "mirror" }>
 
 /** How it was settled, on its tone: answered green, the rest quiet. */
@@ -60,7 +62,16 @@ function SettledIcon({ state }: { state: string }) {
   return <Icon className="size-3.5 shrink-0" aria-hidden />
 }
 
+/** Asked in another assistant's session, in a folder of its own. */
 export function MirrorCard({ item }: { item: MirrorItem }) {
+  return (
+    <ElsewhereImages>
+      <MirrorCardBody item={item} />
+    </ElsewhereImages>
+  )
+}
+
+function MirrorCardBody({ item }: { item: MirrorItem }) {
   const t = useTranslations("PersonalAgent.mirror")
   const botId = useBotId()
   const { readOnly } = usePageScope()

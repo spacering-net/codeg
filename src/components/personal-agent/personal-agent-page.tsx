@@ -45,6 +45,7 @@ import { useTranslations } from "next-intl"
 import { ChevronDown } from "lucide-react"
 import { toast } from "sonner"
 
+import { MarkdownImageProvider } from "@/components/ai-elements/markdown-local-image"
 import { SessionLinkOpenerContext } from "@/components/ai-elements/session-link-opener"
 import { LiveTranscriptView } from "@/components/message/live-transcript-view"
 import {
@@ -695,116 +696,123 @@ export function PersonalAgentPage() {
 
   return (
     <PageScopeContext.Provider value={scope}>
-      <SessionLinkOpenerContext.Provider value={openSession}>
-        <div ref={pageRef} data-pa-page className="flex h-full min-h-0">
+      {/* The assistant's sessions run in its working directory: the local
+          images its replies name are read there, or where an absolute path
+          puts them, as in a project's transcript. */}
+      <MarkdownImageProvider rootPath={agent.workdir || null}>
+        <SessionLinkOpenerContext.Provider value={openSession}>
+          <div ref={pageRef} data-pa-page className="flex h-full min-h-0">
+            {isMobile ? (
+              <div className="min-w-0 flex-1">{conversation}</div>
+            ) : (
+              <ResizablePanelGroup
+                ref={auxGroupRef}
+                direction="horizontal"
+                className="min-h-0 flex-1"
+              >
+                <ResizablePanel
+                  id="personal-agent-main"
+                  order={1}
+                  // Alone — the panel closed, or a page over the
+                  // conversation — the whole width: the group warns of a
+                  // layout short of 100%.
+                  defaultSize={auxOpen && !pageOver ? 100 - auxShare : 100}
+                  minSize={MAIN_MIN_SIZE}
+                >
+                  {conversation}
+                </ResizablePanel>
+                {auxOpen && !pageOver ? (
+                  <>
+                    <ResizableHandle onDragging={onAuxDragging} />
+                    <ResizablePanel
+                      id="personal-agent-aux"
+                      order={2}
+                      defaultSize={auxShare}
+                      minSize={AUX_MIN_SIZE}
+                    >
+                      {aux}
+                    </ResizablePanel>
+                  </>
+                ) : null}
+              </ResizablePanelGroup>
+            )}
+          </div>
           {isMobile ? (
-            <div className="min-w-0 flex-1">{conversation}</div>
-          ) : (
-            <ResizablePanelGroup
-              ref={auxGroupRef}
-              direction="horizontal"
-              className="min-h-0 flex-1"
+            <Drawer
+              open={auxOpen && !pageOver}
+              onOpenChange={setAuxOpen}
+              swipeDirection="right"
             >
-              <ResizablePanel
-                id="personal-agent-main"
-                order={1}
-                // Alone — the panel closed, or a page over the
-                // conversation — the whole width: the group warns of a
-                // layout short of 100%.
-                defaultSize={auxOpen && !pageOver ? 100 - auxShare : 100}
-                minSize={MAIN_MIN_SIZE}
+              <DrawerContent
+                closeButtonClassName="top-2.5 right-3"
+                className={SIDE_PANEL_CONTENT_CLASS}
               >
-                {conversation}
-              </ResizablePanel>
-              {auxOpen && !pageOver ? (
-                <>
-                  <ResizableHandle onDragging={onAuxDragging} />
-                  <ResizablePanel
-                    id="personal-agent-aux"
-                    order={2}
-                    defaultSize={auxShare}
-                    minSize={AUX_MIN_SIZE}
-                  >
-                    {aux}
-                  </ResizablePanel>
-                </>
-              ) : null}
-            </ResizablePanelGroup>
-          )}
-        </div>
-        {isMobile ? (
-          <Drawer
-            open={auxOpen && !pageOver}
-            onOpenChange={setAuxOpen}
-            swipeDirection="right"
-          >
-            <DrawerContent
-              closeButtonClassName="top-2.5 right-3"
-              className={SIDE_PANEL_CONTENT_CLASS}
+                <DrawerTitle className="sr-only">{t("aux.title")}</DrawerTitle>
+                <DrawerDescription className="sr-only">
+                  {t("aux.title")}
+                </DrawerDescription>
+                {aux}
+              </DrawerContent>
+            </Drawer>
+          ) : null}
+          <PersonalAgentWorkDrawer />
+          <RoutineEditor />
+          <PersonalAgentHistorySearch />
+          <AlertDialog open={confirmNew} onOpenChange={setConfirmNew}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{t("newSession.title")}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {t("newSession.description")}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{t("newSession.cancel")}</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => {
+                    personalAgentNewSession(botId)
+                      .then(() => toast.message(t("newSession.queued")))
+                      .catch((e) => toast.error(toErrorMessage(e)))
+                  }}
+                >
+                  {t("newSession.confirm")}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          {segment?.conversation_id != null && agentType ? (
+            <Drawer
+              open={sessionOpen}
+              onOpenChange={setSessionOpen}
+              swipeDirection="right"
             >
-              <DrawerTitle className="sr-only">{t("aux.title")}</DrawerTitle>
-              <DrawerDescription className="sr-only">
-                {t("aux.title")}
-              </DrawerDescription>
-              {aux}
-            </DrawerContent>
-          </Drawer>
-        ) : null}
-        <PersonalAgentWorkDrawer />
-        <RoutineEditor />
-        <PersonalAgentHistorySearch />
-        <AlertDialog open={confirmNew} onOpenChange={setConfirmNew}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{t("newSession.title")}</AlertDialogTitle>
-              <AlertDialogDescription>
-                {t("newSession.description")}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>{t("newSession.cancel")}</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => {
-                  personalAgentNewSession(botId)
-                    .then(() => toast.message(t("newSession.queued")))
-                    .catch((e) => toast.error(toErrorMessage(e)))
-                }}
+              <DrawerContent
+                closeButtonClassName="top-2.5 right-3"
+                className={SIDE_PANEL_CONTENT_CLASS}
               >
-                {t("newSession.confirm")}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-        {segment?.conversation_id != null && agentType ? (
-          <Drawer
-            open={sessionOpen}
-            onOpenChange={setSessionOpen}
-            swipeDirection="right"
-          >
-            <DrawerContent
-              closeButtonClassName="top-2.5 right-3"
-              className={SIDE_PANEL_CONTENT_CLASS}
-            >
-              <DrawerTitle className="sr-only">{t("viewSession")}</DrawerTitle>
-              <DrawerDescription className="sr-only">
-                {t("viewSessionHint")}
-              </DrawerDescription>
-              {sessionOpen ? (
-                <div className="flex h-full min-h-0 flex-col">
-                  <div className="border-b border-border px-4 py-2.5 pr-12 text-sm font-semibold">
-                    {t("sessionTitle", { seq: segment.seq })}
+                <DrawerTitle className="sr-only">
+                  {t("viewSession")}
+                </DrawerTitle>
+                <DrawerDescription className="sr-only">
+                  {t("viewSessionHint")}
+                </DrawerDescription>
+                {sessionOpen ? (
+                  <div className="flex h-full min-h-0 flex-col">
+                    <div className="border-b border-border px-4 py-2.5 pr-12 text-sm font-semibold">
+                      {t("sessionTitle", { seq: segment.seq })}
+                    </div>
+                    <LiveTranscriptView
+                      conversationId={segment.conversation_id}
+                      connectionId={connectionId}
+                      agentType={agentType}
+                    />
                   </div>
-                  <LiveTranscriptView
-                    conversationId={segment.conversation_id}
-                    connectionId={connectionId}
-                    agentType={agentType}
-                  />
-                </div>
-              ) : null}
-            </DrawerContent>
-          </Drawer>
-        ) : null}
-      </SessionLinkOpenerContext.Provider>
+                ) : null}
+              </DrawerContent>
+            </Drawer>
+          ) : null}
+        </SessionLinkOpenerContext.Provider>
+      </MarkdownImageProvider>
     </PageScopeContext.Provider>
   )
 }

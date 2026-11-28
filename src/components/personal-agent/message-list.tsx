@@ -84,7 +84,7 @@ import type { TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useActivity } from "@/stores/personal-agent-activity-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
-import { EventCard } from "./event-card"
+import { ElsewhereImages, EventCard } from "./event-card"
 import { ExchangeRow } from "./exchange-row"
 import { MirrorCard } from "./mirror-card"
 import { NoticeCard } from "./notice-card"
@@ -614,18 +614,26 @@ function PreviewBody({ rowId }: { rowId: number }) {
             <PreviewTurn row={row} />
           ) : (
             <JsonRenderScope>
-              <MessageResponse
-                className={cn(MARKDOWN_LIST_ROOM, BUBBLE_MARKDOWN)}
-              >
-                {row.kind === "result"
-                  ? [
+              {row.kind === "result" ? (
+                <ElsewhereImages>
+                  <MessageResponse
+                    className={cn(MARKDOWN_LIST_ROOM, BUBBLE_MARKDOWN)}
+                  >
+                    {[
                       str(row.data, "title"),
                       str(row.data, "excerpt") ?? row.body,
                     ]
                       .filter(Boolean)
-                      .join("\n\n")
-                  : row.body || t("noText")}
-              </MessageResponse>
+                      .join("\n\n")}
+                  </MessageResponse>
+                </ElsewhereImages>
+              ) : (
+                <MessageResponse
+                  className={cn(MARKDOWN_LIST_ROOM, BUBBLE_MARKDOWN)}
+                >
+                  {row.body || t("noText")}
+                </MessageResponse>
+              )}
             </JsonRenderScope>
           )}
         </ScrollArea>

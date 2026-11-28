@@ -5,11 +5,16 @@ import type { Nodes } from "mdast"
 import remarkGfm from "remark-gfm"
 import remarkParse from "remark-parse"
 import { unified } from "unified"
-import { Streamdown } from "streamdown"
+import { Streamdown, defaultRehypePlugins } from "streamdown"
 import { readFileBase64 } from "@/lib/api"
 import { normalizeMathDelimiters } from "@/components/ai-elements/message"
 import { scrollportComponents } from "@/components/ai-elements/markdown-scrollport"
 import { mermaidComponents } from "@/components/ai-elements/mermaid-block"
+import {
+  useImageZoom,
+  ZoomButton,
+} from "@/components/ai-elements/markdown-image-zoom"
+import { rehypeLinkedImages } from "@/components/ai-elements/rehype-linked-images"
 import { useStreamdownPlugins } from "@/components/ai-elements/streamdown-plugins"
 import { BrowserLink } from "@/components/ui/browser-link"
 import {
@@ -357,13 +362,31 @@ function PreviewImage({
   baseDir: string | null
   previewRoot: string | null
   enabled: boolean
+  "data-codeg-image-linked"?: string
 }) {
   const src = typeof props.src === "string" ? props.src : undefined
   const resolvedSrc = useLocalImageSrc(src, baseDir, previewRoot, enabled)
+  // A click opens the picture at full size — unless it is a link's.
+  const zoom = useImageZoom({
+    src: resolvedSrc,
+    alt: props.alt ?? "",
+    linked: props["data-codeg-image-linked"] === "true",
+  })
 
-  // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text
-  return <img {...props} src={resolvedSrc} />
+  return (
+    <ZoomButton zoom={zoom} label={props.alt ?? ""}>
+      {/* eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text */}
+      <img {...props} src={resolvedSrc} />
+    </ZoomButton>
+  )
 }
+
+// Streamdown's own pipeline, then the mark that leaves a linked image's
+// click to its link.
+const previewRehypePlugins = [
+  ...Object.values(defaultRehypePlugins),
+  rehypeLinkedImages,
+]
 
 /**
  * Markdown document preview — the rendered view of a `.md` file on disk.
@@ -447,6 +470,7 @@ export function MarkdownDocumentPreview({
         plugins={plugins}
         mode="static"
         parseIncompleteMarkdown={false}
+        rehypePlugins={previewRehypePlugins}
         components={{
           ...mermaidComponents,
           ...scrollportComponents,

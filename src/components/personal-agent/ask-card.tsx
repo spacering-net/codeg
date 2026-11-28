@@ -47,7 +47,7 @@ import type {
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-import { CollapsedText } from "./event-card"
+import { CollapsedText, ElsewhereImages } from "./event-card"
 import type { MessageItem } from "./message-items"
 import { MessageRow } from "./message-row"
 import {
@@ -343,35 +343,38 @@ export function AskCard({ item }: { item: NoticeItem }) {
         {/* What it asks: to answer here, or as it was asked. */}
         {answerable || question || plan ? (
           <SheetPart className={cn(answerable && FLAT_REQUEST)}>
-            {answerable && question ? (
-              <AskQuestionCard
-                question={{
-                  question_id: data.request_id ?? String(askId),
-                  questions,
-                  created_at: data.asked_at ?? row.created_at,
-                }}
-                onAnswer={(_, answer) => send({ answer })}
-              />
-            ) : answerable ? (
-              <PlanApprovalCard
-                approval={{
-                  approval_id: data.request_id ?? String(askId),
-                  tool_call_id: "",
-                  plan_markdown: plan ?? "",
-                  created_at: data.asked_at ?? row.created_at,
-                }}
-                onAnswer={(_, answer) =>
-                  send({
-                    decision: askDecision(answer.decision),
-                    feedback: answer.feedback ?? null,
-                  })
-                }
-              />
-            ) : question ? (
-              <QuestionList questions={questions} />
-            ) : (
-              <CollapsedText text={plan ?? ""} />
-            )}
+            {/* Asked by work that runs in a folder of its own. */}
+            <ElsewhereImages>
+              {answerable && question ? (
+                <AskQuestionCard
+                  question={{
+                    question_id: data.request_id ?? String(askId),
+                    questions,
+                    created_at: data.asked_at ?? row.created_at,
+                  }}
+                  onAnswer={(_, answer) => send({ answer })}
+                />
+              ) : answerable ? (
+                <PlanApprovalCard
+                  approval={{
+                    approval_id: data.request_id ?? String(askId),
+                    tool_call_id: "",
+                    plan_markdown: plan ?? "",
+                    created_at: data.asked_at ?? row.created_at,
+                  }}
+                  onAnswer={(_, answer) =>
+                    send({
+                      decision: askDecision(answer.decision),
+                      feedback: answer.feedback ?? null,
+                    })
+                  }
+                />
+              ) : question ? (
+                <QuestionList questions={questions} />
+              ) : (
+                <CollapsedText text={plan ?? ""} />
+              )}
+            </ElsewhereImages>
           </SheetPart>
         ) : null}
         {openable && state !== "answered" && state !== "withdrawn" ? (

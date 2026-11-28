@@ -449,3 +449,32 @@ describe("MarkdownDocumentPreview local images", () => {
     expect(openFilePreview).toHaveBeenCalledWith("/repo/docs/guide.md")
   })
 })
+
+describe("MarkdownDocumentPreview image preview", () => {
+  it("opens a local image at full size on click", async () => {
+    renderDocument("![diagram](./img/a.png)")
+    const button = await screen.findByRole("button", { name: "diagram" })
+    await waitFor(() =>
+      expect(button.querySelector("img")).toHaveAttribute(
+        "src",
+        "data:image/png;base64,QUFB"
+      )
+    )
+    fireEvent.click(button)
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog.querySelector("img")).toHaveAttribute(
+      "src",
+      "data:image/png;base64,QUFB"
+    )
+  })
+
+  it("leaves a linked badge's click to its link", async () => {
+    const { container } = renderDocument(
+      "[![build](https://example.com/badge.svg)](https://example.com/ci)"
+    )
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull())
+    expect(screen.queryByRole("button", { name: "build" })).toBeNull()
+    fireEvent.click(container.querySelector("img")!)
+    expect(screen.queryByRole("dialog")).toBeNull()
+  })
+})

@@ -25,6 +25,8 @@ import type {
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 const api = vi.hoisted(() => ({
+  // What a card's local Markdown images are read with.
+  readFileBase64: vi.fn(),
   personalAgentItems: vi.fn(),
   personalAgentDispatches: vi.fn(),
   personalAgentStats: vi.fn(),

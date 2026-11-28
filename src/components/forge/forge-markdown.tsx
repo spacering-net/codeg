@@ -10,13 +10,19 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react"
-import { defaultComponents, type Components } from "streamdown"
+import type { Components } from "streamdown"
 import { ImageOff, Loader2 } from "lucide-react"
 import {
   MessageResponse,
   type MessageResponseProps,
 } from "@/components/ai-elements/message"
 import { MarkdownImageSpan } from "@/components/ai-elements/markdown-local-image"
+import {
+  useImageZoom,
+  ZoomableMarkdownImage,
+  ZoomButton,
+  type MarkdownImageProps,
+} from "@/components/ai-elements/markdown-image-zoom"
 import { forgeReadImage } from "@/lib/api"
 import type { ForgeImage, ForgeRemote } from "@/lib/types"
 import { remarkGitlabImages } from "./remark-gitlab-images"
@@ -42,11 +48,11 @@ function imageSize(
   }
 }
 
-// Retain Streamdown's remote-image controls while applying GitLab dimensions.
-const DefaultImage = defaultComponents.img
-function ForgeRemoteImage(props: ComponentProps<typeof DefaultImage>) {
+// Retain Streamdown's remote-image controls (and the chat's click to open it
+// at full size) while applying GitLab dimensions.
+function ForgeRemoteImage(props: MarkdownImageProps) {
   return (
-    <DefaultImage
+    <ZoomableMarkdownImage
       {...props}
       style={{ ...props.style, ...imageSize(props.width, props.height) }}
     />
@@ -94,11 +100,13 @@ function ForgeUploadImage({
   alt,
   width,
   height,
+  linked,
 }: {
   path: string
   alt: string
   width?: number
   height?: number
+  linked: boolean
 }) {
   const scope = useContext(ForgeImageContext)
   const [result, setResult] = useState<{
@@ -119,6 +127,11 @@ function ForgeUploadImage({
   const current =
     result?.scope === scope && result?.path === path ? result : null
   const label = alt || path.split("/").pop() || path
+  const zoom = useImageZoom({
+    src: current?.image?.url,
+    alt: label,
+    linked,
+  })
   if (!scope || current?.image === null) {
     return (
       <span
@@ -140,16 +153,18 @@ function ForgeUploadImage({
     )
   }
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={current.image!.url}
-      alt={label}
-      width={width}
-      height={height}
-      className="h-auto max-w-full rounded-lg object-contain"
-      style={imageSize(width, height)}
-      onError={() => setResult({ scope, path, image: null })}
-    />
+    <ZoomButton zoom={zoom} label={label}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={current.image!.url}
+        alt={label}
+        width={width}
+        height={height}
+        className="h-auto max-w-full rounded-lg object-contain"
+        style={imageSize(width, height)}
+        onError={() => setResult({ scope, path, image: null })}
+      />
+    </ZoomButton>
   )
 }
 
@@ -158,6 +173,7 @@ function ForgeImageSpan(
     "data-codeg-forge-image"?: string
     "data-codeg-image-width"?: string
     "data-codeg-image-height"?: string
+    "data-codeg-image-linked"?: string
   }
 ) {
   const path = props["data-codeg-forge-image"]
@@ -168,6 +184,7 @@ function ForgeImageSpan(
       alt={typeof props.children === "string" ? props.children : ""}
       width={Number(props["data-codeg-image-width"]) || undefined}
       height={Number(props["data-codeg-image-height"]) || undefined}
+      linked={props["data-codeg-image-linked"] === "true"}
     />
   )
 }

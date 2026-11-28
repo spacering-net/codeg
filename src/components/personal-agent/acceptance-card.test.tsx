@@ -13,7 +13,12 @@ import zhMessages from "@/i18n/messages/zh-CN.json"
 import type { TimelineRow } from "@/lib/types"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
-const api = vi.hoisted(() => ({ personalAgentNoticeAct: vi.fn() }))
+const api = vi.hoisted(() => ({
+  personalAgentNoticeAct: vi.fn(),
+  // What a card's local Markdown images are read with.
+  readWorkspaceFileBase64: vi.fn(),
+  readFileBase64: vi.fn(),
+}))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/contexts/personal-agent-context", () => ({
   useBotId: () => 7,

@@ -203,6 +203,36 @@ describe("GitLab repository Markdown", () => {
   })
 })
 
+describe("repository images open at full size", () => {
+  it("opens a project upload's preview on click", async () => {
+    render(preview(`![shot](${UPLOAD})`))
+    await screen.findByRole("img", { name: "shot" })
+    fireEvent.click(screen.getByRole("button", { name: "shot" }))
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog.querySelector("img")).toHaveAttribute("src", IMAGE.url)
+  })
+
+  it("leaves a linked upload's click to its link", async () => {
+    const { container } = render(
+      preview(`[![shot](${UPLOAD})](https://example.com/gallery)`)
+    )
+    const image = await screen.findByRole("img", { name: "shot" })
+    // Its only button is the link's own.
+    expect(image.closest("button")).toHaveAttribute("data-streamdown", "link")
+    expect(container.querySelector("button button")).toBeNull()
+  })
+
+  it("opens a remote image in an issue's text the same way", async () => {
+    const url = "https://example.com/screenshot.png"
+    const { container } = render(preview(`![remote](${url})`))
+    await waitFor(() =>
+      expect(container.querySelector(`img[src="${url}"]`)).not.toBeNull()
+    )
+    fireEvent.click(container.querySelector(`img[src="${url}"]`)!)
+    expect(await screen.findByRole("dialog")).toBeVisible()
+  })
+})
+
 describe("project upload coordinates", () => {
   const project = `${REMOTE.web_origin}/${REMOTE.owner_repo}`
   it.each([UPLOAD, UPLOAD.slice(1), `${project}${UPLOAD}`])(

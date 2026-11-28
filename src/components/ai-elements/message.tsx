@@ -43,6 +43,8 @@ import { remarkRestoreWindowsPaths } from "./remark-windows-paths"
 import { remarkLocalImages } from "./remark-local-images"
 import { rehypeListDirection } from "./rehype-list-direction"
 import { markdownLocalImageComponents } from "./markdown-local-image"
+import { markdownImageComponents } from "./markdown-image-zoom"
+import { rehypeLinkedImages } from "./rehype-linked-images"
 import { MATH_FENCE_PAD, useStreamdownPlugins } from "./streamdown-plugins"
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
@@ -496,6 +498,8 @@ const remarkPlugins = [
 const rehypePlugins = [
   ...rehypePluginsAllowingCodeg(withRelativeFileLinks(defaultRehypePlugins)),
   rehypeListDirection,
+  // Last, so it sees the links sanitize and harden kept.
+  rehypeLinkedImages,
 ]
 
 /**
@@ -625,6 +629,8 @@ function MessageResponseImpl({
       // json-render blocks on `pre` and the table's scrollbars always win.
       components={{
         ...markdownLocalImageComponents,
+        // A remote image opens at full size when clicked, as a local one does.
+        ...markdownImageComponents,
         ...props.components,
         ...markdownLinkComponents,
         ...messageBlockComponents,

@@ -16,6 +16,9 @@ const api = vi.hoisted(() => ({
   personalAgentThread: vi.fn(),
   personalAgentAnswerQuestion: vi.fn(),
   personalAgentRespondPermission: vi.fn(),
+  // A mirrored request's local images are read by absolute path.
+  readWorkspaceFileBase64: vi.fn(),
+  readFileBase64: vi.fn(),
 }))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/contexts/personal-agent-context", () => ({

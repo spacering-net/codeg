@@ -14,6 +14,8 @@ import type { TimelineRow } from "@/lib/types"
 const api = vi.hoisted(() => ({
   personalAgentAskAnswer: vi.fn(),
   personalAgentNoticeAct: vi.fn(),
+  readWorkspaceFileBase64: vi.fn(),
+  readFileBase64: vi.fn(),
 }))
 const toast = vi.hoisted(() => ({
   info: vi.fn(),
@@ -44,6 +46,7 @@ import { waitsForOwner } from "./message-list"
 import { buildMessageItems, type MessageItem } from "./message-items"
 import { NoticeCard } from "./notice-card"
 import { PageScopeContext, type PageScope } from "./shared"
+import { MarkdownImageProvider } from "@/components/ai-elements/markdown-local-image"
 
 const QUESTION = {
   id: "q1",
@@ -134,6 +137,43 @@ afterEach(() => {
 })
 
 describe("AskCard", () => {
+  // The page reads its assistant's images in its working directory; a plan
+  // forwarded from work in another folder must not have its relative
+  // pictures read there (#1347).
+  it("reads a forwarded plan's pictures by absolute path only", async () => {
+    api.readFileBase64.mockResolvedValue("QUFB")
+    api.readWorkspaceFileBase64.mockResolvedValue("QUFB")
+    const item = buildMessageItems([
+      ask({
+        state: "forwarded",
+        forward_reason: "timeout",
+        request: "plan",
+        questions: [],
+        plan: "![rel](docs/diagram.png)\n\n![abs](/shots/a.png)",
+        plan_actions: ["approve", "revise", "abandon"],
+      }),
+    ]).find((i) => i.kind === "notice")
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <MarkdownImageProvider rootPath="/pa/nova">
+          <PageScopeContext.Provider value={scope()}>
+            <NoticeCard
+              item={item as Extract<MessageItem, { kind: "notice" }>}
+            />
+          </PageScopeContext.Provider>
+        </MarkdownImageProvider>
+      </NextIntlClientProvider>
+    )
+    await waitFor(() =>
+      expect(api.readFileBase64).toHaveBeenCalledWith(
+        "/shots/a.png",
+        expect.any(Number)
+      )
+    )
+    expect(api.readWorkspaceFileBase64).not.toHaveBeenCalled()
+    expect(api.readFileBase64).toHaveBeenCalledTimes(1)
+  })
+
   it("says the assistant is answering, with the question and nothing to answer", () => {
     const { container } = draw(ask({}))
     // Only the assistant speaks: the work asks, unnamed — its head leads

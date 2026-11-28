@@ -15,11 +15,13 @@
  * which round it checked and what it found, with its evidence as the text.
  */
 
+import type { ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { ChevronDown, ChevronUp, MoreHorizontal, Repeat } from "lucide-react"
 
 import { JsonRenderScope } from "@/components/ai-elements/json-render-pre"
 import { MessageResponse } from "@/components/ai-elements/message"
+import { MarkdownImageProvider } from "@/components/ai-elements/markdown-local-image"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useCollapsibleOverflow } from "@/hooks/use-collapsible-overflow"
 import { Button } from "@/components/ui/button"
@@ -75,6 +77,15 @@ type EventItem = Extract<MessageItem, { kind: "event" }>
  *  other note is an agent's own error, shown as it came. */
 const OWN_NOTES = new Set(["boot", "lost", "gone"])
 
+/** A result's text was written by work that ran in a folder of its own,
+ *  not the assistant's working directory: only the images it names by an
+ *  absolute path are found. */
+export function ElsewhereImages({ children }: { children: ReactNode }) {
+  return (
+    <MarkdownImageProvider rootPath={null}>{children}</MarkdownImageProvider>
+  )
+}
+
 /** The result, as the message's text, cut at six of its lines until asked
  *  for all. A proposal card shows its prompt the same way. */
 export function CollapsedText({
@@ -101,14 +112,16 @@ export function CollapsedText({
         )}
       >
         <JsonRenderScope>
-          {/* The result is cut at a length, not at a block: close what the
-              cut left open (a fence, a list) as a stream would. */}
-          <MessageResponse
-            parseIncompleteMarkdown
-            className={cn("text-sm", BUBBLE_MARKDOWN)}
-          >
-            {text}
-          </MessageResponse>
+          <ElsewhereImages>
+            {/* The result is cut at a length, not at a block: close what the
+                cut left open (a fence, a list) as a stream would. */}
+            <MessageResponse
+              parseIncompleteMarkdown
+              className={cn("text-sm", BUBBLE_MARKDOWN)}
+            >
+              {text}
+            </MessageResponse>
+          </ElsewhereImages>
         </JsonRenderScope>
       </div>
       {isOverflowing ? (
@@ -287,12 +300,14 @@ function WholeText({ text }: { text: string }) {
   return (
     <div data-pa-result className={cn("break-words", MARKDOWN_LIST_ROOM)}>
       <JsonRenderScope>
-        <MessageResponse
-          parseIncompleteMarkdown
-          className={cn("text-sm", BUBBLE_MARKDOWN)}
-        >
-          {text}
-        </MessageResponse>
+        <ElsewhereImages>
+          <MessageResponse
+            parseIncompleteMarkdown
+            className={cn("text-sm", BUBBLE_MARKDOWN)}
+          >
+            {text}
+          </MessageResponse>
+        </ElsewhereImages>
       </JsonRenderScope>
     </div>
   )

@@ -10,6 +10,7 @@ import { CalendarDays, Package } from "lucide-react"
 import { toast } from "sonner"
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { MessageResponse } from "@/components/ai-elements/message"
+import { MarkdownImageProvider } from "@/components/ai-elements/markdown-local-image"
 import {
   Dialog,
   DialogContent,
@@ -104,6 +105,14 @@ function useClock(): (iso: string) => string {
       hour: "2-digit",
       minute: "2-digit",
     })
+}
+
+/** The folder a document in the working directory is in: `path` is
+ *  relative to it, `/`-separated. */
+function docDir(workdir: string, path: string): string {
+  const base = workdir.replace(/[\\/]+$/, "")
+  const slash = path.lastIndexOf("/")
+  return slash < 0 ? base : `${base}/${path.slice(0, slash)}`
 }
 
 /** What it made, newest first, a list a day: the work that ended — a
@@ -351,7 +360,12 @@ export function OutputTab({
                 className="mx-auto my-6 size-4 text-muted-foreground"
               />
             ) : /\.(md|markdown)$/i.test(reading.path) ? (
-              <MessageResponse>{reading.text}</MessageResponse>
+              // Its pictures are where it names them, from its own folder.
+              <MarkdownImageProvider
+                rootPath={workdir ? docDir(workdir, reading.path) : null}
+              >
+                <MessageResponse>{reading.text}</MessageResponse>
+              </MarkdownImageProvider>
             ) : (
               <pre className="text-xs whitespace-pre-wrap">{reading.text}</pre>
             )}

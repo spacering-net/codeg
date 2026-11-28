@@ -11,7 +11,12 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import enMessages from "@/i18n/messages/en.json"
 import type { FolderDetail, TimelineRow } from "@/lib/types"
 
-const api = vi.hoisted(() => ({ personalAgentNoticeAct: vi.fn() }))
+const api = vi.hoisted(() => ({
+  personalAgentNoticeAct: vi.fn(),
+  // What a card's local Markdown images are read with.
+  readWorkspaceFileBase64: vi.fn(),
+  readFileBase64: vi.fn(),
+}))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/contexts/personal-agent-context", () => ({
   useBotId: () => null,

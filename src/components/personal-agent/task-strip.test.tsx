@@ -14,6 +14,9 @@ import type { DispatchInfo, TaskFacts, TimelineRow } from "@/lib/types"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 const api = vi.hoisted(() => ({
+  // What a card's local Markdown images are read with.
+  readWorkspaceFileBase64: vi.fn(),
+  readFileBase64: vi.fn(),
   personalAgentDispatchStop: vi.fn(
     async (): Promise<{
       outcome: string
