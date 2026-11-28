@@ -767,7 +767,7 @@ pub(crate) fn add_usage_to_turn_current_at(
                     .min_by_key(|(i, t)| (t.timestamp, *i))
             })
             .map(|(i, _)| i),
-        None => replies().last().map(|(i, _)| i),
+        None => replies().next_back().map(|(i, _)| i),
     };
     let Some(turn) = target.and_then(|i| turns.get_mut(i)) else {
         return false;
