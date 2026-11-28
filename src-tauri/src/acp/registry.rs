@@ -343,9 +343,7 @@ pub fn from_registry_id(id: &str) -> Option<AgentType> {
         // Only ids the user has actually registered resolve. An unregistered
         // id must stay `None` so the ACP-registry picker still offers it as
         // "addable" rather than treating it as already supported.
-        other => crate::acp::custom_registry::is_registered(other)
-            .then(|| AgentType::custom(other))
-            .flatten(),
+        other => crate::acp::custom_registry::resolve_id(other),
     }
 }
 
@@ -623,6 +621,19 @@ fn launch_spec_uses_cursor_acp(cmd: &str, args: &[&str]) -> bool {
         .and_then(|s| s.to_str())
         .unwrap_or(trimmed);
     base.eq_ignore_ascii_case("cursor-agent") && args.contains(&"acp")
+}
+
+pub(crate) fn require_agent_meta(
+    agent_type: AgentType,
+) -> Result<AcpAgentMeta, crate::acp::error::AcpError> {
+    if let Some(id) = agent_type.custom_id() {
+        return crate::acp::custom_registry::get(id).cloned().ok_or_else(|| {
+            crate::acp::error::AcpError::SdkNotInstalled(format!(
+                "The custom agent \"{id}\" is no longer registered. Enable its plugin or re-add the user agent in Settings → Agents."
+            ))
+        });
+    }
+    Ok(get_agent_meta(agent_type))
 }
 
 pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {

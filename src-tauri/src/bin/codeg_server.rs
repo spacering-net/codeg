@@ -344,7 +344,13 @@ async fn async_main(
     let acp_event_bus = Arc::new(codeg_lib::acp::InternalEventBus::new(
         event_bus_metrics.clone(),
     ));
-    let emitter = EventEmitter::web_only(broadcaster.clone(), acp_event_bus.clone());
+    let host_plugins =
+        Arc::new(codeg_lib::host_plugins::HostPlugins::new_with_acp_providers(&data_dir));
+    let emitter = EventEmitter::web_only(
+        broadcaster.clone(),
+        acp_event_bus.clone(),
+        Some(host_plugins.clone()),
+    );
 
     // Build AppState
     let pet_state_handle = codeg_lib::pet_state_mapper::new_pet_state_handle();
@@ -377,6 +383,7 @@ async fn async_main(
         )
     };
     let state = Arc::new(AppState {
+        host_plugins,
         db,
         connection_manager,
         terminal_manager: codeg_lib::app_state::default_terminal_manager(),
@@ -405,6 +412,13 @@ async fn async_main(
         cli_runs,
         cli_access,
     });
+    {
+        let plugins = state.host_plugins.clone();
+        let events = acp_event_bus.subscribe();
+        let connections = state.connection_manager.clone_ref();
+        let emitter = state.emitter.clone();
+        tokio::spawn(async move { plugins.observe_sessions(events, connections, emitter).await });
+    }
     state
         .connection_manager
         .install_chat_channel(state.chat_channel_manager.clone_ref());

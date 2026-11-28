@@ -20,6 +20,7 @@ use crate::db::service::{
     conversation_service, folder_service, sender_context_service, thread_binding_service,
 };
 use crate::db::AppDatabase;
+use crate::host_plugins::lifecycle::{observe_agent_created, prepare_agent_title};
 use crate::models::agent::AgentType;
 use crate::models::conversation::DbConversationSummary;
 use crate::models::folder::FolderDetail;
@@ -506,6 +507,28 @@ pub async fn handle_task(
         }
     };
 
+    let title = match prepare_agent_title(
+        emitter,
+        agent_type,
+        Some(folder_id),
+        conversation::ConversationKind::Regular,
+        None,
+        Some(truncate_title(task_description)),
+    )
+    .await
+    {
+        Ok(title) => title,
+        Err(e) => {
+            return CommandMessageResult::current_target(
+                RichMessage::error(format!(
+                    "{}{e}",
+                    i18n::failed_to_create_conversation_label(lang)
+                )),
+                target,
+            );
+        }
+    };
+
     let mut session_target = target.clone();
     if target.is_telegram_general_topic() {
         match manager
@@ -525,26 +548,22 @@ pub async fn handle_task(
     }
 
     // 4. Create conversation record
-    let conv = match conversation_service::create(
-        db,
-        folder_id,
-        agent_type,
-        Some(truncate_title(task_description)),
-        folder.git_branch.clone(),
-    )
-    .await
-    {
-        Ok(c) => c,
-        Err(e) => {
-            return CommandMessageResult::current_target(
-                RichMessage::error(format!(
-                    "{}{e}",
-                    i18n::failed_to_create_conversation_label(lang)
-                )),
-                target,
-            );
-        }
-    };
+    let conv =
+        match conversation_service::create(db, folder_id, agent_type, title, folder.git_branch)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return CommandMessageResult::current_target(
+                    RichMessage::error(format!(
+                        "{}{e}",
+                        i18n::failed_to_create_conversation_label(lang)
+                    )),
+                    target,
+                );
+            }
+        };
+    observe_agent_created(emitter, &conv);
 
     // 5. Spawn ACP agent
     let owner_label = owner_label_for(channel_id, sender_id, &session_target);
@@ -1693,19 +1712,19 @@ fn agent_type_to_string(at: AgentType) -> String {
 
 fn parse_agent_type(name: &str) -> Option<AgentType> {
     let trimmed = name.trim();
-    // Custom agents are `custom:<registry-id>` and their ids legitimately
-    // contain `-` (`custom:qwen-code`), which the built-in normalization below
-    // would mangle. Accept both the full wire form and the bare id shown in the
-    // agent list — but only for ids the user has actually registered:
-    // `AgentType::from_wire` validates the slug's SHAPE, not its existence, so
-    // without this gate any typo would resolve to a phantom agent.
-    let custom_candidate = trimmed
-        .strip_prefix(crate::models::agent::CUSTOM_AGENT_WIRE_PREFIX)
-        .unwrap_or(trimmed);
-    if crate::acp::custom_registry::is_registered(custom_candidate) {
-        if let Some(custom) = AgentType::custom(custom_candidate) {
-            return Some(custom);
-        }
+    // A bare alias resolves to the current provider. A full wire id resolves
+    // only the exact runtime identity, including a plugin's reviewed recipe.
+    let custom = if trimmed.starts_with(crate::models::agent::CUSTOM_AGENT_WIRE_PREFIX) {
+        AgentType::from_wire(trimmed).filter(|agent| {
+            agent
+                .custom_id()
+                .is_some_and(crate::acp::custom_registry::is_registered)
+        })
+    } else {
+        crate::acp::custom_registry::resolve_id(trimmed)
+    };
+    if custom.is_some() {
+        return custom;
     }
     // Built-in names are snake_case; accept the spaced/dashed spellings a user
     // is likely to type ("Claude Code", "claude-code").

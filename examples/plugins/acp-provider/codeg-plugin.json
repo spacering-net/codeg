@@ -1,0 +1,31 @@
+{
+  "apiVersion": 1,
+  "id": "codeg.acp-provider-example",
+  "name": "ACP Provider Example",
+  "version": "0.109.0",
+  "contributes": {
+    "acpProviders": [
+      {
+        "id": "example-claude-adapter",
+        "name": "Claude Code ACP Adapter Example",
+        "nameTranslations": {
+          "zh-CN": "Claude Code ACP 适配器示例",
+          "es": "Ejemplo de adaptador ACP de Claude Code"
+        },
+        "description": "Launches Claude Code through the Claude Agent ACP adapter.",
+        "descriptionTranslations": {
+          "zh-CN": "通过 Claude Agent ACP 适配器启动 Claude Code。",
+          "es": "Inicia Claude Code con el adaptador Claude Agent ACP."
+        },
+        "distributionKind": "npx",
+        "spec": {
+          "npx": {
+            "package": "@agentclientprotocol/claude-agent-acp@0.109.0",
+            "cmd": "claude-agent-acp",
+            "node_required": "22.0.0"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
+use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
-    QueryFilter, QueryOrder, QuerySelect, Set,
+    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    EntityTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, Set,
 };
 
 use crate::db::entities::conversation::ConversationKind;
@@ -1544,15 +1545,26 @@ pub async fn list_live_origin_cwds(conn: &DatabaseConnection) -> Result<Vec<Stri
 }
 
 pub async fn soft_delete(conn: &DatabaseConnection, conversation_id: i32) -> Result<(), DbError> {
-    let conv = conversation::Entity::find_by_id(conversation_id)
+    archive_live_conversation(conn, conversation_id).await.map(drop)
+}
+
+/// Capture the folder and session identity in the statement that archives the
+/// conversation. Concurrent deletes can only observe one live row.
+pub(crate) async fn archive_live_conversation(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<conversation::Model, DbError> {
+    let mut update = conversation::Entity::update_many()
+        .filter(conversation::Column::Id.eq(conversation_id))
         .filter(conversation::Column::DeletedAt.is_null())
+        .col_expr(conversation::Column::DeletedAt, Expr::value(Utc::now()))
+        .into_query();
+    update.returning_all();
+    conversation::Entity::find()
+        .from_raw_sql(conn.get_database_backend().build(&update))
         .one(conn)
         .await?
-        .ok_or_else(|| DbError::Migration(format!("Conversation not found: {conversation_id}")))?;
-    let mut active: conversation::ActiveModel = conv.into();
-    active.deleted_at = Set(Some(Utc::now()));
-    active.update(conn).await?;
-    Ok(())
+        .ok_or_else(|| DbError::Migration(format!("Conversation not found: {conversation_id}")))
 }
 
 /// Undo [`soft_delete`] for a conversation the user re-selected in the

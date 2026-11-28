@@ -152,6 +152,8 @@ import { ComposerAddMenu } from "@/components/chat/composer/composer-add-menu"
 import { ComposerImageThumbnails } from "@/components/chat/composer/composer-image-thumbnails"
 import { useComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
 import { useComposerShortcuts } from "@/components/chat/composer/use-composer-shortcuts"
+import { HostPluginSlot } from "@/components/host-plugin-slot"
+import type { HostPluginSessionContext } from "@/lib/host-plugins"
 
 /**
  * Payload pushed into the composer from outside (e.g. a welcome-page quick
@@ -291,6 +293,11 @@ interface MessageInputProps {
    * component knows the action row that separates them.
    */
   tall?: boolean
+  /** Workspace + session isolation context for `composer` host plugin surfaces.
+   *  Omitted on standalone/non-session composers so no plugin catalog is queried. */
+  pluginContext?: HostPluginSessionContext | null
+  /** Gate host plugin catalog subscription while a keep-alive composer is hidden. */
+  pluginSlotEnabled?: boolean
 }
 
 // Non-image files attach as inline file badges in the editor (like `@`-file
@@ -363,6 +370,8 @@ export function MessageInput({
   onInjectConsumed,
   getSentHistory,
   tall = false,
+  pluginContext = null,
+  pluginSlotEnabled = true,
 }: MessageInputProps) {
   const t = useTranslations("Folder.chat.messageInput")
   const tQueue = useTranslations("Folder.chat.messageQueue")
@@ -2258,6 +2267,13 @@ export function MessageInput({
                           : null
                       }
                       onChange={handleSessionSettingChange}
+                    />
+                  )}
+                  {pluginContext && (
+                    <HostPluginSlot
+                      slot="composer"
+                      sessionContext={pluginContext}
+                      enabled={pluginSlotEnabled}
                     />
                   )}
                 </div>

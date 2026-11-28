@@ -5,6 +5,8 @@ use serde::{ser::SerializeStruct, Serialize, Serializer};
 use tokio::sync::{broadcast, RwLock};
 
 use crate::acp::{AcpEvent, EventBusMetrics, EventEnvelope, InternalEventBus, SessionState};
+use crate::host_plugins::lifecycle as plugin_lifecycle;
+use crate::host_plugins::HostPlugins;
 
 /// Broadcast-delivered event.
 ///
@@ -124,6 +126,7 @@ pub enum EventEmitter {
     WebOnly {
         broadcaster: Arc<WebEventBroadcaster>,
         bus: Arc<InternalEventBus>,
+        host_plugins: Option<Arc<HostPlugins>>,
     },
     /// Silent no-op emitter — drops all events. Used when streaming progress
     /// is not needed (e.g. legacy non-streaming call paths).
@@ -145,8 +148,30 @@ impl EventEmitter {
     /// Convenience constructor for the standalone server runtime path.
     /// Mirrors how `Tauri` resolves the same two pieces of state via
     /// `app.try_state`.
-    pub fn web_only(broadcaster: Arc<WebEventBroadcaster>, bus: Arc<InternalEventBus>) -> Self {
-        EventEmitter::WebOnly { broadcaster, bus }
+    pub fn web_only(
+        broadcaster: Arc<WebEventBroadcaster>,
+        bus: Arc<InternalEventBus>,
+        host_plugins: Option<Arc<HostPlugins>>,
+    ) -> Self {
+        EventEmitter::WebOnly {
+            broadcaster,
+            bus,
+            host_plugins,
+        }
+    }
+
+    /// The same plugin catalog that serves calls for the connected host.
+    pub(crate) fn host_plugins(&self) -> Option<Arc<HostPlugins>> {
+        match self {
+            #[cfg(feature = "tauri-runtime")]
+            EventEmitter::Tauri(app) => {
+                use tauri::Manager;
+                app.try_state::<Arc<HostPlugins>>()
+                    .map(|state| Arc::clone(&state))
+            }
+            EventEmitter::WebOnly { host_plugins, .. } => host_plugins.clone(),
+            EventEmitter::Noop => None,
+        }
     }
 
     /// Resolve the `InternalEventBus` for ACP-typed event delivery.
@@ -181,7 +206,7 @@ impl EventEmitter {
     pub fn test_web_only(broadcaster: Arc<WebEventBroadcaster>) -> Self {
         let metrics = Arc::new(EventBusMetrics::default());
         let bus = Arc::new(InternalEventBus::new(metrics));
-        EventEmitter::WebOnly { broadcaster, bus }
+        Self::web_only(broadcaster, bus, None)
     }
 }
 
@@ -661,12 +686,18 @@ pub async fn emit_with_state_built<F>(
 where
     F: FnOnce(&mut SessionState) -> Option<AcpEvent>,
 {
-    let (envelope_arc, stream, evicted, turn_file_jobs) = {
+    let (envelope_arc, stream, evicted, turn_file_jobs, tool_result) = {
         let mut s = state.write().await;
         let Some(payload) = build(&mut s) else {
             return false;
         };
+        // Capture the settled result under the same lock as the event.
+        // Turn completion can clear the tool state before listeners run.
+        let pending_tool_result = plugin_lifecycle::pending_tool_result(emitter, &s, &payload);
         s.apply_event(&payload);
+        let tool_result = pending_tool_result.and_then(|(host, tool_call_id)| {
+            plugin_lifecycle::tool_result_input(&s, tool_call_id).map(|input| (host, input))
+        });
         s.event_seq += 1;
         let envelope = Arc::new(EventEnvelope {
             seq: s.event_seq,
@@ -675,7 +706,13 @@ where
         });
         let evicted = s.push_recent_event(Arc::clone(&envelope));
         let turn_file_jobs = std::mem::take(&mut s.turn_file_jobs);
-        (envelope, s.event_stream(), evicted, turn_file_jobs)
+        (
+            envelope,
+            s.event_stream(),
+            evicted,
+            turn_file_jobs,
+            tool_result,
+        )
     };
 
     // Office auto-preview: confirm the files this turn's tool calls named.
@@ -729,6 +766,10 @@ where
             }
         }
         EventEmitter::Noop => {}
+    }
+
+    if let Some((host, input)) = tool_result {
+        host.observe(emitter, plugin_lifecycle::Event::ToolCompleted, input);
     }
 
     // Bridge conversation status transitions onto the global

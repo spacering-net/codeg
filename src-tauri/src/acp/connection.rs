@@ -2015,19 +2015,7 @@ async fn build_agent(
     scratch: Option<&Path>,
     prompt_suggestions: bool,
 ) -> Result<(AcpAgent, crate::acp::reported_usage::PromptUsageMode), AcpError> {
-    // A conversation can outlive the custom-agent definition it was started
-    // with (the user deleted it in settings). `get_agent_meta` cannot report
-    // that — it is infallible — so it hands back a placeholder with an empty
-    // command. Catch it here, before we try to spawn nothing and surface an
-    // opaque ENOENT.
-    if let Some(id) = agent_type.custom_id() {
-        if !crate::acp::custom_registry::is_registered(id) {
-            return Err(AcpError::SdkNotInstalled(format!(
-                "The custom agent \"{id}\" is no longer registered. Re-add it in Settings → Agents to use this conversation."
-            )));
-        }
-    }
-    let meta = registry::get_agent_meta(agent_type);
+    let meta = registry::require_agent_meta(agent_type)?;
     debug_assert_eq!(meta.agent_type, agent_type);
     let prompt_usage_mode = crate::acp::reported_usage::PromptUsageMode::for_distribution(
         agent_type,
@@ -2115,6 +2103,12 @@ async fn build_agent(
             }
             let resolved_command =
                 crate::commands::acp::resolve_npx_command_for(agent_type, cmd).await;
+            if agent_type.is_plugin_provider() && resolved_command.is_none() {
+                return Err(AcpError::SdkNotInstalled(format!(
+                    "{} is not installed. Please install it in Agent Settings.",
+                    meta.name
+                )));
+            }
             let qoder_direct = if agent_type == AgentType::Qoder && cfg!(windows) {
                 // Windows reaches Qoder through cmd wrappers that would strip
                 // the inline `--settings` JSON's quotes (see
@@ -2578,6 +2572,9 @@ async fn build_agent(
     } else {
         agent
     };
+    if agent_type.is_plugin_provider() {
+        registry::require_agent_meta(agent_type)?;
+    }
     Ok((agent, prompt_usage_mode))
 }
 
@@ -2976,6 +2973,7 @@ pub async fn spawn_agent_connection(
                 .await;
         }
 
+        let failed = result.is_err();
         if let Err(e) = result {
             let code = e.code().map(String::from);
             emit_with_state(
@@ -3017,6 +3015,8 @@ pub async fn spawn_agent_connection(
             },
         )
         .await;
+        let session = state_clone.read().await;
+        crate::host_plugins::lifecycle::observe_agent_close(&emitter_clone, &session, failed);
                 // Connection loop ended; `block_on` returns and `_cleanup`
                 // (bound at the top of the thread body) drops next, removing
                 // the manager map entry — same as on a panic unwind.

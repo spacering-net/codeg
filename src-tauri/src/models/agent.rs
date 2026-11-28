@@ -2,8 +2,8 @@ use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::fmt;
 
-/// Wire prefix marking a custom (user-registered) ACP agent. The full wire
-/// form is `custom:<registry-id>`, e.g. `custom:goose`.
+/// Wire prefix for runtime-defined ACP agents, such as `custom:goose`.
+/// Plugin providers use a scoped runtime ID after the same prefix.
 pub const CUSTOM_AGENT_WIRE_PREFIX: &str = "custom:";
 
 /// Which agent backs a conversation.
@@ -11,10 +11,9 @@ pub const CUSTOM_AGENT_WIRE_PREFIX: &str = "custom:";
 /// The twenty named variants are compile-time built-ins with hand-written
 /// launch metadata (`acp::registry`). Most use a dedicated transcript parser;
 /// ZCode, TRAE CLI, Command Code and MiniMax Code use the Codeg-owned ACP transcript.
-/// [`AgentType::Custom`] is the open end: a user-registered
-/// ACP agent whose launch metadata lives in the database
-/// (`acp::custom_registry`) and whose history comes from codeg's own ACP
-/// transcript (`parsers::acp_native`) rather than an agent-specific store.
+/// [`AgentType::Custom`] includes both database definitions and host plugin
+/// providers (`acp::custom_registry`). Their history uses Codeg's ACP
+/// transcript (`parsers::acp_native`).
 ///
 /// The `Custom` payload is an **interned** slug (`crate::intern`), not a
 /// `String`, so this type stays `Copy` — it is passed by value through
@@ -73,6 +72,18 @@ pub const BUILTIN_AGENT_TYPES: &[AgentType] = &[
     AgentType::MiniMaxCode,
 ];
 
+pub(crate) const PLUGIN_PROVIDER_ID_PREFIX: &str = "@plugin-";
+
+pub(crate) fn is_plugin_provider_id(id: &str) -> bool {
+    id.strip_prefix(PLUGIN_PROVIDER_ID_PREFIX)
+        .is_some_and(|hash| {
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+}
+
 impl AgentType {
     /// True for a user-registered agent.
     pub fn is_custom(&self) -> bool {
@@ -91,12 +102,16 @@ impl AgentType {
         )
     }
 
-    /// The custom agent's registry id, or `None` for a built-in.
+    /// The custom runtime id, or `None` for a built-in.
     pub fn custom_id(&self) -> Option<&'static str> {
         match self {
             AgentType::Custom(id) => Some(id),
             _ => None,
         }
+    }
+
+    pub(crate) fn is_plugin_provider(self) -> bool {
+        self.custom_id().is_some_and(is_plugin_provider_id)
     }
 
     /// Build a custom agent type from a raw registry id, interning the slug.
@@ -163,9 +178,13 @@ impl AgentType {
             "trae" => Some(AgentType::Trae),
             "command_code" => Some(AgentType::CommandCode),
             "minimax_code" => Some(AgentType::MiniMaxCode),
-            other => other
-                .strip_prefix(CUSTOM_AGENT_WIRE_PREFIX)
-                .and_then(AgentType::custom),
+            other => other.strip_prefix(CUSTOM_AGENT_WIRE_PREFIX).and_then(|id| {
+                if is_plugin_provider_id(id) {
+                    Some(Self::Custom(crate::intern::intern(id)))
+                } else {
+                    Self::custom(id)
+                }
+            }),
         }
     }
 }

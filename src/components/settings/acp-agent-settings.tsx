@@ -45,6 +45,7 @@ import { toast } from "sonner"
 import {
   customAgentId,
   isCustomAgentType,
+  isPluginProviderAgentType,
   setCustomAgentDisplay,
 } from "@/lib/custom-agents"
 import { AgentIcon } from "@/components/agent-icon"
@@ -6134,6 +6135,7 @@ export function AcpAgentSettings() {
    */
   const handleRemoveCustomAgent = useCallback(
     async (agent: AcpAgentInfo) => {
+      if (isPluginProviderAgentType(agent.agent_type)) return
       const id = customAgentId(agent.agent_type)
       if (!id) return
       setRemovingCustomAgent(true)
@@ -8961,6 +8963,14 @@ export function AcpAgentSettings() {
                         <span className="text-sm font-medium truncate">
                           {agent.name}
                         </span>
+                        {isPluginProviderAgentType(agent.agent_type) && (
+                          <Badge
+                            variant="secondary"
+                            className="h-5 shrink-0 px-1.5 text-[10px] leading-none"
+                          >
+                            {t("pluginAgentBadge")}
+                          </Badge>
+                        )}
                         {draft.enabled && (
                           <span
                             className="h-2 w-2 rounded-full bg-emerald-500 shrink-0"
@@ -9045,11 +9055,15 @@ export function AcpAgentSettings() {
                         {t("adapter.badge")}
                       </Badge>
                     )}
-                    {isCustomAgentType(selectedAgent.agent_type) && (
+                    {isPluginProviderAgentType(selectedAgent.agent_type) ? (
+                      <Badge variant="secondary" className="shrink-0">
+                        {t("pluginAgentBadge")}
+                      </Badge>
+                    ) : isCustomAgentType(selectedAgent.agent_type) ? (
                       <Badge variant="secondary" className="shrink-0">
                         {t("customAgentBadge")}
                       </Badge>
-                    )}
+                    ) : null}
                   </div>
                   {/* Removing a custom agent lives in the danger row at the
                       bottom of the panel, not here: this line already carries
@@ -12967,9 +12981,17 @@ base_url = "https://api.openai.com/v1"`}
                     </AgentPanelSaveBar>
                   </AgentPanelGroup>
                 ) : selectedAgent.agent_type ===
-                  "zcode" ? null : isCustomAgentType(
+                  "zcode" ? null : isPluginProviderAgentType(
                     selectedAgent.agent_type
                   ) ? (
+                  <SettingCard data-slot="plugin-agent-managed-card">
+                    <SettingRow
+                      icon={Puzzle}
+                      title={t("pluginAgentManagedTitle")}
+                      description={t("pluginAgentManagedHint")}
+                    />
+                  </SettingCard>
+                ) : isCustomAgentType(selectedAgent.agent_type) ? (
                   // A custom agent is driven purely by the ACP protocol: codeg
                   // knows nothing about its config file layout or auth model,
                   // so the generic "config management" editor below would be

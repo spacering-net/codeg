@@ -242,6 +242,9 @@ pub(crate) fn resolve_system_agent_binary(cmd: &str) -> Option<PathBuf> {
 /// app launched from Finder or the Dock. Ordered last, so a codeg-managed copy
 /// and anything genuinely on PATH still win.
 pub(crate) fn resolve_system_agent_binary_for(agent_type: AgentType, cmd: &str) -> Option<PathBuf> {
+    if agent_type.is_plugin_provider() {
+        return None;
+    }
     if let Some(path) = resolve_system_agent_binary(cmd) {
         return Some(path);
     }
@@ -356,7 +359,7 @@ async fn uvx_displayed_version(
     system_cmd: Option<(&'static str, &'static [&'static str])>,
 ) -> Option<String> {
     let mut version = binary_cache::uvx_prepared_version(agent_type);
-    if version.is_none() {
+    if version.is_none() && !agent_type.is_plugin_provider() {
         let bin = resolve_command_on_path(cmd)
             .or_else(|| system_cmd.and_then(|(c, _)| resolve_command_on_path(c)));
         if let Some(bin) = bin {
@@ -453,6 +456,9 @@ pub(crate) async fn resolve_npx_command(cmd: &str) -> Option<PathBuf> {
 /// Ordered last, so anything on PATH, an official-installer copy in
 /// `~/.local/bin` and the npm copy codeg manages all still win.
 pub(crate) async fn resolve_npx_command_for(agent_type: AgentType, cmd: &str) -> Option<PathBuf> {
+    if agent_type.is_plugin_provider() {
+        return resolve_plugin_npx_in_prefix(cmd, &plugin_npm_prefix(agent_type).ok()?);
+    }
     if let Some(path) = resolve_npx_command(cmd).await {
         return Some(path);
     }
@@ -563,6 +569,9 @@ impl NpxCommandResolver {
     /// npx agent at once: the npm prefix is probed at most once per request,
     /// and each command is resolved at most once.
     async fn resolve_for_list(&mut self, agent_type: AgentType, cmd: &str) -> Option<PathBuf> {
+        if agent_type.is_plugin_provider() {
+            return resolve_npx_command_for(agent_type, cmd).await;
+        }
         // Outside the per-command cache, which is keyed by the command alone:
         // whether a native-installer copy counts depends on the agent asking.
         self.resolve_cmd(cmd)
@@ -644,6 +653,36 @@ fn npm_global_prefix_from_stdout(stdout: &[u8]) -> Option<PathBuf> {
     Some(PathBuf::from(prefix))
 }
 
+fn plugin_npm_prefix(agent_type: AgentType) -> Result<PathBuf, AcpError> {
+    Ok(binary_cache::cache_dir()?
+        .join(registry::registry_id_for(agent_type))
+        .join("npm"))
+}
+
+fn resolve_plugin_npx_in_prefix(cmd: &str, prefix: &Path) -> Option<PathBuf> {
+    resolve_npx_command_from_npm_prefix(cmd, prefix)
+        .filter(|path| binary_cache::path_within(prefix, path))
+}
+
+fn plugin_npm_version(prefix: &Path, cmd: &str, package: &str) -> Option<String> {
+    resolve_plugin_npx_in_prefix(cmd, prefix)?;
+    let modules = if cfg!(windows) {
+        prefix.join("node_modules")
+    } else {
+        prefix.join("lib/node_modules")
+    };
+    let manifest = std::fs::read(
+        modules
+            .join(package_name_from_spec(package))
+            .join("package.json"),
+    )
+    .ok()?;
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest).ok()?;
+    let version = manifest.get("version")?.as_str()?;
+    semver::Version::parse(version).ok()?;
+    Some(version.to_owned())
+}
+
 fn npm_prefix_bin_dir(prefix: &Path) -> PathBuf {
     if cfg!(windows) {
         prefix.to_path_buf()
@@ -709,7 +748,7 @@ fn system_agent_is_user_managed(name: &str, install_url: &str) -> AcpError {
 /// For Binary agents: checks platform support and that the binary is
 /// already cached locally.
 pub(crate) async fn verify_agent_installed(agent_type: AgentType) -> Result<(), AcpError> {
-    let meta = registry::get_agent_meta(agent_type);
+    let meta = registry::require_agent_meta(agent_type)?;
     match meta.distribution {
         registry::AgentDistribution::Npx { cmd, .. } => {
             if !is_cmd_available(agent_type, cmd).await {
@@ -838,8 +877,13 @@ async fn npm_list_version(
 }
 
 async fn detect_local_version(agent_type: AgentType) -> Option<String> {
-    let meta = registry::get_agent_meta(agent_type);
+    let meta = registry::require_agent_meta(agent_type).ok()?;
     match meta.distribution {
+        registry::AgentDistribution::Npx { cmd, package, .. }
+            if agent_type.is_plugin_provider() =>
+        {
+            plugin_npm_version(&plugin_npm_prefix(agent_type).ok()?, cmd, package)
+        }
         registry::AgentDistribution::Npx { cmd, package, .. } => {
             let resolved = resolve_npx_command_for(agent_type, cmd).await?;
             // A Windows Qoder dispatcher can select a native install even
@@ -863,7 +907,7 @@ async fn detect_local_version(agent_type: AgentType) -> Option<String> {
             let cached = binary_cache::detect_installed_version(agent_type, cmd)
                 .ok()
                 .flatten();
-            if cached.is_some() {
+            if cached.is_some() || agent_type.is_plugin_provider() {
                 return cached;
             }
             // A user-installed CLI (no codeg cache) still reports a version
@@ -11941,6 +11985,7 @@ pub async fn acp_preflight_core(
     agent_type: AgentType,
     force_refresh: Option<bool>,
 ) -> Result<PreflightResult, AcpError> {
+    registry::require_agent_meta(agent_type)?;
     if force_refresh.unwrap_or(false) {
         preflight::clear_npm_env_cache();
     }
@@ -13112,12 +13157,20 @@ pub(crate) async fn acp_get_agent_status_core(
     db: &AppDatabase,
 ) -> Result<crate::acp::types::AcpAgentStatus, AcpError> {
     let platform = registry::current_platform();
-    let meta = registry::get_agent_meta(agent_type);
+    let meta = registry::require_agent_meta(agent_type)?;
     let setting = agent_setting_service::get_by_agent_type(&db.conn, agent_type)
         .await
         .map_err(|e| AcpError::protocol(e.to_string()))?;
 
     let (available, installed_version) = match &meta.distribution {
+        registry::AgentDistribution::Npx { cmd, package, .. }
+            if agent_type.is_plugin_provider() =>
+        {
+            (
+                true,
+                plugin_npm_version(&plugin_npm_prefix(agent_type)?, cmd, package),
+            )
+        }
         registry::AgentDistribution::Npx { cmd, package, .. } => {
             let resolved = resolve_npx_command_for(agent_type, cmd).await;
             let mut version = resolved
@@ -13150,7 +13203,7 @@ pub(crate) async fn acp_get_agent_status_core(
             // install isn't blocked as "not installed". Dir-tree agents
             // (Cursor) keep their dedicated probe; everyone else (custom or
             // built-in) goes through the per-agent probe cache.
-            if detected.is_none() {
+            if detected.is_none() && !agent_type.is_plugin_provider() {
                 if dir_entry.is_some() {
                     detected = system_dir_agent_version(cmd).await;
                 } else if let Some(bin) = resolve_system_agent_binary_for(agent_type, cmd) {
@@ -13225,8 +13278,19 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
     let mut npx_resolver = NpxCommandResolver::default();
     for (idx, agent_type) in agent_types.into_iter().enumerate() {
         let setting = settings_map.get(&agent_type);
-        let meta = registry::get_agent_meta(agent_type);
+        let Ok(meta) = registry::require_agent_meta(agent_type) else {
+            continue;
+        };
         let (available, dist_type, local_installed_version) = match &meta.distribution {
+            registry::AgentDistribution::Npx { cmd, package, .. }
+                if agent_type.is_plugin_provider() =>
+            {
+                (
+                    true,
+                    "npx",
+                    plugin_npm_version(&plugin_npm_prefix(agent_type)?, cmd, package),
+                )
+            }
             registry::AgentDistribution::Npx { cmd, package, .. } => {
                 // Keep the list path bounded: each list request probes npm
                 // global prefix at most once, then reuses the result across
@@ -13257,7 +13321,7 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
                 // (cached probes — no per-list subprocess after the first
                 // call). Without this, the list would also persist
                 // `installed_version = None` over the detected value.
-                if detected.is_none() {
+                if detected.is_none() && !agent_type.is_plugin_provider() {
                     if dir_entry.is_some() {
                         detected = system_dir_agent_version(cmd).await;
                     } else if let Some(bin) = resolve_system_agent_binary_for(agent_type, cmd) {
@@ -13418,11 +13482,20 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
         } else {
             None
         };
+        let registry_id = if agent_type.is_plugin_provider() {
+            let Some(id) = custom_registry::public_provider_id(agent_type) else {
+                continue;
+            };
+            id
+        } else {
+            registry::registry_id_for(agent_type)
+        };
         agents.push(AcpAgentInfo {
             agent_type,
-            registry_id: registry::registry_id_for(agent_type).to_string(),
+            registry_id: registry_id.to_owned(),
             registry_version: meta.registry_version().map(ToString::to_string),
-            supports_custom_version: meta.supports_custom_version(),
+            supports_custom_version: !agent_type.is_plugin_provider()
+                && meta.supports_custom_version(),
             name: meta.name.to_string(),
             description: meta.description.to_string(),
             available,
@@ -14450,9 +14523,9 @@ pub(crate) async fn acp_download_agent_binary_core(
     task_id: String,
     emitter: &EventEmitter,
 ) -> Result<(), AcpError> {
+    let meta = registry::require_agent_meta(agent_type)?;
+    validate_provider_version_override(agent_type, version_override.as_deref())?;
     emit_agent_install_event(emitter, &task_id, AgentInstallEventKind::Started, "");
-
-    let meta = registry::get_agent_meta(agent_type);
     let result = match meta.distribution {
         registry::AgentDistribution::Binary {
             version,
@@ -14957,6 +15030,79 @@ async fn refresh_codex_catalog_after_install(
     }
 }
 
+static PLUGIN_NPM_OPERATIONS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn validate_provider_version_override(
+    agent_type: AgentType,
+    override_version: Option<&str>,
+) -> Result<(), AcpError> {
+    if agent_type.is_plugin_provider()
+        && override_version.is_some_and(|version| !version.trim().is_empty())
+    {
+        return Err(AcpError::protocol(
+            "Change the plugin manifest to install a different ACP provider release",
+        ));
+    }
+    Ok(())
+}
+
+async fn install_plugin_npm_provider(
+    agent_type: AgentType,
+    package: &str,
+    cmd: &str,
+    task_id: &str,
+    emitter: &EventEmitter,
+) -> Result<String, AcpError> {
+    let _guard = PLUGIN_NPM_OPERATIONS.lock().await;
+    registry::require_agent_meta(agent_type)?;
+    let prefix = plugin_npm_prefix(agent_type)?;
+    let parent = prefix.parent().expect("npm prefix has a parent");
+    let io_error = |error| AcpError::DownloadFailed(format!("ACP provider installation: {error}"));
+    std::fs::create_dir_all(parent).map_err(io_error)?;
+    let staging = tempfile::tempdir_in(parent).map_err(io_error)?;
+    let next = staging.path().join("npm");
+    let prefix_arg = format!("--prefix={}", next.display());
+    let registry_arg = format!("--registry={NPM_OFFICIAL_REGISTRY}");
+    let scripts = npm_run_scripts_args(package);
+    let mut args = vec![
+        "install",
+        "-g",
+        NPM_INCLUDE_OPTIONAL,
+        NPM_FOREGROUND_SCRIPTS,
+        &prefix_arg,
+        &registry_arg,
+    ];
+    args.extend(scripts.iter().map(String::as_str));
+    args.extend(["--", package]);
+    let (success, stderr) = run_npm_streaming(&args, task_id, emitter)
+        .await
+        .map_err(annotate_npm_proxy_url_failure)?;
+    if !success {
+        return Err(annotate_npm_proxy_url_failure(AcpError::protocol(format!(
+            "ACP provider npm install failed: {stderr}"
+        ))));
+    }
+    let version = plugin_npm_version(&next, cmd, package).ok_or_else(|| {
+        AcpError::protocol(format!("The reviewed npm package did not install the {cmd:?} command and a valid package version"))
+    })?;
+    registry::require_agent_meta(agent_type)?;
+    let previous = staging.path().join("previous");
+    if prefix.exists() {
+        std::fs::rename(&prefix, &previous).map_err(io_error)?;
+    }
+    if let Err(error) = std::fs::rename(&next, &prefix) {
+        if previous.exists() {
+            if let Err(restore_error) = std::fs::rename(&previous, &prefix) {
+                let recovery_path = staging.keep();
+                return Err(AcpError::DownloadFailed(format!("ACP provider restoration failed: {restore_error}. Previous installation retained at {}", recovery_path.display())));
+            }
+        }
+        return Err(io_error(error));
+    }
+    emit_acp_agents_updated(emitter, "npx_prepared", Some(agent_type));
+    Ok(version)
+}
+
 pub(crate) async fn acp_prepare_npx_agent_core(
     agent_type: AgentType,
     registry_version: Option<String>,
@@ -14966,10 +15112,15 @@ pub(crate) async fn acp_prepare_npx_agent_core(
     db: &AppDatabase,
     emitter: &EventEmitter,
 ) -> Result<String, AcpError> {
+    let meta = registry::require_agent_meta(agent_type)?;
+    validate_provider_version_override(agent_type, version_override.as_deref())?;
     emit_agent_install_event(emitter, &task_id, AgentInstallEventKind::Started, "");
-
-    let meta = registry::get_agent_meta(agent_type);
     let result = match meta.distribution {
+        registry::AgentDistribution::Npx { package, cmd, .. }
+            if agent_type.is_plugin_provider() =>
+        {
+            install_plugin_npm_provider(agent_type, package, cmd, &task_id, emitter).await
+        }
         registry::AgentDistribution::Npx { package, cmd, .. } => {
             // `version_override` of None/empty keeps the registry-pinned spec;
             // a custom version installs `<name>@<version>` instead.
@@ -15206,9 +15357,8 @@ pub(crate) async fn acp_uninstall_agent_core(
     db: &AppDatabase,
     emitter: &EventEmitter,
 ) -> Result<(), AcpError> {
+    let meta = registry::require_agent_meta(agent_type)?;
     emit_agent_install_event(emitter, &task_id, AgentInstallEventKind::Started, "");
-
-    let meta = registry::get_agent_meta(agent_type);
     emit_agent_install_event(
         emitter,
         &task_id,
@@ -15219,6 +15369,11 @@ pub(crate) async fn acp_uninstall_agent_core(
     let result: Result<(), AcpError> = async {
         match meta.distribution {
             registry::AgentDistribution::Binary { .. } => {
+                binary_cache::clear_agent_cache(agent_type)?;
+            }
+            registry::AgentDistribution::Npx { .. } if agent_type.is_plugin_provider() => {
+                let _guard = PLUGIN_NPM_OPERATIONS.lock().await;
+                registry::require_agent_meta(agent_type)?;
                 binary_cache::clear_agent_cache(agent_type)?;
             }
             registry::AgentDistribution::Npx { package, .. } => {
@@ -21779,6 +21934,44 @@ wire_api = "chat"
         assert_eq!(
             apply_custom_version_to_url(opencode, "1.15.12", "1.16.0"),
             "https://github.com/anomalyco/opencode/releases/download/v1.16.0/opencode-darwin-arm64.zip"
+        );
+    }
+
+    #[test]
+    fn plugin_npm_version_requires_the_reviewed_command_and_package_in_its_prefix() {
+        let temp = tempfile::tempdir().unwrap();
+        let prefix = temp.path();
+        let modules = if cfg!(windows) {
+            prefix.join("node_modules")
+        } else {
+            prefix.join("lib/node_modules")
+        };
+        let package = modules.join("@scope/adapter");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("package.json"), r#"{"version":"1.2.3"}"#).unwrap();
+        let spec = "@scope/adapter@1.2.3";
+        assert_eq!(plugin_npm_version(prefix, "acp-bridge", spec), None);
+        let bin = npm_prefix_bin_dir(prefix);
+        std::fs::create_dir_all(&bin).unwrap();
+        let filename = if cfg!(windows) {
+            "acp-bridge.cmd"
+        } else {
+            "acp-bridge"
+        };
+        let command = bin.join(filename);
+        std::fs::write(&command, "fixture").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(
+            plugin_npm_version(prefix, "acp-bridge", spec).as_deref(),
+            Some("1.2.3")
+        );
+        assert_eq!(
+            plugin_npm_version(prefix, "acp-bridge", "different-package"),
+            None
         );
     }
 
