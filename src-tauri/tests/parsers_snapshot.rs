@@ -1729,7 +1729,18 @@ fn hermes_session_total_spans_delegates_compressions_and_auxiliary_calls() {
                 .expect("create table");
         }
         // (id, source, model_config, parent, end_reason, input, output, read, write)
-        let sessions: [(&str, &str, &str, &str, &str, i64, i64, i64, i64); 6] = [
+        type SessionRow = (
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static str,
+            i64,
+            i64,
+            i64,
+            i64,
+        );
+        let sessions: [SessionRow; 6] = [
             ("root", "acp", "{}", "", "compression", 1000, 10, 100, 1),
             // Delegated by the root.
             (
