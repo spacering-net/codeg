@@ -710,6 +710,17 @@ impl EngineHost {
                 Some(e) => e,
                 None => self.primary.clone(),
             };
+            // Seen to from the activity since it was found (6.5): no card.
+            if f.rule == "failed" {
+                if let Some((d, seen)) = engine.failed_claim_of(&f.facts).await {
+                    if svc::failed_claim_holds(&engine.db.conn, &svc::failed_claim_id(d, seen))
+                        .await
+                        .unwrap_or(false)
+                    {
+                        continue;
+                    }
+                }
+            }
             if let Err(e) = engine.raise_rule_card(&f, &look.prefs, lowered).await {
                 tracing::warn!("[personal-agent] rule {rule}: no card for {}: {e}", f.object);
             }
@@ -774,6 +785,14 @@ impl EngineHost {
                 {
                     continue;
                 }
+                // Seen to from the activity already (6.5): not nobody's.
+                if svc::failed_claim_holds(&self.db.conn, &svc::failed_claim_id(d.id, d.updated_at))
+                    .await
+                    .unwrap_or(false)
+                    || failure_handed(&self.db, d.id).await
+                {
+                    continue;
+                }
                 // One codeg retries or asks about is not nobody's.
                 if d.state == DispatchState::Interrupted {
                     if let Some(e) = &engine {
@@ -816,9 +835,17 @@ impl EngineHost {
             let (bot, d) = self
                 .owner_of_dispatch(t.personal_agent_dispatch_id, look.primary)
                 .await;
-            // Its run taken over by other work (B1).
+            // Its run taken over by other work (B1), or seen to from the
+            // activity already (6.5).
             if let Some(d) = d.as_ref() {
                 if super::dispatch::superseded(&self.db, d).await {
+                    continue;
+                }
+                if svc::failed_claim_holds(&self.db.conn, &svc::failed_claim_id(d.id, d.updated_at))
+                    .await
+                    .unwrap_or(false)
+                    || failure_handed(&self.db, d.id).await
+                {
                     continue;
                 }
             }
@@ -1374,6 +1401,18 @@ impl EngineHost {
 
 // ── the cards ───────────────────────────────────────────────────────────────
 
+/// Whether failed work `d`'s latest result card says it was handed to its
+/// assistant from the activity (6.5) — the failure it reports is seen to.
+pub(super) async fn failure_handed(db: &AppDatabase, d: i32) -> bool {
+    svc::latest_result_row(&db.conn, d)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|r| r.data)
+        .and_then(|data| serde_json::from_str::<Value>(&data).ok())
+        .is_some_and(|data| data["handed_at"].is_string())
+}
+
 /// Read a card row's data.
 fn data_of_row(raw: Option<&str>) -> Value {
     raw.and_then(|d| serde_json::from_str::<Value>(d).ok())
@@ -1523,6 +1562,21 @@ impl PersonalAgentEngine {
     }
 
     /// A card whose thing is gone: it says so, and waits on nobody.
+    /// [`Self::expire_rule_card`] for one this answer took to acting.
+    async fn expire_acting_rule_card(&self, notice: &notice_entity::Model) {
+        if svc::move_notice(
+            &self.db.conn,
+            notice.id,
+            &[NoticeState::Acting],
+            NoticeState::Expired,
+        )
+        .await
+        .unwrap_or(false)
+        {
+            let _ = self.rule_card_row(notice, "expired", json!({})).await;
+        }
+    }
+
     pub(super) async fn expire_rule_card(&self, notice: &notice_entity::Model) {
         if svc::move_notice(
             &self.db.conn,
@@ -1538,7 +1592,7 @@ impl PersonalAgentEngine {
     }
 
     /// Write a rule card's state (and what more it says) on its row.
-    async fn rule_card_row(
+    pub(super) async fn rule_card_row(
         &self,
         notice: &notice_entity::Model,
         state: &str,
@@ -1658,12 +1712,116 @@ impl PersonalAgentEngine {
         {
             return Err("this card was answered already".into());
         }
+        // Failed work's failure: the card and the activity's row claim the
+        // same thing (6.5) — one of them has it.
+        let claim = if rule == "failed" && matches!(action, "retry" | "hand") {
+            self.failed_claim_of(&facts).await
+        } else {
+            None
+        };
+        // Its work moved on since the card was raised (run again from the
+        // activity, failed again since): the card stands for nothing now.
+        // (A card of a failed dispatch: its episode is the version that
+        // failed. One of a board task's goes by the task's run.)
+        let of_work = payload["object"]
+            .as_str()
+            .is_some_and(|o| o.starts_with("dispatch:"));
+        let of_task = payload["object"]
+            .as_str()
+            .is_some_and(|o| o.starts_with("task:"));
+        let acting_on_failure = rule == "failed" && matches!(action, "retry" | "hand");
+        let mut stale = acting_on_failure
+            && of_work
+            && match claim {
+                None => true,
+                Some((_, seen)) => {
+                    payload["episode"].as_str() != Some(seen.timestamp_millis().to_string().as_str())
+                }
+            };
+        // A board task's: still failed, in the run the card was raised for —
+        // and run again only as read here.
+        let mut task_seen = None;
+        if acting_on_failure && of_task {
+            let task = facts["task_id"].as_i64().and_then(|v| i32::try_from(v).ok());
+            let now = match task {
+                Some(t) => crate::db::service::work_task_service::get_model(&self.db.conn, t)
+                    .await
+                    .ok(),
+                None => None,
+            };
+            let current = now.filter(|t| {
+                t.status == WorkTaskStatus::Failed
+                    && payload["episode"].as_str() == Some(t.run_seq.to_string().as_str())
+            });
+            stale |= current.is_none();
+            task_seen = current.map(|t| crate::db::service::work_task_service::ClaimSeen {
+                updated_at: t.updated_at,
+                dispatch_id: t.personal_agent_dispatch_id,
+            });
+        }
+        // Handed to its assistant already from the activity (its result
+        // card says so): not again from here.
+        if acting_on_failure && !stale {
+            if let Some((d, _)) = claim {
+                stale = failure_handed(&self.db, d).await;
+            }
+        }
+        if stale {
+            self.expire_acting_rule_card(notice).await;
+            return Err("this work moved on since the card was raised".into());
+        }
+        let mut token = None;
+        if let Some((d, seen)) = claim {
+            match svc::take_failed_claim(&self.db.conn, self.bot().await, d, seen).await {
+                Ok(Some(t)) => token = Some(t),
+                Ok(None) => {
+                    self.expire_acting_rule_card(notice).await;
+                    return Err("this failure was seen to from the activity already".into());
+                }
+                Err(e) => {
+                    let _ = svc::move_notice(
+                        &self.db.conn,
+                        notice.id,
+                        &[NoticeState::Acting],
+                        NoticeState::Open,
+                    )
+                    .await;
+                    return Err(e.to_string());
+                }
+            }
+        }
+        // The result card of the failure it acts on, as of now: what a hand
+        // over from here marks — not a newer run's, failed meanwhile.
+        // A board task's: the card of the run this card was raised for — a
+        // run failed again since has a card of its own, not this one's.
+        // Work's own: its card while the work is still at the version that
+        // failed, as claimed — in the one read.
+        let result_card = match claim {
+            Some((d, seen)) if action == "hand" => {
+                let card = if of_task {
+                    svc::latest_result_row(&self.db.conn, d).await
+                } else {
+                    svc::latest_result_row_at(&self.db.conn, d, seen).await
+                };
+                card.ok()
+                    .flatten()
+                    .filter(|r| {
+                        !of_task || {
+                            let data = data_of_row(r.data.as_deref());
+                            data["run"].as_i64().map(|n| n.to_string()).as_deref()
+                                == payload["episode"].as_str()
+                        }
+                    })
+                    .map(|r| r.id)
+            }
+            _ => None,
+        };
         let id_of = |k: &str| facts[k].as_i64().and_then(|v| i32::try_from(v).ok());
         let words = text
             .map(|t| t.trim().chars().take(2_000).collect::<String>())
             .filter(|t| !t.is_empty());
         let ran: Result<(String, Value), String> = match (rule.as_str(), action) {
-            ("failed", "retry") => self.retry_failed(&facts, notice.id).await,
+            ("failed", "retry") => self.retry_failed(&facts, notice.id, task_seen).await,
             ("review", "check") => match self.check_review(&facts).await {
                 Ok(Some(r)) => Ok(r),
                 // Not one codeg can check: the assistant sees to it.
@@ -1724,6 +1882,27 @@ impl PersonalAgentEngine {
         };
         match ran {
             Ok((state, more)) => {
+                if let (Some((d, seen)), Some(t)) = (claim, token) {
+                    // Handed from the card: its result card says so too, as
+                    // one handed from the activity's row does — what the
+                    // rule and the activity tell a failure seen to by.
+                    if let (true, Some(card)) = (state == "handed", result_card) {
+                        if let Err(e) = svc::merge_row_data(
+                            &self.db.conn,
+                            card,
+                            &json!({ "handed_at": Utc::now() }),
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                "[personal-agent] the result card of #{d} not marked handed: {e}"
+                            );
+                        }
+                    }
+                    let _ =
+                        svc::finish_failed_claim(&self.db.conn, &svc::failed_claim_id(d, seen), t)
+                            .await;
+                }
                 let _ = svc::move_notice(
                     &self.db.conn,
                     notice.id,
@@ -1757,6 +1936,12 @@ impl PersonalAgentEngine {
             }
             Err(e) => {
                 let e = self.for_the_owner(e);
+                // Not done: the failure free to act on again.
+                if let (Some((d, seen)), Some(t)) = (claim, token) {
+                    let _ =
+                        svc::release_failed_claim(&self.db.conn, &svc::failed_claim_id(d, seen), t)
+                            .await;
+                }
                 let _ = svc::move_notice(
                     &self.db.conn,
                     notice.id,
@@ -1770,6 +1955,15 @@ impl PersonalAgentEngine {
                 Err(e)
             }
         }
+    }
+
+    /// The failure a "failed" rule card's facts name, as its claim is keyed
+    /// (6.5): the work and its version, while it is still failed.
+    pub(super) async fn failed_claim_of(&self, facts: &Value) -> Option<(i32, DateTime<Utc>)> {
+        let id = facts["dispatch_id"].as_i64().and_then(|v| i32::try_from(v).ok())?;
+        let d = svc::get_dispatch(&self.db.conn, id).await.ok().flatten()?;
+        matches!(d.state, DispatchState::Failed | DispatchState::Interrupted)
+            .then_some((d.id, d.updated_at))
     }
 
     /// The thing, handed to the assistant as the owner's message (the
@@ -1800,6 +1994,7 @@ impl PersonalAgentEngine {
         self: &Arc<Self>,
         facts: &Value,
         notice_id: i32,
+        task_seen: Option<crate::db::service::work_task_service::ClaimSeen>,
     ) -> Result<(String, Value), String> {
         let id_of = |k: &str| facts[k].as_i64().and_then(|v| i32::try_from(v).ok());
         if let Some(id) = id_of("dispatch_id") {
@@ -1807,11 +2002,30 @@ impl PersonalAgentEngine {
                 .await
                 .map_err(|e| e.to_string())?;
             if let Some(d) = mine {
+                // A board task's work, its task as the card's press read
+                // it: run again on the board only as read — set aside for
+                // later meanwhile, or run again, it is not this card's.
+                if let (DispatchMode::Task, Some(seen), Some(task)) =
+                    (d.mode, task_seen, d.work_task_id)
+                {
+                    super::activity_acts::retry_task(
+                        &self.db,
+                        task,
+                        seen,
+                        Some(RETRY_FAILED_MESSAGE.to_string()),
+                        Some(super::ledger::fresh_op_id()),
+                    )
+                    .await
+                    .map_err(String::from)?;
+                    return Ok(("retried".into(), json!({ "task_id": task })));
+                }
                 // Work that never got a session (it failed starting — an
                 // agent not installed, say) has nothing to go on with: it
                 // starts again as it was asked.
                 if d.mode != DispatchMode::Task && !self.resumable(&d).await {
-                    let made = self.dispatch_again(&d, notice_id).await?;
+                    let made = self
+                        .dispatch_again(&d, super::dispatch::DispatchAuth::Card { notice_id })
+                        .await?;
                     return Ok((
                         "retried".into(),
                         json!({ "dispatch_id": made, "retry_of": d.id }),
@@ -1831,9 +2045,16 @@ impl PersonalAgentEngine {
             }
         }
         let task = id_of("task_id").ok_or("the card names nothing to retry")?;
-        crate::commands::work_task::work_task_retry_core(task, None, Vec::new(), false)
-            .await
-            .map_err(|e| e.to_string())?;
+        match task_seen {
+            // As the card's press read it: one run again since is not this
+            // card's to run again.
+            Some(seen) => super::activity_acts::retry_task(&self.db, task, seen, None, None)
+                .await
+                .map_err(String::from)?,
+            None => crate::commands::work_task::work_task_retry_core(task, None, Vec::new(), false)
+                .await
+                .map_err(|e| e.to_string())?,
+        }
         Ok(("retried".into(), json!({ "task_id": task })))
     }
 
@@ -1867,13 +2088,15 @@ impl PersonalAgentEngine {
 
     /// The same work handed out again, as it was first asked for: a new
     /// dispatch on the same line, taking the failed one over (B1). Its id.
-    /// As card `notice_id`'s own run, settled with the dispatch it makes:
-    /// the card run again (a second click) finds the dispatch it made, and a
-    /// restart midway finds the card settled by its entry, not reopened.
-    async fn dispatch_again(
+    /// As card `notice_id`'s own run (`auth`), settled with the dispatch it
+    /// makes: the card run again (a second click) finds the dispatch it
+    /// made, and a restart midway finds the card settled by its entry, not
+    /// reopened — or, from the activity, under an operation keyed by the
+    /// failure, made once.
+    pub(super) async fn dispatch_again(
         self: &Arc<Self>,
         d: &dispatch_entity::Model,
-        notice_id: i32,
+        auth: super::dispatch::DispatchAuth,
     ) -> Result<i32, String> {
         // On what its assistant's work runs on now, not what the first ran on.
         let request = super::dispatch::DispatchRequest {
@@ -1893,9 +2116,7 @@ impl PersonalAgentEngine {
             thread_id: d.thread_id,
             for_input: d.for_input.clone(),
         };
-        let made = self
-            .record_dispatch(v, super::dispatch::DispatchAuth::Card { notice_id })
-            .await?;
+        let made = self.record_dispatch(v, auth).await?;
         Ok(made.dispatch.id)
     }
 
@@ -2102,7 +2323,7 @@ impl PersonalAgentEngine {
 }
 
 /// What a hand-over says when the page sent no words of its own.
-fn hand_text(rule: &str, facts: &Value) -> String {
+pub(super) fn hand_text(rule: &str, facts: &Value) -> String {
     let s = |k: &str| facts[k].as_str().unwrap_or("").to_string();
     let n = |k: &str| facts[k].as_i64().map(|v| v.to_string()).unwrap_or_default();
     match rule {

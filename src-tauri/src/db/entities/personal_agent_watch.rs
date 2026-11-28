@@ -88,6 +88,11 @@ pub struct Model {
     pub backoff: bool,
     #[sea_orm(column_type = "Text", nullable)]
     pub last_error: Option<String>,
+    /// What kind of failure the last read was (`auth`, `no_account`,
+    /// `config`, `network`, `timeout`, `rate_limited`, `not_found`, `api`);
+    /// `None` once a read came back.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub last_error_kind: Option<String>,
     /// What codeg did on it by itself (7.4, phase 3), as JSON: the rounds
     /// it started to fix it, the review feedback read, the merge it made
     /// (`personal_agent::pr_auto::Auto`).

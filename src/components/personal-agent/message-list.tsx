@@ -78,6 +78,7 @@ import {
 } from "@/components/ui/dialog"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useChatMotion, useReducedMotion } from "@/hooks/use-chat-motion"
+import { readGroups, waitingKeys } from "@/lib/activity-groups"
 import { toErrorMessage } from "@/lib/app-error"
 import type { TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -1154,8 +1155,10 @@ export function MessageList({
   // "today"'s, from the same read as the list — and opens the activity at
   // the first of it (10.7, C6); elsewhere, or with none, the cards here,
   // scrolled to.
+  // What waits on the owner, no suggestion counted (R5).
+  const groupsRead = activity ? readGroups(activity) : null
   const pill = attentionPill(
-    botId == null ? (activity?.pill.count ?? 0) : 0,
+    botId == null ? (groupsRead?.pill.count ?? 0) : 0,
     waits.length
   )
   const showWaiting = usePersonalAgentUi((s) => s.showWaiting)
@@ -1163,7 +1166,7 @@ export function MessageList({
   const conversation = botId == null ? "primary" : String(botId)
   const pillKeys = attentionKeys(
     pill,
-    (activity?.needs ?? []).map((r) => r.key),
+    activity ? waitingKeys(activity) : [],
     waits
   )
   const dismissed = usePersonalAgentUi(
@@ -1478,7 +1481,7 @@ export function MessageList({
           className="top-2"
           onClick={() => {
             if (pill?.today) {
-              showWaiting(activity?.pill.first ?? null)
+              showWaiting(groupsRead?.pill.first ?? null)
               return
             }
             const first = waits[0]

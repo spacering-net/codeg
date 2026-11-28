@@ -24,6 +24,9 @@ interface TaskCancelDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   task: WorkTask | null
+  /** Cancel only the run this was opened on (`task.run_seq` then): one run
+   *  again since is left running. Unset: whatever runs when it is sent. */
+  expectRunSeq?: number
 }
 
 /**
@@ -51,6 +54,7 @@ export function TaskCancelDialog({
   open,
   onOpenChange,
   task,
+  expectRunSeq,
 }: TaskCancelDialogProps) {
   const t = useTranslations("Tasks")
   const [reason, setReason] = useState("")
@@ -75,11 +79,11 @@ export function TaskCancelDialog({
     if (!task) return
     setSubmitting(true)
     try {
-      await workTaskCancel(
-        task.id,
-        reason.trim() || null,
-        hasWorktree && deleteWorktree
-      )
+      const why = reason.trim() || null
+      const cleanup = hasWorktree && deleteWorktree
+      await (expectRunSeq === undefined
+        ? workTaskCancel(task.id, why, cleanup)
+        : workTaskCancel(task.id, why, cleanup, expectRunSeq))
       onOpenChange(false)
     } catch (e) {
       toast.error(toErrorMessage(e))

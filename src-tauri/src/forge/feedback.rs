@@ -1017,3 +1017,146 @@ mod tests {
         assert!(f.items.is_empty());
     }
 }
+
+// ── where a review stands (6.6) ────────────────────────────────────────────
+
+#[derive(Debug, Default, Deserialize)]
+struct GhRequestedReviewers {
+    #[serde(default)]
+    users: Vec<GhUser>,
+    #[serde(default)]
+    teams: Vec<GhTeam>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GhTeam {
+    #[serde(default)]
+    slug: String,
+}
+
+/// The review gate from each reviewer's latest verdict (`(login, state)`,
+/// oldest first; a pending or plain comment changes nothing) and who is
+/// still asked.
+fn gate_of(verdicts: Vec<(String, String)>, requested: Vec<String>) -> super::ReviewGate {
+    let mut latest: std::collections::BTreeMap<String, String> = Default::default();
+    for (who, state) in verdicts {
+        match state.as_str() {
+            // Gitea lists a review still asked of someone among the reviews
+            // (`REQUEST_REVIEW`): asked, not answered.
+            "APPROVED" | "CHANGES_REQUESTED" | "REQUEST_CHANGES" | "DISMISSED"
+            | "REQUEST_REVIEW" => {
+                latest.insert(who, state);
+            }
+            _ => {}
+        }
+    }
+    let approved = latest.values().any(|s| s == "APPROVED");
+    let changes_requested = latest
+        .values()
+        .any(|s| s == "CHANGES_REQUESTED" || s == "REQUEST_CHANGES");
+    let mut requested = requested;
+    for (who, state) in &latest {
+        if state == "REQUEST_REVIEW" && !requested.contains(who) {
+            requested.push(who.clone());
+        }
+    }
+    super::ReviewGate {
+        required: None,
+        approved,
+        changes_requested,
+        requested,
+    }
+}
+
+/// A GitHub pull request's review gate (read when the forge blocks it):
+/// its reviews and who is still asked. `None` when they cannot be read.
+pub(crate) async fn github_review_gate(
+    auth: &ResolvedAuth,
+    repo: &str,
+    number: i64,
+) -> Option<super::ReviewGate> {
+    let api = &auth.api_base;
+    let mut partial = false;
+    let reviews: Vec<GhReview> = gh_pages(
+        auth,
+        &format!("{api}/repos/{repo}/pulls/{number}/reviews?"),
+        &mut partial,
+    )
+    .await
+    .ok()?;
+    let requested: GhRequestedReviewers = super::github::api_get(
+        auth,
+        &format!("{api}/repos/{repo}/pulls/{number}/requested_reviewers"),
+    )
+    .await
+    .ok()?
+    .json()
+    .await
+    .ok()?;
+    let verdicts = reviews
+        .into_iter()
+        .filter_map(|r| Some((r.user?.login, r.state)))
+        .collect();
+    let asked = requested
+        .users
+        .into_iter()
+        .map(|u| u.login)
+        .chain(requested.teams.into_iter().map(|t| t.slug))
+        .filter(|s| !s.is_empty())
+        .collect();
+    Some(gate_of(verdicts, asked))
+}
+
+/// A Gitea (Forgejo) pull request's review gate: its reviews and who is
+/// still asked (`requested`, off the pull itself). Always a gate: reviews
+/// that cannot be read count as none given, and who the pull says is still
+/// asked stands all the same.
+pub(crate) async fn gitea_review_gate(
+    auth: &ResolvedAuth,
+    repo: &str,
+    number: i64,
+    requested: Vec<String>,
+) -> Option<super::ReviewGate> {
+    let api = &auth.api_base;
+    let url = format!("{api}/repos/{repo}/pulls/{number}/reviews?limit={GITEA_PER_PAGE}&page=1");
+    // Its reviews not read: who the pull says is still asked stands all the
+    // same — nobody's approval is known.
+    let reviews: Vec<GtReview> = match super::gitea::api_get(auth, &url).await {
+        Ok(resp) => resp.json().await.unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    let verdicts = reviews
+        .into_iter()
+        .filter(|r| !r.dismissed)
+        .filter_map(|r| Some((r.user?.login, r.state)))
+        .collect();
+    Some(gate_of(verdicts, requested))
+}
+
+#[cfg(test)]
+mod review_gate_tests {
+    use super::gate_of;
+
+    fn v(who: &str, state: &str) -> (String, String) {
+        (who.into(), state.into())
+    }
+
+    #[test]
+    fn each_reviewers_latest_verdict_decides() {
+        let g = gate_of(vec![v("ann", "CHANGES_REQUESTED"), v("ann", "APPROVED")], vec![]);
+        assert!(g.approved && !g.changes_requested && !g.waiting());
+        let g = gate_of(vec![v("ann", "APPROVED"), v("bob", "REQUEST_CHANGES")], vec![]);
+        assert!(g.changes_requested && g.waiting());
+        // A plain comment changes nothing; someone still asked waits.
+        let g = gate_of(vec![v("ann", "COMMENTED")], vec!["bob".into()]);
+        assert!(!g.approved && g.waiting());
+        let g = gate_of(vec![], vec![]);
+        assert!(!g.waiting(), "nobody asked, nothing required");
+        // Gitea: one approved, another still asked (among the reviews).
+        let g = gate_of(vec![v("ann", "APPROVED"), v("bob", "REQUEST_REVIEW")], vec![]);
+        assert!(g.approved && g.waiting());
+        assert_eq!(g.requested, vec!["bob".to_string()]);
+        let g = gate_of(vec![v("bob", "REQUEST_REVIEW"), v("bob", "APPROVED")], vec![]);
+        assert!(!g.waiting(), "answered since");
+    }
+}

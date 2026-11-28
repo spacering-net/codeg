@@ -780,7 +780,7 @@ describe("the activity", () => {
         container.querySelector(
           '[data-pa-activity-group="needs"]'
         ) as HTMLElement
-      ).getByText("Waiting for you")
+      ).getByText("Needs you")
     ).toBeTruthy()
     // No "Status" heading, no card of it here.
     expect(screen.queryByText("Status")).toBeNull()

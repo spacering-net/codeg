@@ -832,6 +832,23 @@ async fn activity_in(
         .is_some_and(|b| b.kind == crate::db::entities::personal_agent::BotKind::Primary);
     let now = crate::personal_agent::clock::now();
     let (mut today, mut rows) = crate::personal_agent::today::today_from(db, manager, now, None).await;
+    // A pull request ready to merge whose card is gone: the panel's own row
+    // (6.1), the work it delivers read with it.
+    let ready = std::mem::take(&mut today.ready_prs);
+    for d in ready.iter().filter_map(|r| r.dispatch_id) {
+        if !rows.iter().any(|r| r.id == d) {
+            if let Some(m) = svc::get_dispatch(&db.conn, d).await? {
+                rows.push(m);
+            }
+        }
+    }
+    today.watching.extend(ready);
+    today.watching.sort_by_key(|r| std::cmp::Reverse(r.at));
+    // Watched pull requests it gave up reading today: done today says so.
+    let gone = std::mem::take(&mut today.gone_prs);
+    today.done.extend(gone);
+    // What each row waiting on the owner asks, answered on it (7.5).
+    crate::personal_agent::activity_facts::fill_asks(db, manager, &mut today).await;
     // Its open matters, all of them, as they are now — none another's work
     // took over (B1); on the primary's page, every assistant's, as "today"
     // has.
@@ -856,6 +873,7 @@ async fn activity_in(
     let mut item_bots = HashMap::new();
     let mut item_tasks = HashMap::new();
     let mut item_cards = HashMap::new();
+    let mut item_messages = HashMap::new();
     for i in open {
         let dispatch = match i.dispatch_id {
             Some(id) => svc::get_dispatch(&db.conn, id).await?,
@@ -877,10 +895,12 @@ async fn activity_in(
             && matches!(i.waits_for, Some(WaitsFor::Owner | WaitsFor::Agent));
         if fired {
             if let Some((notice, card)) = crate::personal_agent::today::reminder_card(db, &i).await {
-                let state = card
+                let data = card
                     .data
                     .as_deref()
-                    .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                    .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok());
+                let state = data
+                    .as_ref()
                     .and_then(|d| d["state"].as_str().map(str::to_string));
                 item_cards.insert(
                     i.id,
@@ -889,17 +909,85 @@ async fn activity_in(
                         notice_id: notice.id,
                         open: notice.state == NoticeState::Open && state.as_deref() == Some("open"),
                         handed: state.as_deref() == Some("handed"),
+                        woke: state.as_deref() == Some("woke"),
+                        hand_row: data
+                            .as_ref()
+                            .and_then(|d| d["hand_row_id"].as_i64())
+                            .and_then(|r| i32::try_from(r).ok()),
                     },
                 );
             }
         }
         item_bots.insert(i.id, i.bot_id.unwrap_or(bot));
         let source = message_source(db, &i).await;
+        if let Some(m) = source.sent {
+            item_messages.insert(i.id, m);
+        }
         items.push(item_info(i, dispatch.map(|d| d.state), source));
     }
     let routines = crate::personal_agent::routines::routines_of(db, Some(bot))
         .await
         .map_err(AppCommandError::task_execution_failed)?;
+    // Where each input stands, each watched pull request (6.2): from the
+    // database, as the rest.
+    let prefs = crate::personal_agent::today::account_prefs(db).await;
+    let facts = crate::personal_agent::activity_facts::read(
+        db,
+        &today,
+        &items,
+        &item_bots,
+        &item_cards,
+        &item_messages,
+        &prefs,
+        now,
+    )
+    .await;
+    // What stops a row under way, read with the rest (6.2) — here, not in
+    // "today", which a brief keeps: a board task's own work, its check, a
+    // round fixing a pull request.
+    let stoppers: Vec<i32> = today
+        .needs
+        .iter()
+        .chain(&today.watching)
+        .flat_map(|r| [r.work_dispatch_id, r.check_dispatch_id])
+        .flatten()
+        .chain(facts.watches.values().filter_map(|w| w.fixing))
+        .collect();
+    for d in stoppers {
+        if !rows.iter().any(|r| r.id == d) {
+            if let Some(m) = svc::get_dispatch(&db.conn, d).await? {
+                rows.push(m);
+            }
+        }
+    }
+    // The work a stop can reach now.
+    let live_work = rows
+        .iter()
+        .filter(|d| {
+            matches!(
+                d.state,
+                crate::db::entities::personal_agent_dispatch::DispatchState::Queued
+                    | crate::db::entities::personal_agent_dispatch::DispatchState::Running
+                    | crate::db::entities::personal_agent_dispatch::DispatchState::WaitingInput
+            )
+        })
+        .map(|d| d.id)
+        .collect();
+    // Where the work the rows point at came from: a message's matter goes
+    // in the row of the work its receiver does for it.
+    let works = rows
+        .iter()
+        .map(|d| {
+            (
+                d.id,
+                crate::personal_agent::activity_view::WorkSource {
+                    bot: d.bot_id,
+                    for_input: d.for_input.clone(),
+                    thread: d.thread_id,
+                },
+            )
+        })
+        .collect();
     let mut view = merge(Inputs {
         bot,
         primary,
@@ -908,6 +996,10 @@ async fn activity_in(
         item_bots,
         item_tasks,
         item_cards,
+        item_messages,
+        works,
+        facts,
+        live_work,
         routines,
         as_of: now,
     });
@@ -1165,6 +1257,7 @@ pub async fn personal_agent_dispatch_stop_core(
         updated_at: expect_updated_at,
         run_seq: expect_run_seq,
         task_updated_at: expect_task_updated_at,
+        run_by_batch: None,
     };
     on_own_task(async move {
         engine
@@ -1361,6 +1454,120 @@ pub async fn personal_agent_card_act_core(
 /// started on yet (4.10).
 pub async fn personal_agent_cancel_core(bot_id: Option<i32>) -> Result<(), AppCommandError> {
     engine(bot_id).await?.stop().await.map_err(refused)
+}
+
+/// [Stop {name}'s turn] on the activity: the turn of batch `batch_id` only —
+/// one that ended already, or another begun since, is not stopped. Whether
+/// it was stopped.
+pub async fn personal_agent_cancel_turn_core(
+    bot_id: Option<i32>,
+    batch_id: i32,
+) -> Result<bool, AppCommandError> {
+    engine(bot_id).await?.stop_batch(batch_id).await.map_err(refused)
+}
+
+/// [Retry] on a failed row of the activity (6.5): work `dispatch_id` of
+/// assistant `bot_id`'s again (its board task's run, read as
+/// `expect_task_updated_at`, when it is one), or — no assistant handed it
+/// out — the owner's own failed task `task_id`; as the row read it
+/// (`expect_updated_at`, the version): one changed since is refused.
+pub async fn personal_agent_work_retry_core(
+    db: &AppDatabase,
+    bot_id: Option<i32>,
+    dispatch_id: Option<i32>,
+    task_id: Option<i32>,
+    expect_updated_at: chrono::DateTime<chrono::Utc>,
+    expect_task_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<serde_json::Value, AppCommandError> {
+    match (dispatch_id, task_id) {
+        (Some(id), _) => {
+            let engine = engine(bot_id).await?;
+            on_own_task(async move {
+                engine
+                    .retry_work(id, expect_updated_at, expect_task_updated_at)
+                    .await
+                    .map_err(refusal)
+            })
+            .await
+        }
+        (None, Some(task)) => {
+            let db = AppDatabase {
+                conn: db.conn.clone(),
+            };
+            on_own_task(async move {
+                // The owner's own: none of an assistant's work.
+                crate::personal_agent::activity_acts::retry_task(
+                    &db,
+                    task,
+                    crate::db::service::work_task_service::ClaimSeen {
+                        updated_at: expect_updated_at,
+                        dispatch_id: None,
+                    },
+                    None,
+                    Some(format!(
+                        "pa-row-retry-task-{task}-{}",
+                        expect_updated_at.timestamp_millis()
+                    )),
+                )
+                .await
+                .map_err(refusal)?;
+                Ok(serde_json::json!({ "task_id": task }))
+            })
+            .await
+        }
+        (None, None) => Err(refused("name the work or the task to retry".into())),
+    }
+}
+
+/// [Hand to {name}] on a failed row of the activity (6.5): the work's
+/// assistant asked by the owner to look into it, as the row read it.
+pub async fn personal_agent_dispatch_hand_core(
+    bot_id: Option<i32>,
+    dispatch_id: i32,
+    expect_updated_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), AppCommandError> {
+    let engine = engine(bot_id).await?;
+    on_own_task(async move {
+        engine
+            .hand_failed_work(dispatch_id, expect_updated_at)
+            .await
+            .map_err(refusal)
+    })
+    .await
+}
+
+/// [Merge PR] on the activity (6.5): watched pull request `watch_id` merged
+/// at `head_sha`, the head the row read. What came of it: `merging` (on its
+/// card), `failed`, `asked`, `refused`, `unread`, or `changed` (the head
+/// moved, or it cannot be merged now).
+pub async fn personal_agent_pr_merge_core(
+    bot_id: Option<i32>,
+    watch_id: i32,
+    head_sha: String,
+) -> Result<serde_json::Value, AppCommandError> {
+    let engine = engine(bot_id).await?;
+    on_own_task(async move {
+        engine
+            .merge_watched_pr(watch_id, &head_sha)
+            .await
+            .map_err(refusal)
+    })
+    .await
+}
+
+/// [Ask again] on the activity (6.5): the message assistant `bot_id`'s
+/// matter `item_id` waits on, which its receiver ended its turn on without
+/// answering, asked again. Whether this press asked (`false`: asked a
+/// moment ago).
+pub async fn personal_agent_message_nudge_core(
+    bot_id: Option<i32>,
+    item_id: i32,
+) -> Result<bool, AppCommandError> {
+    engine(bot_id)
+        .await?
+        .nudge_matter(item_id)
+        .await
+        .map_err(refusal)
 }
 
 /// "Stop everything": all the assistant has going.
@@ -1586,6 +1793,9 @@ pub async fn personal_agent_answer_question_core(
         .await?
         .answer_question(&question_id, answer)
         .await
+        // Answered, too late, or withdrawn: the card settles from the row
+        // either way, so none of them is an error to the page.
+        .map(|_| ())
         .map_err(refused)
 }
 
@@ -1598,6 +1808,7 @@ pub async fn personal_agent_answer_plan_core(
         .await?
         .answer_plan_approval(&approval_id, answer)
         .await
+        .map(|_| ())
         .map_err(refused)
 }
 
@@ -2196,6 +2407,65 @@ pub async fn personal_agent_cancel(
     bot_id: Option<i32>,
 ) -> Result<(), AppCommandError> {
     personal_agent_cancel_core(bot_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_cancel_turn(
+    bot_id: Option<i32>,
+    batch_id: i32,
+) -> Result<bool, AppCommandError> {
+    personal_agent_cancel_turn_core(bot_id, batch_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_work_retry(
+    db: State<'_, AppDatabase>,
+    bot_id: Option<i32>,
+    dispatch_id: Option<i32>,
+    task_id: Option<i32>,
+    expect_updated_at: chrono::DateTime<chrono::Utc>,
+    expect_task_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<serde_json::Value, AppCommandError> {
+    personal_agent_work_retry_core(
+        &db,
+        bot_id,
+        dispatch_id,
+        task_id,
+        expect_updated_at,
+        expect_task_updated_at,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_dispatch_hand(
+    bot_id: Option<i32>,
+    dispatch_id: i32,
+    expect_updated_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), AppCommandError> {
+    personal_agent_dispatch_hand_core(bot_id, dispatch_id, expect_updated_at).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_pr_merge(
+    bot_id: Option<i32>,
+    watch_id: i32,
+    head_sha: String,
+) -> Result<serde_json::Value, AppCommandError> {
+    personal_agent_pr_merge_core(bot_id, watch_id, head_sha).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_message_nudge(
+    bot_id: Option<i32>,
+    item_id: i32,
+) -> Result<bool, AppCommandError> {
+    personal_agent_message_nudge_core(bot_id, item_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]

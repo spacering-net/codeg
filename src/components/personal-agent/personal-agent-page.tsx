@@ -109,6 +109,7 @@ import {
 } from "./roster"
 import { PersonalAgentComposer } from "./composer"
 import { usePersonalAgentAttachment } from "./live-turn"
+import { ActivityReturnBar } from "./activity-return-bar"
 import { MessageList } from "./message-list"
 import { replyState } from "./message-items"
 import { BotPage } from "./settings/bot-page"
@@ -651,6 +652,11 @@ export function PersonalAgentPage() {
                 ) : null}
               </div>
             ) : null}
+            {/* Come from the activity's drawer to a row's card: the way
+                back (7.6). */}
+            <div className="mx-auto flex w-full chat-content-w shrink-0 flex-col px-4 pt-2 empty:hidden">
+              <ActivityReturnBar />
+            </div>
             <MessageList jumpRef={jumpRef} sentRef={sentRef} />
             {/* Each assistant's own: how one's turn ended is never shown
                 for another's. */}

@@ -10272,7 +10272,34 @@
     },
     "work": {
       "taskNotStarted": "这个任务还没开始，开始后这里会显示它的会话。",
-      "taskGone": "找不到这个任务，可能已被删除。"
+      "taskGone": "找不到这个任务，可能已被删除。",
+      "retry": "重试",
+      "handTo": "交给{name}处理",
+      "viewSession": "看会话",
+      "merge": "合并",
+      "mergeTo": "合并到 {base}",
+      "createPr": "创建 PR",
+      "pushBack": "推回 PR",
+      "mergePr": "合并 PR",
+      "mergeMr": "合并 MR",
+      "openPr": "打开 PR",
+      "openMr": "打开 MR",
+      "nudge": "催一下",
+      "rehand": "让{name}再处理一次",
+      "toast": {
+        "retried": "已重新开始",
+        "handed": "已交给{name}",
+        "merging": "正在合并…",
+        "merged": "已合并",
+        "mergeAsked": "在卡片上等你批准",
+        "mergeChanged": "刚有变化，已重新读取",
+        "ranAgain": "这个任务在你查看后又跑了一轮，请重新查看",
+        "nudged": "已催{name}",
+        "nudgedAlready": "刚催过{name}",
+        "rehanded": "已再交给{name}",
+        "done": "已处理"
+      },
+      "reconnect": "重新连接账号"
     },
     "composer": {
       "placeholder": "给 {name} 发消息…",
@@ -11056,6 +11083,14 @@
           "auto": "自动生效，出卡可撤销",
           "draft": "先给我看（出草稿卡，点了才生效）",
           "off": "不做"
+        },
+        "pr_checks_wait_hours": {
+          "title": "PR 检查最多等几小时",
+          "hint": "在盯的 PR 检查跑了这么久还没结果，就提到「等你处理」。1–48。"
+        },
+        "pr_review_wait_days": {
+          "title": "PR 评审最多等几天",
+          "hint": "在盯的 PR 等评审超过这么多天，就提到「等你处理」。1–14。"
         }
       },
       "workdir": {
@@ -12049,12 +12084,15 @@
     },
     "feed": {
       "groups": {
-        "needs": "等你",
+        "needs": "等你处理",
+        "running": "进行中",
+        "watch": "在盯",
         "watching": "进行中",
         "next": "例程与提醒",
         "done": "今天完成"
       },
       "empty": "没有要你做的，也没有在跑的。",
+      "suggestions": "还有 {count} 条建议",
       "failed": "暂时读不到动态。",
       "handed": "交给{name}了",
       "checking": "验收中 · 第 {round} 轮",
@@ -12066,7 +12104,57 @@
       "viewReminder": "查看提醒",
       "viewCheck": "查看验收会话",
       "openTask": "打开任务",
-      "routineDeleted": "这个例程已经删除了。"
+      "routineDeleted": "这个例程已经删除了。",
+      "why": {
+        "no_reply": "{name}没回复",
+        "unfinished": "没处理完",
+        "checks": "检查没过 · 没人在修",
+        "conflict": "有冲突 · 没人在修",
+        "fix_pending": "codeg 准备修",
+        "fixing": "修复中",
+        "platform_blocked": "平台还不让合并",
+        "merge_queued": "排队合并",
+        "merging": "合并中",
+        "check_preparing": "验收准备中",
+        "check_settling": "验收收尾中",
+        "queued": "排队等{name}",
+        "in_turn": "{name}在处理",
+        "looking": "等{name}接手",
+        "no_trigger": "没定下次时间",
+        "failed": "失败了",
+        "readFailed": {
+          "auth": "读不到状态 · 需要重新登录",
+          "no_account": "读不到状态 · 没有这个平台的账号",
+          "config": "这个平台读不了",
+          "network": "读不到状态 · 连不上",
+          "api": "读不到状态 · 平台返回错误",
+          "timeout": "读不到状态 · 平台没回应",
+          "other": "读不到状态"
+        },
+        "checks_slow": "检查跑了 {hours} 小时还没结果",
+        "review_pending": "等评审",
+        "review_slow": "等评审 {days} 天了"
+      },
+      "stop": {
+        "task": "停止",
+        "turn": "停止{name}这一轮"
+      },
+      "ask": {
+        "approvePlan": "批准计划",
+        "queued": "后面还有 {count} 个在等",
+        "settled": "已经有人回答了，已重新读取",
+        "planAll": "看完整计划",
+        "planLess": "收起",
+        "planRevise": "退回并说明…",
+        "planReviseSend": "退回",
+        "planReviseCancel": "取消",
+        "planReviseHint": "需要改什么？",
+        "answered": "已提交回答"
+      },
+      "back": {
+        "line": "从动态来的 · 还有 {count} 件等你处理",
+        "go": "回到动态"
+      }
     },
     "today": {
       "title": "今日",
@@ -12107,7 +12195,8 @@
         "memoryUndone": "记住了，又撤销了",
         "plan_stuck": "计划卡住",
         "routine_paused": "例程已暂停",
-        "used_up": "退回几轮仍不对"
+        "used_up": "退回几轮仍不对",
+        "pr_gone": "找不到这个 PR，不再盯了"
       },
       "reason": {
         "failed": "失败",
@@ -13080,7 +13169,17 @@
         "answer": "去回答",
         "drop": "不用了",
         "stop": "不再提醒",
-        "undo": "撤销"
+        "undo": "撤销",
+        "withdrawMessage": "撤回消息",
+        "stopWaiting": "不再等回复",
+        "noReplyNeeded": "不用回复",
+        "noAnswerNeeded": "不用回答",
+        "stopFollowing": "不再跟进",
+        "cancelReminder": "取消提醒",
+        "noNeedToDo": "不用做了",
+        "wontDo": "不做了",
+        "remove": "移除",
+        "giveUp": "放弃这项工作"
       },
       "hint": {
         "doneNext": "这次完成，之后照常：{rule}",
@@ -13139,6 +13238,7 @@
         "stopped": "你停了这项工作 · {time}",
         "skippedLast": "你跳过了最后一次 · {time}",
         "dropped": "你移除了 · {time}",
+        "givenUp": "你放弃了这项工作 · {time}",
         "withdrawn": "你撤回了发给{peer}的消息 · {time}",
         "stoppedWaiting": "你不再等{peer}回复 · {time}",
         "agentDone": "{name}完成了 · {time}",

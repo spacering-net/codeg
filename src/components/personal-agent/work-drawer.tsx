@@ -40,6 +40,7 @@ import {
 } from "@/stores/personal-agent-ui-store"
 
 import { useOpenInWorkbench, workTargetOf } from "./shared"
+import { ActivityReturnButton } from "./activity-return-bar"
 
 /** The states a dispatch's conversation runs in. */
 const WORKING: ReadonlySet<DispatchState> = new Set([
@@ -141,7 +142,12 @@ function TaskWork({
   // A state toggle, not a route: the back gesture closes it rather than
   // leaving the page (the sub-agent viewer does the same for itself).
   useHistoryBackDismiss(open, () => onOpenChange(false))
-  const wayOut = <WayOut target={target} label={t("openTask")} />
+  const wayOut = (
+    <>
+      <ActivityReturnButton />
+      <WayOut target={target} label={t("openTask")} />
+    </>
+  )
   return (
     <TaskTranscriptDialog
       open={open}
@@ -221,7 +227,12 @@ function ConversationWork({
         botUid: null,
       }}
       kickoffTask={now.prompt}
-      headerActions={<WayOut target={now} label={t("openConversation")} />}
+      headerActions={
+        <>
+          <ActivityReturnButton />
+          <WayOut target={now} label={t("openConversation")} />
+        </>
+      }
     />
   )
 }

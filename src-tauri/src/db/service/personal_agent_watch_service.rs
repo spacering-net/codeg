@@ -173,6 +173,7 @@ pub async fn insert_or_get(
         failures: Set(0),
         backoff: Set(false),
         last_error: Set(None),
+        last_error_kind: Set(None),
         auto: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
@@ -222,10 +223,14 @@ pub struct WatchWrite {
     pub last_read_at: Option<Option<DateTime<Utc>>>,
     pub last_change_at: Option<Option<DateTime<Utc>>>,
     pub next_poll_at: Option<Option<DateTime<Utc>>>,
+    /// Read again no sooner than this — a later time already set (a hold
+    /// on its account meanwhile) stands.
+    pub next_poll_at_least: Option<DateTime<Utc>>,
     pub not_found: Option<i32>,
     pub failures: Option<i32>,
     pub backoff: Option<bool>,
     pub last_error: Option<Option<String>>,
+    pub last_error_kind: Option<Option<String>>,
     /// What codeg did on it by itself (7.4, phase 3), as JSON.
     pub auto: Option<Option<String>>,
     /// Only while `auto` still reads this: what was read before the write
@@ -278,10 +283,20 @@ pub async fn update(
     set!(last_read_at, LastReadAt);
     set!(last_change_at, LastChangeAt);
     set!(next_poll_at, NextPollAt);
+    if let Some(at) = w.next_poll_at_least {
+        q = q.col_expr(
+            watch::Column::NextPollAt,
+            Expr::cust_with_values(
+                "CASE WHEN next_poll_at IS NOT NULL AND next_poll_at > ? THEN next_poll_at ELSE ? END",
+                [sea_orm::Value::from(at), sea_orm::Value::from(at)],
+            ),
+        );
+    }
     set!(not_found, NotFound);
     set!(failures, Failures);
     set!(backoff, Backoff);
     set!(last_error, LastError);
+    set!(last_error_kind, LastErrorKind);
     set!(auto, Auto);
     if let Some(expect) = w.expect_auto {
         q = match expect {
@@ -341,6 +356,41 @@ pub async fn hold_account(
     watch::Entity::update_many()
         .col_expr(watch::Column::NextPollAt, Expr::value(Some(until)))
         .col_expr(watch::Column::Backoff, Expr::value(true))
+        .col_expr(watch::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(on_account())
+        .exec(conn)
+        .await?;
+    Ok(held)
+}
+
+/// [`hold_account`] for a failure of the account itself (`kind`: `auth`,
+/// `no_account`): every watch on it waits until `until`, saying why — no
+/// read of any of them can come back before the owner sees to it.
+pub async fn hold_account_failing(
+    conn: &DatabaseConnection,
+    target: &DeliveryTarget,
+    until: DateTime<Utc>,
+    kind: &str,
+) -> Result<Vec<watch::Model>, DbError> {
+    // Held and said why in the one write: none held without its reason —
+    // nor held less long than it was already.
+    let on_account = || {
+        Condition::all()
+            .add(watch::Column::State.eq(WatchState::Watching))
+            .add(watch::Column::Provider.eq(target.provider.as_str()))
+            .add(watch::Column::ServerHost.eq(target.server_host.as_str()))
+            .add(watch::Column::AccountId.eq(target.account_id.as_str()))
+            .add(
+                Condition::any()
+                    .add(watch::Column::NextPollAt.is_null())
+                    .add(watch::Column::NextPollAt.lt(until)),
+            )
+    };
+    let held = watch::Entity::find().filter(on_account()).all(conn).await?;
+    watch::Entity::update_many()
+        .col_expr(watch::Column::NextPollAt, Expr::value(Some(until)))
+        .col_expr(watch::Column::Backoff, Expr::value(true))
+        .col_expr(watch::Column::LastErrorKind, Expr::value(Some(kind.to_string())))
         .col_expr(watch::Column::UpdatedAt, Expr::value(Utc::now()))
         .filter(on_account())
         .exec(conn)

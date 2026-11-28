@@ -2628,6 +2628,93 @@ export async function personalAgentCancel(bot?: number | null): Promise<void> {
   return getTransport().call("personal_agent_cancel", { botId: bot ?? null })
 }
 
+/** [Retry] on a failed row of the activity: the work again, or — no
+ *  assistant handed it out — the board's failed task; as the row read it
+ *  (`expectUpdatedAt`), refused when it changed since. */
+export async function personalAgentWorkRetry(
+  bot: number | null,
+  target: { dispatchId: number } | { taskId: number },
+  expectUpdatedAt: string,
+  /** Work that is a board task's: the task's version as the row read it. */
+  expectTaskUpdatedAt?: string | null
+): Promise<{ dispatch_id?: number; task_id?: number; retry_of?: number }> {
+  return getTransport().call("personal_agent_work_retry", {
+    botId: bot ?? null,
+    dispatchId: "dispatchId" in target ? target.dispatchId : null,
+    taskId: "taskId" in target ? target.taskId : null,
+    expectUpdatedAt,
+    expectTaskUpdatedAt: expectTaskUpdatedAt ?? null,
+  })
+}
+
+/** [Hand to {name}] on a failed row: the work's assistant asked to look
+ *  into it, as the row read it. */
+export async function personalAgentDispatchHand(
+  bot: number | null,
+  dispatchId: number,
+  expectUpdatedAt: string
+): Promise<void> {
+  return getTransport().call("personal_agent_dispatch_hand", {
+    botId: bot ?? null,
+    dispatchId,
+    expectUpdatedAt,
+  })
+}
+
+/** What merging a watched pull request from the activity came to. */
+export interface PrMergeOutcome {
+  outcome:
+    | "merging"
+    | "merged"
+    | "failed"
+    | "asked"
+    | "refused"
+    | "unread"
+    | "changed"
+  notice_id?: number
+  why?: string
+}
+
+/** [Merge PR] on the activity: the watched pull request merged at the head
+ *  the row read. */
+export async function personalAgentPrMerge(
+  bot: number | null,
+  watchId: number,
+  headSha: string
+): Promise<PrMergeOutcome> {
+  return getTransport().call("personal_agent_pr_merge", {
+    botId: bot ?? null,
+    watchId,
+    headSha,
+  })
+}
+
+/** [Ask again] on the activity: the message matter `itemId` waits on, its
+ *  receiver's turn over without an answer, asked again. Whether this press
+ *  asked (`false`: asked a moment ago). */
+export async function personalAgentMessageNudge(
+  bot: number | null,
+  itemId: number
+): Promise<boolean> {
+  return getTransport().call("personal_agent_message_nudge", {
+    botId: bot ?? null,
+    itemId,
+  })
+}
+
+/** Stop the assistant's turn of batch `batchId` only — the one a row of the
+ *  activity read: one over already, or another begun since, is left.
+ *  Whether it was stopped. */
+export async function personalAgentCancelTurn(
+  bot: number | null,
+  batchId: number
+): Promise<boolean> {
+  return getTransport().call("personal_agent_cancel_turn", {
+    botId: bot ?? null,
+    batchId,
+  })
+}
+
 /** "Stop everything": all the assistant has going — its turn, the work it
  *  dispatched, the messages nobody started on. */
 export async function personalAgentStopAll(bot?: number | null): Promise<void> {
@@ -3128,6 +3215,9 @@ export type NoticeAction =
   | "snooze:1h"
   | "snooze:tomorrow"
   | "hand_over"
+  // [Hand again] on the activity (6.5): a reminder handed over before,
+  // whose assistant's turn on it is over.
+  | "hand_again"
   | `accept:${string}`
   | "skip"
   | "hand"
@@ -5160,12 +5250,16 @@ export async function workTaskReturn(
 export async function workTaskCancel(
   id: number,
   reason?: string | null,
-  deleteWorktree = false
+  deleteWorktree = false,
+  /** The run the asking dialog showed: one run again since is left running.
+   *  Omitted: whatever runs now. */
+  expectRunSeq?: number
 ): Promise<void> {
   return getTransport().call("work_task_cancel", {
     id,
     reason: reason ?? null,
     deleteWorktree,
+    ...(expectRunSeq === undefined ? {} : { expectRunSeq }),
   })
 }
 
@@ -5178,13 +5272,17 @@ export async function workTaskMerge(
   id: number,
   message: string | null,
   deleteWorktree: boolean,
-  instructions: string | null = null
+  instructions: string | null = null,
+  /** The run the asking dialog showed: a task run again since is refused.
+   *  Omitted: the run in review now. */
+  expectRunSeq?: number
 ): Promise<boolean> {
   return getTransport().call("work_task_merge", {
     id,
     message,
     deleteWorktree,
     instructions,
+    ...(expectRunSeq === undefined ? {} : { expectRunSeq }),
   })
 }
 
@@ -5219,7 +5317,10 @@ export async function workTaskDeliverPr(
   /** Commit what the worktree holds uncommitted, with this message, before
    *  the push (see `workTaskUncommittedFiles`). Omitted, a dirty worktree is
    *  refused. */
-  commitMessage?: string
+  commitMessage?: string,
+  /** The run the asking dialog showed: a task run again since is refused.
+   *  Omitted: the run in review now. */
+  expectRunSeq?: number
 ): Promise<string> {
   return getTransport().call("work_task_deliver_pr", {
     id,
@@ -5229,6 +5330,7 @@ export async function workTaskDeliverPr(
     markDone,
     ...(closes === undefined ? {} : { closes }),
     ...(commitMessage === undefined ? {} : { commitMessage }),
+    ...(expectRunSeq === undefined ? {} : { expectRunSeq }),
   })
 }
 

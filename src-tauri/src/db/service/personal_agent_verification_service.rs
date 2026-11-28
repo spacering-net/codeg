@@ -10,7 +10,7 @@ use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait,
     ActiveValue::{NotSet, Set},
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
 };
 
 use crate::db::entities::personal_agent_verification::{
@@ -31,6 +31,12 @@ pub struct NewRound {
 }
 
 pub async fn create(conn: &DatabaseConnection, new: NewRound) -> Result<round::Model, DbError> {
+    create_on(conn, new).await
+}
+
+/// [`create`] on any connection: the transaction that sends the round's
+/// check out with it (M0-5).
+pub async fn create_on<C: ConnectionTrait>(conn: &C, new: NewRound) -> Result<round::Model, DbError> {
     let now = Utc::now();
     Ok(round::ActiveModel {
         id: NotSet,
@@ -59,6 +65,11 @@ pub async fn create(conn: &DatabaseConnection, new: NewRound) -> Result<round::M
     }
     .insert(conn)
     .await?)
+}
+
+/// [`get`] on any connection (a transaction).
+pub async fn get_on<C: ConnectionTrait>(conn: &C, id: i32) -> Result<Option<round::Model>, DbError> {
+    Ok(round::Entity::find_by_id(id).one(conn).await?)
 }
 
 pub async fn get(conn: &DatabaseConnection, id: i32) -> Result<Option<round::Model>, DbError> {
@@ -158,6 +169,8 @@ pub struct RoundWrite {
     pub delivered_head: Option<Option<String>>,
     pub merge_commit: Option<Option<String>>,
     pub version_guaranteed: Option<Option<bool>>,
+    /// Whether nobody checked it independently (the card says so).
+    pub unchecked: Option<bool>,
     /// Stamp `decided_at` now.
     pub decided: bool,
 }
@@ -192,6 +205,60 @@ pub async fn write_round(
     write: RoundWrite,
 ) -> Result<Option<round::Model>, DbError> {
     apply(conn, id, None, None, write).await
+}
+
+/// Name round `id`'s check, dispatch `check` — while the round is checking
+/// with no check named yet (M0-5). In the transaction that creates the
+/// check, so that at no moment is the check work of its own; or, healing a
+/// round a crash left between the two (written before that was one step),
+/// with the check its card says it sent. Whether it was named.
+pub async fn link_check_on<C: ConnectionTrait>(
+    conn: &C,
+    id: i32,
+    check: i32,
+) -> Result<bool, DbError> {
+    let res = round::Entity::update_many()
+        .col_expr(round::Column::CheckDispatchId, Expr::value(Some(check)))
+        .col_expr(round::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(round::Column::Id.eq(id))
+        .filter(round::Column::State.eq(VerificationState::Checking))
+        .filter(round::Column::CheckDispatchId.is_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
+}
+
+/// A checking round with no check named, and none to be found: the
+/// assistant decides on what there is, and the card says it was not
+/// checked (M0-5) — while the round is still so, in one statement. Returns
+/// the round when it moved; `None`, when it had moved on meanwhile.
+pub async fn abandon_unlinked_check(
+    conn: &DatabaseConnection,
+    id: i32,
+) -> Result<Option<round::Model>, DbError> {
+    let res = round::Entity::update_many()
+        .col_expr(round::Column::State, Expr::value(VerificationState::Deciding))
+        .col_expr(round::Column::Unchecked, Expr::value(true))
+        .col_expr(
+            round::Column::CheckVerdict,
+            Expr::value(Some(CheckVerdict::Unverified)),
+        )
+        .col_expr(
+            round::Column::CheckEvidence,
+            Expr::value(Some(
+                "codeg stopped before its check was sent".to_string(),
+            )),
+        )
+        .col_expr(round::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(round::Column::Id.eq(id))
+        .filter(round::Column::State.eq(VerificationState::Checking))
+        .filter(round::Column::CheckDispatchId.is_null())
+        .exec(conn)
+        .await?;
+    if res.rows_affected != 1 {
+        return Ok(None);
+    }
+    get(conn, id).await
 }
 
 async fn apply(
@@ -255,6 +322,9 @@ async fn apply(
     }
     if let Some(v) = write.version_guaranteed {
         update = update.col_expr(round::Column::VersionGuaranteed, Expr::value(v));
+    }
+    if let Some(v) = write.unchecked {
+        update = update.col_expr(round::Column::Unchecked, Expr::value(v));
     }
     if write.decided {
         update = update.col_expr(round::Column::DecidedAt, Expr::value(Some(now)));

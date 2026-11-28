@@ -632,15 +632,23 @@ pub async fn work_task_return_core(
 /// retryable `cleanup_state`. A stop interrupts a working agent, so the second
 /// is the common one, and turning it into an error would report the stop that
 /// already happened as failed.
+/// `expect_run_seq`: the run the dialog asking showed — one run again since
+/// is left running (`None`: whatever runs now).
 pub async fn work_task_cancel_core(
     id: i32,
     reason: Option<String>,
     delete_worktree: bool,
+    expect_run_seq: Option<i32>,
 ) -> Result<(), DbError> {
     let engine = engine()?;
-    engine.cancel(id, reason).await.map_err(DbError::Validation)?;
+    let run = engine
+        .cancel_seen(id, expect_run_seq, reason)
+        .await
+        .map_err(DbError::Validation)?;
+    // The worktree of the run it canceled: one run again since is the new
+    // run's.
     if delete_worktree {
-        if let Err(blocked) = engine.cleanup_task(id).await {
+        if let Err(blocked) = engine.cleanup_task_of_run(id, Some(run)).await {
             tracing::warn!(
                 "[work_task] cleanup during cancel of task {id}: {}",
                 blocked.message
@@ -671,14 +679,18 @@ pub async fn work_task_stop_background_wait_core(id: i32) -> Result<(), DbError>
 ///
 /// Returns `true` when the merge was QUEUED instead of started — the folder was
 /// already landing another task, and this one goes in as soon as that finishes.
+///
+/// `expect_run_seq`: the run the dialog asking showed — a task run again
+/// since is refused (`None`: the run in review now).
 pub async fn work_task_merge_core(
     id: i32,
     message: Option<String>,
     delete_worktree: bool,
     instructions: Option<String>,
+    expect_run_seq: Option<i32>,
 ) -> Result<bool, DbError> {
     engine()?
-        .merge_task(id, message, delete_worktree, instructions, false)
+        .merge_task_seen(id, expect_run_seq, message, delete_worktree, instructions)
         .await
         .map(|dispatch| dispatch.is_queued())
         .map_err(DbError::Validation)
@@ -733,6 +745,7 @@ pub async fn work_task_merge_unqueue_core(
 /// `commit_message` commits what the agent left uncommitted in the worktree
 /// (see [`work_task_uncommitted_files_core`]) before the push; `None` refuses
 /// a dirty worktree, which is what every client did before the choice existed.
+#[allow(clippy::too_many_arguments)]
 pub async fn work_task_deliver_pr_core(
     id: i32,
     pr_title: Option<String>,
@@ -741,10 +754,12 @@ pub async fn work_task_deliver_pr_core(
     mark_done: Option<bool>,
     closes: Option<Vec<i64>>,
     commit_message: Option<String>,
+    expect_run_seq: Option<i32>,
 ) -> Result<String, DbError> {
     engine()?
-        .deliver_pr_closing(
+        .deliver_pr_seen(
             id,
+            expect_run_seq,
             pr_title,
             draft,
             delete_worktree,
@@ -1218,8 +1233,9 @@ pub async fn work_task_cancel(
     id: i32,
     reason: Option<String>,
     delete_worktree: Option<bool>,
+    expect_run_seq: Option<i32>,
 ) -> Result<(), DbError> {
-    work_task_cancel_core(id, reason, delete_worktree.unwrap_or(false)).await
+    work_task_cancel_core(id, reason, delete_worktree.unwrap_or(false), expect_run_seq).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1235,8 +1251,9 @@ pub async fn work_task_merge(
     message: Option<String>,
     delete_worktree: bool,
     instructions: Option<String>,
+    expect_run_seq: Option<i32>,
 ) -> Result<bool, DbError> {
-    work_task_merge_core(id, message, delete_worktree, instructions).await
+    work_task_merge_core(id, message, delete_worktree, instructions, expect_run_seq).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1251,6 +1268,7 @@ pub async fn work_task_merge_unqueue(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[allow(clippy::too_many_arguments)]
 pub async fn work_task_deliver_pr(
     id: i32,
     pr_title: Option<String>,
@@ -1259,6 +1277,7 @@ pub async fn work_task_deliver_pr(
     mark_done: Option<bool>,
     closes: Option<Vec<i64>>,
     commit_message: Option<String>,
+    expect_run_seq: Option<i32>,
 ) -> Result<String, DbError> {
     work_task_deliver_pr_core(
         id,
@@ -1268,6 +1287,7 @@ pub async fn work_task_deliver_pr(
         mark_done,
         closes,
         commit_message,
+        expect_run_seq,
     )
     .await
 }

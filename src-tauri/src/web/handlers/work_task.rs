@@ -130,6 +130,9 @@ pub struct CancelParams {
     /// Take the worktree (and its work branch) along with the stop.
     #[serde(default)]
     pub delete_worktree: bool,
+    /// The run the dialog asking showed; absent: whatever runs now.
+    #[serde(default)]
+    pub expect_run_seq: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -144,6 +147,9 @@ pub struct MergeParams {
     /// predates the field, which is what `default` covers.
     #[serde(default)]
     pub instructions: Option<String>,
+    /// The run the dialog asking showed; absent: the one in review now.
+    #[serde(default)]
+    pub expect_run_seq: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -180,6 +186,9 @@ pub struct DeliverPrParams {
     /// the push. Absent refuses a dirty worktree, as it always did.
     #[serde(default)]
     pub commit_message: Option<String>,
+    /// The run the dialog asking showed; absent: the one in review now.
+    #[serde(default)]
+    pub expect_run_seq: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -396,7 +405,12 @@ pub async fn work_task_return(
 pub async fn work_task_cancel(
     Json(params): Json<CancelParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    core::work_task_cancel_core(params.id, params.reason, params.delete_worktree)
+    core::work_task_cancel_core(
+        params.id,
+        params.reason,
+        params.delete_worktree,
+        params.expect_run_seq,
+    )
         .await
         .map_err(AppCommandError::from)?;
     Ok(Json(()))
@@ -421,6 +435,7 @@ pub async fn work_task_merge(
         params.message,
         params.delete_worktree,
         params.instructions,
+        params.expect_run_seq,
     )
     .await
     .map_err(AppCommandError::from)?;
@@ -450,6 +465,7 @@ pub async fn work_task_deliver_pr(
         params.mark_done,
         params.closes,
         params.commit_message,
+        params.expect_run_seq,
     )
     .await
     .map_err(AppCommandError::from)?;

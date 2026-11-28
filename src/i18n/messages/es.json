@@ -10272,7 +10272,34 @@
     },
     "work": {
       "taskNotStarted": "Esta tarea aún no ha empezado. Su conversación aparecerá aquí en cuanto empiece.",
-      "taskGone": "No se encuentra esta tarea; puede que se haya eliminado."
+      "taskGone": "No se encuentra esta tarea; puede que se haya eliminado.",
+      "retry": "Reintentar",
+      "handTo": "Pasar a {name}",
+      "viewSession": "Ver sesión",
+      "merge": "Fusionar",
+      "mergeTo": "Fusionar en {base}",
+      "createPr": "Crear PR",
+      "pushBack": "Devolver al PR",
+      "mergePr": "Fusionar PR",
+      "mergeMr": "Fusionar MR",
+      "openPr": "Abrir PR",
+      "openMr": "Abrir MR",
+      "nudge": "Volver a preguntar",
+      "rehand": "Que {name} lo haga otra vez",
+      "toast": {
+        "retried": "Empezó de nuevo",
+        "handed": "Pasado a {name}",
+        "merging": "Fusionando…",
+        "merged": "Fusionado",
+        "mergeAsked": "Espera tu aprobación en su tarjeta",
+        "mergeChanged": "Cambió desde que lo miraste: leído de nuevo",
+        "ranAgain": "Esta tarea se volvió a ejecutar desde que la viste: vuelve a revisarla",
+        "nudged": "Se volvió a preguntar a {name}",
+        "nudgedAlready": "Se preguntó a {name} hace un momento",
+        "rehanded": "Pasado de nuevo a {name}",
+        "done": "Hecho"
+      },
+      "reconnect": "Volver a conectar la cuenta"
     },
     "composer": {
       "placeholder": "Escribe a {name}…",
@@ -11057,6 +11084,14 @@
           "auto": "Al momento, con deshacer en la tarjeta",
           "draft": "Muéstramelo antes (tarjeta en borrador, se aplica cuando lo diga)",
           "off": "No"
+        },
+        "pr_checks_wait_hours": {
+          "title": "Horas de espera de las comprobaciones",
+          "hint": "Un PR vigilado cuyas comprobaciones lleven este tiempo sin resultado pasa a Te espera. De 1 a 48."
+        },
+        "pr_review_wait_days": {
+          "title": "Días de espera de la revisión",
+          "hint": "Un PR vigilado que lleve estos días esperando su revisión pasa a Te espera. De 1 a 14."
         }
       },
       "workdir": {
@@ -12049,12 +12084,15 @@
     },
     "feed": {
       "groups": {
-        "needs": "Esperándote",
+        "needs": "Te toca a ti",
+        "running": "En curso",
+        "watch": "Vigilando",
         "watching": "En curso",
         "next": "Rutinas y recordatorios",
         "done": "Hecho hoy"
       },
       "empty": "No hay nada que hacer ni nada en marcha.",
+      "suggestions": "{count, plural, one {# sugerencia más} other {# sugerencias más}}",
       "failed": "No se pudo leer la actividad ahora mismo.",
       "handed": "Pasado a {name}",
       "checking": "En revisión · ronda {round}",
@@ -12066,7 +12104,57 @@
       "viewReminder": "Ver el recordatorio",
       "viewCheck": "Ver la sesión de aceptación",
       "openTask": "Abrir la tarea",
-      "routineDeleted": "Esta rutina se ha eliminado."
+      "routineDeleted": "Esta rutina se ha eliminado.",
+      "why": {
+        "no_reply": "Sin respuesta de {name}",
+        "unfinished": "Sin terminar",
+        "checks": "Comprobaciones fallidas · nadie lo arregla",
+        "conflict": "Conflicto · nadie lo arregla",
+        "fix_pending": "codeg va a arreglarlo",
+        "fixing": "Arreglándose",
+        "platform_blocked": "La plataforma aún no deja fusionar",
+        "merge_queued": "En cola para fusionar",
+        "merging": "Fusionando",
+        "check_preparing": "Preparando la revisión",
+        "check_settling": "Cerrando la revisión",
+        "queued": "En cola para {name}",
+        "in_turn": "{name} está en ello",
+        "looking": "Esperando a que {name} lo retome",
+        "no_trigger": "Sin próxima hora",
+        "failed": "Falló",
+        "readFailed": {
+          "auth": "No se puede leer · vuelve a iniciar sesión",
+          "no_account": "No se puede leer · no hay cuenta para esta forja",
+          "config": "Esta forja no se puede leer",
+          "network": "No se puede leer · sin conexión",
+          "api": "No se puede leer · la forja respondió con un error",
+          "timeout": "No se puede leer · la forja no respondió",
+          "other": "No se puede leer"
+        },
+        "checks_slow": "Comprobaciones {hours} h sin resultado",
+        "review_pending": "Esperando revisión",
+        "review_slow": "{days} d esperando revisión"
+      },
+      "stop": {
+        "task": "Detener",
+        "turn": "Detener el turno de {name}"
+      },
+      "ask": {
+        "approvePlan": "Aprobar el plan",
+        "queued": "{count, plural, one {# más en espera} other {# más en espera}}",
+        "settled": "Ya se respondió: se volvió a leer",
+        "planAll": "Ver el plan completo",
+        "planLess": "Mostrar menos",
+        "planRevise": "Devolver con una nota…",
+        "planReviseSend": "Devolver",
+        "planReviseCancel": "Cancelar",
+        "planReviseHint": "¿Qué debería cambiar?",
+        "answered": "Respuesta enviada"
+      },
+      "back": {
+        "line": "Desde la actividad · {count, plural, one {# más te espera} other {# más te esperan}}",
+        "go": "Volver a la actividad"
+      }
     },
     "today": {
       "title": "Hoy",
@@ -12107,7 +12195,8 @@
         "memoryUndone": "Recordado y luego deshecho",
         "plan_stuck": "Plan atascado",
         "routine_paused": "Rutina en pausa",
-        "used_up": "Aún no está bien"
+        "used_up": "Aún no está bien",
+        "pr_gone": "Dejó de vigilar un PR que no encuentra"
       },
       "reason": {
         "failed": "Falló",
@@ -13080,7 +13169,17 @@
         "answer": "Responder",
         "drop": "Ya no hace falta",
         "stop": "Dejar de recordar",
-        "undo": "Deshacer"
+        "undo": "Deshacer",
+        "withdrawMessage": "Retirar mensaje",
+        "stopWaiting": "Dejar de esperar respuesta",
+        "noReplyNeeded": "No hace falta responder",
+        "noAnswerNeeded": "No hace falta contestar",
+        "stopFollowing": "Dejar de dar seguimiento",
+        "cancelReminder": "Cancelar recordatorio",
+        "noNeedToDo": "No hace falta hacerlo",
+        "wontDo": "No lo haré",
+        "remove": "Quitar",
+        "giveUp": "Abandonar este trabajo"
       },
       "hint": {
         "doneNext": "Hecho esta vez; sigue igual: {rule}",
@@ -13139,6 +13238,7 @@
         "stopped": "Detuviste su trabajo · {time}",
         "skippedLast": "Omitiste la última vez · {time}",
         "dropped": "Lo quitaste · {time}",
+        "givenUp": "Dejaste este trabajo · {time}",
         "withdrawn": "Retiraste el mensaje a {peer} · {time}",
         "stoppedWaiting": "Dejaste de esperar la respuesta de {peer} · {time}",
         "agentDone": "{name} lo terminó · {time}",

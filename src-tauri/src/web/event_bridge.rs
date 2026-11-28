@@ -755,8 +755,30 @@ where
             );
         }
     }
+    // A session's request raised or answered: every client's activity panel
+    // reads its rows again (7.5) — the per-connection stream above reaches
+    // only clients attached to this one.
+    if matches!(
+        &envelope_arc.payload,
+        AcpEvent::PermissionRequest { .. }
+            | AcpEvent::PermissionResolved { .. }
+            | AcpEvent::QuestionRequest { .. }
+            | AcpEvent::QuestionResolved { .. }
+            | AcpEvent::PlanApprovalRequest { .. }
+            | AcpEvent::PlanApprovalResolved { .. }
+    ) {
+        emit_event(
+            emitter,
+            ACTIVITY_ASKS_EVENT,
+            serde_json::json!({ "connection_id": envelope_arc.connection_id }),
+        );
+    }
     true
 }
+
+/// The global side-channel telling every client a session's request was
+/// raised or answered: what the activity panel reads its asks again on.
+pub const ACTIVITY_ASKS_EVENT: &str = "activity://asks";
 
 #[cfg(test)]
 mod tests {

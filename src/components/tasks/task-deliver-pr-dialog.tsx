@@ -36,6 +36,9 @@ interface TaskDeliverPrDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   task: WorkTask | null
+  /** Deliver only the run this was opened on: a task sent back and reviewed
+   *  again since is refused. Unset: the run in review when it is sent. */
+  expectRunSeq?: number
 }
 
 /**
@@ -91,6 +94,7 @@ export function TaskDeliverPrDialog({
   open,
   onOpenChange,
   task,
+  expectRunSeq,
 }: TaskDeliverPrDialogProps) {
   const t = useTranslations("Tasks")
   const [title, setTitle] = useState("")
@@ -219,11 +223,15 @@ export function TaskDeliverPrDialog({
         .map((item) => item.number)
         .filter((n) => closes.has(n))
       // Optional trailing arguments, sent only when they apply.
-      const extra: [number[]?, string?] = commits
+      const optional: [number[]?, string?] = commits
         ? [closesEditable ? picked : undefined, commitMessage.trim()]
         : closesEditable
           ? [picked]
           : []
+      const extra: [number[]?, string?, number?] =
+        expectRunSeq === undefined
+          ? optional
+          : [optional[0], optional[1], expectRunSeq]
       const url = !opensOne
         ? await workTaskDeliverPr(
             task.id,

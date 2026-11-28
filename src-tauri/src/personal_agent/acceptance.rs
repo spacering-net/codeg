@@ -70,6 +70,10 @@ const WORDS_CHARS: usize = 4_000;
 /// will not be: the check goes ahead without it.
 const PREFLIGHT_GRACE_SECS: i64 = 120;
 
+/// How old a checking round with no check named, and none to be found, is
+/// before it is put to the assistant as not checked (M0-5).
+const UNLINKED_CHECK_MINUTES: i64 = 10;
+
 // ── pure parts ──────────────────────────────────────────────────────────────
 
 /// A check's report, as codeg reads it.
@@ -534,11 +538,11 @@ impl PersonalAgentEngine {
             .await
             .unwrap_or_default()
         {
-            if !self.round_still_current(&r).await {
-                self.go_stale(&r).await;
-                continue;
+            match self.round_still_current(&r).await {
+                Some(true) => self.heal_round(&r).await,
+                Some(false) => self.go_stale(&r).await,
+                None => {}
             }
-            self.heal_round(&r).await;
         }
     }
 
@@ -550,6 +554,7 @@ impl PersonalAgentEngine {
     async fn heal_round(&self, r: &round_entity::Model) {
         if r.state == VerificationState::Checking {
             let Some(check_id) = r.check_dispatch_id else {
+                self.heal_unlinked_check(r).await;
                 return;
             };
             let Ok(Some(check)) = svc::get_dispatch(&self.db.conn, check_id).await else {
@@ -604,17 +609,158 @@ impl PersonalAgentEngine {
         }
     }
 
-    /// Whether round `r`'s task is still in review at its generation.
-    async fn round_still_current(&self, r: &round_entity::Model) -> bool {
-        let Ok(Some(d)) = svc::get_dispatch(&self.db.conn, r.dispatch_id).await else {
-            return false;
+    /// A checking round with no check named — what a crash between sending
+    /// the check and naming it on the round left, before the two were one
+    /// step (M0-5): named now with the check its card says it sent; with
+    /// none to be found once the round is a while old, put to the assistant
+    /// as not checked. A round that moved on meanwhile is left as it is.
+    async fn heal_unlinked_check(&self, r: &round_entity::Model) {
+        let _one = self.accept_lock.lock().await;
+        let Ok(Some(r)) = vsvc::get(&self.db.conn, r.id).await else {
+            return;
+        };
+        if r.state != VerificationState::Checking || r.check_dispatch_id.is_some() {
+            return;
+        }
+        // Its card, on the timeline it was sent from.
+        let cards = match svc::check_cards_of(
+            &self.db.conn,
+            r.dispatch_id,
+            r.id,
+            r.round,
+            r.created_at,
+        )
+        .await
+        {
+            Ok(cards) => cards,
+            // Not read: looked for again at the next healing — never taken
+            // for no check at all.
+            Err(e) => {
+                tracing::warn!("[personal_agent] round {}: check card not read: {e}", r.id);
+                return;
+            }
+        };
+        // The likeliest card whose check no other round has.
+        let mut check = None;
+        for id in cards.iter().filter_map(|c| c.dispatch_id) {
+            match vsvc::of_check(&self.db.conn, id).await {
+                Ok(None) => {
+                    check = Some(id);
+                    break;
+                }
+                Ok(Some(_)) => {}
+                Err(e) => {
+                    tracing::warn!("[personal_agent] round {}: check #{id} not read: {e}", r.id);
+                    return;
+                }
+            }
+        }
+        // No card: an older codeg may have sent the check and stopped
+        // before writing its card. Its one check sent since, in its
+        // worktree, that nothing else claims, is it.
+        let check = match check {
+            Some(c) => Some(c),
+            None => match self.cardless_check_of(&r).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("[personal_agent] round {}: checks not read: {e}", r.id);
+                    return;
+                }
+            },
+        };
+        if let Some(check) = check {
+            match vsvc::link_check_on(&self.db.conn, r.id, check).await {
+                Ok(true) => {
+                    self.emit(PersonalAgentChange::Dispatch { id: r.dispatch_id });
+                    self.emit(PersonalAgentChange::Status);
+                }
+                Ok(false) => {}
+                Err(e) => tracing::warn!(
+                    "[personal_agent] round {}: check #{check} not named: {e}",
+                    r.id
+                ),
+            }
+            return;
+        }
+        if chrono::Utc::now() - r.created_at < chrono::Duration::minutes(UNLINKED_CHECK_MINUTES) {
+            return;
+        }
+        match vsvc::abandon_unlinked_check(&self.db.conn, r.id).await {
+            Ok(Some(moved)) => {
+                drop(_one);
+                self.emit(PersonalAgentChange::Dispatch { id: moved.dispatch_id });
+                self.put_to_assistant(&moved, None).await;
+            }
+            // Moved on meanwhile: nothing to heal.
+            Ok(None) => {}
+            // Tried again at the next healing.
+            Err(e) => tracing::warn!(
+                "[personal_agent] round {}: unlinked check not settled: {e}",
+                r.id
+            ),
+        }
+    }
+
+    /// The check an older codeg sent for round `r` without its card: the one
+    /// check sent in the task's worktree since the round opened that no
+    /// round and no fact check has. `None` with none, or with more than one
+    /// (which is a guess).
+    async fn cardless_check_of(&self, r: &round_entity::Model) -> Result<Option<i32>, String> {
+        let Some(task) = svc::get_dispatch(&self.db.conn, r.dispatch_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .and_then(|d| d.work_task_id)
+        else {
+            return Ok(None);
+        };
+        let folder = match crate::db::service::work_task_service::get_model(&self.db.conn, task).await
+        {
+            Ok(t) => t.worktree_folder_id,
+            Err(crate::db::error::DbError::NotFound(_)) => None,
+            Err(e) => return Err(e.to_string()),
+        };
+        let Some(folder) = folder else {
+            return Ok(None);
+        };
+        let mut found = Vec::new();
+        for c in svc::checks_in_folder_since(&self.db.conn, folder, r.created_at)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            let claimed = vsvc::of_check(&self.db.conn, c.id)
+                .await
+                .map_err(|e| e.to_string())?
+                .is_some()
+                || crate::db::service::personal_agent_check_service::of_dispatch(&self.db.conn, c.id)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .is_some();
+            if !claimed {
+                found.push(c.id);
+            }
+        }
+        Ok(match found.as_slice() {
+            [one] => Some(*one),
+            _ => None,
+        })
+    }
+
+    /// Whether round `r`'s task is still in review at its generation;
+    /// `None` when that could not be read (looked at again next time —
+    /// never taken for "moved on").
+    async fn round_still_current(&self, r: &round_entity::Model) -> Option<bool> {
+        let d = match svc::get_dispatch(&self.db.conn, r.dispatch_id).await {
+            Ok(Some(d)) => d,
+            Ok(None) => return Some(false),
+            Err(_) => return None,
         };
         let Some(tid) = d.work_task_id else {
-            return false;
+            return Some(false);
         };
         match crate::db::service::work_task_service::get_model(&self.db.conn, tid).await {
-            Ok(t) => t.status == WorkTaskStatus::Review && t.run_seq == r.run_seq,
-            Err(_) => false,
+            Ok(t) => Some(t.status == WorkTaskStatus::Review && t.run_seq == r.run_seq),
+            Err(crate::db::error::DbError::NotFound(_)) => Some(false),
+            Err(_) => None,
         }
     }
 
@@ -756,67 +902,62 @@ impl PersonalAgentEngine {
     ) {
         let n = rounds.iter().filter(|r| r.state.counts()).count() as i32 + 1;
         let checker = self.pick_checker(d, task).await;
+        let new = NewRound {
+            bot_id: d.bot_id,
+            dispatch_id: d.id,
+            round: n,
+            run_seq: task.run_seq,
+            fingerprint,
+            state: if checker.is_some() {
+                VerificationState::Checking
+            } else {
+                VerificationState::Deciding
+            },
+            unchecked: checker.is_none(),
+        };
+        // The round opens with its check sent out, one step (M0-5).
+        let not_sent = match checker {
+            Some(checker) => match self.dispatch_check(d, task, wt, new.clone(), checker).await {
+                Ok(_) => return,
+                Err(e) => Some(e),
+            },
+            None => None,
+        };
+        // Nobody to check it, or no check went out: the round opens to be
+        // decided on what there is, and the card says it was not checked.
         let made = vsvc::create(
             &self.db.conn,
             NewRound {
-                bot_id: d.bot_id,
-                dispatch_id: d.id,
-                round: n,
-                run_seq: task.run_seq,
-                fingerprint,
-                state: if checker.is_some() {
-                    VerificationState::Checking
-                } else {
-                    VerificationState::Deciding
-                },
-                unchecked: checker.is_none(),
+                state: VerificationState::Deciding,
+                unchecked: true,
+                ..new
             },
         )
         .await;
-        let round = match made {
+        let mut round = match made {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("[personal_agent] dispatch #{}: round not opened: {e}", d.id);
                 return;
             }
         };
-        self.emit(PersonalAgentChange::Dispatch { id: d.id });
-        match checker {
-            Some(checker) => match self.dispatch_check(d, task, wt, &round, checker).await {
-                Ok(check_id) => {
-                    let _ = vsvc::write_round(
-                        &self.db.conn,
-                        round.id,
-                        RoundWrite {
-                            check_dispatch_id: Some(Some(check_id)),
-                            ..Default::default()
-                        },
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    // No check went out: the assistant decides on what
-                    // there is, and the card says it was not checked.
-                    if let Ok(Some(r)) = vsvc::move_round(
-                        &self.db.conn,
-                        round.id,
-                        &[VerificationState::Checking],
-                        VerificationState::Deciding,
-                        None,
-                        RoundWrite {
-                            check_verdict: Some(Some(CheckVerdict::Unverified)),
-                            check_evidence: Some(Some(format!("the check could not be sent: {e}"))),
-                            ..Default::default()
-                        },
-                    )
-                    .await
-                    {
-                        self.put_to_assistant(&r, None).await;
-                    }
-                }
-            },
-            None => self.put_to_assistant(&round, None).await,
+        if let Some(e) = not_sent {
+            if let Ok(Some(r)) = vsvc::write_round(
+                &self.db.conn,
+                round.id,
+                RoundWrite {
+                    check_verdict: Some(Some(CheckVerdict::Unverified)),
+                    check_evidence: Some(Some(format!("the check could not be sent: {e}"))),
+                    ..Default::default()
+                },
+            )
+            .await
+            {
+                round = r;
+            }
         }
+        self.emit(PersonalAgentChange::Dispatch { id: d.id });
+        self.put_to_assistant(&round, None).await;
     }
 
     /// Who checks this work (7.5, D1): what the assistant the work is now
@@ -849,18 +990,27 @@ impl PersonalAgentEngine {
         d: &dispatch_entity::Model,
         task: &work_task::Model,
         wt: &crate::models::FolderDetail,
-        round: &round_entity::Model,
+        new: NewRound,
         checker: DispatchWorkSnapshot,
-    ) -> Result<i32, String> {
-        let prompt = self.check_prompt(d, task, wt, round).await;
+    ) -> Result<round_entity::Model, String> {
+        use sea_orm::TransactionTrait;
+        let prompt = self.check_prompt(d, task, wt, new.round).await;
         let snapshot = DispatchWorkSnapshot {
             dispatcher: Some(self.dispatcher_brief().await),
             ..checker
         };
-        let row = svc::create_dispatch(
-            &self.db.conn,
+        let bot = self.bot().await;
+        let segment = self.state.lock().await.connection_segment;
+        // The round, its check naming it and the check's card: one
+        // transaction — at no moment is the check work of its own, nor a
+        // round checking with no check (M0-5).
+        let txn = self.db.conn.begin().await.map_err(|e| e.to_string())?;
+        // Nothing in it reads through another connection.
+        let round = vsvc::create_on(&txn, new).await.map_err(|e| e.to_string())?;
+        let row = svc::create_dispatch_on(
+            &txn,
             NewDispatch {
-                bot_id: self.bot().await,
+                bot_id: bot,
                 mode: DispatchMode::Session,
                 work_snapshot_json: serde_json::to_string(&snapshot)
                     .map_err(|e| e.to_string())?,
@@ -883,34 +1033,53 @@ impl PersonalAgentEngine {
         )
         .await
         .map_err(|e| e.to_string())?;
+        if !vsvc::link_check_on(&txn, round.id, row.id)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            return Err("the round did not take its check".into());
+        }
+        let round = vsvc::get_on(&txn, round.id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("the round is gone")?;
         let mut card = NewRow::new(TimelineKind::Dispatch, d.title.clone());
         card.dispatch_id = Some(row.id);
-        card.segment_id = self.state.lock().await.connection_segment;
+        card.segment_id = segment;
         card.data = Some(json!({
             "mode": row.mode,
             "agent_type": snapshot.agent_type,
             "folder_id": d.folder_id,
             "deliverable": Value::Null,
             "state": row.state,
-            // What it checks, and which round (7.5).
+            // What it checks, and which round (7.5) — the round itself:
+            // its number is reused after a void or stale one.
             "check_for": d.id,
             "check_round": round.round,
+            "check_round_id": round.id,
             "work_task_id": task.id,
         }));
-        self.push_row(card).await;
+        let card = svc::insert_row_on(&txn, bot, card)
+            .await
+            .map_err(|e| e.to_string())?;
+        txn.commit().await.map_err(|e| e.to_string())?;
+        self.emit_rows(vec![svc::to_row(card)]);
         self.emit(PersonalAgentChange::Dispatch { id: row.id });
+        self.emit(PersonalAgentChange::Dispatch { id: d.id });
         self.kick_queue();
-        Ok(row.id)
+        Ok(round)
     }
 
     /// What the checker is asked: read only, criterion by criterion, a
     /// verdict last.
+    /// `round` is the number of the round it checks — one not opened yet
+    /// (it opens with its check).
     async fn check_prompt(
         &self,
         d: &dispatch_entity::Model,
         task: &work_task::Model,
         wt: &crate::models::FolderDetail,
-        round: &round_entity::Model,
+        round: i32,
     ) -> String {
         let mut parts = vec![
             "You are checking a piece of work before it is accepted. This is a READ-ONLY \
@@ -940,22 +1109,22 @@ impl PersonalAgentEngine {
             },
         );
         // A later round: what the last one sent back, to look at first.
-        if round.round > 1 {
+        if round > 1 {
             let sent_back = vsvc::rounds_of(&self.db.conn, d.id)
                 .await
                 .unwrap_or_default()
                 .into_iter()
                 .rev()
-                .find(|x| x.id != round.id && x.state == VerificationState::Revised)
+                .find(|x| x.state == VerificationState::Revised)
                 .and_then(|x| x.message);
             parts.push(match sent_back {
                 Some(m) => format!(
                     "This is check {} of this work. After the last one it was sent back with:\n{}\n\
                      See that this was done, and check every criterion again.",
-                    round.round,
+                    round,
                     cut(&m, 3_000)
                 ),
-                None => format!("This is check {} of this work.", round.round),
+                None => format!("This is check {} of this work.", round),
             });
         }
         parts.push(self.changes_text(task, wt).await);
@@ -1080,21 +1249,43 @@ impl PersonalAgentEngine {
             },
         };
         let _one = self.accept_lock.lock().await;
-        let Ok(Some(round)) = vsvc::get(&self.db.conn, round.id).await else {
-            return;
+        // Not read, it is settled again at a later healing: its report is
+        // kept for then — the excerpt alone may have lost its verdict.
+        let keep = |text: Option<String>| async move {
+            if let Some(t) = text {
+                self.state.lock().await.check_texts.insert(check.id, t);
+            }
+        };
+        let round = match vsvc::get(&self.db.conn, round.id).await {
+            Ok(Some(round)) => round,
+            Ok(None) => return,
+            Err(_) => {
+                keep(text).await;
+                return;
+            }
         };
         if round.state != VerificationState::Checking {
             self.post_check_card(check, &round, Some(&report), cause)
                 .await;
             return;
         }
-        if !self.round_still_current(&round).await {
-            self.post_check_card(check, &round, Some(&report), cause)
-                .await;
-            self.go_stale(&round).await;
-            return;
+        match self.round_still_current(&round).await {
+            Some(true) => {}
+            Some(false) => {
+                self.post_check_card(check, &round, Some(&report), cause)
+                    .await;
+                self.go_stale(&round).await;
+                return;
+            }
+            // Not read: the round still checks, its check ended — healing
+            // settles it at a later tick.
+            None => {
+                keep(text).await;
+                return;
+            }
         }
         let Some((d, task)) = self.round_task(&round).await else {
+            keep(text).await;
             return;
         };
         let now = match self.worktree_of(&task).await {
@@ -1177,19 +1368,35 @@ impl PersonalAgentEngine {
                 ..Default::default()
             },
         )
-        .await
-        .ok()
-        .flatten();
+        .await;
         match moved {
-            Some(r) => {
+            Ok(Some(r)) => {
                 let card = self.check_card(check, &r, Some(&report), cause).await;
                 self.put_to_assistant(&r, Some(card)).await;
             }
-            None => {
+            Ok(None) => {
                 self.post_check_card(check, &round, Some(&report), cause)
                     .await;
                 self.go_stale(&round).await;
             }
+            // Not read back: moved on after all, it is the assistant's
+            // now; not written, still checking, its check ended — settled
+            // again at a later healing, never taken for "moved on".
+            Err(e) => match vsvc::get(&self.db.conn, round.id).await {
+                Ok(Some(r)) if r.state == VerificationState::Deciding => {
+                    let card = self.check_card(check, &r, Some(&report), cause).await;
+                    self.put_to_assistant(&r, Some(card)).await;
+                }
+                // Not read at all: its card still goes up — the round may
+                // have moved on to the assistant, whose wake carries none —
+                // and its report is kept, should it still be checking.
+                _ => {
+                    tracing::warn!("[personal_agent] round {}: check not settled: {e}", round.id);
+                    self.post_check_card(check, &round, Some(&report), cause)
+                        .await;
+                    keep(text).await;
+                }
+            },
         }
     }
 
@@ -1247,6 +1454,9 @@ impl PersonalAgentEngine {
             "folder_id": check.folder_id,
             "check_for": round.dispatch_id,
             "check_round": round.round,
+            // The round of the check itself it tells of, as every result
+            // card does: a check continued and failed again is another's.
+            "round": check.turns,
             "verdict": report.map(|r| r.verdict),
             "evidence": report.map(|r| r.evidence.clone()),
             "stopped_by": stopped.as_ref().map(|b| b.key()),
@@ -1425,12 +1635,21 @@ impl PersonalAgentEngine {
             lines.push(p);
         }
         if r.unchecked {
-            lines.push(
-                "It could not be checked: you have nothing to work with right now, so no \
-                 read-only session could be opened for it. Judge it from the preflight and the \
-                 work session's summary; the card will say it was not checked independently."
-                    .into(),
-            );
+            // Why, when codeg knows: a check it could not send.
+            let why = r
+                .check_evidence
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|ev| format!("It could not be checked ({ev})"))
+                .unwrap_or_else(|| {
+                    "It could not be checked: you have nothing to work with right now".into()
+                });
+            lines.push(format!(
+                "{why}, so no read-only session could be opened for it. Judge it from the \
+                 preflight and the work session's summary; the card will say it was not checked \
+                 independently."
+            ));
         } else {
             lines.push(format!(
                 "The check (a read-only session){}: VERDICT {}",

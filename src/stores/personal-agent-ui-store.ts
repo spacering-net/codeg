@@ -2,6 +2,8 @@ import { create } from "zustand"
 
 import { stamp } from "@/lib/stamp"
 
+import { clearReturn } from "./personal-agent-return-store"
+
 import type {
   AgentType,
   DispatchMode,
@@ -9,13 +11,23 @@ import type {
   RoutineDraft,
 } from "@/lib/types"
 
-/** The activity's groups (C1), in order: what waits on the owner, what is
- *  under way, what comes next, what was done today. */
-export type ActivityGroup = "needs" | "watching" | "next" | "done"
+/** The activity's groups (5.1), by whose turn it is: what waits on the
+ *  owner, what an agent is at now, what codeg watches go on outside, what
+ *  comes next, what was done today — and, from an older codeg, its one
+ *  group of what is under way and watched (`watching`, 11). */
+export type ActivityGroup =
+  | "needs"
+  | "running"
+  | "watch"
+  | "watching"
+  | "next"
+  | "done"
 
 /** Where each of the activity's groups keeps whether it is folded. */
 export const ACTIVITY_FOLD: Record<ActivityGroup, string> = {
   needs: "activity.needs",
+  running: "activity.running",
+  watch: "activity.watch",
   watching: "activity.watching",
   next: "activity.next",
   done: "activity.done",
@@ -295,10 +307,14 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
   openWork: (work) => set({ work, workOpen: true }),
   setWorkOpen: (workOpen) => set({ workOpen }),
   settings: null,
-  openSettings: (page = "communication") =>
-    set({ settings: { page }, botPage: null }),
+  // Gone somewhere else: no way back to the activity to offer (7.6).
+  openSettings: (page = "communication") => {
+    clearReturn()
+    set({ settings: { page }, botPage: null })
+  },
   botPage: null,
-  openBotPage: (tab = "identity", opts = {}) =>
+  openBotPage: (tab = "identity", opts = {}) => {
+    clearReturn()
     set((s) => {
       const botPage: BotPageOpen = opts.entry
         ? { tab, entry: opts.entry }
@@ -312,7 +328,8 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
             workOpen: false,
             watching: false,
           }
-    }),
+    })
+  },
   showConversation: () => set({ settings: null, botPage: null }),
   routineEditor: null,
   openRoutineEditor: (req) =>

@@ -691,6 +691,18 @@ pub async fn change_detail(
         (Some(source), Some(target)) if source != target => project_path(auth, source).await,
         _ => None,
     };
+    // Its review, as the detailed status ties it to approvals (6.6).
+    let review = match raw.detailed_merge_status.as_deref() {
+        Some("not_approved") => Some(super::ReviewGate {
+            required: Some(true),
+            ..Default::default()
+        }),
+        Some("requested_changes") => Some(super::ReviewGate {
+            changes_requested: true,
+            ..Default::default()
+        }),
+        _ => None,
+    };
 
     Ok(ForgeChangeDetail {
         number: if raw.iid > 0 { raw.iid } else { iid },
@@ -721,6 +733,7 @@ pub async fn change_detail(
         // Only GitHub holds runs for a maintainer's approval through an API
         // this panel can act on.
         workflow_approval: None,
+        review,
     })
 }
 

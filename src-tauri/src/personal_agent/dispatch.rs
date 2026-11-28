@@ -197,6 +197,11 @@ pub enum FollowupAuth {
     Op { op_id: String },
 }
 
+/// The `source_batch_id` of work no turn runs (a card's or a row's
+/// follow-up): no batch has it, so no turn's stop reaches it — and it is
+/// not "none recorded", which falls back to the turn that made it.
+pub(crate) const NO_TURN: i32 = 0;
+
 /// What a follow-up's send answers when its session is still busy with the
 /// round before (a stop just went out, the executor has not wound down):
 /// said before the round is claimed, so nothing of it was written.
@@ -1380,7 +1385,11 @@ impl PersonalAgentEngine {
                     },
                 };
                 self.set_live(&op_id, true).await;
-                if let Err(e) = self.send_followup(&d, message, &[DispatchState::Queued], &op_id).await {
+                // Queued with the turn that runs it already.
+                if let Err(e) = self
+                    .send_followup(&d, message, &[DispatchState::Queued], &op_id, None)
+                    .await
+                {
                     self.set_live(&op_id, false).await;
                     // Busy with the round before: still queued, untouched.
                     if e == FOLLOWUP_BUSY {
@@ -1433,6 +1442,7 @@ impl PersonalAgentEngine {
             dispatch_id: d.id,
             message: message.to_string(),
             intent: None,
+            asking_batch: None,
         };
         match svc::begin_op(
             &self.db.conn,
@@ -2461,13 +2471,36 @@ impl PersonalAgentEngine {
             // stopped moves with the work's next round, as done does.
             let stopped = item.status == ItemStatus::Dropped
                 && item.closed_how.as_deref() == Some("stopped");
-            if item.status != ItemStatus::Dropped || stopped {
+            // A failure: when it was, a board task's as the board has it.
+            let failed_at = matches!(d.state, DispatchState::Failed | DispatchState::Interrupted)
+                .then(|| super::today::failed_at(d, task.as_ref()));
+            let by_owner = matches!(item.status, ItemStatus::Done | ItemStatus::Dropped)
+                && item.closed_by.as_deref() == Some("owner");
+            // The owner closed it after this failure ("got it", gave it
+            // up): as they left it — this failure's word arriving late
+            // does not open it again (6.4).
+            let closed_since = by_owner
+                && failed_at.is_some_and(|at| item.closed_at.is_some_and(|c| c >= at));
+            // Given up before this failure: a new failure is theirs to see
+            // again, with its matter.
+            let failed_again = by_owner
+                && item.status == ItemStatus::Dropped
+                && failed_at.is_some_and(|at| item.closed_at.is_some_and(|c| c < at));
+            if !closed_since && (item.status != ItemStatus::Dropped || stopped || failed_again) {
                 // Not when other work took it over meanwhile (B1): its
-                // matter was closed with that, and stays so.
-                let _ = svc::update_item_unless_taken_over(
+                // matter was closed with that, and stays so. Nor over the
+                // owner's settling of it since it was read here (a give-up
+                // between the read and the write).
+                let guard = match (by_owner, item.closed_at) {
+                    (false, _) => svc::OwnerGuard::NotClosed,
+                    (true, Some(at)) => svc::OwnerGuard::ClosedAt(at),
+                    (true, None) => svc::OwnerGuard::NotClosed,
+                };
+                let _ = svc::update_item_unless_taken_over_if(
                     &self.db.conn,
                     item.id,
                     d.id,
+                    guard,
                     ItemWrite {
                         status: Some(status),
                         waits_for: Some(waits_for),
@@ -3171,10 +3204,16 @@ impl PersonalAgentEngine {
                 d.replaced_by.unwrap_or_default()
             ));
         }
+        let asking_batch = match &auth {
+            FollowupAuth::Ledgered { batch_id, .. } => Some(*batch_id),
+            FollowupAuth::Direct => self.current_batch().await,
+            FollowupAuth::Card { .. } | FollowupAuth::Op { .. } => None,
+        };
         let call = FollowupCall {
             dispatch_id: id,
             message: message.clone(),
             intent: intent.clone(),
+            asking_batch,
         };
         let payload = serde_json::to_value(&call).map_err(|e| e.to_string())?;
         let target = serde_json::to_value(SendTarget {
@@ -3347,8 +3386,14 @@ impl PersonalAgentEngine {
         }
         self.set_live(&op_id, true).await;
         let out = match d.mode {
-            DispatchMode::Task => self.followup_task(d, call.message, call.intent, &op_id).await,
-            _ => self.followup_conversation(d, call.message, &op_id).await,
+            DispatchMode::Task => {
+                self.followup_task(d, call.message, call.intent, &op_id, call.asking_batch)
+                    .await
+            }
+            _ => {
+                self.followup_conversation(d, call.message, &op_id, call.asking_batch)
+                    .await
+            }
         };
         match &out {
             // A conversation's send stays live until the executor confirms
@@ -3369,13 +3414,17 @@ impl PersonalAgentEngine {
     /// reply of the turn that asked for it, and the results it brings follow
     /// up on that reply — so the dispatch's source is that turn, from before
     /// the round can report. Returns the card.
+    /// `batch`: the turn that asked for it ([`FollowupCall::asking_batch`]) —
+    /// its card goes among what that turn wrote, and the work is that
+    /// turn's from here (what it brings back quotes that turn's reply, sent
+    /// or not; a stop of that turn reaches it).
     async fn record_followup(
         &self,
         d: &dispatch_entity::Model,
         message: &str,
         op_id: &str,
+        batch: Option<i32>,
     ) -> Option<i32> {
-        let batch = self.current_batch().await;
         // Where its pill goes among what its turn wrote: the turn of the
         // call's own entry only (one let through from a card has none).
         let own_batch = svc::get_op(&self.db.conn, op_id)
@@ -3389,18 +3438,19 @@ impl PersonalAgentEngine {
             None => None,
         };
         self.push_reply_now().await;
-        if let Some(b) = batch {
-            let _ = svc::update_dispatch(
-                &self.db.conn,
-                d.id,
-                None,
-                DispatchWrite {
-                    source_batch_id: Some(Some(b)),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
+        // Only while the work is as the call read it: a round another took
+        // up meanwhile (a retry from the activity, say) keeps whose it is.
+        let _ = svc::update_dispatch(
+            &self.db.conn,
+            d.id,
+            Some(&[d.state]),
+            DispatchWrite {
+                source_batch_id: Some(Some(batch.unwrap_or(NO_TURN))),
+                expect_round_op_is: Some(d.round_op_id.clone()),
+                ..Default::default()
+            },
+        )
+        .await;
         let work = work_of(d);
         let mut card = NewRow::new(TimelineKind::Dispatch, d.title.clone());
         card.dispatch_id = Some(d.id);
@@ -3453,6 +3503,7 @@ impl PersonalAgentEngine {
         message: String,
         intent: Option<String>,
         op_id: &str,
+        batch: Option<i32>,
     ) -> Result<String, String> {
         let task_id = d.work_task_id.ok_or("this dispatch has no task yet")?;
         let engine = crate::work_task::engine().ok_or("the task engine is not running")?;
@@ -3462,7 +3513,7 @@ impl PersonalAgentEngine {
         match task.status {
             WorkTaskStatus::Review => {
                 let intent = FollowUpIntent::from_wire(intent.as_deref())?;
-                let card = self.record_followup(d, &message, op_id).await;
+                let card = self.record_followup(d, &message, op_id, batch).await;
                 if let Err(e) = engine
                     .return_task_with_op(task_id, intent, message, Vec::new(), Some(op_id.to_string()))
                     .await
@@ -3481,7 +3532,7 @@ impl PersonalAgentEngine {
                 if intent.is_some() {
                     return Err("a failed task is retried; `intent` applies to a task in review".into());
                 }
-                let card = self.record_followup(d, &message, op_id).await;
+                let card = self.record_followup(d, &message, op_id, batch).await;
                 if let Err(e) = engine
                     .retry_with_op(task_id, Some(message), Vec::new(), false, Some(op_id.to_string()))
                     .await
@@ -3505,6 +3556,7 @@ impl PersonalAgentEngine {
         d: &dispatch_entity::Model,
         message: String,
         op_id: &str,
+        batch: Option<i32>,
     ) -> Result<String, String> {
         match d.state {
             DispatchState::HandedOver => {
@@ -3521,6 +3573,8 @@ impl PersonalAgentEngine {
         // A follow-up is a round like the first: it takes a session slot, or
         // waits for one the way a new dispatch does.
         let _one_pass = self.dispatch_lock.lock().await;
+        // The turn that asked for it: what it is queued or claimed with,
+        // and its card among.
         let limit = match self.agent_row().await {
             Some(row) => settings_of(&row).dispatch_concurrency,
             None => crate::models::personal_agent::DEFAULT_DISPATCH_CONCURRENCY,
@@ -3533,6 +3587,8 @@ impl PersonalAgentEngine {
             // message is the entry's — kept there until it is sent, whatever
             // happens to the dispatch row in between.
             self.write_send_target(op_id, d, DispatchState::Queued, true).await?;
+            // The turn asking for it runs it from here, in the same write
+            // that queues it: a stop of the turn before never takes it.
             let Some(_) = svc::update_dispatch(
                 &self.db.conn,
                 d.id,
@@ -3543,6 +3599,7 @@ impl PersonalAgentEngine {
                     error: Some(None),
                     followup: Some(Some(message.clone())),
                     round_op_id: Some(Some(op_id.to_string())),
+                    source_batch_id: Some(Some(batch.unwrap_or(NO_TURN))),
                     ..Default::default()
                 },
             )
@@ -3553,7 +3610,7 @@ impl PersonalAgentEngine {
             };
             // Recorded as it is queued: it is the turn asking for it now that
             // it belongs to, whenever a slot frees up.
-            self.record_followup(d, &message, op_id).await;
+            self.record_followup(d, &message, op_id, batch).await;
             self.reopen_item(d.id, op_id).await;
             self.emit(PersonalAgentChange::Dispatch { id: d.id });
             self.emit(PersonalAgentChange::Status);
@@ -3563,8 +3620,10 @@ impl PersonalAgentEngine {
                 d.id
             ));
         }
-        let card = self.record_followup(d, &message, op_id).await;
-        let sent = self.send_followup(d, message.clone(), FOLLOWUP_FROM, op_id).await;
+        let card = self.record_followup(d, &message, op_id, batch).await;
+        let sent = self
+            .send_followup(d, message.clone(), FOLLOWUP_FROM, op_id, Some(batch))
+            .await;
         // Its session still winding the round before down — stopped a moment
         // ago, the executor not done yet: it waits its turn in the queue, as
         // for a slot — the same entry, sent once that round is over.
@@ -3582,6 +3641,7 @@ impl PersonalAgentEngine {
                     error: Some(None),
                     followup: Some(Some(message)),
                     round_op_id: Some(Some(op_id.to_string())),
+                    source_batch_id: Some(Some(batch.unwrap_or(NO_TURN))),
                     ..Default::default()
                 },
             )
@@ -3640,12 +3700,16 @@ impl PersonalAgentEngine {
     /// nothing when that fails; the executor's own answer to the request
     /// commits it. The message carries the id twice: as its message id, and
     /// in an operation frame stripped from every display.
+    /// `runs_for`: the turn that runs it from the claim on — `Some(the
+    /// turn that asked)`, `Some(None)` no turn's (a card's, a row's);
+    /// `None` leaves whose it is as it was (one queued with its turn).
     async fn send_followup(
         self: &std::sync::Arc<Self>,
         d: &dispatch_entity::Model,
         message: String,
         from: &[DispatchState],
         op_id: &str,
+        runs_for: Option<Option<i32>>,
     ) -> Result<String, String> {
         let conversation_id = d.conversation_id.ok_or("this dispatch never started a conversation")?;
         let work = work_of(d);
@@ -3725,6 +3789,7 @@ impl PersonalAgentEngine {
                 followup: Some(None),
                 round_op_id: Some(Some(op_id.to_string())),
                 expect_round_op: if queued { d.round_op_id.clone() } else { None },
+                source_batch_id: runs_for.map(|b| Some(b.unwrap_or(NO_TURN))),
                 ..Default::default()
             },
         )

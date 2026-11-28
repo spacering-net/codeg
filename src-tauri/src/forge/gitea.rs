@@ -465,6 +465,20 @@ pub async fn change_detail(
         .and_then(|r| r.full_name.clone())
         .filter(|full| !super::same_repo(full, &repo));
 
+    // Its review (6.6): Gitea's "mergeable" says nothing of approvals, so
+    // an open one is read for who was asked and what they said.
+    let review = if raw.state == "open" && !raw.merged {
+        let requested: Vec<String> = raw
+            .requested_reviewers
+            .iter()
+            .map(|u| u.login.clone())
+            .filter(|l| !l.is_empty())
+            .collect();
+        super::feedback::gitea_review_gate(auth, &repo, number, requested).await
+    } else {
+        None
+    };
+
     Ok(ForgeChangeDetail {
         number: if raw.number > 0 { raw.number } else { number },
         base_ref: raw.base.as_ref().map(|b| b.ref_name.clone()).unwrap_or_default(),
@@ -489,6 +503,7 @@ pub async fn change_detail(
         // Only GitHub holds runs for a maintainer's approval through an API
         // this panel can act on.
         workflow_approval: None,
+        review,
     })
 }
 
@@ -1490,6 +1505,15 @@ struct RawPull {
     head: Option<RawPullRef>,
     #[serde(default)]
     base: Option<RawPullRef>,
+    /// Who was asked to review it and has not yet (the single pull).
+    #[serde(default)]
+    requested_reviewers: Vec<RawReviewer>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawReviewer {
+    #[serde(default)]
+    login: String,
 }
 
 impl RawPull {

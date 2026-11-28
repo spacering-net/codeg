@@ -406,6 +406,25 @@ describe("the settings view", () => {
     )
   })
 
+  it("has how long a watched PR's checks and review may wait on “Dispatch & automation” (6.6)", async () => {
+    usePersonalAgentUi.getState().openSettings("automation")
+    draw()
+    expect(
+      document.querySelector('[data-pa-pref="pr_review_wait_days"]')
+    ).not.toBeNull()
+    const hours = document.querySelector(
+      '[data-pa-pref="pr_checks_wait_hours"]'
+    ) as HTMLInputElement
+    fireEvent.change(hours, { target: { value: "6" } })
+    fireEvent.blur(hours)
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.pr_checks_wait_hours", value: 6 }],
+        null
+      )
+    )
+  })
+
   it("has commenting, closing issues and merging pull requests on “Dispatch & automation” (7.4)", () => {
     usePersonalAgentUi.getState().openSettings("automation")
     draw()

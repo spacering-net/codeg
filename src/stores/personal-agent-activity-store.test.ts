@@ -216,6 +216,11 @@ describe("the activity's read", () => {
     for (const cb of bus.reconnect) cb()
     await settle(TODAY_GAP_MS)
     expect(calls()).toBe(6)
+
+    // A session's request raised or answered anywhere (7.5).
+    emit("activity://asks", { connection_id: "c" })
+    await settle(TODAY_GAP_MS)
+    expect(calls()).toBe(7)
   })
 
   it("reads a burst once, once more after a read on its way, and never starves", async () => {

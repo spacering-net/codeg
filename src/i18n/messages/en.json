@@ -10272,7 +10272,34 @@
     },
     "work": {
       "taskNotStarted": "This task hasn't started yet. Its session shows here once it does.",
-      "taskGone": "Couldn't find this task — it may have been deleted."
+      "taskGone": "Couldn't find this task — it may have been deleted.",
+      "retry": "Retry",
+      "handTo": "Hand to {name}",
+      "viewSession": "View session",
+      "merge": "Merge",
+      "mergeTo": "Merge into {base}",
+      "createPr": "Create PR",
+      "pushBack": "Push back to the PR",
+      "mergePr": "Merge PR",
+      "mergeMr": "Merge MR",
+      "openPr": "Open PR",
+      "openMr": "Open MR",
+      "nudge": "Ask again",
+      "rehand": "Have {name} do it again",
+      "toast": {
+        "retried": "Started again",
+        "handed": "Handed to {name}",
+        "merging": "Merging…",
+        "merged": "Merged",
+        "mergeAsked": "Waiting for your approval on its card",
+        "mergeChanged": "It changed since you looked: read again",
+        "ranAgain": "This task ran again since you looked: read again",
+        "nudged": "Asked {name} again",
+        "nudgedAlready": "{name} was asked a moment ago",
+        "rehanded": "Handed to {name} again",
+        "done": "Done"
+      },
+      "reconnect": "Reconnect account"
     },
     "composer": {
       "placeholder": "Message {name}…",
@@ -11056,6 +11083,14 @@
           "auto": "Take effect at once, undo on the card",
           "draft": "Show me first (a draft card, applied when I say)",
           "off": "Don't"
+        },
+        "pr_checks_wait_hours": {
+          "title": "Hours to wait for PR checks",
+          "hint": "A watched PR whose checks have run this long with no result moves to Needs you. 1 to 48."
+        },
+        "pr_review_wait_days": {
+          "title": "Days to wait for a PR review",
+          "hint": "A watched PR waiting this long for its review moves to Needs you. 1 to 14."
         }
       },
       "workdir": {
@@ -12049,12 +12084,15 @@
     },
     "feed": {
       "groups": {
-        "needs": "Waiting for you",
+        "needs": "Needs you",
+        "running": "In progress",
+        "watch": "Watching",
         "watching": "In progress",
         "next": "Routines & reminders",
         "done": "Done today"
       },
       "empty": "Nothing for you to do, and nothing running.",
+      "suggestions": "{count, plural, one {# more suggestion} other {# more suggestions}}",
       "failed": "The activity could not be read just now.",
       "handed": "Handed to {name}",
       "checking": "Being checked · round {round}",
@@ -12066,7 +12104,57 @@
       "viewReminder": "View the reminder",
       "viewCheck": "View the acceptance session",
       "openTask": "Open the task",
-      "routineDeleted": "This routine has been deleted."
+      "routineDeleted": "This routine has been deleted.",
+      "why": {
+        "no_reply": "No reply from {name}",
+        "unfinished": "Not finished",
+        "checks": "Checks failed · nobody fixing",
+        "conflict": "Conflict · nobody fixing",
+        "fix_pending": "codeg is about to fix it",
+        "fixing": "Being fixed",
+        "platform_blocked": "Platform won't merge yet",
+        "merge_queued": "Queued to merge",
+        "merging": "Merging",
+        "check_preparing": "Preparing the check",
+        "check_settling": "Settling the check",
+        "queued": "Queued for {name}",
+        "in_turn": "{name} is on it",
+        "looking": "Waiting for {name} to pick it up",
+        "no_trigger": "No next time set",
+        "failed": "Failed",
+        "readFailed": {
+          "auth": "Can't read it · sign in again",
+          "no_account": "Can't read it · no account for this forge",
+          "config": "This forge can't be read",
+          "network": "Can't read it · no connection",
+          "api": "Can't read it · the forge answered with an error",
+          "timeout": "Can't read it · the forge didn't answer",
+          "other": "Can't read it"
+        },
+        "checks_slow": "Checks running {hours} h with no result",
+        "review_pending": "Waiting for review",
+        "review_slow": "Waiting {days} d for review"
+      },
+      "stop": {
+        "task": "Stop",
+        "turn": "Stop {name}'s turn"
+      },
+      "ask": {
+        "approvePlan": "Approve plan",
+        "queued": "{count, plural, one {# more waiting} other {# more waiting}}",
+        "settled": "Answered already — read again",
+        "planAll": "See the whole plan",
+        "planLess": "Show less",
+        "planRevise": "Send back with a note…",
+        "planReviseSend": "Send back",
+        "planReviseCancel": "Cancel",
+        "planReviseHint": "What should change?",
+        "answered": "Answer sent"
+      },
+      "back": {
+        "line": "From the activity · {count, plural, one {# more waits on you} other {# more wait on you}}",
+        "go": "Back to the activity"
+      }
     },
     "today": {
       "title": "Today",
@@ -12107,7 +12195,8 @@
         "memoryUndone": "Remembered, then taken back",
         "plan_stuck": "Plan stuck",
         "routine_paused": "Routine paused",
-        "used_up": "Still not right"
+        "used_up": "Still not right",
+        "pr_gone": "Stopped watching a PR it can't find"
       },
       "reason": {
         "failed": "Failed",
@@ -13080,7 +13169,17 @@
         "answer": "Answer",
         "drop": "Not needed",
         "stop": "Stop reminding",
-        "undo": "Undo"
+        "undo": "Undo",
+        "withdrawMessage": "Withdraw message",
+        "stopWaiting": "Stop waiting for a reply",
+        "noReplyNeeded": "No reply needed",
+        "noAnswerNeeded": "No answer needed",
+        "stopFollowing": "Stop following up",
+        "cancelReminder": "Cancel reminder",
+        "noNeedToDo": "Don't do it",
+        "wontDo": "Won't do",
+        "remove": "Remove",
+        "giveUp": "Give up on this work"
       },
       "hint": {
         "doneNext": "Done for this time; it goes on: {rule}",
@@ -13139,6 +13238,7 @@
         "stopped": "You stopped its work · {time}",
         "skippedLast": "You skipped the last time · {time}",
         "dropped": "You removed it · {time}",
+        "givenUp": "You gave up on this work · {time}",
         "withdrawn": "You took back the message to {peer} · {time}",
         "stoppedWaiting": "You stopped waiting for {peer}'s reply · {time}",
         "agentDone": "{name} finished it · {time}",

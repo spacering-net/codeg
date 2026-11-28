@@ -10,7 +10,8 @@
 import { useTranslations } from "next-intl"
 import { MessageCircleQuestionMark, X } from "lucide-react"
 
-import type { ActivityRow, PersonalAgentActivity } from "@/lib/types"
+import { allActivityRows } from "@/lib/activity-groups"
+import type { PersonalAgentActivity } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { usePersonalAgentActivity } from "@/stores/personal-agent-activity-store"
 
@@ -30,13 +31,8 @@ function standingIn(
   itemId: number
 ): AnswerStanding {
   if (!view) return "unknown"
-  const rows: ActivityRow[] = [
-    ...view.needs,
-    ...view.watching,
-    ...view.next,
-    ...view.done,
-  ]
-  for (const r of rows) {
+  // Every group's, with what a row stands for of its chain (`folded`).
+  for (const r of allActivityRows(view)) {
     if (r.today?.kind === "matter_closed" && r.today.item_id === itemId)
       return "ended"
     const item = r.item

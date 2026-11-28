@@ -10272,7 +10272,34 @@
     },
     "work": {
       "taskNotStarted": "Diese Aufgabe hat noch nicht begonnen. Sobald sie startet, erscheint ihre Konversation hier.",
-      "taskGone": "Diese Aufgabe wurde nicht gefunden – vielleicht wurde sie gelöscht."
+      "taskGone": "Diese Aufgabe wurde nicht gefunden – vielleicht wurde sie gelöscht.",
+      "retry": "Erneut versuchen",
+      "handTo": "An {name} übergeben",
+      "viewSession": "Sitzung ansehen",
+      "merge": "Mergen",
+      "mergeTo": "In {base} mergen",
+      "createPr": "PR erstellen",
+      "pushBack": "Zurück in den PR",
+      "mergePr": "PR mergen",
+      "mergeMr": "MR mergen",
+      "openPr": "PR öffnen",
+      "openMr": "MR öffnen",
+      "nudge": "Nochmal fragen",
+      "rehand": "{name} nochmal ranlassen",
+      "toast": {
+        "retried": "Neu gestartet",
+        "handed": "An {name} übergeben",
+        "merging": "Wird gemergt…",
+        "merged": "Zusammengeführt",
+        "mergeAsked": "Wartet auf deine Freigabe auf der Karte",
+        "mergeChanged": "Hat sich geändert: neu gelesen",
+        "ranAgain": "Diese Aufgabe lief seitdem erneut: sieh sie dir noch einmal an",
+        "nudged": "{name} nochmal gefragt",
+        "nudgedAlready": "{name} wurde gerade gefragt",
+        "rehanded": "Nochmal an {name} übergeben",
+        "done": "Erledigt"
+      },
+      "reconnect": "Konto neu verbinden"
     },
     "composer": {
       "placeholder": "Nachricht an {name}…",
@@ -11057,6 +11084,14 @@
           "auto": "Sofort wirksam, auf der Karte rückgängig",
           "draft": "Erst zeigen (Entwurfskarte, wirksam, wenn ich zustimme)",
           "off": "Nicht"
+        },
+        "pr_checks_wait_hours": {
+          "title": "Stunden Warten auf PR-Prüfungen",
+          "hint": "Ein beobachteter PR, dessen Prüfungen so lange ohne Ergebnis laufen, kommt zu „Wartet auf dich“. 1 bis 48."
+        },
+        "pr_review_wait_days": {
+          "title": "Tage Warten auf PR-Review",
+          "hint": "Ein beobachteter PR, der so lange auf sein Review wartet, kommt zu „Wartet auf dich“. 1 bis 14."
         }
       },
       "workdir": {
@@ -12050,11 +12085,14 @@
     "feed": {
       "groups": {
         "needs": "Wartet auf dich",
+        "running": "In Arbeit",
+        "watch": "Im Blick",
         "watching": "In Arbeit",
         "next": "Routinen & Erinnerungen",
         "done": "Heute erledigt"
       },
       "empty": "Nichts für dich zu tun, und nichts läuft.",
+      "suggestions": "{count, plural, one {# weiterer Vorschlag} other {# weitere Vorschläge}}",
       "failed": "Die Aktivität konnte gerade nicht gelesen werden.",
       "handed": "An {name} übergeben",
       "checking": "Wird geprüft · Runde {round}",
@@ -12066,7 +12104,57 @@
       "viewReminder": "Erinnerung ansehen",
       "viewCheck": "Abnahme-Sitzung ansehen",
       "openTask": "Aufgabe öffnen",
-      "routineDeleted": "Diese Routine wurde gelöscht."
+      "routineDeleted": "Diese Routine wurde gelöscht.",
+      "why": {
+        "no_reply": "Keine Antwort von {name}",
+        "unfinished": "Nicht erledigt",
+        "checks": "Checks fehlgeschlagen · niemand behebt es",
+        "conflict": "Konflikt · niemand behebt es",
+        "fix_pending": "codeg behebt es gleich",
+        "fixing": "Wird behoben",
+        "platform_blocked": "Plattform lässt noch nicht mergen",
+        "merge_queued": "Zum Mergen eingereiht",
+        "merging": "Wird gemergt",
+        "check_preparing": "Prüfung wird vorbereitet",
+        "check_settling": "Prüfung wird abgeschlossen",
+        "queued": "Wartet auf {name}",
+        "in_turn": "{name} ist dran",
+        "looking": "Wartet, dass {name} übernimmt",
+        "no_trigger": "Kein nächster Zeitpunkt",
+        "failed": "Fehlgeschlagen",
+        "readFailed": {
+          "auth": "Nicht lesbar · neu anmelden",
+          "no_account": "Nicht lesbar · kein Konto für diese Forge",
+          "config": "Diese Forge ist nicht lesbar",
+          "network": "Nicht lesbar · keine Verbindung",
+          "api": "Nicht lesbar · die Forge meldet einen Fehler",
+          "timeout": "Nicht lesbar · die Forge antwortet nicht",
+          "other": "Nicht lesbar"
+        },
+        "checks_slow": "Prüfungen seit {hours} h ohne Ergebnis",
+        "review_pending": "Wartet auf Review",
+        "review_slow": "Wartet seit {days} T auf Review"
+      },
+      "stop": {
+        "task": "Stoppen",
+        "turn": "Runde von {name} stoppen"
+      },
+      "ask": {
+        "approvePlan": "Plan genehmigen",
+        "queued": "{count, plural, one {# weitere wartet} other {# weitere warten}}",
+        "settled": "Bereits beantwortet – neu geladen",
+        "planAll": "Ganzen Plan ansehen",
+        "planLess": "Weniger anzeigen",
+        "planRevise": "Mit Hinweis zurückgeben…",
+        "planReviseSend": "Zurückgeben",
+        "planReviseCancel": "Abbrechen",
+        "planReviseHint": "Was soll sich ändern?",
+        "answered": "Antwort gesendet"
+      },
+      "back": {
+        "line": "Aus der Aktivität · {count, plural, one {# weiterer wartet auf dich} other {# weitere warten auf dich}}",
+        "go": "Zurück zur Aktivität"
+      }
     },
     "today": {
       "title": "Heute",
@@ -12107,7 +12195,8 @@
         "memoryUndone": "Gemerkt, dann zurückgenommen",
         "plan_stuck": "Plan hängt fest",
         "routine_paused": "Routine pausiert",
-        "used_up": "Immer noch nicht richtig"
+        "used_up": "Immer noch nicht richtig",
+        "pr_gone": "Beobachtung eines nicht auffindbaren PR beendet"
       },
       "reason": {
         "failed": "Fehlgeschlagen",
@@ -13080,7 +13169,17 @@
         "answer": "Antworten",
         "drop": "Nicht mehr nötig",
         "stop": "Nicht mehr erinnern",
-        "undo": "Rückgängig"
+        "undo": "Rückgängig",
+        "withdrawMessage": "Nachricht zurückziehen",
+        "stopWaiting": "Nicht mehr auf Antwort warten",
+        "noReplyNeeded": "Keine Antwort nötig",
+        "noAnswerNeeded": "Keine Antwort nötig",
+        "stopFollowing": "Nicht mehr nachfassen",
+        "cancelReminder": "Erinnerung absagen",
+        "noNeedToDo": "Nicht nötig",
+        "wontDo": "Nicht machen",
+        "remove": "Entfernen",
+        "giveUp": "Diese Arbeit aufgeben"
       },
       "hint": {
         "doneNext": "Diesmal erledigt; danach wie gewohnt: {rule}",
@@ -13139,6 +13238,7 @@
         "stopped": "Du hast die Arbeit angehalten · {time}",
         "skippedLast": "Du hast das letzte Mal übersprungen · {time}",
         "dropped": "Von dir entfernt · {time}",
+        "givenUp": "Du hast diese Arbeit aufgegeben · {time}",
         "withdrawn": "Du hast die Nachricht an {peer} zurückgezogen · {time}",
         "stoppedWaiting": "Du wartest nicht mehr auf die Antwort von {peer} · {time}",
         "agentDone": "{name} hat es erledigt · {time}",

@@ -204,6 +204,11 @@ pub enum What {
     PrNoConflict {
         text: String,
     },
+    /// Watched pull requests codeg cannot read: the forge account behind
+    /// them needs the owner (signed out, gone).
+    PrUnread {
+        text: String,
+    },
     PrClosed {
         text: String,
     },
@@ -536,6 +541,7 @@ struct Words {
     pr_ready: &'static str,
     pr_no_conflict: &'static str,
     pr_closed: &'static str,
+    pr_unread: &'static str,
     pr_gave_up: &'static str,
     why_pr_gave_up: &'static str,
     why_pr_merged: &'static str,
@@ -626,6 +632,7 @@ const EN: Words = Words {
     pr_ready: "Ready to merge: {text}",
     pr_no_conflict: "No conflict, checks unknown: {text}",
     pr_closed: "Closed without merging: {text}",
+    pr_unread: "Can't read watched PRs — sign in to the forge again: {text}",
     pr_gave_up: "Fixed {n} times, still failing: {text}",
     why_pr_gave_up: "codeg fixed it as many times as you allow; it's yours now.",
     why_pr_merged: "Its checks were green, so codeg merged it.",
@@ -715,6 +722,7 @@ const ZH_CN: Words = Words {
     pr_ready: "可以合并了：{text}",
     pr_no_conflict: "没有冲突，检查状态未知：{text}",
     pr_closed: "没合并就关了：{text}",
+    pr_unread: "读不到在盯的 PR，请重新登录平台账号：{text}",
     pr_gave_up: "已经修了 {n} 次，还是没过：{text}",
     why_pr_gave_up: "codeg 已经按你允许的次数修过了，接下来交给你。",
     why_pr_merged: "检查全绿，codeg 直接合并了。",
@@ -804,6 +812,7 @@ const ZH_TW: Words = Words {
     pr_ready: "可以合併了：{text}",
     pr_no_conflict: "沒有衝突，檢查狀態未知：{text}",
     pr_closed: "沒合併就關了：{text}",
+    pr_unread: "讀不到在盯的 PR，請重新登入平台帳號：{text}",
     pr_gave_up: "已經修了 {n} 次，還是沒過：{text}",
     why_pr_gave_up: "codeg 已經按你允許的次數修過了，接下來交給你。",
     why_pr_merged: "檢查全綠，codeg 直接合併了。",
@@ -893,6 +902,7 @@ const JA: Words = Words {
     pr_ready: "マージできます：{text}",
     pr_no_conflict: "コンフリクトなし、チェック状態は不明：{text}",
     pr_closed: "マージされずにクローズ：{text}",
+    pr_unread: "監視中の PR を読み取れません。フォージに再ログインしてください：{text}",
     pr_gave_up: "{n} 回修正してもまだ失敗：{text}",
     why_pr_gave_up: "codeg は許可された回数まで修正しました。ここからはあなたの判断です。",
     why_pr_merged: "チェックがすべて通ったので、codeg がマージしました。",
@@ -982,6 +992,7 @@ const KO: Words = Words {
     pr_ready: "병합 가능: {text}",
     pr_no_conflict: "충돌 없음, 검사 상태 알 수 없음: {text}",
     pr_closed: "병합 없이 닫힘: {text}",
+    pr_unread: "지켜보는 PR을 읽을 수 없습니다. 플랫폼에 다시 로그인하세요: {text}",
     pr_gave_up: "{n}번 고쳤지만 여전히 실패: {text}",
     why_pr_gave_up: "codeg가 허용된 횟수만큼 고쳤습니다. 이제 직접 봐 주세요.",
     why_pr_merged: "검사가 모두 통과해서 codeg가 병합했습니다.",
@@ -1071,6 +1082,7 @@ const ES: Words = Words {
     pr_ready: "Lista para fusionar: {text}",
     pr_no_conflict: "Sin conflictos, comprobaciones desconocidas: {text}",
     pr_closed: "Cerrada sin fusionar: {text}",
+    pr_unread: "No se pueden leer los PR vigilados: vuelve a iniciar sesión en la forja: {text}",
     pr_gave_up: "Corregido {n} veces y sigue fallando: {text}",
     why_pr_gave_up: "codeg lo corrigió tantas veces como permites; ahora te toca a ti.",
     why_pr_merged: "Sus comprobaciones estaban en verde, así que codeg lo fusionó.",
@@ -1160,6 +1172,7 @@ const DE: Words = Words {
     pr_ready: "Bereit zum Mergen: {text}",
     pr_no_conflict: "Kein Konflikt, Prüfungen unbekannt: {text}",
     pr_closed: "Ohne Merge geschlossen: {text}",
+    pr_unread: "Beobachtete PRs nicht lesbar – bei der Forge neu anmelden: {text}",
     pr_gave_up: "{n}-mal repariert, schlägt weiter fehl: {text}",
     why_pr_gave_up: "codeg hat es so oft repariert, wie du erlaubst; jetzt bist du dran.",
     why_pr_merged: "Die Prüfungen waren grün, also hat codeg es zusammengeführt.",
@@ -1250,6 +1263,7 @@ const FR: Words = Words {
     pr_ready: "Prête à fusionner : {text}",
     pr_no_conflict: "Pas de conflit, vérifications inconnues : {text}",
     pr_closed: "Fermée sans fusion : {text}",
+    pr_unread: "Impossible de lire les PR suivies — reconnectez-vous à la forge : {text}",
     pr_gave_up: "Corrigé {n} fois, échoue toujours : {text}",
     why_pr_gave_up: "codeg l'a corrigé autant de fois que tu le permets ; à toi maintenant.",
     why_pr_merged: "Ses vérifications étaient au vert, codeg l'a donc fusionné.",
@@ -1340,6 +1354,7 @@ const PT: Words = Words {
     pr_ready: "Pronto para mesclar: {text}",
     pr_no_conflict: "Sem conflito, verificações desconhecidas: {text}",
     pr_closed: "Fechado sem mesclar: {text}",
+    pr_unread: "Não dá para ler os PRs acompanhados — entre de novo na forja: {text}",
     pr_gave_up: "Corrigido {n} vezes e ainda falha: {text}",
     why_pr_gave_up: "O codeg corrigiu quantas vezes você permite; agora é com você.",
     why_pr_merged: "As verificações estavam verdes, então o codeg fez o merge.",
@@ -1429,6 +1444,7 @@ const AR: Words = Words {
     pr_ready: "جاهز للدمج: {text}",
     pr_no_conflict: "لا يوجد تعارض، وحالة الفحوصات غير معروفة: {text}",
     pr_closed: "أُغلق دون دمج: {text}",
+    pr_unread: "تعذّرت قراءة طلبات الدمج المتابَعة — سجّل الدخول إلى المنصة مجددًا: {text}",
     pr_gave_up: "أُصلح {n} مرات وما زال يفشل: {text}",
     why_pr_gave_up: "أصلحه codeg بقدر ما تسمح به؛ الأمر لك الآن.",
     why_pr_merged: "كانت فحوصه ناجحة، فدمجه codeg.",
@@ -1528,6 +1544,7 @@ fn main_line(w: &Words, what: &What) -> String {
         What::PrReady { text } => fill(w.pr_ready, text, 0, ""),
         What::PrNoConflict { text } => fill(w.pr_no_conflict, text, 0, ""),
         What::PrClosed { text } => fill(w.pr_closed, text, 0, ""),
+        What::PrUnread { text } => fill(w.pr_unread, text, 0, ""),
         What::PrGaveUp { text, rounds } => fill(w.pr_gave_up, text, *rounds as i64, ""),
         What::RoutineReport { title, text } => {
             let main = fill(w.routine, title, 0, "");
@@ -3023,6 +3040,10 @@ mod tests {
             mirror: false,
             dispatch_id: dispatch,
             forwarded,
+            notice_id: None,
+            watch_id: None,
+            phase: None,
+            has_message: false,
         }
     }
 

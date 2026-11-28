@@ -459,6 +459,8 @@ pub async fn change_detail(
         // Only GitHub holds runs for a maintainer's approval through an API
         // this panel can act on.
         workflow_approval: None,
+        // Its review is not read (6.6).
+        review: None,
     })
 }
 

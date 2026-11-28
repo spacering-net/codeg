@@ -10272,7 +10272,34 @@
     },
     "work": {
       "taskNotStarted": "このタスクはまだ始まっていません。始まるとここに会話が表示されます。",
-      "taskGone": "このタスクが見つかりません。削除された可能性があります。"
+      "taskGone": "このタスクが見つかりません。削除された可能性があります。",
+      "retry": "再試行",
+      "handTo": "{name}に任せる",
+      "viewSession": "セッションを見る",
+      "merge": "マージ",
+      "mergeTo": "{base} にマージ",
+      "createPr": "PR を作成",
+      "pushBack": "PR に戻す",
+      "mergePr": "PR をマージ",
+      "mergeMr": "MR をマージ",
+      "openPr": "PR を開く",
+      "openMr": "MR を開く",
+      "nudge": "もう一度聞く",
+      "rehand": "{name}にもう一度任せる",
+      "toast": {
+        "retried": "やり直しました",
+        "handed": "{name}に任せました",
+        "merging": "マージ中…",
+        "merged": "マージしました",
+        "mergeAsked": "カードであなたの承認待ちです",
+        "mergeChanged": "変更があったので読み直しました",
+        "ranAgain": "表示後にこのタスクが再実行されました。もう一度確認してください",
+        "nudged": "{name}にもう一度聞きました",
+        "nudgedAlready": "{name}には少し前に聞いたところです",
+        "rehanded": "{name}にもう一度任せました",
+        "done": "完了しました"
+      },
+      "reconnect": "アカウントを再接続"
     },
     "composer": {
       "placeholder": "{name}にメッセージ…",
@@ -11057,6 +11084,14 @@
           "auto": "すぐ反映（カードから元に戻せます）",
           "draft": "先に見せて（下書きカード、承認してから反映）",
           "off": "しない"
+        },
+        "pr_checks_wait_hours": {
+          "title": "PR チェックを待つ時間",
+          "hint": "監視中の PR のチェックがこの時間を過ぎても結果が出なければ「対応待ち」に移します。1〜48。"
+        },
+        "pr_review_wait_days": {
+          "title": "PR レビューを待つ日数",
+          "hint": "監視中の PR がこの日数を超えてレビュー待ちなら「対応待ち」に移します。1〜14。"
         }
       },
       "workdir": {
@@ -12049,12 +12084,15 @@
     },
     "feed": {
       "groups": {
-        "needs": "あなた待ち",
+        "needs": "あなたの番",
+        "running": "進行中",
+        "watch": "見守り中",
         "watching": "進行中",
         "next": "ルーティンとリマインダー",
         "done": "今日完了"
       },
       "empty": "あなたのやることも、実行中のものもありません。",
+      "suggestions": "ほかに提案が {count} 件",
       "failed": "アクティビティを今は読み込めません。",
       "handed": "{name}に任せました",
       "checking": "検収中 · 第 {round} ラウンド",
@@ -12066,7 +12104,57 @@
       "viewReminder": "リマインダーを見る",
       "viewCheck": "検収セッションを見る",
       "openTask": "タスクを開く",
-      "routineDeleted": "このルーティンは削除されています。"
+      "routineDeleted": "このルーティンは削除されています。",
+      "why": {
+        "no_reply": "{name}から返信なし",
+        "unfinished": "未完了",
+        "checks": "チェック失敗 · 誰も修正していない",
+        "conflict": "競合 · 誰も修正していない",
+        "fix_pending": "codeg がまもなく修正",
+        "fixing": "修正中",
+        "platform_blocked": "プラットフォームがまだマージ不可",
+        "merge_queued": "マージ待ち",
+        "merging": "マージ中",
+        "check_preparing": "検収の準備中",
+        "check_settling": "検収の締めくくり中",
+        "queued": "{name}の順番待ち",
+        "in_turn": "{name}が対応中",
+        "looking": "{name}の引き取り待ち",
+        "no_trigger": "次の時間が未設定",
+        "failed": "失敗",
+        "readFailed": {
+          "auth": "読み取れません · 再ログインが必要",
+          "no_account": "読み取れません · このフォージのアカウントがありません",
+          "config": "このフォージは読み取れません",
+          "network": "読み取れません · 接続できません",
+          "api": "読み取れません · フォージがエラーを返しました",
+          "timeout": "読み取れません · フォージが応答しません",
+          "other": "読み取れません"
+        },
+        "checks_slow": "チェックが {hours} 時間結果なし",
+        "review_pending": "レビュー待ち",
+        "review_slow": "レビュー待ち {days} 日"
+      },
+      "stop": {
+        "task": "停止",
+        "turn": "{name}のこのターンを停止"
+      },
+      "ask": {
+        "approvePlan": "計画を承認",
+        "queued": "ほかに {count} 件待機中",
+        "settled": "すでに回答済みです。再読み込みしました",
+        "planAll": "計画全体を見る",
+        "planLess": "折りたたむ",
+        "planRevise": "理由を添えて差し戻す…",
+        "planReviseSend": "差し戻す",
+        "planReviseCancel": "キャンセル",
+        "planReviseHint": "何を変えるべきですか？",
+        "answered": "回答を送りました"
+      },
+      "back": {
+        "line": "アクティビティから · あと {count} 件があなたを待っています",
+        "go": "アクティビティに戻る"
+      }
     },
     "today": {
       "title": "今日",
@@ -12107,7 +12195,8 @@
         "memoryUndone": "覚えたが取り消し",
         "plan_stuck": "計画が止まっています",
         "routine_paused": "ルーティン停止中",
-        "used_up": "差し戻してもまだ不十分"
+        "used_up": "差し戻してもまだ不十分",
+        "pr_gone": "見つからない PR の監視をやめました"
       },
       "reason": {
         "failed": "失敗",
@@ -13080,7 +13169,17 @@
         "answer": "回答する",
         "drop": "不要",
         "stop": "今後は知らせない",
-        "undo": "元に戻す"
+        "undo": "元に戻す",
+        "withdrawMessage": "メッセージを取り消す",
+        "stopWaiting": "返信を待たない",
+        "noReplyNeeded": "返信不要",
+        "noAnswerNeeded": "回答不要",
+        "stopFollowing": "フォローをやめる",
+        "cancelReminder": "リマインダーを取り消す",
+        "noNeedToDo": "やらなくていい",
+        "wontDo": "やらない",
+        "remove": "削除",
+        "giveUp": "この作業をあきらめる"
       },
       "hint": {
         "doneNext": "今回は完了、以降はいつもどおり：{rule}",
@@ -13139,6 +13238,7 @@
         "stopped": "作業を止めました · {time}",
         "skippedLast": "最後の回をスキップしました · {time}",
         "dropped": "あなたが外しました · {time}",
+        "givenUp": "この作業はやめました · {time}",
         "withdrawn": "{peer}へのメッセージを取り消しました · {time}",
         "stoppedWaiting": "{peer}の返事を待つのをやめました · {time}",
         "agentDone": "{name}が完了 · {time}",

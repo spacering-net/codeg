@@ -51,6 +51,9 @@ export const ACTIVITY_GAP_MS = 400
 /** How often it is read while the window is shown. */
 export const ACTIVITY_POLL_MS = 10_000
 const WORK_TASK_CHANGED_EVENT = "task://changed"
+/** A session's request raised or answered (the backend's global
+ *  side-channel, 7.5). */
+const ACTIVITY_ASKS_EVENT = "activity://asks"
 
 /** The rows of a timeline change that can be in the activity: cards, asks,
  *  handed-out work and its results. */
@@ -210,6 +213,9 @@ function start(): Session {
     })
   )
   hold(subscribe(WORK_TASK_CHANGED_EVENT, () => request()))
+  // A session's request raised or answered anywhere (7.5): the rows that
+  // ask it — told to every client, on every transport.
+  hold(subscribe(ACTIVITY_ASKS_EVENT, () => request()))
   try {
     const off = onTransportReconnect(() => request())
     if (off) offs.push(off)

@@ -10272,7 +10272,34 @@
     },
     "work": {
       "taskNotStarted": "Cette tâche n'a pas encore commencé. Sa conversation s'affichera ici dès qu'elle démarrera.",
-      "taskGone": "Tâche introuvable — elle a peut-être été supprimée."
+      "taskGone": "Tâche introuvable — elle a peut-être été supprimée.",
+      "retry": "Réessayer",
+      "handTo": "Confier à {name}",
+      "viewSession": "Voir la session",
+      "merge": "Fusionner",
+      "mergeTo": "Fusionner dans {base}",
+      "createPr": "Créer une PR",
+      "pushBack": "Renvoyer dans la PR",
+      "mergePr": "Fusionner la PR",
+      "mergeMr": "Fusionner la MR",
+      "openPr": "Ouvrir la PR",
+      "openMr": "Ouvrir la MR",
+      "nudge": "Relancer",
+      "rehand": "Le confier de nouveau à {name}",
+      "toast": {
+        "retried": "Relancé",
+        "handed": "Confié à {name}",
+        "merging": "Fusion en cours…",
+        "merged": "Fusionné",
+        "mergeAsked": "Attend votre approbation sur sa carte",
+        "mergeChanged": "Modifié depuis : relu",
+        "ranAgain": "Cette tâche a été relancée depuis : regardez-la à nouveau",
+        "nudged": "{name} a été relancé",
+        "nudgedAlready": "{name} a été relancé il y a un instant",
+        "rehanded": "Confié de nouveau à {name}",
+        "done": "Fait"
+      },
+      "reconnect": "Reconnecter le compte"
     },
     "composer": {
       "placeholder": "Écrire à {name}…",
@@ -11057,6 +11084,14 @@
           "auto": "Effet immédiat, annulable sur la carte",
           "draft": "Me montrer d’abord (carte en brouillon, appliquée sur mon accord)",
           "off": "Non"
+        },
+        "pr_checks_wait_hours": {
+          "title": "Heures d’attente des vérifications",
+          "hint": "Une PR suivie dont les vérifications tournent depuis ce temps sans résultat passe dans « À traiter ». De 1 à 48."
+        },
+        "pr_review_wait_days": {
+          "title": "Jours d’attente de la revue",
+          "hint": "Une PR suivie qui attend sa revue depuis ce nombre de jours passe dans « À traiter ». De 1 à 14."
         }
       },
       "workdir": {
@@ -12049,12 +12084,15 @@
     },
     "feed": {
       "groups": {
-        "needs": "En attente de vous",
+        "needs": "À vous de jouer",
+        "running": "En cours",
+        "watch": "Sous surveillance",
         "watching": "En cours",
         "next": "Routines et rappels",
         "done": "Fait aujourd’hui"
       },
       "empty": "Rien à faire pour vous, et rien en cours.",
+      "suggestions": "{count, plural, one {# autre suggestion} other {# autres suggestions}}",
       "failed": "L’activité n’a pas pu être lue pour l’instant.",
       "handed": "Confié à {name}",
       "checking": "En vérification · tour {round}",
@@ -12066,7 +12104,57 @@
       "viewReminder": "Voir le rappel",
       "viewCheck": "Voir la session de recette",
       "openTask": "Ouvrir la tâche",
-      "routineDeleted": "Cette routine a été supprimée."
+      "routineDeleted": "Cette routine a été supprimée.",
+      "why": {
+        "no_reply": "Pas de réponse de {name}",
+        "unfinished": "Pas terminé",
+        "checks": "Vérifications en échec · personne ne corrige",
+        "conflict": "Conflit · personne ne corrige",
+        "fix_pending": "codeg va corriger",
+        "fixing": "En correction",
+        "platform_blocked": "La plateforme ne permet pas encore la fusion",
+        "merge_queued": "En file pour la fusion",
+        "merging": "Fusion en cours",
+        "check_preparing": "Vérification en préparation",
+        "check_settling": "Vérification en clôture",
+        "queued": "En attente de {name}",
+        "in_turn": "{name} s’en occupe",
+        "looking": "En attente que {name} reprenne",
+        "no_trigger": "Pas de prochaine échéance",
+        "failed": "Échec",
+        "readFailed": {
+          "auth": "Illisible · reconnectez-vous",
+          "no_account": "Illisible · aucun compte pour cette forge",
+          "config": "Cette forge ne peut pas être lue",
+          "network": "Illisible · pas de connexion",
+          "api": "Illisible · la forge a répondu par une erreur",
+          "timeout": "Illisible · la forge ne répond pas",
+          "other": "Illisible"
+        },
+        "checks_slow": "Vérifications depuis {hours} h sans résultat",
+        "review_pending": "En attente de revue",
+        "review_slow": "{days} j en attente de revue"
+      },
+      "stop": {
+        "task": "Arrêter",
+        "turn": "Arrêter le tour de {name}"
+      },
+      "ask": {
+        "approvePlan": "Approuver le plan",
+        "queued": "{count, plural, one {# autre en attente} other {# autres en attente}}",
+        "settled": "Déjà répondu — relu",
+        "planAll": "Voir tout le plan",
+        "planLess": "Réduire",
+        "planRevise": "Renvoyer avec une note…",
+        "planReviseSend": "Renvoyer",
+        "planReviseCancel": "Annuler",
+        "planReviseHint": "Que faut-il changer ?",
+        "answered": "Réponse envoyée"
+      },
+      "back": {
+        "line": "Depuis l’activité · {count, plural, one {# autre vous attend} other {# autres vous attendent}}",
+        "go": "Revenir à l’activité"
+      }
     },
     "today": {
       "title": "Aujourd’hui",
@@ -12107,7 +12195,8 @@
         "memoryUndone": "Mémorisé, puis annulé",
         "plan_stuck": "Plan bloqué",
         "routine_paused": "Routine en pause",
-        "used_up": "Toujours pas bon"
+        "used_up": "Toujours pas bon",
+        "pr_gone": "Ne suit plus une PR introuvable"
       },
       "reason": {
         "failed": "Échec",
@@ -13080,7 +13169,17 @@
         "answer": "Répondre",
         "drop": "Plus besoin",
         "stop": "Ne plus rappeler",
-        "undo": "Annuler"
+        "undo": "Annuler",
+        "withdrawMessage": "Retirer le message",
+        "stopWaiting": "Ne plus attendre de réponse",
+        "noReplyNeeded": "Pas besoin de répondre",
+        "noAnswerNeeded": "Pas besoin de répondre",
+        "stopFollowing": "Ne plus suivre",
+        "cancelReminder": "Annuler le rappel",
+        "noNeedToDo": "Pas besoin de le faire",
+        "wontDo": "Ne pas faire",
+        "remove": "Retirer",
+        "giveUp": "Abandonner ce travail"
       },
       "hint": {
         "doneNext": "Fait cette fois ; la suite comme d’habitude : {rule}",
@@ -13139,6 +13238,7 @@
         "stopped": "Tu as arrêté le travail · {time}",
         "skippedLast": "Tu as sauté la dernière fois · {time}",
         "dropped": "Retiré par toi · {time}",
+        "givenUp": "Vous avez abandonné ce travail · {time}",
         "withdrawn": "Tu as retiré le message à {peer} · {time}",
         "stoppedWaiting": "Tu n’attends plus la réponse de {peer} · {time}",
         "agentDone": "{name} l’a terminé · {time}",

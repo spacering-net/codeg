@@ -34,6 +34,9 @@ interface TaskMergeDialogProps {
   /** This task is already in the queue: submitting updates its intent (and
    *  keeps its place in line) rather than adding a second one. */
   alreadyQueued?: boolean
+  /** Merge only the run this was opened on: a task sent back and reviewed
+   *  again since is refused. Unset: the run in review when it is sent. */
+  expectRunSeq?: number
 }
 
 /**
@@ -59,6 +62,7 @@ export function TaskMergeDialog({
   task,
   anotherMerging = false,
   alreadyQueued = false,
+  expectRunSeq,
 }: TaskMergeDialogProps) {
   const t = useTranslations("Tasks")
   const [autoMessage, setAutoMessage] = useState(true)
@@ -143,12 +147,11 @@ export function TaskMergeDialog({
       // The comment's answer first: the landing is what posts it, and it
       // reads the answer from the task when it does.
       await comment.persist()
-      const queued = await workTaskMerge(
-        task.id,
-        autoMessage ? null : message.trim(),
-        deleteWorktree,
-        instructions.trim() || null
-      )
+      const msg = autoMessage ? null : message.trim()
+      const extra = instructions.trim() || null
+      const queued = await (expectRunSeq === undefined
+        ? workTaskMerge(task.id, msg, deleteWorktree, extra)
+        : workTaskMerge(task.id, msg, deleteWorktree, extra, expectRunSeq))
       onOpenChange(false)
       // Only the queued outcome needs saying: a started merge is already
       // visible on the card as "合并中", while a queued one looks like nothing

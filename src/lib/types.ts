@@ -3078,6 +3078,11 @@ export interface PersonalAgentPrefs {
   outsider_comments: "auto" | "ask"
   /** Rounds codeg starts by itself to fix one pull request; 0 is never. */
   ci_rounds: number
+  /** Hours a watched pull request's checks may run with no result before
+   *  it is the owner's (1–48, 6.6). */
+  pr_checks_wait_hours: number
+  /** Days it may wait for its review before it is (1–14). */
+  pr_review_wait_days: number
   /** The owner's time zone: `system` (follow the system's) or an IANA
    *  name (1.12). */
   time_zone: string
@@ -3326,6 +3331,9 @@ export type TodayRowKind =
   | "pr_ready"
   | "pr"
   | "pr_merged"
+  // One codeg gave up reading today (not found, read after read): the
+  // activity's done today alone (6.6).
+  | "pr_gone"
   // A routine (6.9): one that runs later today, a run under way, a report.
   | "routine"
   | "routine_run"
@@ -3427,10 +3435,152 @@ export interface ActivityRow {
   card_row_id: number | null
   /** Its reminder card while it is open: what [Hand to ...] answers. */
   card_notice_id?: number | null
+  /** ... handed to its assistant: what [Hand it again] answers. */
+  hand_notice_id?: number
+  /** Rows of the same chain it stands for: a message its sender waits on
+   *  an answer to while the receiver does this work for it. */
+  folded?: ActivityRow[]
+  /** Why it is in its group: what it waits on (5.2). */
+  why?: RowWhy
+  /** Under way: what [Stop] stops (every row under way has one). */
+  stop?: RowStop
+  /** The card it is, as its buttons answer it. */
+  notice?: RowNotice
+  /** The watched pull request it is of. */
+  pr?: RowPr
+  /** The routine run that handed out its work. */
+  run?: RunRef
+  /** A board task's row: the task as it read it — what an act on it from
+   *  the row holds to. */
+  task?: RowTask
+  /** What it asks the owner, answered on the row (7.5). */
+  ask?: RowAsk
+}
+
+/** Whose commands answer a row's ask: the assistant's own request
+ *  (`personalAgent*`), a session's (`acp*` on its connection), an
+ *  executor's forwarded to the owner (`personalAgentAskAnswer`). */
+export type AskVia = "assistant" | "session" | "ask"
+
+/** What a row waiting on the owner asks, as it is answered there (7.5). */
+export type RowAsk =
+  | {
+      kind: "permission"
+      via: AskVia
+      connection_id?: string
+      request_id: string
+      tool_call: unknown
+      options: PermissionOptionInfo[]
+      queued?: number
+    }
+  | {
+      kind: "question"
+      via: AskVia
+      connection_id?: string
+      ask_id?: number
+      question_id: string
+      questions: QuestionSpec[] | null
+    }
+  | {
+      kind: "plan"
+      via: AskVia
+      connection_id?: string
+      ask_id?: number
+      approval_id: string
+      plan: string
+    }
+  | {
+      kind: "choice"
+      notice_id: number
+      options: { key: string; label: string }[]
+    }
+
+/** A board task as a row read it. */
+export interface RowTask {
+  id: number
+  run_seq: number
+  updated_at: string
+  /** The assistant's work it is of; null, the owner's own. */
+  dispatch_id: number | null
+}
+
+/** Why a row is in its group, for its chip (5.2). */
+export type RowWhy =
+  | { kind: "no_reply"; peer: number }
+  | { kind: "unfinished" }
+  | { kind: "nobody_fixing"; cause: "checks" | "conflict" }
+  | { kind: "fix_pending" }
+  | { kind: "fixing" }
+  | { kind: "platform_blocked" }
+  | { kind: "merge_queued" }
+  | { kind: "merging" }
+  | { kind: "check_preparing" }
+  | { kind: "check_settling" }
+  | { kind: "queued"; bot: number }
+  | { kind: "redelivering"; bot: number }
+  | { kind: "in_turn"; bot: number }
+  | { kind: "looking"; bot: number }
+  | { kind: "no_trigger" }
+  | { kind: "failed" }
+  /** A watched pull request codeg cannot read (6.6): `auth`, `no_account`,
+   *  `config`, `network`, `api`, `timeout`. */
+  | { kind: "read_failed"; error: string }
+  | { kind: "checks_slow"; hours: number }
+  | { kind: "review_pending" }
+  | { kind: "review_slow"; days: number }
+
+/** What [Stop] on a row under way stops. */
+export type RowStop =
+  | { kind: "dispatch"; id: number }
+  | { kind: "task"; id: number; run_seq?: number | null }
+  | { kind: "turn"; bot: number; batch: number }
+
+export interface RowNotice {
+  id: number
+  kind: string
+  phase?: string
+  /** An acceptance's: it says what sending the work back would. */
+  has_message?: boolean
+}
+
+export interface RowPr {
+  watch_id: number
+  number: number
+  provider: string
+  url?: string
+  head_sha?: string
+  is_mr: boolean
+}
+
+export interface RunRef {
+  run_id: number
+  routine_id: number
+  title: string
+}
+
+/** The activity's five groups (5.1), by whose turn it is. */
+export interface ActivityGroups {
+  /** The owner's: nobody else moves it on. */
+  needs: ActivityRow[]
+  /** The assistants' suggestions: one line, not counted. */
+  suggestions: ActivityRow[]
+  /** An agent's, at it now: each with what stops it. */
+  running: ActivityRow[]
+  /** Something outside's: codeg goes on with it on its own. */
+  watch: ActivityRow[]
+  next: ActivityRow[]
+  done: ActivityRow[]
+  /** `needs` counted: no suggestion among it. */
+  waiting: number
+  pill: { count: number; first: string | null }
 }
 
 /** The activity tab's one list (C1). */
 export interface PersonalAgentActivity {
+  /** The five groups; an older codeg sends the four below alone. */
+  groups?: ActivityGroups
+  /** What this codeg's list can do (`groups_v2`, ...). */
+  capabilities?: string[]
   needs: ActivityRow[]
   watching: ActivityRow[]
   next: ActivityRow[]

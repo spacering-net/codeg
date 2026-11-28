@@ -448,6 +448,26 @@ pub fn build_router_with_srn(
             post(handlers::personal_agent::personal_agent_cancel),
         )
         .route(
+            "/personal_agent_message_nudge",
+            post(handlers::personal_agent::personal_agent_message_nudge),
+        )
+        .route(
+            "/personal_agent_pr_merge",
+            post(handlers::personal_agent::personal_agent_pr_merge),
+        )
+        .route(
+            "/personal_agent_dispatch_hand",
+            post(handlers::personal_agent::personal_agent_dispatch_hand),
+        )
+        .route(
+            "/personal_agent_work_retry",
+            post(handlers::personal_agent::personal_agent_work_retry),
+        )
+        .route(
+            "/personal_agent_cancel_turn",
+            post(handlers::personal_agent::personal_agent_cancel_turn),
+        )
+        .route(
             "/personal_agent_stop_all",
             post(handlers::personal_agent::personal_agent_stop_all),
         )

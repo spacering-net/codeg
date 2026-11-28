@@ -1375,6 +1375,129 @@ pub async fn insert_row(
     Ok(row.into_active(bot, Utc::now()).insert(conn).await?)
 }
 
+/// [`insert_row`] on any connection: a transaction that writes what the row
+/// is for with it.
+pub async fn insert_row_on<C: ConnectionTrait>(
+    conn: &C,
+    bot: i32,
+    row: NewRow,
+) -> Result<timeline::Model, DbError> {
+    require_bot(bot)?;
+    Ok(row.into_active(bot, Utc::now()).insert(conn).await?)
+}
+
+/// The cards of the check sent for round `round_id` of work `of` (7.5) —
+/// on whichever timeline: the round may have moved to another assistant
+/// since — the likeliest first: the ones naming the round
+/// (`data.check_round_id`), the latest first; then older cards, which name
+/// only the round's number — one a round after a void or stale one reuses —
+/// written since the round opened (`since`), the latest first.
+pub async fn check_cards_of(
+    conn: &DatabaseConnection,
+    of: i32,
+    round_id: i32,
+    round: i32,
+    since: DateTime<Utc>,
+) -> Result<Vec<timeline::Model>, DbError> {
+    let at = |key: &str| {
+        format!("(CASE WHEN json_valid(data) THEN json_extract(data, '$.{key}') END)")
+    };
+    let cards = || {
+        timeline::Entity::find()
+            .filter(timeline::Column::Kind.eq(TimelineKind::Dispatch))
+            .filter(timeline::Column::DispatchId.is_not_null())
+            .filter(Expr::cust_with_values(
+                format!("{} = ?", at("check_for")),
+                [sea_orm::Value::from(of)],
+            ))
+            .order_by_desc(timeline::Column::Id)
+    };
+    let mut out = cards()
+        .filter(Expr::cust_with_values(
+            format!("{} = ?", at("check_round_id")),
+            [sea_orm::Value::from(round_id)],
+        ))
+        .all(conn)
+        .await?;
+    out.extend(
+        cards()
+            .filter(Expr::cust(format!("{} IS NULL", at("check_round_id"))))
+            .filter(Expr::cust_with_values(
+                format!("{} = ?", at("check_round")),
+                [sea_orm::Value::from(round)],
+            ))
+            .filter(timeline::Column::CreatedAt.gte(since))
+            .all(conn)
+            .await?,
+    );
+    Ok(out)
+}
+
+/// codeg's checks (`is_check`) sent in folder `folder` since `since`.
+pub async fn checks_in_folder_since(
+    conn: &DatabaseConnection,
+    folder: i32,
+    since: DateTime<Utc>,
+) -> Result<Vec<dispatch::Model>, DbError> {
+    Ok(dispatch::Entity::find()
+        .filter(dispatch::Column::IsCheck.eq(true))
+        .filter(dispatch::Column::FolderId.eq(folder))
+        .filter(dispatch::Column::CreatedAt.gte(since))
+        .order_by_asc(dispatch::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// Assistant `bot`'s event of source key `key` (unique: scoped as
+/// [`scoped_source_key`] scopes it).
+pub async fn event_by_source_key(
+    conn: &DatabaseConnection,
+    bot: i32,
+    key: &str,
+) -> Result<Option<event::Model>, DbError> {
+    Ok(event::Entity::find()
+        .filter(event::Column::BotId.eq(bot))
+        .filter(event::Column::SourceKey.eq(key))
+        .one(conn)
+        .await?)
+}
+
+/// Assistant `bot`'s latest event of `kind` about matter `item_id` (its
+/// payload's `item_id`): what the clock raised when it came due.
+pub async fn latest_event_for_item(
+    conn: &DatabaseConnection,
+    bot: i32,
+    kind: &str,
+    item_id: i32,
+) -> Result<Option<event::Model>, DbError> {
+    Ok(event::Entity::find()
+        .filter(event::Column::BotId.eq(bot))
+        .filter(event::Column::Kind.eq(kind))
+        .filter(Expr::cust_with_values(
+            "(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.item_id') END) = ?",
+            [sea_orm::Value::from(item_id)],
+        ))
+        .order_by_desc(event::Column::Id)
+        .one(conn)
+        .await?)
+}
+
+/// The latest of the owner's messages to `bot` quoting row `row_id`: what
+/// handed a reminder card over before the card kept which message did.
+pub async fn latest_owner_reply_to(
+    conn: &DatabaseConnection,
+    bot: i32,
+    row_id: i32,
+) -> Result<Option<timeline::Model>, DbError> {
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::BotId.eq(bot))
+        .filter(timeline::Column::Kind.eq(TimelineKind::Owner))
+        .filter(timeline::Column::ReplyTo.eq(row_id))
+        .order_by_desc(timeline::Column::Id)
+        .one(conn)
+        .await?)
+}
+
 /// Mark owner row `from` as sent again as `copy`, inside `txn` — only
 /// when it was not already: of two sends again at once, one copy stands.
 /// Whether it was marked.
@@ -1395,6 +1518,10 @@ pub async fn mark_resent(
         .filter(timeline::Column::Id.eq(from))
         .filter(Expr::cust(
             "(CASE WHEN json_valid(data) THEN json_extract(data, '$.resent_as') END) IS NULL",
+        ))
+        // Handed again from its reminder since (6.5): that hand-over has it.
+        .filter(Expr::cust(
+            "(CASE WHEN json_valid(data) THEN json_extract(data, '$.rehanded_as') END) IS NULL",
         ))
         .exec(txn)
         .await?;
@@ -1422,6 +1549,49 @@ pub async fn insert_resent_row(
     Ok(Some(inserted))
 }
 
+
+/// What a reminder card handed to the assistant writes with the owner's
+/// message, in its transaction (M0-4): the card answered, the message's id
+/// on it (`hand_row_id`), the matter waiting on the assistant.
+#[derive(Debug, Clone, Copy)]
+pub struct HandOver {
+    pub notice_id: i32,
+    pub item_id: i32,
+    /// The matter as the hand-over read it: one written since — by its
+    /// assistant, the panel — refuses it.
+    pub item_updated_at: DateTime<Utc>,
+}
+
+/// Why a hand-over was not written (`DbError::Conflict`'s words): its card
+/// answered meanwhile, or its matter changed or settled.
+pub const HAND_CARD_ANSWERED: &str = "the card was answered already";
+pub const HAND_MATTER_CHANGED: &str = "the matter changed since it was read";
+/// ... the card moved on since it was read (handed again meanwhile, or
+/// the message written once already).
+pub const CARD_MOVED: &str = "the card moved on since it was read";
+
+/// What a card's write with the owner's message checks and writes besides,
+/// in its transaction.
+#[derive(Debug, Clone, Copy)]
+pub enum CardGuard {
+    /// A reminder card handed over (M0-4).
+    HandOver(HandOver),
+    /// A reminder card handed over again, its turn on it over (6.5): still
+    /// handed by `prev` (the message that handed it last; `None` for an
+    /// older card that does not say), its notice acted on — and `last`, the
+    /// message of those that had it (`prev`, or the copy it was sent again
+    /// as), neither sent again nor handed again since: claimed by this
+    /// hand-over (`rehanded_as`), as a send again claims it (`resent_as`).
+    HandAgain {
+        hand: HandOver,
+        prev: Option<i32>,
+        last: Option<i32>,
+    },
+    /// A card the message is written from once (`key` unset on its data,
+    /// set by the write): a second press finds it set.
+    Once(&'static str),
+}
+
 /// Insert `row` and, in the same transaction, set row `other`'s data to
 /// `data` (the assistant's own rows only): both are written, or neither.
 /// Returns the new row and `other` as written.
@@ -1431,24 +1601,113 @@ pub async fn insert_row_writing(
     row: NewRow,
     other: i32,
     data: serde_json::Value,
+    guard: Option<&CardGuard>,
 ) -> Result<(timeline::Model, Option<timeline::Model>), DbError> {
     use sea_orm::TransactionTrait;
     require_bot(bot)?;
     let now = Utc::now();
     let txn = conn.begin().await?;
     let inserted = row.into_active(bot, now).insert(&txn).await?;
-    let written = timeline::Entity::update_many()
+    let mut data = data;
+    let hand = match guard {
+        Some(CardGuard::HandOver(h)) | Some(CardGuard::HandAgain { hand: h, .. }) => Some(*h),
+        _ => None,
+    };
+    if hand.is_some() {
+        // The card keeps which message handed it over: what the panel reads
+        // to tell whether the assistant has it yet, and is done with it.
+        if let Some(map) = data.as_object_mut() {
+            map.insert("hand_row_id".into(), inserted.id.into());
+        }
+    }
+    let at = |key: &str| format!("(CASE WHEN json_valid(data) THEN json_extract(data, '$.{key}') END)");
+    let mut write = timeline::Entity::update_many()
         .col_expr(timeline::Column::UpdatedAt, Expr::value(now))
         .col_expr(timeline::Column::Data, Expr::value(Some(data.to_string())))
         .filter(timeline::Column::Id.eq(other))
-        .filter(timeline::Column::BotId.eq(bot))
+        .filter(timeline::Column::BotId.eq(bot));
+    match guard {
+        Some(CardGuard::HandAgain { prev, .. }) => {
+            write = write.filter(Expr::cust_with_values(
+                format!("{} IS ?", at("hand_row_id")),
+                [sea_orm::Value::from(*prev)],
+            ));
+        }
+        Some(CardGuard::Once(key)) => {
+            write = write.filter(Expr::cust(format!("{} IS NULL", at(key))));
+        }
+        _ => {}
+    }
+    let written = write.exec(&txn).await?;
+    let mut claimed_last = true;
+    if written.rows_affected == 1 {
+        if let Some(CardGuard::HandAgain { last: Some(last), .. }) = guard {
+            claimed_last = timeline::Entity::update_many()
+                .col_expr(
+                    timeline::Column::Data,
+                    Expr::cust_with_values(
+                        "json_set(CASE WHEN json_valid(data) THEN data ELSE '{}' END, '$.rehanded_as', ?)",
+                        [sea_orm::Value::from(inserted.id)],
+                    ),
+                )
+                .col_expr(timeline::Column::UpdatedAt, Expr::value(now))
+                .filter(timeline::Column::Id.eq(*last))
+                .filter(timeline::Column::BotId.eq(bot))
+                .filter(Expr::cust(format!("{} IS NULL", at("resent_as"))))
+                .filter(Expr::cust(format!("{} IS NULL", at("rehanded_as"))))
+                .exec(&txn)
+                .await?
+                .rows_affected
+                == 1;
+        }
+    }
+    if written.rows_affected != 1 || !claimed_last {
+        return Err(match guard {
+            Some(CardGuard::HandAgain { .. }) | Some(CardGuard::Once(_)) => {
+                DbError::Conflict(CARD_MOVED.into())
+            }
+            _ => DbError::Validation(format!("no row #{other} of this assistant")),
+        });
+    }
+    if let Some(hand) = hand {
+        // The card answered — the first answer wins — and its matter the
+        // assistant's now, with the message: all of it or none. Handed
+        // again, the card was answered already: it still is.
+        let first = matches!(guard, Some(CardGuard::HandOver(_)));
+        let acted = notice::Entity::update_many()
+            .col_expr(notice::Column::State, Expr::value(NoticeState::Acted))
+            .col_expr(notice::Column::ActedAt, Expr::value(Some(now)))
+            .col_expr(notice::Column::UpdatedAt, Expr::value(now))
+            .filter(notice::Column::Id.eq(hand.notice_id))
+            .filter(notice::Column::State.eq(if first {
+                NoticeState::Open
+            } else {
+                NoticeState::Acted
+            }))
+            .exec(&txn)
+            .await?;
+        if acted.rows_affected != 1 {
+            return Err(DbError::Conflict(HAND_CARD_ANSWERED.into()));
+        }
+        let moved = item_update_stmt(
+            hand.item_id,
+            ItemWrite {
+                waits_for: Some(Some(WaitsFor::Agent)),
+                ..Default::default()
+            },
+        )
+        .filter(item::Column::BotId.eq(bot))
+        .filter(item::Column::UpdatedAt.eq(hand.item_updated_at))
+        .filter(item::Column::Status.is_in([ItemStatus::Open, ItemStatus::Waiting]))
         .exec(&txn)
         .await?;
-    if written.rows_affected != 1 {
-        return Err(DbError::Validation(format!("no row #{other} of this assistant")));
+        if moved.rows_affected != 1 {
+            return Err(DbError::Conflict(HAND_MATTER_CHANGED.into()));
+        }
     }
+    // Read back before it commits: once it has, nothing here can fail.
+    let other = timeline::Entity::find_by_id(other).one(&txn).await?;
     txn.commit().await?;
-    let other = get_row(conn, other).await?;
     Ok((inserted, other))
 }
 
@@ -1762,6 +2021,90 @@ pub async fn update_row_data(
     );
     update.exec(conn).await?;
     Ok(())
+}
+
+/// Merge `patch`'s keys into row `id`'s data (an object), leaving the rest as
+/// it is — what was written there meanwhile included.
+pub async fn merge_row_data(
+    conn: &DatabaseConnection,
+    id: i32,
+    patch: &serde_json::Value,
+) -> Result<(), DbError> {
+    timeline::Entity::update_many()
+        .col_expr(timeline::Column::UpdatedAt, Expr::value(Utc::now()))
+        .col_expr(
+            timeline::Column::Data,
+            Expr::cust_with_values(
+                "json_patch(CASE WHEN json_valid(data) AND json_type(data) = 'object' \
+                 THEN data ELSE '{}' END, json(?))",
+                [sea_orm::Value::from(patch.to_string())],
+            ),
+        )
+        .filter(timeline::Column::Id.eq(id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// Row `id`'s data written whole — only while its `state` is still
+/// `expect`, the check and the write one statement. Whether it wrote.
+pub async fn write_row_data_if(
+    conn: &DatabaseConnection,
+    id: i32,
+    expect: &str,
+    data: &serde_json::Value,
+) -> Result<bool, DbError> {
+    let res = timeline::Entity::update_many()
+        .col_expr(timeline::Column::UpdatedAt, Expr::value(Utc::now()))
+        .col_expr(timeline::Column::Data, Expr::value(Some(data.to_string())))
+        .filter(timeline::Column::Id.eq(id))
+        .filter(Expr::cust_with_values(
+            "(CASE WHEN json_valid(data) THEN json_extract(data, '$.state') END) IS ?",
+            [sea_orm::Value::from(expect.to_string())],
+        ))
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
+/// Settle a request's row: its data's `state` set to `state` (and its
+/// `answer`, when there is one) only while the state is still `expect` —
+/// the check and the write one statement, so of two answers to one request
+/// the second never overwrites the first. Only those two keys are written:
+/// what else the row says (the copies it was mirrored to, written
+/// meanwhile) stays. Whether it wrote.
+pub async fn settle_row_if(
+    conn: &DatabaseConnection,
+    id: i32,
+    expect: &str,
+    state: &str,
+    answer: Option<&serde_json::Value>,
+) -> Result<bool, DbError> {
+    let data = match answer {
+        Some(a) => Expr::cust_with_values(
+            "json_set(CASE WHEN json_valid(data) THEN data ELSE '{}' END, '$.state', ?, \
+             '$.answer', json(?))",
+            [
+                sea_orm::Value::from(state.to_string()),
+                sea_orm::Value::from(a.to_string()),
+            ],
+        ),
+        None => Expr::cust_with_values(
+            "json_set(CASE WHEN json_valid(data) THEN data ELSE '{}' END, '$.state', ?)",
+            [sea_orm::Value::from(state.to_string())],
+        ),
+    };
+    let res = timeline::Entity::update_many()
+        .col_expr(timeline::Column::UpdatedAt, Expr::value(Utc::now()))
+        .col_expr(timeline::Column::Data, data)
+        .filter(timeline::Column::Id.eq(id))
+        .filter(Expr::cust_with_values(
+            "(CASE WHEN json_valid(data) THEN json_extract(data, '$.state') END) IS ?",
+            [sea_orm::Value::from(expect.to_string())],
+        ))
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
 }
 
 /// The owner's messages waiting for a delivery, oldest first.
@@ -2594,6 +2937,135 @@ pub async fn insert_new_event(
         }
         Err(e) => Err(e.into()),
     }
+}
+
+/// What came of a nudge ([`insert_nudge`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nudged {
+    /// Woken now.
+    Asked,
+    /// Woken with this nudge already (the same window).
+    Already,
+    /// Answered meanwhile, not waited on any more, or not delivered.
+    Changed,
+    /// Its receiver still has it (queued, or in its turn).
+    Taken,
+}
+
+/// Wake `to` again about message `message_id`, which `from` sent and its
+/// matter `item_id` waits on (6.5) — in one transaction holding the write
+/// lock from its first statement, so an answer or the owner's "stop
+/// waiting" either lands before it (and it wakes nobody) or after: the
+/// message still delivered and waited for, the matter still waiting, the
+/// receiver done with its event for it. `event` is the nudge, keyed by its
+/// window: one in it already is the same nudge.
+pub async fn insert_nudge(
+    conn: &DatabaseConnection,
+    to: i32,
+    from: i32,
+    message_id: i32,
+    item_id: i32,
+    event: NewEvent,
+) -> Result<Nudged, DbError> {
+    use crate::db::entities::personal_agent_message::{self as message, MessageState};
+    use sea_orm::TransactionTrait;
+    require_bot(to)?;
+    let source_key = scoped_source_key(conn, to, &event.source_key).await?;
+    let message_key = scoped_source_key(conn, to, &format!("message:{message_id}")).await?;
+    let txn = conn.begin().await?;
+    // First statement, a write (of nothing new): the message as it is now
+    // stays so until this ends.
+    let held = message::Entity::update_many()
+        .col_expr(message::Column::UpdatedAt, Expr::col(message::Column::UpdatedAt).into())
+        .filter(message::Column::Id.eq(message_id))
+        .filter(message::Column::FromBotId.eq(from))
+        .filter(message::Column::ToBotId.eq(to))
+        .filter(message::Column::State.eq(MessageState::Delivered))
+        .filter(message::Column::WantsReply.eq(true))
+        .exec(&txn)
+        .await?;
+    if held.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(Nudged::Changed);
+    }
+    let waiting = item::Entity::find_by_id(item_id)
+        .filter(item::Column::BotId.eq(from))
+        .filter(item::Column::Kind.eq(ItemKind::Message))
+        .filter(item::Column::Status.is_in([ItemStatus::Open, ItemStatus::Waiting]))
+        .one(&txn)
+        .await?
+        .is_some();
+    if !waiting {
+        txn.rollback().await?;
+        return Ok(Nudged::Changed);
+    }
+    // Its receiver done with it, as the activity reads it
+    // (`Standing::Ended`): its event over, handed to a turn no longer
+    // running, or none there (it is written with the message and never
+    // deleted: one missing has nothing under way of it). Waiting for a
+    // turn, or in one running: still with it.
+    let taken = match event::Entity::find()
+        .filter(event::Column::BotId.eq(to))
+        .filter(event::Column::SourceKey.eq(message_key))
+        .one(&txn)
+        .await?
+    {
+        Some(e) => match e.state {
+            EventState::Done => false,
+            EventState::Pending => true,
+            EventState::Delivered => match e.batch_id {
+                Some(b) => batch::Entity::find_by_id(b)
+                    .one(&txn)
+                    .await?
+                    .is_some_and(|b| b.status == BatchStatus::Running),
+                None => false,
+            },
+        },
+        None => false,
+    };
+    if taken {
+        txn.rollback().await?;
+        return Ok(Nudged::Taken);
+    }
+    let now = Utc::now();
+    let inserted = event::ActiveModel {
+        id: NotSet,
+        kind: Set(event.kind),
+        source_key: Set(source_key),
+        coalesce_key: Set(event.coalesce_key),
+        summary: Set(event.summary),
+        payload: Set(event.payload.map(|p| p.to_string())),
+        wake: Set(event.wake),
+        state: Set(EventState::Pending),
+        batch_id: Set(None),
+        requeues: Set(0),
+        requeued_from: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+        bot_id: Set(Some(to)),
+        origin_bot_id: Set(event.lineage.origin_bot_id),
+        origin_row_id: Set(event.lineage.origin_row_id),
+        thread_id: Set(event.lineage.thread_id),
+    }
+    .insert(&txn)
+    .await;
+    let out = match inserted {
+        Ok(_) => Nudged::Asked,
+        Err(e)
+            if matches!(
+                e.sql_err(),
+                Some(sea_orm::SqlErr::UniqueConstraintViolation(_))
+            ) =>
+        {
+            Nudged::Already
+        }
+        Err(e) => {
+            txn.rollback().await?;
+            return Err(e.into());
+        }
+    };
+    txn.commit().await?;
+    Ok(out)
 }
 
 /// An event to queue.
@@ -4114,10 +4586,54 @@ pub async fn update_item_unless_taken_over(
     dispatch_id: i32,
     write: ItemWrite,
 ) -> Result<bool, DbError> {
+    update_item_unless_taken_over_if(conn, item_id, dispatch_id, OwnerGuard::None, write).await
+}
+
+/// What a progress write of a matter keeps from being written over: the
+/// owner's settling of it since it was read.
+#[derive(Debug, Clone, Copy)]
+pub enum OwnerGuard {
+    /// Nothing.
+    None,
+    /// Read as the owner had not closed it: not once they have.
+    NotClosed,
+    /// Read as the owner closed it then: not once that closing is another.
+    ClosedAt(DateTime<Utc>),
+}
+
+/// [`update_item_unless_taken_over`], kept by `guard` from writing over the
+/// owner's settling of the matter since it was read — a give-up between the
+/// read and the write. Anything else written meanwhile (its words, its
+/// reopening) does not stop it. Whether it wrote.
+pub async fn update_item_unless_taken_over_if(
+    conn: &DatabaseConnection,
+    item_id: i32,
+    dispatch_id: i32,
+    guard: OwnerGuard,
+    write: ItemWrite,
+) -> Result<bool, DbError> {
     use crate::db::entities::work_task;
     use sea_orm::TransactionTrait;
     let txn = conn.begin().await?;
-    item_update_stmt(item_id, write).exec(&txn).await?;
+    let mut update = item_update_stmt(item_id, write);
+    match guard {
+        OwnerGuard::None => {}
+        OwnerGuard::NotClosed => {
+            update = update.filter(
+                Condition::any()
+                    .add(item::Column::ClosedBy.is_null())
+                    .add(item::Column::ClosedBy.ne("owner"))
+                    .add(item::Column::Status.is_in([ItemStatus::Open, ItemStatus::Waiting])),
+            );
+        }
+        OwnerGuard::ClosedAt(at) => {
+            update = update.filter(item::Column::ClosedAt.eq(at));
+        }
+    }
+    if update.exec(&txn).await?.rows_affected == 0 {
+        txn.rollback().await?;
+        return Ok(false);
+    }
     let d = dispatch::Entity::find_by_id(dispatch_id).one(&txn).await?;
     let taken = match d.and_then(|d| d.replaced_by.map(|by| (by, d.work_task_id))) {
         None => false,
@@ -4977,21 +5493,282 @@ pub async fn dispatches_since(
         .await?)
 }
 
-/// The dispatches batch `batch_id` made or continued (a follow-up it sent
-/// moves `source_batch_id` to it).
+/// The dispatches batch `batch_id` runs: the last it continued (a
+/// follow-up it sent moves `source_batch_id` to it; one made in it starts
+/// there), or one on record with no `source_batch_id` that it made. One a
+/// later batch continued since is that batch's.
 pub async fn dispatches_run_by_batch(
     conn: &DatabaseConnection,
     batch_id: i32,
 ) -> Result<Vec<dispatch::Model>, DbError> {
     Ok(dispatch::Entity::find()
-        .filter(
-            Condition::any()
-                .add(dispatch::Column::OriginBatchId.eq(batch_id))
-                .add(dispatch::Column::SourceBatchId.eq(batch_id)),
-        )
+        .filter(run_by_batch(batch_id))
         .order_by_asc(dispatch::Column::Id)
         .all(conn)
         .await?)
+}
+
+/// What came of claiming failed work for the owner's act on it from a row
+/// of the activity (6.5): [`claim_failed_work`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum FailedClaim {
+    /// Still failed as the row read it: the act is the owner's, and the
+    /// rule cards of this failure, open, are theirs with it (`Acting` now —
+    /// what the act came to settles them).
+    Claimed {
+        cards: Vec<notice::Model>,
+        /// This claim's own mark (when it was taken): what settles it, and
+        /// only it — one taken over since is the newer act's.
+        token: DateTime<Utc>,
+    },
+    /// Changed since the row read it: no longer failed, taken over, failed
+    /// again since.
+    Changed,
+    /// The owner gave it up after it failed (its matter closed by them).
+    GivenUp,
+    /// The rule card of this failure is being acted on, or was: it has it.
+    OnCard,
+    /// Acted on from a row already (another window's press).
+    Taken,
+}
+
+/// The ledger entry an act on failed work `dispatch_id` from a row claims
+/// it by, for its failure as of `seen` (its version): one per failure.
+pub fn failed_claim_id(dispatch_id: i32, seen: DateTime<Utc>) -> String {
+    format!("pa-row-failed-{dispatch_id}-{}", seen.timestamp_millis())
+}
+
+/// Let go of a claim on failed work ([`claim_failed_work`]) whose act did
+/// not go through — this claim's (`token`), not one that took it over
+/// since: it can be pressed again.
+pub async fn release_failed_claim(
+    conn: &DatabaseConnection,
+    op_id: &str,
+    token: DateTime<Utc>,
+) -> Result<(), DbError> {
+    action::Entity::delete_many()
+        .filter(action::Column::OpId.eq(op_id))
+        .filter(action::Column::Kind.eq(FAILED_CLAIM_KIND))
+        .filter(action::Column::State.eq(ActionState::Prepared))
+        .filter(action::Column::UpdatedAt.eq(token))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// The ledger kind of a row's claim on failed work.
+pub const FAILED_CLAIM_KIND: &str = "row_failed_claim";
+
+/// How long a claim on failed work whose act never said how it came out
+/// (cut off by a restart) holds: after it, the failure can be acted on
+/// again.
+pub const FAILED_CLAIM_STALE_MINUTES: i64 = 10;
+
+/// Claim failed work `dispatch_id`'s failure as of `seen` for an act on it
+/// from its rule card: the same claim a row's act takes
+/// ([`claim_failed_work`]) — its token, `None` when taken already.
+pub async fn take_failed_claim(
+    conn: &DatabaseConnection,
+    bot: i32,
+    dispatch_id: i32,
+    seen: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>, DbError> {
+    require_bot(bot)?;
+    claim_failed_in(conn, bot, dispatch_id, seen).await
+}
+
+/// The claim, written in `conn` (a transaction's): one per failure — taken
+/// already, `None`, unless the act of the one there never said how it
+/// came out and it is stale ([`FAILED_CLAIM_STALE_MINUTES`]): it is this
+/// one's then. Its token: the mark it was taken with.
+async fn claim_failed_in(
+    conn: &impl ConnectionTrait,
+    bot: i32,
+    dispatch_id: i32,
+    seen: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>, DbError> {
+    let now = Utc::now();
+    let claim = failed_claim_id(dispatch_id, seen);
+    let inserted = action::ActiveModel {
+        id: NotSet,
+        bot_id: Set(Some(bot)),
+        batch_id: Set(0),
+        key: Set(claim.clone()),
+        kind: Set(FAILED_CLAIM_KIND.to_string()),
+        state: Set(ActionState::Prepared),
+        ref_id: Set(Some(dispatch_id.to_string())),
+        created_at: Set(now),
+        updated_at: Set(now),
+        op_id: Set(Some(claim.clone())),
+        payload: Set(None),
+        observed: Set(None),
+        target: Set(None),
+        notice_id: Set(None),
+        attempted_at: Set(None),
+        detail: Set(None),
+    }
+    .insert(conn)
+    .await;
+    match inserted {
+        Ok(_) => Ok(Some(now)),
+        Err(e) if is_unique_violation(&e) => {
+            let stale = now - chrono::Duration::minutes(FAILED_CLAIM_STALE_MINUTES);
+            let taken_over = action::Entity::update_many()
+                .col_expr(action::Column::UpdatedAt, Expr::value(now))
+                .filter(action::Column::OpId.eq(claim))
+                .filter(action::Column::Kind.eq(FAILED_CLAIM_KIND))
+                .filter(action::Column::State.eq(ActionState::Prepared))
+                .filter(action::Column::UpdatedAt.lt(stale))
+                .exec(conn)
+                .await?;
+            Ok((taken_over.rows_affected == 1).then_some(now))
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// The act a claim on failed work was for went through: the claim holds
+/// for good — this claim's (`token`); one taken over since is the newer
+/// act's to settle.
+pub async fn finish_failed_claim(
+    conn: &DatabaseConnection,
+    op_id: &str,
+    token: DateTime<Utc>,
+) -> Result<(), DbError> {
+    action::Entity::update_many()
+        .col_expr(action::Column::State, Expr::value(ActionState::Committed))
+        .filter(action::Column::OpId.eq(op_id))
+        .filter(action::Column::Kind.eq(FAILED_CLAIM_KIND))
+        .filter(action::Column::State.eq(ActionState::Prepared))
+        .filter(action::Column::UpdatedAt.eq(token))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// Whether failure `op_id` ([`failed_claim_id`]) is claimed now: its act
+/// went through, or is under way (not stale).
+pub async fn failed_claim_holds(conn: &DatabaseConnection, op_id: &str) -> Result<bool, DbError> {
+    let stale = Utc::now() - chrono::Duration::minutes(FAILED_CLAIM_STALE_MINUTES);
+    Ok(action::Entity::find()
+        .filter(action::Column::OpId.eq(op_id))
+        .filter(action::Column::Kind.eq(FAILED_CLAIM_KIND))
+        .filter(
+            Condition::any()
+                .add(action::Column::State.eq(ActionState::Committed))
+                .add(action::Column::UpdatedAt.gte(stale)),
+        )
+        .one(conn)
+        .await?
+        .is_some())
+}
+
+/// Claim failed work `dispatch_id` of `bot`'s, as a row read it (`seen`, its
+/// version; it failed at `failed_at`), for the owner's act on it — in one
+/// transaction that holds the write lock from its first statement: still
+/// failed as read, not given up since, and its rule card of this failure
+/// (raised since it failed) taken from open to acting, or refused for one
+/// acting or acted already. The card's own [Retry] and
+/// [Hand to] claim the same card: one of the two has it.
+pub async fn claim_failed_work(
+    conn: &DatabaseConnection,
+    bot: i32,
+    dispatch_id: i32,
+    task_id: Option<i32>,
+    seen: DateTime<Utc>,
+    failed_at: DateTime<Utc>,
+) -> Result<FailedClaim, DbError> {
+    use sea_orm::TransactionTrait;
+    let txn = conn.begin().await?;
+    // First statement, a write (of nothing new): from here nothing below
+    // changes before the transaction ends.
+    let held = dispatch::Entity::update_many()
+        .col_expr(dispatch::Column::UpdatedAt, Expr::col(dispatch::Column::UpdatedAt).into())
+        .filter(dispatch::Column::Id.eq(dispatch_id))
+        .filter(dispatch::Column::BotId.eq(bot))
+        .filter(dispatch::Column::UpdatedAt.eq(seen))
+        .filter(dispatch::Column::State.is_in([DispatchState::Failed, DispatchState::Interrupted]))
+        .exec(&txn)
+        .await?;
+    if held.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(FailedClaim::Changed);
+    }
+    let given_up = item::Entity::find()
+        .filter(item::Column::DispatchId.eq(dispatch_id))
+        .filter(item::Column::Kind.eq(ItemKind::Dispatch))
+        .filter(item::Column::Status.is_in([ItemStatus::Done, ItemStatus::Dropped]))
+        .filter(item::Column::ClosedBy.eq("owner"))
+        .filter(item::Column::ClosedAt.gte(failed_at))
+        .one(&txn)
+        .await?
+        .is_some();
+    if given_up {
+        txn.rollback().await?;
+        return Ok(FailedClaim::GivenUp);
+    }
+    // Its rule cards of this failure, raised since it failed: of the work,
+    // or of its board task.
+    let mut subjects = vec![format!("rule:failed:dispatch:{dispatch_id}")];
+    subjects.extend(task_id.map(|t| format!("rule:failed:task:{t}")));
+    let cards = notice::Entity::find()
+        .filter(notice::Column::BotId.eq(bot))
+        .filter(notice::Column::Kind.eq(NoticeKind::Rule))
+        .filter(notice::Column::SubjectKey.is_in(subjects))
+        .filter(notice::Column::CreatedAt.gte(failed_at))
+        .order_by_desc(notice::Column::Id)
+        .all(&txn)
+        .await?;
+    if cards
+        .iter()
+        .any(|n| matches!(n.state, NoticeState::Acting | NoticeState::Acted))
+    {
+        txn.rollback().await?;
+        return Ok(FailedClaim::OnCard);
+    }
+    let mut claimed = Vec::new();
+    for n in cards.into_iter().filter(|n| n.state == NoticeState::Open) {
+        let now = Utc::now();
+        let moved = notice::Entity::update_many()
+            .col_expr(notice::Column::State, Expr::value(NoticeState::Acting))
+            .col_expr(notice::Column::UpdatedAt, Expr::value(now))
+            .filter(notice::Column::Id.eq(n.id))
+            .filter(notice::Column::State.eq(NoticeState::Open))
+            .exec(&txn)
+            .await?;
+        if moved.rows_affected != 1 {
+            txn.rollback().await?;
+            return Ok(FailedClaim::OnCard);
+        }
+        claimed.push(notice::Model {
+            state: NoticeState::Acting,
+            updated_at: now,
+            ..n
+        });
+    }
+    // The failure claimed, kept: a second press — in another window, before
+    // any card of it is raised, its rule off — finds it taken, and the rule
+    // raises no card of it after.
+    let Some(token) = claim_failed_in(&txn, bot, dispatch_id, seen).await? else {
+        txn.rollback().await?;
+        return Ok(FailedClaim::Taken);
+    };
+    txn.commit().await?;
+    Ok(FailedClaim::Claimed {
+        cards: claimed,
+        token,
+    })
+}
+
+/// [`dispatches_run_by_batch`]'s condition, for a write that holds to it.
+pub fn run_by_batch(batch_id: i32) -> Condition {
+    Condition::any()
+        .add(dispatch::Column::SourceBatchId.eq(batch_id))
+        .add(
+            Condition::all()
+                .add(dispatch::Column::SourceBatchId.is_null())
+                .add(dispatch::Column::OriginBatchId.eq(batch_id)),
+        )
 }
 
 /// The dispatches made on thread `thread_id`, by any assistant.
@@ -5330,6 +6107,45 @@ pub async fn result_rows_of_dispatch(
         .filter(timeline::Column::DispatchId.eq(dispatch_id))
         .order_by_asc(timeline::Column::Id)
         .all(conn)
+        .await?)
+}
+
+/// The result card of dispatch `dispatch_id` at version `seen`: the newest
+/// one telling of the round and the state the dispatch is in, while it is
+/// still at that version — read in one statement. A run failed again since
+/// (a newer version) returns nothing, and so does a version whose own card
+/// was never written: an earlier round's card is not its card.
+pub async fn latest_result_row_at(
+    conn: &DatabaseConnection,
+    dispatch_id: i32,
+    seen: DateTime<Utc>,
+) -> Result<Option<timeline::Model>, DbError> {
+    let still = sea_orm::sea_query::Query::select()
+        .expr(Expr::val(1))
+        .from(dispatch::Entity)
+        .and_where(dispatch::Column::Id.eq(dispatch_id))
+        .and_where(dispatch::Column::UpdatedAt.eq(seen))
+        // Its card tells of the round it is at — its turns; a board task's
+        // run — and of the state it is in. One written before every card
+        // told its round (a check's) goes by its state.
+        .and_where(Expr::cust(format!(
+            "(json_extract({data}, '$.round') IS NULL \
+             OR json_extract({data}, '$.round') = CASE WHEN {d}.\"mode\" = 'task' \
+             THEN COALESCE((SELECT \"run_seq\" FROM \"work_task\" \
+             WHERE \"work_task\".\"id\" = {d}.\"work_task_id\"), 0) \
+             ELSE {d}.\"turns\" END) \
+             AND json_extract({data}, '$.state') = {d}.\"state\"",
+            data = "CASE WHEN json_valid(\"personal_agent_timeline\".\"data\") \
+                    THEN \"personal_agent_timeline\".\"data\" ELSE '{}' END",
+            d = "\"personal_agent_dispatch\"",
+        )))
+        .to_owned();
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::Kind.eq(TimelineKind::Result))
+        .filter(timeline::Column::DispatchId.eq(dispatch_id))
+        .filter(Expr::exists(still))
+        .order_by_desc(timeline::Column::Id)
+        .one(conn)
         .await?)
 }
 

@@ -19,14 +19,17 @@ import {
 } from "lucide-react"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import { Button } from "@/components/ui/button"
+import type { TaskActionHandlers } from "@/components/tasks/task-actions"
 import type {
   ActivityRow,
   DispatchInfo,
   ItemInfo,
   ItemKind,
   TodayRow,
+  WorkTask,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { markReturn } from "@/stores/personal-agent-return-store"
 import { useRoster } from "@/stores/personal-agent-roster-store"
 import {
   usePersonalAgentUi,
@@ -69,6 +72,8 @@ import {
   useUndoMatter,
 } from "./matter-actions"
 import { useActSettle } from "./act-settle"
+import { useRowActs } from "./row-acts"
+import { RowStopButton, WhyChip } from "./row-why"
 
 /** A piece of work's glyph leading a row, in px at 100% zoom: as a kind's
  *  icon tile. */
@@ -105,7 +110,19 @@ export interface RowScope {
   opener: Opener
   /** The board task's detail sheet. */
   openTask: ((id: number) => void) | null
+  /** The board's cancel for task `id` (its dialog): [Stop] on a task no
+   *  assistant handed out — of run `runSeq`, the one the row read. */
+  cancelTask: ((id: number, runSeq?: number | null) => void) | null
   dispatches: DispatchInfo[]
+  /** The five groups (`v2`), or an older codeg's four (`legacy`, 11). */
+  mode: "v2" | "legacy"
+  /** What the codeg's list can do (`work_retry`, `pr_merge`, ...). */
+  can: (capability: string) => boolean
+  /** The board's tasks, and what lands one (merge, deliver). */
+  tasks: WorkTask[]
+  taskHandlers: ((task: WorkTask) => TaskActionHandlers) | null
+  /** Whose list it is (`listOf`): what a row acted on leaves (7.4). */
+  list: string
 }
 
 /** A card in an assistant's conversation, shown: the page switched to it,
@@ -115,6 +132,9 @@ function useJumpTo(inDrawer: boolean): (bot: number, rowId: number) => void {
   return (bot, rowId) => {
     const primary = entries?.find((e) => e.id === bot)?.kind === "primary"
     const ui = usePersonalAgentUi.getState()
+    // The drawer closes for it: the way back is offered (7.6), to the
+    // activity it was in.
+    if (inDrawer) markReturn(ui.viewBot)
     ui.setViewBot(primary ? null : bot)
     ui.showConversation()
     ui.setPendingJump({ bot, row: rowId })
@@ -324,9 +344,19 @@ function ThingRow({
     dispatchId != null
       ? (scope.dispatches.find((d) => d.id === dispatchId) ?? null)
       : null
-  const details = useDetails({ row, today, item, dispatch, scope })
-  // Only when it has any: a card with no buttons has no row of them.
-  const actions =
+  const own = useDetails({ row, today, item, dispatch, scope })
+  const folded = useFolded(row, scope)
+  const details =
+    own != null || folded.details != null ? (
+      <div className="flex min-w-0 flex-col gap-3">
+        {own}
+        {folded.details}
+      </div>
+    ) : null
+  // Its own buttons first (6.5), then its matter's — only when it has
+  // any: a card with no buttons has no row of them.
+  const acts = useRowActs(row, scope, dispatch, group)
+  const matterActs =
     item && !scope.readOnly && hasItemActions(item, dispatch) ? (
       <MatterActions
         row={row}
@@ -335,7 +365,16 @@ function ThingRow({
         dispatch={dispatch}
         now={scope.now}
         inDrawer={scope.inDrawer}
+        mode={scope.mode}
+        list={scope.list}
       />
+    ) : null
+  const actions =
+    acts != null || matterActs != null ? (
+      <>
+        {acts}
+        {matterActs}
+      </>
     ) : undefined
   const unfold = details ? (
     <UnfoldButton open={open} onOpenChange={onOpenChange} />
@@ -347,7 +386,7 @@ function ThingRow({
     flash,
     dispatch,
   }
-  const shell = { ...props, row, scope, actions }
+  const shell = { ...props, row, scope, actions, notes: folded.notes }
   if (today?.kind === "matter_closed")
     return <MatterClosedShell {...shell} today={today} />
   if (today) return <TodayRowShell {...shell} today={today} group={group} />
@@ -370,6 +409,7 @@ function finish(
     flash,
     dispatch,
     scope,
+    notes,
   }: {
     row: ActivityRow
     open: boolean
@@ -378,45 +418,65 @@ function finish(
     flash: boolean
     dispatch: DispatchInfo | null
     scope: RowScope
+    notes: ReactNode[]
   }
 ): PanelItemProps {
   const buttons = props.actions != null
+  // The five groups (5.2): only a row under way is stopped, by what it
+  // says stops it — its work, the board's task, its assistant's turn —
+  // after its other buttons, never also on its strip; nothing else has
+  // [Stop] (a task queued to merge is not to be canceled from here).
+  const v2 = scope.mode === "v2"
+  const rowStop = v2 && row.stop != null
   // [Stop] for any work while it moves — a chat or a session too: after the
   // row's other buttons; on a task's strip when it has none; on its own
   // otherwise.
-  const stoppable = workStoppable(dispatch, scope.readOnly)
+  const stoppable = !v2 && workStoppable(dispatch, scope.readOnly)
   const strip = dispatch?.task ? (
     <TaskStrip
       d={dispatch}
       compact
       bot={row.bot_id}
-      stop={!buttons}
+      stop={!buttons && !v2}
       from="activity"
     />
   ) : null
-  const stop =
-    dispatch && stoppable ? (
-      <WorkStopButton
-        d={dispatch}
-        bot={row.bot_id}
-        from="activity"
-        className="ms-auto"
-      />
-    ) : null
+  const stop = rowStop ? (
+    <RowStopButton
+      row={row}
+      dispatches={scope.dispatches}
+      readOnly={scope.readOnly}
+      cancelTask={scope.cancelTask}
+      className="ms-auto"
+    />
+  ) : dispatch && stoppable ? (
+    <WorkStopButton
+      d={dispatch}
+      bot={row.bot_id}
+      from="activity"
+      className="ms-auto"
+    />
+  ) : null
   const actions = buttons ? (
     <>
       {props.actions}
       {stop}
     </>
-  ) : strip ? (
+  ) : strip && !v2 ? (
     props.actions
   ) : (
     (stop ?? props.actions)
   )
+  // Why it is where it is (5.2): its chip, over what its row says of
+  // itself.
+  const chip =
+    scope.mode === "v2" && row.why ? <WhyChip why={row.why} /> : props.chip
   return {
     ...props,
+    chip,
     actions,
     unfold: unfold ?? undefined,
+    notes: notes.length > 0 ? [...(props.notes ?? []), ...notes] : props.notes,
     details: open ? details : undefined,
     extra: strip ?? undefined,
     className: cn(
@@ -437,6 +497,62 @@ interface ShellProps {
   unfold: ReactNode
   flash: boolean
   dispatch: DispatchInfo | null
+  notes: ReactNode[]
+}
+
+/** The rows of its chain a row stands for (`folded`): a message its sender
+ *  waits on an answer to while the receiver does this work for it — said
+ *  on a line of the work's row ("糯米在等研发工程师回复 · 已等 3 小时"),
+ *  what was written and the message's own buttons where the row unfolds:
+ *  [Not needed] there takes the message back, not the work. */
+function useFolded(
+  row: ActivityRow,
+  scope: RowScope
+): { notes: ReactNode[]; details: ReactNode } {
+  const matterLine = useMatterLine()
+  const matterTitle = useMatterTitle()
+  const subs = (row.folded ?? []).filter(
+    (r): r is ActivityRow & { item: ItemInfo } => r.item != null
+  )
+  if (subs.length === 0) return { notes: [], details: null }
+  const notes = subs.map((sub) => (
+    <span
+      key={sub.key}
+      className="flex min-w-0 items-center gap-1.5"
+      data-pa-row-folded-line={sub.key}
+    >
+      <MessagesSquare aria-hidden className="size-3.5 shrink-0 opacity-70" />
+      <span className="min-w-0 truncate">
+        {matterLine(sub, sub.item, scope.now).meta}
+      </span>
+    </span>
+  ))
+  const details = subs.map((sub) => (
+    <div
+      key={sub.key}
+      className="flex min-w-0 flex-col gap-2 text-xs leading-5 text-muted-foreground"
+      data-pa-row-folded={sub.key}
+    >
+      <p className="line-clamp-4 border-s-2 border-border ps-2 break-words whitespace-pre-line">
+        {matterTitle(sub.item)}
+      </p>
+      {!scope.readOnly && hasItemActions(sub.item, null) ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <MatterActions
+            row={sub}
+            item={sub.item}
+            group={scope.mode === "v2" ? "watch" : "watching"}
+            dispatch={null}
+            now={scope.now}
+            inDrawer={scope.inDrawer}
+            mode={scope.mode}
+            list={scope.list}
+          />
+        </div>
+      ) : null}
+    </div>
+  ))
+  return { notes, details }
 }
 
 /** "Today"'s row of it, the matter's buttons and due line on it — opening,
@@ -680,9 +796,13 @@ function MatterClosedShell({ today, ...p }: ShellProps & { today: TodayRow }) {
   })
   const by = today.closed_by
   const how = today.closed_how
+  const kind = (today.state ?? "reminder") as ItemKind
   const key = ((): string => {
     // Given up because its work was stopped.
     if (how === "stopped") return by === "agent" ? "agentStopped" : "stopped"
+    // Work that failed, dropped by the owner: given up on.
+    if (kind === "dispatch" && by === "owner" && how === "dropped")
+      return "givenUp"
     if (by === "owner") {
       if (how === "skipped") return "skippedLast"
       if (how === "withdrawn") return "withdrawn"
@@ -708,7 +828,6 @@ function MatterClosedShell({ today, ...p }: ShellProps & { today: TodayRow }) {
         return "ended"
     }
   })()
-  const kind = (today.state ?? "reminder") as ItemKind
   const title =
     kind === "message"
       ? (messageWords(today)?.text ?? today.title)

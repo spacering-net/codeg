@@ -51,6 +51,12 @@ import type {
   ItemInfo,
 } from "@/lib/types"
 import { refreshActivity } from "@/stores/personal-agent-activity-store"
+import {
+  leaveRow,
+  returnRow,
+  type LeaveToken,
+} from "@/stores/personal-agent-activity-leaving-store"
+import { markReturn } from "@/stores/personal-agent-return-store"
 import { useRoster } from "@/stores/personal-agent-roster-store"
 import {
   usePersonalAgentUi,
@@ -59,6 +65,7 @@ import {
 
 import {
   messageText,
+  messageWords,
   peerName,
   useMatterError,
   useWhenInSentence,
@@ -121,6 +128,9 @@ function useShowConversation(): (
   return (bot, rowId, inDrawer) => {
     const primary = entries?.find((e) => e.id === bot)?.kind === "primary"
     const ui = usePersonalAgentUi.getState()
+    // The drawer closes for it: the way back is offered (7.6), to the
+    // activity it was in.
+    if (inDrawer) markReturn(ui.viewBot)
     ui.setViewBot(primary ? null : bot)
     ui.showConversation()
     if (rowId != null) ui.setPendingJump({ bot, row: rowId })
@@ -189,6 +199,8 @@ export function MatterActions({
   dispatch,
   now,
   inDrawer,
+  mode = "legacy",
+  list,
 }: {
   row: ActivityRow
   item: ItemInfo
@@ -196,6 +208,12 @@ export function MatterActions({
   dispatch: DispatchInfo | null
   now: number
   inDrawer: boolean
+  /** The five groups (`v2`): every button says what it does (5.5); an
+   *  older codeg's four (`legacy`): as they were. */
+  mode?: "v2" | "legacy"
+  /** Whose list it is drawn in (`listOf`): what it leaves once acted on
+   *  (7.4). None: it does not leave. */
+  list?: string
 }) {
   const t = useTranslations("PersonalAgent.matter")
   const tr = useTranslations("PersonalAgent.reminder")
@@ -222,7 +240,12 @@ export function MatterActions({
   const acts = item.at_due === "act"
 
   // What the act did, in the owner's words, with [Undo] when it can be.
-  const tell = (act: Act, res: ItemActResult | undefined) => {
+  const tell = (
+    act: Act,
+    res: ItemActResult | undefined,
+    /** This act's leaving (7.4): what its [Undo] brings back. */
+    leaving: LeaveToken | null
+  ) => {
     const left = res?.item ?? item
     const ended = left.status === "done" || left.status === "dropped"
     const next = left.due_at ? when(left.due_at) : ""
@@ -257,7 +280,9 @@ export function MatterActions({
               label: t("act.undo"),
               // The row may be drawn elsewhere by now (another group): it
               // waits by its key, wherever it is.
-              onClick: () =>
+              onClick: () => {
+                // Back where it was, as the undo leaves it.
+                if (leaving != null) returnRow(leaving)
                 void undoMatter(
                   bot,
                   item.id,
@@ -271,7 +296,8 @@ export function MatterActions({
                       notRefreshed
                     )
                   }
-                }),
+                })
+              },
             }
           : undefined,
     })
@@ -282,6 +308,9 @@ export function MatterActions({
   // now — a repeating one's next time skipped too.
   const run = (act: Act) => {
     setActing(true)
+    // It leaves its group at once (7.4); back if the act fails.
+    const left =
+      mode === "v2" && list != null ? leaveRow(row.key, group, list) : null
     const call =
       act.op === "snooze"
         ? personalAgentItemAct(
@@ -305,9 +334,10 @@ export function MatterActions({
         const wrote = res?.item?.updated_at
         if (wrote) settle.waitFor({ atLeast: wrote })
         refreshActivity()
-        tell(act, res)
+        tell(act, res, left)
       })
       .catch((e) => {
+        if (left != null) returnRow(left)
         refreshIfChanged(e)
         toast.error(errorText(e))
       })
@@ -319,6 +349,8 @@ export function MatterActions({
     const notice = row.card_notice_id
     if (notice == null) return
     setActing(true)
+    const left =
+      mode === "v2" && list != null ? leaveRow(row.key, group, list) : null
     const seen = item.updated_at
     personalAgentNoticeAct(
       notice,
@@ -335,6 +367,7 @@ export function MatterActions({
         refreshActivity()
       })
       .catch((e) => {
+        if (left != null) returnRow(left)
         refreshIfChanged(e)
         toast.error(errorText(e))
       })
@@ -398,7 +431,11 @@ export function MatterActions({
       </Button>
     )
 
+  // A matter its assistant or something outside is on takes no time from
+  // here: codeg refuses one (it would keep its own).
+  const timed = item.waits_for !== "agent" && item.waits_for !== "external"
   const timeMenu = (key: "snooze" | "setTime") => {
+    if (!timed) return null
     const hint =
       key === "snooze"
         ? acts
@@ -452,6 +489,25 @@ export function MatterActions({
   const nextHint = (doneKey: "doneNext" | "skipNext") =>
     rule ? t(`hint.${doneKey}`, { rule }) : null
 
+  // What letting it go does, in its words (5.5) — never "not needed".
+  const dropWords = (how: "drop" | "stop"): string => {
+    if (mode !== "v2" || how === "stop") return t(`act.${how}`)
+    if (item.kind === "message") {
+      if (messageWords(item)?.toMe) return t("act.noReplyNeeded")
+      return row.why?.kind === "queued"
+        ? t("act.withdrawMessage")
+        : t("act.stopWaiting")
+    }
+    if (item.kind === "question") return t("act.noAnswerNeeded")
+    if (item.kind === "dispatch") return t("act.giveUp")
+    if (ahead) return acts ? t("act.noNeedToDo") : t("act.cancelReminder")
+    if (item.kind === "followup" || item.waits_for === "agent")
+      return t("act.stopFollowing")
+    if (item.waits_for === "time" && !item.due_at) return t("act.remove")
+    if (item.due_at) return t("act.wontDo")
+    return t("act.drop")
+  }
+
   const dropButton = (how: "drop" | "stop") => {
     const hint =
       how === "stop"
@@ -461,7 +517,7 @@ export function MatterActions({
           : item.kind === "question"
             ? t("hint.dropQuestion", { name })
             : t("hint.drop", { name })
-    return button(how, t(`act.${how}`), hint, () => run({ op: "drop", how }), {
+    return button(how, dropWords(how), hint, () => run({ op: "drop", how }), {
       quiet: true,
     })
   }
@@ -490,6 +546,15 @@ export function MatterActions({
   if (item.kind === "dispatch") {
     const state = dispatch?.state ?? item.dispatch_state
     const merged = state === "completed" && item.waits_for === "external"
+    if (mode === "v2") {
+      // Failed: given up on, on purpose — nothing to "acknowledge".
+      if (state === "failed" || state === "interrupted")
+        return dropButton("drop")
+      // A pull request delivered and watched is its watch's: codeg closes
+      // the matter as it is merged. One no longer watched is the owner's to
+      // close, as before.
+      if (row.pr != null) return null
+    }
     return (
       <>
         {button(
@@ -506,8 +571,14 @@ export function MatterActions({
 
   if (item.kind === "when_mentioned") return dropButton("stop")
 
-  // Someone else's move: only "not needed".
-  if (group === "watching" || item.kind === "message") return dropButton("drop")
+  // Someone else's move: only letting it go.
+  if (
+    group === "watching" ||
+    group === "running" ||
+    group === "watch" ||
+    item.kind === "message"
+  )
+    return dropButton("drop")
 
   if (group === "next") {
     if (item.kind === "question")

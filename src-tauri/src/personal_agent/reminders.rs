@@ -1227,9 +1227,9 @@ impl PersonalAgentEngine {
                     ItemOp::parse("snooze", action.strip_prefix("snooze:"), tz, now, mornings)
                         .map_err(|e| Refusal::new(keys::BAD_TIME, e))?,
                 ),
-                "hand_over" => None,
+                "hand_over" | "hand_again" => None,
                 _ => return Err(
-                    "`action` must be done, snooze:15m, snooze:1h, snooze:tomorrow or hand_over"
+                    "`action` must be done, snooze:15m, snooze:1h, snooze:tomorrow, hand_over or hand_again"
                         .into(),
                 ),
             };
@@ -1243,16 +1243,95 @@ impl PersonalAgentEngine {
             .await
             .map_err(|e| e.to_string())?
             .ok_or("the card's row is missing")?;
-        let card_state = card
+        let card_data = card
             .data
             .as_deref()
             .and_then(|d| serde_json::from_str::<Value>(d).ok())
-            .and_then(|d| d.get("state").and_then(Value::as_str).map(str::to_string));
-        if notice.state != NoticeState::Open || card_state.as_deref() != Some("open") {
+            .unwrap_or(Value::Null);
+        let card_state = card_data["state"].as_str().map(str::to_string);
+        // [Hand again] (6.5): handed to its assistant already, whose turn on
+        // it is over with the matter still open — asked for by name, so a
+        // card's first [Hand over] pressed late never hands it again.
+        let again = action == "hand_again";
+        // Come due for its assistant to do (`at_due = act`), not handed by
+        // a message: as handed by none.
+        let woke = card_state.as_deref() == Some("woke");
+        if again {
+            if notice.state != NoticeState::Acted
+                || !matches!(card_state.as_deref(), Some("handed" | "woke"))
+            {
+                return Err(Refusal::new(
+                    keys::CHANGED,
+                    "this reminder is not handed to its assistant now: look at it again",
+                ));
+            }
+        } else if notice.state != NoticeState::Open || card_state.as_deref() != Some("open") {
             return Err(Refusal::new(
                 keys::REMINDER_ANSWERED,
                 "this reminder was answered already",
             ));
+        }
+        // The message that handed it last — named on the card, or (an older
+        // card) the latest of the owner's quoting it — and, sent again, its
+        // copy.
+        let prev = card_data["hand_row_id"]
+            .as_i64()
+            .and_then(|r| i32::try_from(r).ok());
+        // The message of those that has it now: the one the card names, or
+        // the copy it was sent again as.
+        let mut last_id = None;
+        if again && woke {
+            // Its assistant still on what woke it: queued, or in its turn.
+            let woken = svc::latest_event_for_item(
+                &self.db.conn,
+                self.bot().await,
+                REMINDER_EVENT,
+                item_id,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            if woken.is_some_and(|e| {
+                e.state != crate::db::entities::personal_agent_event::EventState::Done
+            }) {
+                return Err(Refusal::new(
+                    keys::IN_OTHER_HANDS,
+                    "its assistant has it now: wait for it, or stop its turn",
+                ));
+            }
+        } else if again {
+            let last = match prev {
+                Some(id) => svc::get_row(&self.db.conn, id).await.map_err(|e| e.to_string())?,
+                None => svc::latest_owner_reply_to(&self.db.conn, self.bot().await, card_id)
+                    .await
+                    .map_err(|e| e.to_string())?,
+            };
+            if let Some(last) = last {
+                let last = super::activity_facts::sent_again(&self.db, last).await;
+                last_id = Some(last.id);
+                let on_it = match last.status {
+                    Some(crate::db::entities::personal_agent_timeline::OwnerStatus::Queued) => true,
+                    Some(
+                        crate::db::entities::personal_agent_timeline::OwnerStatus::Delivered
+                        | crate::db::entities::personal_agent_timeline::OwnerStatus::Answered,
+                    ) => match last.batch_id {
+                        Some(b) => svc::get_batch(&self.db.conn, b)
+                            .await
+                            .map_err(|e| e.to_string())?
+                            .is_some_and(|b| {
+                                b.status
+                                    == crate::db::entities::personal_agent_batch::BatchStatus::Running
+                            }),
+                        None => false,
+                    },
+                    _ => false,
+                };
+                if on_it {
+                    return Err(Refusal::new(
+                        keys::IN_OTHER_HANDS,
+                        "its assistant has it now: wait for it, or stop its turn",
+                    ));
+                }
+            }
         }
         let item = svc::get_item_of(&self.db.conn, self.bot().await, item_id)
             .await
@@ -1280,6 +1359,7 @@ impl PersonalAgentEngine {
             let _ = svc::move_notice(&self.db.conn, notice.id, &[NoticeState::Open], to).await;
             return Ok(self.set_reminder_row(&notice, state, None, None).await?);
         }
+        let item_updated_at = item.as_ref().map(|i| i.updated_at);
         let summary = item.map(|i| i.summary).unwrap_or_default();
         match op {
             Some(op) => {
@@ -1301,40 +1381,56 @@ impl PersonalAgentEngine {
                     .map(|t| t.trim().chars().take(2_000).collect::<String>())
                     .filter(|t| !t.is_empty())
                     .unwrap_or_else(|| format!("Handle this reminder: {summary}"));
-                // The message and the card's "handed" are written together.
-                let data = Self::reminder_data(&card, "handed", None, None);
-                if let Err(e) = self
-                    .queue_owner_message(text, Vec::new(), Some(card_id), super::engine::Origin::Written, None, Some(data))
-                    .await
-                {
-                    let e = Refusal::from(e);
-                    let _ = self
-                        .set_reminder_row(&notice, "open", None, Some(&e))
-                        .await;
-                    return Err(e);
+                // The message, the card's "handed" with the message's id,
+                // the card answered and the matter the assistant's: written
+                // together, all or none (M0-4).
+                let mut data = Self::reminder_data(&card, "handed", None, None);
+                if again {
+                    data["rehands"] = (card_data["rehands"].as_i64().unwrap_or(0) + 1).into();
                 }
-                let _ = svc::move_notice(
-                    &self.db.conn,
-                    notice.id,
-                    &[NoticeState::Open],
-                    NoticeState::Acted,
-                )
-                .await;
-                let _ = svc::update_item(
-                    &self.db.conn,
+                let Some(item_updated_at) = item_updated_at else {
+                    return Err("the card names no matter".into());
+                };
+                let hand = svc::HandOver {
+                    notice_id: notice.id,
                     item_id,
-                    ItemWrite {
-                        waits_for: Some(Some(WaitsFor::Agent)),
-                        ..Default::default()
-                    },
-                )
-                .await;
+                    item_updated_at,
+                };
+                // Handed again: only while the card is still handed by the
+                // message read here.
+                let guard = if again {
+                    svc::CardGuard::HandAgain {
+                        hand,
+                        prev,
+                        last: last_id,
+                    }
+                } else {
+                    svc::CardGuard::HandOver(hand)
+                };
+                let card = match self.queue_owner_hand_over(text, card_id, data, guard).await {
+                    Ok(card) => card,
+                    Err(e) => {
+                        // Answered meanwhile: the card is as that answer
+                        // left it. Its matter changed: open as it was. Any
+                        // other failure says so on the card — while it is
+                        // still open, in one conditional write: one settled
+                        // meanwhile stays settled.
+                        if e.key != Some(keys::REMINDER_ANSWERED) && e.key != Some(keys::CHANGED) {
+                            let data = Self::reminder_data(&card, "open", None, Some(&e));
+                            if let Ok(true) =
+                                svc::write_row_data_if(&self.db.conn, card_id, "open", &data).await
+                            {
+                                if let Ok(Some(r)) = svc::get_row(&self.db.conn, card_id).await {
+                                    self.emit_rows(vec![svc::to_row(r)]);
+                                }
+                            }
+                        }
+                        return Err(e);
+                    }
+                };
                 self.emit_item(item_id);
-                let row = svc::get_row(&self.db.conn, card_id)
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .ok_or("the card's row is missing")?;
-                Ok(svc::to_row(row))
+                // As its transaction wrote it: nothing read after can fail it.
+                Ok(card)
             }
         }
     }

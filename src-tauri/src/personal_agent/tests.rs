@@ -2070,6 +2070,12 @@ async fn news_waited_for_within_a_turn_is_settled_with_the_reply_that_reports_it
     let d = dispatch_state(&engine, id).await;
     engine.record_progress(&d, Some("The title was never changed.".into()), None, "turn").await;
     let card = svc::latest_result_row(&engine.db.conn, id).await.unwrap().unwrap();
+    // Its card as of a version: only while the work is still at it.
+    let at = svc::get_dispatch(&engine.db.conn, id).await.unwrap().unwrap().updated_at;
+    let read = svc::latest_result_row_at(&engine.db.conn, id, at).await.unwrap();
+    assert_eq!(read.map(|r| r.id), Some(card.id));
+    let stale = at - chrono::Duration::seconds(1);
+    assert!(svc::latest_result_row_at(&engine.db.conn, id, stale).await.unwrap().is_none());
     let out = engine.dispatch_wait(id, Some(Duration::from_secs(5))).await;
     assert!(out.ok && out.data["waiting"] == "news", "{}", out.text);
     assert!(out.text.contains(&format!("[#{}] Dispatch #{id}", card.id)), "{}", out.text);
@@ -2158,6 +2164,21 @@ async fn news_waited_for_within_a_turn_is_settled_with_the_reply_that_reports_it
     // The turn over, the wait is too.
     let out = engine.dispatch_wait(id3, Some(Duration::ZERO)).await;
     assert!(!out.ok, "{}", out.text);
+
+    // Failed since, its own card never written: the earlier round's card is
+    // not this failure's.
+    let failed = svc::update_dispatch(
+        &engine.db.conn,
+        id,
+        None,
+        DispatchWrite { state: Some(DispatchState::Failed), ..Default::default() },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(svc::latest_result_row(&engine.db.conn, id).await.unwrap().is_some());
+    let read = svc::latest_result_row_at(&engine.db.conn, id, failed.updated_at).await.unwrap();
+    assert!(read.is_none(), "{read:?}");
 }
 
 /// News of a round that was never told, then a follow-up: waiting for the
@@ -9488,18 +9509,16 @@ async fn a_secret_answer_to_the_brains_question_is_not_kept() {
         is_secret: true,
         allow_other: true,
     };
-    state.write().await.pending_question = Some(crate::acp::question::PendingQuestionState {
-        question_id: "qs".into(),
-        questions: vec![spec.clone()],
-        created_at: chrono::Utc::now(),
-    });
+    let _ = state;
+    // Asked for real: the manager holds it, and records the answer redacted.
+    let reg = engine.manager.register_question("pa-secret", vec![spec.clone()]).await.unwrap();
     let mut row = NewRow::new(TimelineKind::Question, "Your API key?");
-    row.ref_id = Some("qs".into());
+    row.ref_id = Some(reg.question_id.clone());
     row.data = Some(serde_json::json!({ "kind": "ask", "state": "pending", "questions": [spec] }));
     let row = svc::insert_row(&engine.db.conn, engine.bot().await, row).await.unwrap();
     let _ = engine
         .answer_question(
-            "qs",
+            &reg.question_id,
             crate::acp::question::QuestionAnswer {
                 answers: vec![crate::acp::question::QuestionAnswerItem {
                     question_id: "k".into(),
@@ -9514,6 +9533,166 @@ async fn a_secret_answer_to_the_brains_question_is_not_kept() {
     assert_eq!(data["state"], "answered");
     assert!(!kept.data.unwrap().contains("sk-live-123"), "{data}");
     assert!(data.to_string().contains("•••"), "{data}");
+}
+
+/// A plan approval of the brain's, asked on its live connection, with its
+/// pending row as `record_plan_request` writes it.
+async fn pending_plan(engine: &PersonalAgentEngine, conn: &str) -> (crate::acp::plan_approval::RegisteredPlanApproval, i32) {
+    let reg = engine
+        .manager
+        .register_plan_approval(conn, "t".into(), "# Plan".into())
+        .await
+        .unwrap();
+    let mut row = NewRow::new(TimelineKind::Question, "# Plan");
+    row.ref_id = Some(reg.approval_id.clone());
+    row.data = Some(serde_json::json!({ "kind": "plan_approval", "state": "pending" }));
+    let row = svc::insert_row(&engine.db.conn, engine.bot().await, row).await.unwrap();
+    (reg, row.id)
+}
+
+fn plan_answer(decision: crate::acp::plan_approval::PlanApprovalDecision) -> crate::acp::plan_approval::PlanApprovalAnswer {
+    crate::acp::plan_approval::PlanApprovalAnswer { decision, feedback: None }
+}
+
+/// M0-1: of two answers to one plan approval (a double click, a second
+/// window), the first is the one the agent gets and the timeline keeps; the
+/// second learns it came too late.
+#[tokio::test]
+async fn a_second_answer_to_a_plan_never_writes_over_the_first() {
+    use crate::acp::plan_approval::PlanApprovalDecision;
+    use crate::acp::types::AnswerOutcome;
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (_rx, _state) = live_connection(&engine, seg, "pa-plan").await;
+    let (reg, row_id) = pending_plan(&engine, "pa-plan").await;
+    let first = engine
+        .answer_plan_approval(&reg.approval_id, plan_answer(PlanApprovalDecision::Approve))
+        .await
+        .unwrap();
+    assert!(matches!(first, AnswerOutcome::Answered(_)), "{first:?}");
+    let second = engine
+        .answer_plan_approval(&reg.approval_id, plan_answer(PlanApprovalDecision::Abandon))
+        .await
+        .unwrap();
+    assert!(matches!(second, AnswerOutcome::AlreadyAnswered(_)), "{second:?}");
+    assert_eq!(reg.answer_rx.await.unwrap().decision, PlanApprovalDecision::Approve);
+    let kept = data_of(&svc::get_row(&engine.db.conn, row_id).await.unwrap().unwrap());
+    assert_eq!(kept["state"], "answered");
+    assert_eq!(kept["answer"]["decision"], "approve", "{kept}");
+}
+
+/// M0-1: an answer elsewhere that the row has not caught up with yet (its
+/// resolved event still on the way) is the one recorded when the owner's
+/// later answer finds it taken.
+#[tokio::test]
+async fn a_late_answer_records_the_one_that_took_effect() {
+    use crate::acp::plan_approval::PlanApprovalDecision;
+    use crate::acp::types::{AnswerOrigin, AnswerOutcome};
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (_rx, _state) = live_connection(&engine, seg, "pa-late").await;
+    let (reg, row_id) = pending_plan(&engine, "pa-late").await;
+    // Answered through the manager alone (a chat channel): the row still
+    // says pending.
+    let elsewhere = engine
+        .manager
+        .answer_plan_approval_from(
+            "pa-late",
+            &reg.approval_id,
+            plan_answer(PlanApprovalDecision::RequestChanges),
+            AnswerOrigin::ChatChannel,
+        )
+        .await;
+    assert!(matches!(elsewhere, AnswerOutcome::Answered(_)));
+    let pending = data_of(&svc::get_row(&engine.db.conn, row_id).await.unwrap().unwrap());
+    assert_eq!(pending["state"], "pending");
+    let late = engine
+        .answer_plan_approval(&reg.approval_id, plan_answer(PlanApprovalDecision::Approve))
+        .await
+        .unwrap();
+    assert!(matches!(late, AnswerOutcome::AlreadyAnswered(_)), "{late:?}");
+    let kept = data_of(&svc::get_row(&engine.db.conn, row_id).await.unwrap().unwrap());
+    assert_eq!(kept["state"], "answered");
+    assert_eq!(kept["answer"]["decision"], "request_changes", "{kept}");
+}
+
+/// M0-1: an answer to a request no longer there writes `withdrawn`, and no
+/// answer.
+#[tokio::test]
+async fn an_answer_to_a_withdrawn_plan_records_no_answer() {
+    use crate::acp::plan_approval::PlanApprovalDecision;
+    use crate::acp::types::AnswerOutcome;
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (_rx, _state) = live_connection(&engine, seg, "pa-gone").await;
+    let (reg, row_id) = pending_plan(&engine, "pa-gone").await;
+    // The connection drains: the approval is withdrawn.
+    engine.manager.cancel_plan_approvals_by_parent("pa-gone").await;
+    let outcome = engine
+        .answer_plan_approval(&reg.approval_id, plan_answer(PlanApprovalDecision::Approve))
+        .await
+        .unwrap();
+    assert_eq!(outcome, AnswerOutcome::Withdrawn);
+    let kept = data_of(&svc::get_row(&engine.db.conn, row_id).await.unwrap().unwrap());
+    assert_eq!(kept["state"], "withdrawn");
+    assert!(kept.get("answer").is_none(), "{kept}");
+}
+
+/// M0-1: the resolved event writes what it carries — the answer that took
+/// effect, or that it was withdrawn — and never over a row already settled.
+#[tokio::test]
+async fn a_resolved_event_records_what_it_carries_once() {
+    use crate::acp::types::AnswerResolution;
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (_rx, _state) = live_connection(&engine, seg, "pa-ev").await;
+    let mut ids = Vec::new();
+    for ref_id in ["p-answered", "p-withdrawn"] {
+        let mut row = NewRow::new(TimelineKind::Question, "# Plan");
+        row.ref_id = Some(ref_id.into());
+        // What else the row says (its mirrors, written meanwhile) stays.
+        row.data = Some(serde_json::json!({ "kind": "plan_approval", "state": "pending", "mirrors": [7] }));
+        ids.push(svc::insert_row(&engine.db.conn, engine.bot().await, row).await.unwrap().id);
+    }
+    let answered = AnswerResolution {
+        answer: Some(json!({ "decision": "approve" })),
+        origin: Some(crate::acp::types::AnswerOrigin::ChatChannel),
+        at: chrono::Utc::now(),
+    };
+    engine
+        .feed_for_test(
+            "pa-ev",
+            1,
+            AcpEvent::PlanApprovalResolved { approval_id: "p-answered".into(), resolution: Some(answered) },
+        )
+        .await;
+    engine
+        .feed_for_test(
+            "pa-ev",
+            2,
+            AcpEvent::PlanApprovalResolved {
+                approval_id: "p-withdrawn".into(),
+                resolution: Some(AnswerResolution::withdrawn()),
+            },
+        )
+        .await;
+    // A second event, later, for the one already answered: nothing changes.
+    engine
+        .feed_for_test(
+            "pa-ev",
+            3,
+            AcpEvent::PlanApprovalResolved {
+                approval_id: "p-answered".into(),
+                resolution: Some(AnswerResolution::withdrawn()),
+            },
+        )
+        .await;
+    let a = data_of(&svc::get_row(&engine.db.conn, ids[0]).await.unwrap().unwrap());
+    assert_eq!(a["state"], "answered");
+    assert_eq!(a["answer"]["decision"], "approve");
+    assert_eq!(a["mirrors"], json!([7]), "{a}");
+    let w = data_of(&svc::get_row(&engine.db.conn, ids[1]).await.unwrap().unwrap());
+    assert_eq!(w["state"], "withdrawn");
 }
 
 // ── 1.11: time ──────────────────────────────────────────────────────────────
@@ -9953,15 +10132,61 @@ async fn handing_a_reminder_to_the_assistant_is_the_owners_message_quoting_it() 
         .act_on_notice_with(notice, "hand_over", Some(format!("处理提醒 #{id}：Renew the domain")))
         .await
         .unwrap();
-    assert_eq!(row.data.unwrap()["state"], "handed");
+    let data = row.data.unwrap();
+    assert_eq!(data["state"], "handed");
     let owner = svc::queued_owner_rows(&engine.db.conn, engine.bot().await).await.unwrap();
     assert_eq!(owner.len(), 1);
     assert_eq!(owner[0].body, format!("处理提醒 #{id}：Renew the domain"));
     assert_eq!(owner[0].reply_to, Some(card.id), "it quotes the card");
+    // M0-4: the card keeps which message handed it over, written with it,
+    // the card answered and the matter the assistant's in the same step.
+    assert_eq!(data["hand_row_id"], owner[0].id, "{data}");
+    let card_now = svc::get_notice(&engine.db.conn, notice).await.unwrap().unwrap();
+    assert_eq!(card_now.state, NoticeState::Acted);
     let item = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
     assert_eq!(item.waits_for, Some(WaitsFor::Agent));
     assert!(engine.act_on_notice_with(notice, "hand_over", None).await.is_err(), "once");
     assert!(engine.act_on_notice(notice, "accept").await.is_err());
+}
+
+/// M0-4: a hand-over of a reminder whose matter changed after it was read
+/// is not written — no message, the card open as it was, the matter as its
+/// change left it.
+#[tokio::test]
+async fn a_hand_over_of_a_matter_changed_meanwhile_writes_nothing() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Renew the domain", "due": "1m" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    engine.fire_due_at(super::clock::now() + chrono::Duration::minutes(2)).await;
+    let card = reminder_rows(&engine, id).await.remove(0);
+    let notice = notice_of_row(&card);
+    let read = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    // Changed after the hand-over read it.
+    svc::update_item(
+        &engine.db.conn,
+        id,
+        svc::ItemWrite { summary: Some("Renew both domains".into()), ..Default::default() },
+    )
+    .await
+    .unwrap();
+    let data = data_of(&card);
+    let e = engine
+        .queue_owner_hand_over(
+            "Handle it".into(),
+            card.id,
+            data,
+            svc::CardGuard::HandOver(svc::HandOver { notice_id: notice, item_id: id, item_updated_at: read.updated_at }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::CHANGED));
+    assert!(svc::queued_owner_rows(&engine.db.conn, bot).await.unwrap().is_empty(), "no message");
+    let n = svc::get_notice(&engine.db.conn, notice).await.unwrap().unwrap();
+    assert_eq!(n.state, NoticeState::Open);
+    let card_now = svc::get_row(&engine.db.conn, card.id).await.unwrap().unwrap();
+    assert_eq!(data_of(&card_now)["state"], "open");
+    assert!(data_of(&card_now).get("hand_row_id").is_none());
 }
 
 #[tokio::test]
@@ -10483,6 +10708,174 @@ async fn reaching(att: super::presence::Attending) -> (Arc<EngineHost>, i32, tem
     set_pref(&host.primary(), "quiet_hours", json!("none")).await;
     host.reach.set_attending(Some(att));
     (host, w, tmp)
+}
+
+/// 6.4: failed work the owner gives up on leaves "waiting on you" at once,
+/// and today's done says they gave it up, with its [Undo]; work that
+/// finished, its matter closed by them, is not listed again (its own rows
+/// say it). Read at once as one at a time.
+#[tokio::test]
+async fn failed_work_given_up_leaves_needs_for_done() {
+    let (engine, _tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let bot = engine.bot().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-gu").await;
+    svc::update_dispatch(conn, id, None, DispatchWrite { state: Some(DispatchState::Failed), error: Some(Some("boom".into())), ..Default::default() })
+        .await
+        .unwrap();
+    age_failure(&engine, id).await;
+    let item = svc::create_item(conn, bot, ItemKind::Dispatch, Some(id), ItemStatus::Open, Some(WaitsFor::Agent), "Investigate".into(), None, None)
+        .await
+        .unwrap();
+    let ok = session_dispatch(&engine, DispatchState::Completed, "c-ok").await;
+    let finished = svc::create_item(conn, bot, ItemKind::Dispatch, Some(ok), ItemStatus::Open, Some(WaitsFor::External), "Ship it".into(), None, None)
+        .await
+        .unwrap();
+    let view = today_now(&engine).await;
+    assert!(view.needs.iter().any(|r| r.key == format!("failed:{id}")), "{:?}", view.needs);
+    engine.settle_item_from(item.id, "drop", None, OpSource::Panel).await.unwrap();
+    engine.settle_item_from(finished.id, "done", None, OpSource::Panel).await.unwrap();
+    let view = today_now(&engine).await;
+    assert!(!view.needs.iter().any(|r| r.dispatch_id == Some(id)), "{:?}", view.needs);
+    assert!(!view.watching.iter().any(|r| r.dispatch_id == Some(id)), "{:?}", view.watching);
+    let now = chrono::Utc::now();
+    let day = now - chrono::Duration::days(1);
+    let done = super::today::closed_matters(&engine.db, &[bot], day, now).await;
+    let row = done.iter().find(|r| r.item_id == Some(item.id)).expect("in today's done");
+    assert_eq!(
+        (row.state.as_deref(), row.closed_by.as_deref(), row.closed_how.as_deref()),
+        (Some("dispatch"), Some("owner"), Some("dropped"))
+    );
+    assert!(row.matter_undo.is_some(), "can be taken back");
+    assert!(!done.iter().any(|r| r.item_id == Some(finished.id)), "{done:?}");
+    let single = super::today::closed_matters_one_by_one(&engine.db, &[bot], day, now).await;
+    assert_eq!(serde_json::to_value(&done).unwrap(), serde_json::to_value(&single).unwrap());
+    // Taken back: it waits on the owner again.
+    engine.undo_item(item.id, row.matter_undo.unwrap()).await.unwrap();
+    let view = today_now(&engine).await;
+    assert!(view.needs.iter().any(|r| r.key == format!("failed:{id}")), "{:?}", view.needs);
+}
+
+/// 6.4: a failure after the owner gave the work up is a new one: theirs to
+/// see again.
+#[tokio::test]
+async fn a_failure_after_giving_up_waits_on_the_owner_again() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (engine, _tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let bot = engine.bot().await;
+    let id = session_dispatch(&engine, DispatchState::Failed, "c-again").await;
+    age_failure(&engine, id).await;
+    let item = svc::create_item(conn, bot, ItemKind::Dispatch, Some(id), ItemStatus::Open, Some(WaitsFor::Agent), "Investigate".into(), None, None)
+        .await
+        .unwrap();
+    engine.settle_item_from(item.id, "drop", None, OpSource::Panel).await.unwrap();
+    assert!(!today_now(&engine).await.needs.iter().any(|r| r.dispatch_id == Some(id)));
+    // Run again by its assistant, and failed again after the give-up.
+    let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = dispatch_state(&engine, id).await.into();
+    let later = chrono::Utc::now() + chrono::Duration::seconds(5);
+    am.finished_at = Set(Some(later));
+    am.updated_at = Set(later);
+    am.update(conn).await.unwrap();
+    let view = today_now(&engine).await;
+    assert!(
+        view.needs.iter().chain(view.watching.iter()).any(|r| r.key == format!("failed:{id}")),
+        "{:?} {:?}",
+        view.needs,
+        view.watching
+    );
+    // Its progress reopens the matter the owner gave up before this failure
+    // — theirs to act on again — and today lists it with it.
+    engine.record_progress(&dispatch_state(&engine, id).await, None, None, "turn").await;
+    let reopened = svc::get_item(conn, item.id).await.unwrap().unwrap();
+    assert_eq!((reopened.status, reopened.waits_for), (ItemStatus::Open, Some(WaitsFor::Agent)));
+    // Nor is the give-up of the earlier failure said of this one.
+    let now = chrono::Utc::now() + chrono::Duration::seconds(10);
+    let day = now - chrono::Duration::days(1);
+    let done = super::today::closed_matters(&engine.db, &[bot], day, now).await;
+    assert!(!done.iter().any(|r| r.item_id == Some(item.id)), "{done:?}");
+    let single = super::today::closed_matters_one_by_one(&engine.db, &[bot], day, now).await;
+    assert_eq!(serde_json::to_value(&done).unwrap(), serde_json::to_value(&single).unwrap());
+}
+
+/// 6.4: the owner closing failed work ("got it") before codeg recorded the
+/// failure keeps it closed: the failure's word arriving after does not
+/// open it again, nor is it said to be given up.
+#[tokio::test]
+async fn a_failure_recorded_after_the_owner_closed_it_stays_closed() {
+    let (engine, _tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let bot = engine.bot().await;
+    let id = session_dispatch(&engine, DispatchState::Failed, "c-late").await;
+    age_failure(&engine, id).await;
+    let item = svc::create_item(conn, bot, ItemKind::Dispatch, Some(id), ItemStatus::Open, Some(WaitsFor::Agent), "Investigate".into(), None, None)
+        .await
+        .unwrap();
+    engine.settle_item_from(item.id, "done", None, OpSource::Panel).await.unwrap();
+    engine.record_progress(&dispatch_state(&engine, id).await, None, None, "turn").await;
+    let after = svc::get_item(conn, item.id).await.unwrap().unwrap();
+    assert_eq!(after.status, ItemStatus::Done, "{after:?}");
+    assert!(!today_now(&engine).await.needs.iter().any(|r| r.dispatch_id == Some(id)));
+    let now = chrono::Utc::now();
+    let done = super::today::closed_matters(&engine.db, &[bot], now - chrono::Duration::days(1), now).await;
+    assert!(!done.iter().any(|r| r.item_id == Some(item.id)), "not given up: {done:?}");
+}
+
+/// 6.4: a dispatched board task that failed, given up by the owner on its
+/// matter, leaves "waiting on you" as its work does.
+#[tokio::test]
+async fn a_failed_dispatched_task_given_up_leaves_needs() {
+    use sea_orm::Set;
+    let (engine, tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let bot = engine.bot().await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let then = chrono::Utc::now() - chrono::Duration::minutes(10);
+    let task = board_task(&engine, project, "Bump deps", WorkTaskStatus::Failed, |t| {
+        t.last_error = Set(Some("tests failed".into()));
+        t.settled_at = Set(Some(then));
+    })
+    .await;
+    // Run again on the board and failed again: its work still says the
+    // earlier failure, not read again yet.
+    let d = task_dispatch(&engine, coder, project, task.id, "Bump deps", DispatchState::Failed).await;
+    {
+        use sea_orm::ActiveModelTrait;
+        let earlier = chrono::Utc::now() - chrono::Duration::hours(1);
+        let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = dispatch_state(&engine, d.id).await.into();
+        am.finished_at = Set(Some(earlier));
+        am.updated_at = Set(earlier);
+        am.update(conn).await.unwrap();
+    }
+    let item = svc::create_item(conn, bot, ItemKind::Dispatch, Some(d.id), ItemStatus::Open, Some(WaitsFor::Agent), "Bump deps".into(), None, None)
+        .await
+        .unwrap();
+    let view = today_now(&engine).await;
+    assert!(
+        view.needs.iter().chain(view.watching.iter()).any(|r| r.task_id == Some(task.id)),
+        "{:?}",
+        view.needs
+    );
+    engine.settle_item_from(item.id, "drop", None, OpSource::Panel).await.unwrap();
+    // Read only now: its work's own end is after the give-up — the give-up
+    // stands, as the board's time says.
+    let synced = {
+        use sea_orm::ActiveModelTrait;
+        let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = dispatch_state(&engine, d.id).await.into();
+        am.finished_at = Set(Some(chrono::Utc::now()));
+        am.updated_at = Set(chrono::Utc::now());
+        am.update(conn).await.unwrap()
+    };
+    engine.record_progress(&synced, None, None, "task").await;
+    let after = svc::get_item(conn, item.id).await.unwrap().unwrap();
+    assert_eq!(after.status, ItemStatus::Dropped, "{after:?}");
+    let view = today_now(&engine).await;
+    assert!(!view.needs.iter().any(|r| r.task_id == Some(task.id) || r.dispatch_id == Some(d.id)), "{:?}", view.needs);
+    let now = chrono::Utc::now();
+    let done = super::today::closed_matters(&engine.db, &[bot], now - chrono::Duration::days(1), now).await;
+    let row = done.iter().find(|r| r.item_id == Some(item.id)).expect("given up today");
+    assert!(row.matter_undo.is_some());
 }
 
 /// B6: work that just failed is its assistant's to pick up first — in
@@ -12231,6 +12624,162 @@ async fn waiting_on_code_work_whose_check_concluded_does_not_promise_a_verdict()
     }
 }
 
+/// Round `id` as a crash between sending its check and naming it left it,
+/// before the two were one step: checking, with no check named.
+async fn unlink_check(engine: &PersonalAgentEngine, id: i32) {
+    use sea_orm::{ActiveModelTrait, Set};
+    let r = crate::db::service::personal_agent_verification_service::get(&engine.db.conn, id).await.unwrap().unwrap();
+    let mut am: crate::db::entities::personal_agent_verification::ActiveModel = r.into();
+    am.check_dispatch_id = Set(None);
+    am.update(&engine.db.conn).await.unwrap();
+}
+
+/// M0-5: the check, its round naming it and its card are written in one
+/// step — the round never checks with no check; a round an older codeg
+/// left so is named again from the check's card at the next tick.
+#[tokio::test]
+async fn a_check_is_named_on_its_round_as_it_is_sent_and_healed_from_its_card() {
+    use crate::db::entities::personal_agent_verification::VerificationState;
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    let conn = &engine.db.conn;
+    engine.acceptance_tick().await;
+    let r = rounds_of(&engine, w.d.id).await.remove(0);
+    assert_eq!(r.state, VerificationState::Checking);
+    let check = r.check_dispatch_id.expect("named as it is sent");
+    let card = svc::check_cards_of(conn, w.d.id, r.id, r.round, r.created_at).await.unwrap().into_iter().next().expect("its card");
+    assert_eq!(card.dispatch_id, Some(check));
+    assert_eq!(data_of(&card)["check_round_id"], r.id, "the card names its round");
+    // Left unnamed by an older codeg, its card naming only the round's
+    // number: named again from it.
+    let mut legacy = data_of(&card);
+    legacy.as_object_mut().unwrap().remove("check_round_id");
+    {
+        use sea_orm::{ActiveModelTrait, Set};
+        // On another assistant's timeline (the work moved since).
+        let other = worker_row(&engine, "Old").await;
+        let mut am: crate::db::entities::personal_agent_timeline::ActiveModel = card.clone().into();
+        am.data = Set(Some(legacy.to_string()));
+        am.bot_id = Set(Some(other));
+        am.update(conn).await.unwrap();
+    }
+    unlink_check(&engine, r.id).await;
+    engine.acceptance_tick().await;
+    let r = rounds_of(&engine, w.d.id).await.remove(0);
+    assert_eq!((r.state, r.check_dispatch_id), (VerificationState::Checking, Some(check)));
+}
+
+/// M0-5: a round's number is reused after a void one — the void round's
+/// check is not the new round's, whatever its card says.
+#[tokio::test]
+async fn an_unlinked_round_is_never_named_with_an_earlier_rounds_check() {
+    use crate::db::entities::personal_agent_verification::VerificationState;
+    use crate::db::service::personal_agent_verification_service as vsvc;
+    use sea_orm::{ActiveModelTrait, Set};
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    let conn = &engine.db.conn;
+    engine.acceptance_tick().await;
+    let old = rounds_of(&engine, w.d.id).await.remove(0);
+    // The worktree changed while it was checked: void, its number free.
+    let mut am: crate::db::entities::personal_agent_verification::ActiveModel = old.clone().into();
+    am.state = Set(VerificationState::Void);
+    am.update(conn).await.unwrap();
+    for legacy in [false, true] {
+        let card = svc::check_cards_of(conn, w.d.id, old.id, old.round, old.created_at)
+            .await
+            .unwrap()
+            .remove(0);
+        if legacy {
+            // An older card naming only the number, written before the new
+            // round opened; and the old round no longer holding its check.
+            let mut data = data_of(&card);
+            data.as_object_mut().unwrap().remove("check_round_id");
+            let mut am: crate::db::entities::personal_agent_timeline::ActiveModel = card.into();
+            am.data = Set(Some(data.to_string()));
+            am.update(conn).await.unwrap();
+            unlink_check(&engine, old.id).await;
+        }
+        // The new round, crashed before its check was sent.
+        let new = vsvc::create(
+            conn,
+            vsvc::NewRound {
+                bot_id: Some(engine.bot().await),
+                dispatch_id: w.d.id,
+                round: old.round,
+                run_seq: old.run_seq,
+                fingerprint: old.fingerprint.clone(),
+                state: VerificationState::Checking,
+                unchecked: false,
+            },
+        )
+        .await
+        .unwrap();
+        let mut am: crate::db::entities::personal_agent_verification::ActiveModel = new.clone().into();
+        am.created_at = Set(chrono::Utc::now() + chrono::Duration::seconds(2));
+        am.update(conn).await.unwrap();
+        engine.acceptance_tick().await;
+        let now = vsvc::get(conn, new.id).await.unwrap().unwrap();
+        assert_eq!((now.state, now.check_dispatch_id), (VerificationState::Checking, None), "legacy {legacy}");
+        // Out of the way of the next case.
+        let mut am: crate::db::entities::personal_agent_verification::ActiveModel = now.into();
+        am.state = Set(VerificationState::Stale);
+        am.update(conn).await.unwrap();
+    }
+}
+
+/// M0-5: a checking round with no check named and no card to name it by,
+/// once a while old, is put to the assistant as not checked; younger, it is
+/// left for the moment; moved on meanwhile, it is left as it is.
+#[tokio::test]
+async fn a_checking_round_with_no_check_to_be_found_goes_to_the_assistant_unchecked() {
+    use crate::db::entities::personal_agent_verification::VerificationState;
+    use sea_orm::{ActiveModelTrait, Set};
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    let conn = &engine.db.conn;
+    let bot = engine.bot().await;
+    engine.acceptance_tick().await;
+    let r = rounds_of(&engine, w.d.id).await.remove(0);
+    let check = r.check_dispatch_id.unwrap();
+    // No card to name it by: an older codeg's check sent without one is
+    // still found — the one check in its worktree since, nothing else's.
+    let card = svc::check_cards_of(conn, w.d.id, r.id, r.round, r.created_at).await.unwrap().remove(0);
+    let mut am: crate::db::entities::personal_agent_timeline::ActiveModel = card.into();
+    am.data = Set(Some(json!({ "mode": "session" }).to_string()));
+    am.update(conn).await.unwrap();
+    unlink_check(&engine, r.id).await;
+    engine.acceptance_tick().await;
+    assert_eq!(rounds_of(&engine, w.d.id).await.remove(0).check_dispatch_id, Some(check));
+    // And with no check of its at all to be found.
+    unlink_check(&engine, r.id).await;
+    let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = dispatch_state(&engine, check).await.into();
+    am.folder_id = Set(None);
+    am.update(conn).await.unwrap();
+    // Just opened: left for now.
+    engine.acceptance_tick().await;
+    let now = rounds_of(&engine, w.d.id).await.remove(0);
+    assert_eq!((now.state, now.check_dispatch_id), (VerificationState::Checking, None));
+    // A while old: the assistant's, as not checked.
+    let mut am: crate::db::entities::personal_agent_verification::ActiveModel = now.into();
+    am.created_at = Set(chrono::Utc::now() - chrono::Duration::minutes(11));
+    am.update(conn).await.unwrap();
+    engine.acceptance_tick().await;
+    let moved = rounds_of(&engine, w.d.id).await.remove(0);
+    assert_eq!(moved.state, VerificationState::Deciding, "{moved:?}");
+    assert!(moved.unchecked, "the card says it was not checked");
+    let woke = svc::pending_events(conn, bot).await.unwrap();
+    assert!(
+        woke.iter().any(|e| e.source_key == format!("acceptance:{}", moved.id) && e.wake),
+        "the assistant is woken for it: {woke:?}"
+    );
+    // Nothing moves a round that moved on.
+    assert_eq!(
+        crate::db::service::personal_agent_verification_service::abandon_unlinked_check(conn, moved.id).await.unwrap(),
+        None
+    );
+}
+
 #[tokio::test]
 async fn code_work_is_checked_on_its_assistants_work_agent_and_its_assistant_concludes() {
     use crate::db::entities::personal_agent_verification::{CheckVerdict, VerificationState};
@@ -12816,10 +13365,17 @@ async fn the_activity_lists_each_thing_once_in_the_group_it_waits_in() {
     assert_eq!(view.next.iter().filter(|r| r.item.is_some()).count(), 510);
     assert!(view.next.iter().any(|r| r.routine.as_ref().is_some_and(|x| x.title == "Morning check")));
     assert!(view.dispatches.iter().any(|d| d.id == failed));
-    // The counts: what waits on the owner, and "today"'s for the pill.
+    // The counts: what waits on the owner, the pill's the same and its
+    // first the list's (5.4) — the groups' with no suggestion among them,
+    // an older page's with them.
+    let g = &view.groups;
+    assert_eq!((g.waiting, g.pill.count), (g.needs.len(), g.needs.len()));
+    assert_eq!(g.pill.first.as_deref(), Some(failed_row.key.as_str()));
     assert_eq!(view.waiting, view.needs.len());
-    assert_eq!(view.pill.count, view.needs.iter().filter(|r| r.today.is_some()).count());
+    assert_eq!(view.pill.count, view.needs.len());
     assert_eq!(view.pill.first.as_deref(), Some(failed_row.key.as_str()));
+    assert!(g.running.iter().all(|r| r.stop.is_some()), "{:#?}", g.running);
+    assert!(view.capabilities.contains(&"groups_v2"), "{:?}", view.capabilities);
 
     // A work assistant's page: its own rows, none of the primary's.
     let made = engine.create_bot(BotSpec::named("Developer")).await.unwrap();
@@ -13746,6 +14302,18 @@ mod against_a_forge {
             let out = call_tool(primary_ref, "pr_status", json!({ "task_id": b.id })).await;
             assert!(out.ok && out.text.contains("may be out of date"), "{}", out.text);
             assert_eq!(state_ref.lock().unwrap().pull_reads, reads + 1);
+            // A longer hold set since stands: a failure written after it
+            // never brings the next read sooner — a later one moves it on.
+            let x = watches.values().next().unwrap();
+            let later = chrono::Utc::now() + chrono::Duration::hours(1);
+            wsvc::update(&primary_ref.db.conn, x.id, None, wsvc::WatchWrite { next_poll_at: Some(Some(later)), ..Default::default() }).await.unwrap();
+            let sooner = chrono::Utc::now() + chrono::Duration::seconds(60);
+            let saved = wsvc::update(&primary_ref.db.conn, x.id, None, wsvc::WatchWrite { failures: Some(9), next_poll_at_least: Some(sooner), ..Default::default() }).await.unwrap().unwrap();
+            assert_eq!(saved.failures, 9);
+            assert!(saved.next_poll_at.unwrap() > chrono::Utc::now() + chrono::Duration::minutes(50), "{:?}", saved.next_poll_at);
+            let further = later + chrono::Duration::hours(1);
+            let saved = wsvc::update(&primary_ref.db.conn, x.id, None, wsvc::WatchWrite { next_poll_at_least: Some(further), ..Default::default() }).await.unwrap().unwrap();
+            assert!(saved.next_poll_at.unwrap() > later + chrono::Duration::minutes(50), "{:?}", saved.next_poll_at);
         })
         .await;
     }
@@ -23771,4 +24339,609 @@ async fn a_question_of_stopped_work_raises_no_card() {
     let events = svc::pending_events(&engine.db.conn, engine.bot().await).await.unwrap();
     assert!(events.iter().all(|e| e.kind != svc::ASK_EVENT), "nothing woken");
     assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::Canceled);
+}
+
+// ── M3: a row's own buttons on the activity (6.5) ───────────────────────────
+
+/// [Retry] on a row: failed work that never got a session is handed out
+/// again, once — a read from before its last change refused, and a second
+/// press on the same read finding it taken over.
+#[tokio::test]
+async fn retry_from_the_activity_hands_failed_work_out_again_once() {
+    let (host, w, _tmp) = hosted().await;
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    role_assistant(&worker, "Coder", true).await;
+    let d = failed_dispatch(&worker, 0, "Fix the release script", 1).await;
+    // As the list reads it.
+    let d = dispatch_state(&worker, d.id).await;
+    let before = all_dispatches(&worker).await.len();
+    let e = worker
+        .retry_work(d.id, d.updated_at - chrono::Duration::seconds(5), None)
+        .await
+        .unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::CHANGED));
+    assert_eq!(all_dispatches(&worker).await.len(), before, "nothing made");
+    let out = worker.retry_work(d.id, d.updated_at, None).await.unwrap();
+    assert_eq!(out["retry_of"], d.id);
+    let made = out["dispatch_id"].as_i64().unwrap() as i32;
+    let again = dispatch_state(&worker, made).await;
+    assert_eq!((again.title.as_str(), again.replaces_id), ("Fix the release script", Some(d.id)));
+    assert_eq!(dispatch_state(&worker, d.id).await.replaced_by, Some(made));
+    assert_eq!(all_dispatches(&worker).await.len(), before + 1);
+    let e = worker.retry_work(d.id, d.updated_at, None).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::CHANGED));
+    assert_eq!(all_dispatches(&worker).await.len(), before + 1, "made once");
+}
+
+/// [Hand to …] on a row: the owner's message to the assistant quoting the
+/// failed work's result card, once per card.
+#[tokio::test]
+async fn handing_failed_work_from_the_activity_quotes_its_card_once() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let d = failed_dispatch(&engine, 0, "Fix the release script", 1).await;
+    engine.record_progress(&d, None, Some("the agent crashed".into()), "agent").await;
+    let card = svc::latest_result_row(&engine.db.conn, d.id).await.unwrap().expect("its result card");
+    let d = dispatch_state(&engine, d.id).await;
+    let e = engine
+        .hand_failed_work(d.id, d.updated_at - chrono::Duration::seconds(5))
+        .await
+        .unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::CHANGED));
+    assert!(svc::queued_owner_rows(&engine.db.conn, bot).await.unwrap().is_empty());
+    engine.hand_failed_work(d.id, d.updated_at).await.unwrap();
+    let owner = svc::queued_owner_rows(&engine.db.conn, bot).await.unwrap();
+    assert_eq!(owner.len(), 1);
+    assert_eq!(owner[0].reply_to, Some(card.id), "it quotes the card");
+    assert!(owner[0].body.contains("\"Fix the release script\" failed"), "{}", owner[0].body);
+    let card_now = svc::get_row(&engine.db.conn, card.id).await.unwrap().unwrap();
+    assert!(data_of(&card_now)["handed_at"].is_string(), "{}", data_of(&card_now));
+    // Pressed again — or [Retry] in another window: the failure is seen
+    // to already.
+    let e = engine.hand_failed_work(d.id, d.updated_at).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::IN_OTHER_HANDS));
+    let e = engine.retry_work(d.id, d.updated_at, None).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::IN_OTHER_HANDS));
+    assert_eq!(svc::queued_owner_rows(&engine.db.conn, bot).await.unwrap().len(), 1, "handed once");
+    assert!(svc::failed_claim_holds(&engine.db.conn, &svc::failed_claim_id(d.id, d.updated_at)).await.unwrap());
+}
+
+/// [Hand again] on a reminder its assistant ended its turn on with the
+/// matter still open: not while the assistant has it — its message queued,
+/// in a turn under way, or sent again — and once per message that had it;
+/// that message, cut off, is either sent again or handed again, never both.
+/// The card's first [Hand over], pressed late, never hands it again.
+#[tokio::test]
+async fn a_reminder_is_handed_again_only_once_its_assistant_is_done_with_it() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let conn = &engine.db.conn;
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Renew the domain", "due": "1m" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    engine.fire_due_at(super::clock::now() + chrono::Duration::minutes(2)).await;
+    let card = reminder_rows(&engine, id).await.remove(0);
+    let notice_id = notice_of_row(&card);
+    engine.act_on_notice_with(notice_id, "hand_over", Some("Renew it".into())).await.unwrap();
+    let first = svc::queued_owner_rows(conn, bot).await.unwrap().remove(0);
+    let notice = svc::get_notice(conn, notice_id).await.unwrap().unwrap();
+    let again = |text: Option<&str>| {
+        let engine = engine.clone();
+        let notice = notice.clone();
+        let text = text.map(str::to_string);
+        async move { engine.act_on_reminder(&notice, "hand_again", text, None).await }
+    };
+    // Its message still queued: the assistant has it.
+    assert_eq!(again(None).await.unwrap_err().key, Some(super::refusal::keys::IN_OTHER_HANDS));
+    // In a turn under way: still.
+    let seg = open_segment(&engine).await;
+    let deliver = |row: i32| async move {
+        let batch = svc::create_batch(conn, bot, seg, BatchKind::Delivery, None).await.unwrap();
+        svc::move_owner_rows(conn, &[row], &[OwnerStatus::Queued], OwnerStatus::Delivered, Some(batch.id), Some(seg), svc::ReadMark::Read)
+            .await
+            .unwrap();
+        batch.id
+    };
+    let batch = deliver(first.id).await;
+    assert_eq!(again(None).await.unwrap_err().key, Some(super::refusal::keys::IN_OTHER_HANDS));
+    // Cut off: sent again from the conversation. A hand-over again that
+    // read the card before that finds its message taken.
+    svc::finish_batch(conn, batch, BatchStatus::Interrupted, None, None, None).await.unwrap();
+    svc::move_owner_rows(conn, &[first.id], &[OwnerStatus::Delivered], OwnerStatus::Interrupted, None, None, svc::ReadMark::Read)
+        .await
+        .unwrap();
+    let copy = engine.resend(first.id).await.unwrap();
+    let item = svc::get_item(conn, id).await.unwrap().unwrap();
+    let stale = engine
+        .queue_owner_hand_over(
+            "Again".into(),
+            card.id,
+            data_of(&svc::get_row(conn, card.id).await.unwrap().unwrap()),
+            svc::CardGuard::HandAgain {
+                hand: svc::HandOver { notice_id, item_id: id, item_updated_at: item.updated_at },
+                prev: Some(first.id),
+                last: Some(first.id),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(stale.key, Some(super::refusal::keys::CHANGED));
+    let queued: Vec<i32> = svc::queued_owner_rows(conn, bot).await.unwrap().iter().map(|r| r.id).collect();
+    assert_eq!(queued, vec![copy.id], "one message: the copy");
+    // The copy has it now.
+    assert_eq!(again(None).await.unwrap_err().key, Some(super::refusal::keys::IN_OTHER_HANDS));
+    // Its turn over with the matter open: handed again.
+    let batch = deliver(copy.id).await;
+    svc::finish_batch(conn, batch, BatchStatus::Completed, Some("end_turn".into()), None, None).await.unwrap();
+    let row = again(Some("Renew it, please")).await.unwrap();
+    let data = row.data.unwrap();
+    assert_eq!(data["state"], "handed");
+    assert_eq!(data["rehands"], 1);
+    let queued = svc::queued_owner_rows(conn, bot).await.unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].body, "Renew it, please");
+    assert_eq!(queued[0].reply_to, Some(card.id), "it quotes the card");
+    assert_eq!(data["hand_row_id"], queued[0].id, "{data}");
+    let copy_now = svc::get_row(conn, copy.id).await.unwrap().unwrap();
+    assert_eq!(data_of(&copy_now)["rehanded_as"], queued[0].id);
+    assert_eq!(svc::get_notice(conn, notice_id).await.unwrap().unwrap().state, NoticeState::Acted);
+    // The card's first [Hand over], pressed late: answered already.
+    let e = engine.act_on_reminder(&notice, "hand_over", None, None).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::REMINDER_ANSWERED));
+    assert_eq!(svc::queued_owner_rows(conn, bot).await.unwrap().len(), 1, "no message");
+}
+
+/// [Ask again] on a message its receiver ended its turn on unanswered: not
+/// before it was taken up, nor while its turn on it is under way; once in a
+/// window however often pressed; never once it is answered, or the owner
+/// stopped waiting for it.
+#[tokio::test]
+async fn asking_again_waits_for_the_receivers_turn_to_end_and_counts_once() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let p = primary.bot().await;
+    let at = chrono::DateTime::parse_from_rfc3339("2026-11-28T10:00:00Z").unwrap().with_timezone(&chrono::Utc);
+    // A message to Dev, waited on; taken up in a turn of Dev's that ends
+    // with no answer.
+    let send = |text: &'static str| {
+        let primary = primary.clone();
+        async move {
+            let id = sent_id(&say(&primary, json!({ "to": w.to_string(), "text": text })).await);
+            let item = svc::list_items(&primary.db.conn, p, &[ItemStatus::Waiting], 50)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|i| i.kind == ItemKind::Message)
+                .max_by_key(|i| i.id)
+                .unwrap();
+            (id, item.id)
+        }
+    };
+    let take_up = |id: i32| {
+        let worker = worker.clone();
+        let primary = primary.clone();
+        async move {
+            let seg = open_segment(&worker).await;
+            let ev: Vec<i32> = pending_message_events(&primary, w)
+                .await
+                .iter()
+                .filter(|e| e.thread_id == Some(id))
+                .map(|e| e.id)
+                .collect();
+            let batch = svc::create_batch(&worker.db.conn, w, seg, BatchKind::Delivery, None).await.unwrap();
+            svc::mark_events_delivered(&worker.db.conn, &ev, batch.id).await.unwrap();
+            msvc::mark_messages_delivered(&worker.db.conn, &[id], batch.id).await.unwrap();
+            batch.id
+        }
+    };
+    let end_turn = |batch: i32| {
+        let worker = worker.clone();
+        async move {
+            svc::finish_batch(&worker.db.conn, batch, BatchStatus::Completed, Some("end_turn".into()), None, None)
+                .await
+                .unwrap();
+            svc::finish_batch_events(&worker.db.conn, batch).await.unwrap();
+        }
+    };
+    let (id, item) = send("Review the login fix.").await;
+    let e = primary.nudge_matter_at(item, at).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::CHANGED), "not taken up yet");
+    let batch = take_up(id).await;
+    let e = primary.nudge_matter_at(item, at).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::IN_OTHER_HANDS), "in its turn");
+    end_turn(batch).await;
+    assert!(primary.nudge_matter_at(item, at).await.unwrap());
+    assert!(
+        !primary.nudge_matter_at(item, at + chrono::Duration::minutes(5)).await.unwrap(),
+        "the same nudge"
+    );
+    let nudges = || async {
+        svc::pending_events(&worker.db.conn, w)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == super::activity_acts::NUDGE_EVENT)
+            .collect::<Vec<_>>()
+    };
+    let n = nudges().await;
+    assert_eq!(n.len(), 1);
+    assert!(n[0].wake);
+    assert_eq!(n[0].thread_id, Some(id));
+    assert!(n[0].summary.contains(&format!("reply_to m{id}")), "{}", n[0].summary);
+    // Answered: nothing to ask again.
+    assert!(say(&worker, json!({ "reply_to": format!("m{id}"), "text": "Looks good." })).await.ok);
+    assert!(primary.nudge_matter_at(item, at + chrono::Duration::minutes(20)).await.is_err(), "answered");
+    assert_eq!(nudges().await.len(), 1);
+    // Another, the owner stopped waiting for it: nothing to ask again.
+    let (id2, item2) = send("And the signup page.").await;
+    end_turn(take_up(id2).await).await;
+    primary
+        .settle_item_from(item2, "drop", None, super::reminders::OpSource::Panel)
+        .await
+        .unwrap();
+    assert!(primary.nudge_matter_at(item2, at).await.is_err(), "not waited on");
+    assert_eq!(nudges().await.len(), 1);
+    // Delivered, but no event of it with its receiver (none under way): as
+    // the activity reads it — its turn on it over — asked again.
+    let (id3, item3) = send("And the footer.").await;
+    let ev: Vec<i32> = pending_message_events(&primary, w)
+        .await
+        .iter()
+        .filter(|e| e.thread_id == Some(id3))
+        .map(|e| e.id)
+        .collect();
+    let seg = open_segment(&worker).await;
+    let batch = svc::create_batch(&worker.db.conn, w, seg, BatchKind::Delivery, None).await.unwrap();
+    msvc::mark_messages_delivered(&worker.db.conn, &[id3], batch.id).await.unwrap();
+    event_entity::Entity::delete_many()
+        .filter(event_entity::Column::Id.is_in(ev))
+        .exec(&worker.db.conn)
+        .await
+        .unwrap();
+    let standing = crate::commands::personal_agent::personal_agent_activity_core(&primary.db, &primary.manager, None)
+        .await
+        .unwrap()
+        .groups
+        .needs
+        .iter()
+        .find(|r| r.item.as_ref().is_some_and(|i| i.id == item3))
+        .and_then(|r| r.why.clone());
+    assert!(
+        matches!(standing, Some(super::activity_view::RowWhy::NoReply { .. })),
+        "{standing:?}"
+    );
+    assert!(primary.nudge_matter_at(item3, at).await.unwrap());
+    assert_eq!(nudges().await.len(), 2);
+}
+
+/// A turn's stop reaches the work that turn still runs only: work it made
+/// that a later turn continued since is that turn's — read before the later
+/// turn took it, the stop's own write holds to it and stops nothing.
+#[tokio::test]
+async fn a_turns_stop_leaves_work_a_later_turn_continued() {
+    use super::stop::{StopExpect, StopOutcome, StoppedBy};
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let conn = &engine.db.conn;
+    let seg = open_segment(&engine).await;
+    let a = svc::create_batch(conn, bot, seg, BatchKind::Delivery, None).await.unwrap();
+    let b = svc::create_batch(conn, bot, seg, BatchKind::Delivery, None).await.unwrap();
+    let id = session_dispatch(&engine, DispatchState::Running, "c-ab").await;
+    {
+        use sea_orm::{ActiveModelTrait, Set};
+        let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = dispatch_state(&engine, id).await.into();
+        am.origin_batch_id = Set(Some(a.id));
+        am.source_batch_id = Set(Some(a.id));
+        am.update(conn).await.unwrap();
+    }
+    assert_eq!(svc::dispatches_run_by_batch(conn, a.id).await.unwrap().len(), 1, "A runs what it made");
+    // Read by A's stop; then B continues it.
+    let read = dispatch_state(&engine, id).await;
+    svc::update_dispatch(conn, id, None, DispatchWrite { source_batch_id: Some(Some(b.id)), ..Default::default() })
+        .await
+        .unwrap();
+    assert!(svc::dispatches_run_by_batch(conn, a.id).await.unwrap().is_empty(), "B's now");
+    assert_eq!(svc::dispatches_run_by_batch(conn, b.id).await.unwrap().len(), 1);
+    let out = engine
+        .stop_dispatch_as(&read, StoppedBy::Owner, StopExpect { run_by_batch: Some(a.id), ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(out, StopOutcome::Changed);
+    assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::Running, "B's work runs on");
+    let out = engine
+        .stop_dispatch_as(&read, StoppedBy::Owner, StopExpect { run_by_batch: Some(b.id), ..Default::default() })
+        .await
+        .unwrap();
+    assert!(matches!(out, StopOutcome::Stopped { .. }), "{out:?}");
+    // One on record from before `source_batch_id` was kept: the turn that
+    // made it.
+    let old = session_dispatch(&engine, DispatchState::Running, "c-old").await;
+    {
+        use sea_orm::{ActiveModelTrait, Set};
+        let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = dispatch_state(&engine, old).await.into();
+        am.origin_batch_id = Set(Some(a.id));
+        am.source_batch_id = Set(None);
+        am.update(conn).await.unwrap();
+    }
+    let ids: Vec<i32> = svc::dispatches_run_by_batch(conn, a.id).await.unwrap().iter().map(|d| d.id).collect();
+    assert_eq!(ids, vec![old]);
+}
+
+/// A watched pull request ready to merge whose card is gone (seen, put
+/// aside) is the activity's own row, never a brief's: "today" as a brief
+/// reads it lists it nowhere.
+#[tokio::test]
+async fn a_ready_pull_request_without_its_card_is_the_panels_row_not_a_briefs() {
+    use crate::db::service::personal_agent_watch_service as wsvc;
+    let (engine, _tmp) = configured().await;
+    let (w, _) = wsvc::insert_or_get(
+        &engine.db.conn,
+        wsvc::NewWatch {
+            bot_id: engine.bot().await,
+            target: crate::forge::DeliveryTarget {
+                provider: crate::forge::ForgeProvider::GitHub,
+                server_host: "github.com".into(),
+                account_id: "acc".into(),
+                owner_repo: "acme/app".into(),
+            },
+            kind: "pr".into(),
+            number: 7,
+            folder_id: None,
+            work_task_id: None,
+            dispatch_id: None,
+            source: "task".into(),
+            state: crate::db::entities::personal_agent_watch::WatchState::Watching,
+            url: None,
+            title: Some("Fix the login".into()),
+            quiet_first: false,
+        },
+    )
+    .await
+    .unwrap();
+    wsvc::update(
+        &engine.db.conn,
+        w.id,
+        None,
+        wsvc::WatchWrite {
+            phase: Some(Some("mergeable".into())),
+            head_sha: Some(Some("c1".into())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let key = format!("pr:{}", w.id);
+    let (view, _) = super::today::today_from(&engine.db, &engine.manager, super::clock::now(), None).await;
+    assert!(
+        view.needs.iter().chain(&view.watching).chain(&view.done).all(|r| r.key != key),
+        "a brief lists a ready one by its card only"
+    );
+    assert!(view.ready_prs.iter().any(|r| r.key == key));
+    let activity = crate::commands::personal_agent::personal_agent_activity_core(&engine.db, &engine.manager, None)
+        .await
+        .unwrap();
+    let row = activity.groups.needs.iter().find(|r| r.key == key).expect("the owner's to merge");
+    let pr = row.pr.as_ref().expect("what its merge needs");
+    assert_eq!((pr.watch_id, pr.head_sha.as_deref()), (w.id, Some("c1")));
+}
+
+/// A rule card for failed work `d` of `engine`'s, raised as the rule raises
+/// one for that failure.
+async fn failed_rule_card(engine: &PersonalAgentEngine, d: &crate::db::entities::personal_agent_dispatch::Model) -> i32 {
+    let f = super::rules::Found {
+        rule: "failed",
+        object: format!("dispatch:{}", d.id),
+        episode: d.updated_at.timestamp_millis().to_string(),
+        bot: engine.bot().await,
+        since: d.updated_at,
+        held: false,
+        facts: json!({ "dispatch_id": d.id, "title": d.title, "mode": d.mode, "state": d.state }),
+        text: d.title.clone(),
+    };
+    engine.raise_rule_card(&f, &engine.prefs().await, false).await.unwrap()
+}
+
+/// [Retry] on a row of work whose session is still there: a follow-up in
+/// it, under the row's own operation (one the prompt can carry) — and the
+/// rule card of that failure, open, settled with it: the card's own
+/// [Retry] has nothing left to do.
+#[tokio::test]
+async fn retry_from_the_activity_follows_up_in_its_session_and_settles_its_card() {
+    let (engine, tmp) = configured().await;
+    let (id, mut rx, _st, _conv) = live_session_dispatch(&engine, &tmp, "c-rr", DispatchState::Failed).await;
+    let d = dispatch_state(&engine, id).await;
+    let notice = failed_rule_card(&engine, &d).await;
+    let out = engine.retry_work(id, d.updated_at, None).await.unwrap();
+    assert_eq!(out["dispatch_id"], id);
+    let (sent, ..) = take_followup(&mut rx);
+    assert!(sent.contains("Your last attempt at this failed"), "{sent}");
+    let n = svc::get_notice(&engine.db.conn, notice).await.unwrap().unwrap();
+    assert_eq!(n.state, NoticeState::Acted);
+    let row = svc::get_row(&engine.db.conn, n.timeline_id.unwrap()).await.unwrap().unwrap();
+    assert_eq!(data_of(&row)["state"], "retried");
+    assert!(engine.act_on_notice(notice, "retry").await.is_err(), "the card's [Retry] is spent");
+}
+
+/// The row and the card claim the same failure: with its card acting (the
+/// owner pressed it), the row's [Retry] and [Hand to] are refused; given
+/// up since it failed, so are they.
+#[tokio::test]
+async fn a_failure_its_card_is_acting_on_or_the_owner_gave_up_is_not_the_rows() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let d = failed_dispatch(&engine, 0, "Fix the release script", 1).await;
+    engine.record_progress(&d, None, Some("the agent crashed".into()), "agent").await;
+    let d = dispatch_state(&engine, d.id).await;
+    let notice = failed_rule_card(&engine, &d).await;
+    svc::move_notice(&engine.db.conn, notice, &[NoticeState::Open], NoticeState::Acting)
+        .await
+        .unwrap();
+    let e = engine.retry_work(d.id, d.updated_at, None).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::IN_OTHER_HANDS));
+    let e = engine.hand_failed_work(d.id, d.updated_at).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::IN_OTHER_HANDS));
+    assert!(svc::queued_owner_rows(&engine.db.conn, bot).await.unwrap().is_empty());
+    // The card's act failed: open again. The owner gives the work up.
+    svc::move_notice(&engine.db.conn, notice, &[NoticeState::Acting], NoticeState::Open)
+        .await
+        .unwrap();
+    let item = svc::create_item(
+        &engine.db.conn,
+        bot,
+        ItemKind::Dispatch,
+        Some(d.id),
+        ItemStatus::Open,
+        Some(WaitsFor::Owner),
+        "Fix the release script".into(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    engine
+        .settle_item_from(item.id, "drop", None, super::reminders::OpSource::Panel)
+        .await
+        .unwrap();
+    let e = engine.hand_failed_work(d.id, d.updated_at).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::CHANGED), "given up");
+    assert!(svc::queued_owner_rows(&engine.db.conn, bot).await.unwrap().is_empty());
+    assert_eq!(svc::get_notice(&engine.db.conn, notice).await.unwrap().unwrap().state, NoticeState::Open);
+}
+
+/// [Hand again] on a matter that came due for its assistant to do
+/// (`at_due = act`): not while what woke it is still with the assistant;
+/// once its turn on it is over with the matter open, the owner's message
+/// hands it again — and the card says it is handed now, by that message.
+#[tokio::test]
+async fn a_matter_that_woke_its_assistant_is_handed_again_once_its_turn_is_over() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let out = call(
+        &engine,
+        "item_update",
+        json!({ "kind": "reminder", "summary": "Water the plants", "due": "1m", "at_due": "act",
+                "act_spec": { "what": "Water the plants" } }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    engine.fire_due_at(super::clock::now() + chrono::Duration::minutes(2)).await;
+    let card = reminder_rows(&engine, id).await.remove(0);
+    assert_eq!(data_of(&card)["state"], "woke");
+    let notice = svc::get_notice(&engine.db.conn, notice_of_row(&card)).await.unwrap().unwrap();
+    // What woke it still pending: the assistant has it.
+    let e = engine.act_on_reminder(&notice, "hand_again", None, None).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::IN_OTHER_HANDS));
+    // Its turn on it over, the matter open.
+    let ev: Vec<i32> = svc::pending_events(&engine.db.conn, bot)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|e| e.kind == super::reminders::REMINDER_EVENT)
+        .map(|e| e.id)
+        .collect();
+    let seg = open_segment(&engine).await;
+    let batch = svc::create_batch(&engine.db.conn, bot, seg, BatchKind::Delivery, None).await.unwrap();
+    svc::mark_events_delivered(&engine.db.conn, &ev, batch.id).await.unwrap();
+    svc::finish_batch(&engine.db.conn, batch.id, BatchStatus::Completed, Some("end_turn".into()), None, None)
+        .await
+        .unwrap();
+    svc::finish_batch_events(&engine.db.conn, batch.id).await.unwrap();
+    let row = engine
+        .act_on_reminder(&notice, "hand_again", Some("Water them, please".into()), None)
+        .await
+        .unwrap();
+    let data = row.data.unwrap();
+    assert_eq!((data["state"].as_str(), data["rehands"].as_i64()), (Some("handed"), Some(1)));
+    let queued = svc::queued_owner_rows(&engine.db.conn, bot).await.unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].reply_to, Some(card.id));
+    assert_eq!(data["hand_row_id"], queued[0].id);
+    // Pressed again: the message has it now.
+    let e = engine.act_on_reminder(&notice, "hand_again", None, None).await.unwrap_err();
+    assert_eq!(e.key, Some(super::refusal::keys::IN_OTHER_HANDS));
+}
+
+/// M4 (7.5): a row waiting on the owner carries what it asks, as it is
+/// answered there — the assistant's own permission request with its
+/// options, its question, its plan — and nothing once it is answered.
+#[tokio::test]
+async fn a_row_waiting_on_the_owner_carries_what_it_asks() {
+    let (engine, _tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let bot = engine.bot().await;
+    let mut row = NewRow::new(TimelineKind::Permission, "rm -rf build");
+    row.ref_id = Some("p1".into());
+    row.data = Some(json!({
+        "state": "pending",
+        "tool_call": { "title": "rm -rf build", "kind": "execute", "raw_input": { "command": "rm -rf build" } },
+        "options": [
+            { "option_id": "allow", "name": "Allow", "kind": "allow_once" },
+            { "option_id": "reject", "name": "Reject", "kind": "reject_once" },
+        ],
+    }));
+    let asked = svc::insert_row(conn, bot, row).await.unwrap().id;
+    let mut plan = NewRow::new(TimelineKind::Question, "1. Read\n2. Fix\n3. Test\n4. Ship");
+    plan.ref_id = Some("plan-1".into());
+    plan.data = Some(json!({ "kind": "plan_approval", "state": "pending" }));
+    svc::insert_row(conn, bot, plan).await.unwrap();
+    let read = || async {
+        crate::commands::personal_agent::personal_agent_activity_core(&engine.db, &engine.manager, None)
+            .await
+            .unwrap()
+    };
+    let v = read().await;
+    let asks: Vec<serde_json::Value> = v
+        .groups
+        .needs
+        .iter()
+        .filter_map(|r| r.ask.as_ref())
+        .map(|a| serde_json::to_value(a).unwrap())
+        .collect();
+    assert!(
+        asks.iter().any(|a| a["kind"] == "permission"
+            && a["via"] == "assistant"
+            && a["request_id"] == "p1"
+            && a["options"].as_array().map(Vec::len) == Some(2)),
+        "{asks:?}"
+    );
+    assert!(
+        asks.iter().any(|a| a["kind"] == "plan" && a["approval_id"] == "plan-1" && a["plan"].as_str().unwrap().starts_with("1. Read")),
+        "{asks:?}"
+    );
+    assert!(v.capabilities.contains(&"ask_inline"));
+    let key = format!("card:{bot}:{asked}");
+    assert!(v.groups.needs.iter().any(|r| r.key == key));
+    // Answered: its row is gone, and nothing is asked of it.
+    svc::update_row_data(conn, asked, None, Some(json!({ "state": "answered" }))).await.unwrap();
+    let v = read().await;
+    assert!(v.groups.needs.iter().all(|r| r.key != key), "the answered one is gone");
+    assert!(
+        v.groups
+            .needs
+            .iter()
+            .filter_map(|r| r.ask.as_ref())
+            .all(|a| !matches!(a, super::activity_view::RowAsk::Permission { .. })),
+    );
+}
+
+/// A rule card of a failure the activity's row saw to already (raised
+/// before the scan could tell): its [Hand to] loses the same claim — the
+/// card expires, no second message goes out.
+#[tokio::test]
+async fn a_rule_card_of_a_failure_seen_to_from_the_row_expires_when_pressed() {
+    let (engine, _tmp) = configured().await;
+    let bot = engine.bot().await;
+    let d = failed_dispatch(&engine, 0, "Fix the release script", 1).await;
+    engine.record_progress(&d, None, Some("the agent crashed".into()), "agent").await;
+    let d = dispatch_state(&engine, d.id).await;
+    engine.hand_failed_work(d.id, d.updated_at).await.unwrap();
+    assert_eq!(svc::queued_owner_rows(&engine.db.conn, bot).await.unwrap().len(), 1);
+    let notice = failed_rule_card(&engine, &d).await;
+    assert!(engine.act_on_notice(notice, "hand").await.is_err());
+    let n = svc::get_notice(&engine.db.conn, notice).await.unwrap().unwrap();
+    assert_eq!(n.state, NoticeState::Expired, "not left acting");
+    let card = svc::get_row(&engine.db.conn, n.timeline_id.unwrap()).await.unwrap().unwrap();
+    assert_eq!(data_of(&card)["state"], "expired", "the card says so");
+    assert_eq!(svc::queued_owner_rows(&engine.db.conn, bot).await.unwrap().len(), 1, "one message");
 }

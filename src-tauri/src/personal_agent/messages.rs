@@ -1337,6 +1337,22 @@ impl PersonalAgentEngine {
         Ok(())
     }
 
+    /// Stop the turn of batch `batch` — the one a row of the activity read
+    /// — and only it: one over already, or another begun since, is left.
+    /// Whether it was stopped.
+    pub async fn stop_batch(self: &Arc<Self>, batch: i32) -> Result<bool, String> {
+        match self.cancel_turn_of(batch).await {
+            Ok(true) => {}
+            Ok(false) => return Ok(false),
+            // A turn whose connection is gone already is stopped as it is;
+            // what it set going is stopped all the same.
+            Err(e) => tracing::info!("[personal_agent] stopping the turn: {e}"),
+        }
+        // What that turn set going, by its batch: never another's.
+        self.stop_scope(StopScope::Batch(batch), true).await?;
+        Ok(true)
+    }
+
     /// The roster's "stop everything": all this assistant has going.
     pub async fn stop_all(self: &Arc<Self>) -> Result<(), String> {
         let turn = self.current_batch().await.is_some();
@@ -1387,9 +1403,19 @@ impl PersonalAgentEngine {
         // One whose stop could not be written goes on running: said, once
         // the rest are stopped — never taken for stopped.
         let mut failed = Vec::new();
+        // A turn's: only while that turn still runs it — continued by a
+        // later turn since, it is that turn's to stop (the stop's write
+        // holds to it).
+        let expect = super::stop::StopExpect {
+            run_by_batch: match &scope {
+                StopScope::Batch(b) => Some(*b),
+                _ => None,
+            },
+            ..Default::default()
+        };
         for d in dispatches.into_iter().filter(|d| d.bot_id == Some(bot)) {
             match self
-                .stop_dispatch_as(&d, super::stop::StoppedBy::Owner, Default::default())
+                .stop_dispatch_as(&d, super::stop::StoppedBy::Owner, expect)
                 .await
             {
                 Ok(super::stop::StopOutcome::Stopped { .. }) => {
@@ -1397,6 +1423,28 @@ impl PersonalAgentEngine {
                 }
                 Ok(_) => {}
                 Err(e) => failed.push(format!("dispatch #{}: {e}", d.id)),
+            }
+        }
+        // A turn's work read again once its stop is through: a follow-up of
+        // it that was on its way (its session coming back) and turned live
+        // meanwhile is stopped too.
+        if let StopScope::Batch(b) = &scope {
+            for d in svc::dispatches_run_by_batch(&self.db.conn, *b)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| d.bot_id == Some(bot) && LIVE.contains(&d.state))
+            {
+                match self
+                    .stop_dispatch_as(&d, super::stop::StoppedBy::Owner, expect)
+                    .await
+                {
+                    Ok(super::stop::StopOutcome::Stopped { .. }) => {
+                        stopped_work.push(json!({ "id": d.id, "title": d.title }));
+                    }
+                    Ok(_) => {}
+                    Err(e) => failed.push(format!("dispatch #{}: {e}", d.id)),
+                }
             }
         }
         let messages: Vec<message_entity::Model> = match &scope {
@@ -1659,7 +1707,10 @@ impl PersonalAgentEngine {
         attributed: Result<Option<Input>, Vec<Input>>,
     ) {
         let bot = self.bot().await;
-        let mut data = own.data.clone().unwrap_or_else(|| json!({}));
+        let data = own.data.clone().unwrap_or_else(|| json!({}));
+        // What the request's own row gains: written as those keys alone, so
+        // an answer settled on it meanwhile stays (M0-1).
+        let mut patch = serde_json::Map::new();
         match attributed {
             Ok(Some(input)) => {
                 let Some(origin) = input.origin_bot.filter(|b| *b != bot) else {
@@ -1706,13 +1757,11 @@ impl PersonalAgentEngine {
                     },
                 );
                 self.emit_for(origin, PersonalAgentChange::Status);
-                if let Some(map) = data.as_object_mut() {
-                    map.insert(
-                        "mirrors".into(),
-                        json!([{ "bot_id": origin, "row_id": made.id }]),
-                    );
-                    map.insert("for".into(), input.reference.into());
-                }
+                patch.insert(
+                    "mirrors".into(),
+                    json!([{ "bot_id": origin, "row_id": made.id }]),
+                );
+                patch.insert("for".into(), input.reference.into());
             }
             Ok(None) => return,
             Err(inputs) => {
@@ -1734,13 +1783,25 @@ impl PersonalAgentEngine {
                         "origin_row": i.origin_row,
                     }));
                 }
-                if let Some(map) = data.as_object_mut() {
-                    map.insert("inputs".into(), Value::Array(listed));
-                }
+                patch.insert("inputs".into(), Value::Array(listed));
             }
         }
-        let _ = svc::update_row_data(&self.db.conn, own.id, None, Some(data)).await;
+        if svc::merge_row_data(&self.db.conn, own.id, &Value::Object(patch))
+            .await
+            .is_err()
+        {
+            return;
+        }
         if let Ok(Some(row)) = svc::get_row(&self.db.conn, own.id).await {
+            // Settled before its mirror was made: the mirror says so too.
+            let settled = row
+                .data
+                .as_deref()
+                .and_then(|d| serde_json::from_str::<Value>(d).ok())
+                .is_some_and(|d| d.get("state").and_then(Value::as_str) != Some("pending"));
+            if settled {
+                self.sync_mirrors(&row).await;
+            }
             self.emit_rows(vec![svc::to_row(row)]);
         }
     }
@@ -1777,14 +1838,27 @@ impl PersonalAgentEngine {
                 .as_deref()
                 .and_then(|d| serde_json::from_str::<Value>(d).ok())
                 .unwrap_or_else(|| json!({}));
+            let mut changed = false;
             if let (Some(map), Some(src)) = (mdata.as_object_mut(), data.as_object()) {
                 for k in ["state", "answer", "option_id", "origin"] {
                     if let Some(v) = src.get(k) {
+                        changed |= map.get(k) != Some(v);
                         map.insert(k.into(), v.clone());
                     }
                 }
             }
-            let _ = svc::update_row_data(&self.db.conn, row_id, None, Some(mdata)).await;
+            // Already as its source reads (synced by another path): nothing
+            // to write or tell. Written only while it still waits: of two
+            // syncs of one settlement at once, one writes.
+            if !changed {
+                continue;
+            }
+            if !matches!(
+                svc::write_row_data_if(&self.db.conn, row_id, "pending", &mdata).await,
+                Ok(true)
+            ) {
+                continue;
+            }
             if let Ok(Some(updated)) = svc::get_row(&self.db.conn, row_id).await {
                 self.emit_for(
                     bot,

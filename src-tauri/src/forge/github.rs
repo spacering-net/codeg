@@ -751,6 +751,17 @@ pub async fn change_detail(
         None
     };
 
+    // Blocked by the forge: whether by a review is worth one more read
+    // (6.6) — only then. One that cannot be read says nothing.
+    let review = if raw.state == "open"
+        && !raw.merged
+        && raw.mergeable_state.as_deref() == Some("blocked")
+    {
+        super::feedback::github_review_gate(auth, &repo, number).await
+    } else {
+        None
+    };
+
     Ok(ForgeChangeDetail {
         number: if raw.number > 0 { raw.number } else { number },
         base_ref: raw.base.as_ref().map(|b| b.ref_name.clone()).unwrap_or_default(),
@@ -774,6 +785,7 @@ pub async fn change_detail(
         checks,
         updated_at: raw.updated_at.filter(|s| !s.is_empty()),
         workflow_approval,
+        review,
     })
 }
 

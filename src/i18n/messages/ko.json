@@ -10272,7 +10272,34 @@
     },
     "work": {
       "taskNotStarted": "이 작업은 아직 시작되지 않았습니다. 시작되면 여기에 대화가 표시됩니다.",
-      "taskGone": "이 작업을 찾을 수 없습니다. 삭제되었을 수 있습니다."
+      "taskGone": "이 작업을 찾을 수 없습니다. 삭제되었을 수 있습니다.",
+      "retry": "다시 시도",
+      "handTo": "{name}에게 맡기기",
+      "viewSession": "세션 보기",
+      "merge": "병합",
+      "mergeTo": "{base}에 병합",
+      "createPr": "PR 만들기",
+      "pushBack": "PR로 되돌려 보내기",
+      "mergePr": "PR 병합",
+      "mergeMr": "MR 병합",
+      "openPr": "PR 열기",
+      "openMr": "MR 열기",
+      "nudge": "다시 물어보기",
+      "rehand": "{name}에게 다시 맡기기",
+      "toast": {
+        "retried": "다시 시작했어요",
+        "handed": "{name}에게 맡겼어요",
+        "merging": "병합 중…",
+        "merged": "병합했습니다",
+        "mergeAsked": "카드에서 승인을 기다리고 있어요",
+        "mergeChanged": "방금 바뀌어서 다시 읽었어요",
+        "ranAgain": "확인한 뒤 이 작업이 다시 실행되었습니다. 다시 확인하세요",
+        "nudged": "{name}에게 다시 물었어요",
+        "nudgedAlready": "{name}에게 방금 물었어요",
+        "rehanded": "{name}에게 다시 맡겼어요",
+        "done": "처리했습니다"
+      },
+      "reconnect": "계정 다시 연결"
     },
     "composer": {
       "placeholder": "{name}에게 메시지…",
@@ -11057,6 +11084,14 @@
           "auto": "바로 반영(카드에서 되돌리기)",
           "draft": "먼저 보여 주기(초안 카드, 승인하면 반영)",
           "off": "하지 않음"
+        },
+        "pr_checks_wait_hours": {
+          "title": "PR 검사 대기 시간",
+          "hint": "지켜보는 PR의 검사가 이 시간 동안 결과가 없으면 '처리 대기'로 옮깁니다. 1–48."
+        },
+        "pr_review_wait_days": {
+          "title": "PR 리뷰 대기 일수",
+          "hint": "지켜보는 PR이 이 일수보다 오래 리뷰를 기다리면 '처리 대기'로 옮깁니다. 1–14."
         }
       },
       "workdir": {
@@ -12049,12 +12084,15 @@
     },
     "feed": {
       "groups": {
-        "needs": "당신을 기다림",
+        "needs": "내가 처리할 일",
+        "running": "진행 중",
+        "watch": "지켜보는 중",
         "watching": "진행 중",
         "next": "루틴과 리마인더",
         "done": "오늘 완료"
       },
       "empty": "할 일도, 실행 중인 것도 없습니다.",
+      "suggestions": "제안 {count}개 더",
       "failed": "지금은 활동을 읽을 수 없습니다.",
       "handed": "{name}에게 맡겼습니다",
       "checking": "검수 중 · {round}차",
@@ -12066,7 +12104,57 @@
       "viewReminder": "알림 보기",
       "viewCheck": "검수 세션 보기",
       "openTask": "작업 열기",
-      "routineDeleted": "이 루틴은 삭제되었습니다."
+      "routineDeleted": "이 루틴은 삭제되었습니다.",
+      "why": {
+        "no_reply": "{name} 답장 없음",
+        "unfinished": "처리 안 됨",
+        "checks": "검사 실패 · 고치는 사람 없음",
+        "conflict": "충돌 · 고치는 사람 없음",
+        "fix_pending": "codeg가 곧 고침",
+        "fixing": "수정 중",
+        "platform_blocked": "플랫폼이 아직 병합 불가",
+        "merge_queued": "병합 대기",
+        "merging": "병합 중",
+        "check_preparing": "검수 준비 중",
+        "check_settling": "검수 마무리 중",
+        "queued": "{name} 차례 대기",
+        "in_turn": "{name}이(가) 처리 중",
+        "looking": "{name}이(가) 맡기를 기다림",
+        "no_trigger": "다음 시간 미정",
+        "failed": "실패",
+        "readFailed": {
+          "auth": "읽을 수 없음 · 다시 로그인 필요",
+          "no_account": "읽을 수 없음 · 이 플랫폼 계정 없음",
+          "config": "이 플랫폼은 읽을 수 없습니다",
+          "network": "읽을 수 없음 · 연결 안 됨",
+          "api": "읽을 수 없음 · 플랫폼 오류",
+          "timeout": "읽을 수 없음 · 플랫폼 응답 없음",
+          "other": "읽을 수 없음"
+        },
+        "checks_slow": "검사가 {hours}시간째 결과 없음",
+        "review_pending": "리뷰 대기",
+        "review_slow": "리뷰 대기 {days}일"
+      },
+      "stop": {
+        "task": "중지",
+        "turn": "{name}의 이번 턴 중지"
+      },
+      "ask": {
+        "approvePlan": "계획 승인",
+        "queued": "{count}개 더 대기 중",
+        "settled": "이미 답변되었습니다. 다시 불러왔습니다",
+        "planAll": "전체 계획 보기",
+        "planLess": "접기",
+        "planRevise": "설명과 함께 돌려보내기…",
+        "planReviseSend": "돌려보내기",
+        "planReviseCancel": "취소",
+        "planReviseHint": "무엇을 바꿔야 하나요?",
+        "answered": "답변을 보냈습니다"
+      },
+      "back": {
+        "line": "활동에서 왔습니다 · 처리를 기다리는 항목 {count}개",
+        "go": "활동으로 돌아가기"
+      }
     },
     "today": {
       "title": "오늘",
@@ -12107,7 +12195,8 @@
         "memoryUndone": "기억했다가 되돌림",
         "plan_stuck": "계획 막힘",
         "routine_paused": "루틴 일시 중지됨",
-        "used_up": "되돌려도 아직 부족"
+        "used_up": "되돌려도 아직 부족",
+        "pr_gone": "찾을 수 없는 PR 지켜보기를 멈췄습니다"
       },
       "reason": {
         "failed": "실패",
@@ -13080,7 +13169,17 @@
         "answer": "답하기",
         "drop": "필요 없음",
         "stop": "그만 알리기",
-        "undo": "실행 취소"
+        "undo": "실행 취소",
+        "withdrawMessage": "메시지 회수",
+        "stopWaiting": "답장 그만 기다리기",
+        "noReplyNeeded": "답장 불필요",
+        "noAnswerNeeded": "답변 불필요",
+        "stopFollowing": "후속 조치 그만",
+        "cancelReminder": "리마인더 취소",
+        "noNeedToDo": "안 해도 됨",
+        "wontDo": "안 함",
+        "remove": "삭제",
+        "giveUp": "이 작업 포기"
       },
       "hint": {
         "doneNext": "이번은 완료, 이후는 그대로: {rule}",
@@ -13139,6 +13238,7 @@
         "stopped": "작업을 멈췄어요 · {time}",
         "skippedLast": "마지막 회차를 건너뛰었어요 · {time}",
         "dropped": "내가 뺌 · {time}",
+        "givenUp": "이 작업을 포기했어요 · {time}",
         "withdrawn": "{peer}에게 보낸 메시지를 회수함 · {time}",
         "stoppedWaiting": "{peer}의 답을 그만 기다림 · {time}",
         "agentDone": "{name}이(가) 완료 · {time}",

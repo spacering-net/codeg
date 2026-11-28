@@ -788,14 +788,23 @@ impl PersonalAgentEngine {
                 row.id,
                 &[DispatchState::Failed, DispatchState::Interrupted],
                 None,
-                20,
+                super::today::FAILED_READ,
             )
             .await
             .or_failed();
-            for d in failed.iter().filter(|d| {
-                d.mode != DispatchMode::Task
-                    && d.updated_at > now - Duration::days(FAILED_FRESH_DAYS)
-            }) {
+            // Given up by the owner: theirs no longer (6.4).
+            let pairs: Vec<(i32, DateTime<Utc>)> =
+                failed.iter().map(|d| (d.id, super::today::failed_at(d, None))).collect();
+            let gave_up = super::today::given_up(db, &pairs).await;
+            for d in failed
+                .iter()
+                .filter(|d| {
+                    d.mode != DispatchMode::Task
+                        && d.updated_at > now - Duration::days(FAILED_FRESH_DAYS)
+                        && !gave_up.contains(&d.id)
+                })
+                .take(super::today::FAILED_LISTED)
+            {
                 needs_text.push(format!(
                     "{}: dispatch #{} {} failed {} ago",
                     display_name(row),
@@ -815,8 +824,16 @@ impl PersonalAgentEngine {
         // A task its assistant is accepting is its assistant's, or the
         // owner's through the acceptance card listed above (7.5).
         let accepting = super::acceptance::being_accepted(db, &tasks).await;
+        // A dispatched task that failed, given up by the owner (6.4).
+        let tasks_given_up =
+            super::today::given_up(db, &super::today::failed_tasks(&tasks)).await;
         for t in tasks.iter().filter(|t| task_needs_owner(t)) {
             if accepting.contains_key(&t.id) {
+                continue;
+            }
+            if t.status == WorkTaskStatus::Failed
+                && t.personal_agent_dispatch_id.is_some_and(|d| tasks_given_up.contains(&d))
+            {
                 continue;
             }
             // A dispatched task asking for input is its assistant's ask above.

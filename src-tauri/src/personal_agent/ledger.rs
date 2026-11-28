@@ -123,6 +123,11 @@ pub struct FollowupCall {
     pub message: String,
     #[serde(default)]
     pub intent: Option<String>,
+    /// The turn that asked for it: a delivery's call's batch, or — called
+    /// outside a card or codeg's own step — the turn running then. A card's
+    /// or codeg's own (a row of the activity) is no turn's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asking_batch: Option<i32>,
 }
 
 /// What a follow-up acts on — for a conversation, written before the claim,

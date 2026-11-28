@@ -231,6 +231,11 @@ pub struct StopExpect {
     pub updated_at: Option<DateTime<Utc>>,
     pub run_seq: Option<i32>,
     pub task_updated_at: Option<DateTime<Utc>>,
+    /// A turn's stop: only while that turn's batch still runs it — the last
+    /// to continue it (`source_batch_id`), or, on record from before that
+    /// was kept, the one that made it. Continued by a later turn since, it
+    /// is that turn's.
+    pub run_by_batch: Option<i32>,
 }
 
 /// What a stop card shows that is read before the stop's transaction (its
@@ -334,7 +339,9 @@ impl PersonalAgentEngine {
         if let Some(by) = stopped_by_of(&now) {
             return Ok(StopOutcome::AlreadyStopped { by });
         }
-        if LIVE_STATES.contains(&now.state) && expect.updated_at.is_some() {
+        if LIVE_STATES.contains(&now.state)
+            && (expect.updated_at.is_some() || expect.run_by_batch.is_some())
+        {
             return Ok(StopOutcome::Changed);
         }
         Ok(StopOutcome::PastStopping { state: now.state })
@@ -370,6 +377,9 @@ impl PersonalAgentEngine {
             .filter(dispatch_entity::Column::State.is_in(LIVE_STATES.to_vec()));
         if let Some(at) = expect.updated_at {
             write = write.filter(dispatch_entity::Column::UpdatedAt.eq(at));
+        }
+        if let Some(b) = expect.run_by_batch {
+            write = write.filter(svc::run_by_batch(b));
         }
         if write.exec(txn).await?.rows_affected != 1 {
             return Ok(None);

@@ -273,6 +273,10 @@ async fn needs_of(
             mirror: data.get("mirror_of").is_some_and(|m| !m.is_null()),
             dispatch_id: None,
             forwarded: false,
+            notice_id: None,
+            watch_id: None,
+            phase: None,
+            has_message: false,
         });
     }
     let open = svc::notices_in_state(&db.conn, bot, NoticeState::Open)
@@ -345,6 +349,26 @@ async fn needs_of(
             .and_then(|id| rows.get(&id))
             .map(|b| first_line(b, LAST_LINE_CHARS))
             .unwrap_or_default();
+        let payload = payload_of(&n.payload);
+        // A watched pull request's card, or the approval of a merge of one
+        // (`watch-merge:{watch}:{head}`).
+        let watch_id = match n.kind {
+            NoticeKind::Pr => payload["watch_id"].as_i64().and_then(|w| i32::try_from(w).ok()),
+            NoticeKind::Forge => n
+                .subject_key
+                .as_deref()
+                .and_then(|k| k.strip_prefix("watch-merge:"))
+                .and_then(|k| k.split(':').next())
+                .and_then(|w| w.parse().ok()),
+            _ => None,
+        };
+        let phase = payload["phase"]
+            .as_str()
+            .or(payload["state"].as_str())
+            .map(str::to_string);
+        let has_message = payload["message"]
+            .as_str()
+            .is_some_and(|m| !m.trim().is_empty());
         needs.push(NeedsYou {
             kind: kind.into(),
             text,
@@ -354,6 +378,10 @@ async fn needs_of(
             mirror: false,
             dispatch_id: None,
             forwarded: false,
+            notice_id: Some(n.id),
+            watch_id,
+            phase,
+            has_message,
         });
     }
     // An executor's question or plan approval is the owner's once it is
@@ -387,6 +415,10 @@ async fn needs_of(
             mirror,
             dispatch_id: if mirror { None } else { dispatch_id },
             forwarded: true,
+            notice_id: None,
+            watch_id: None,
+            phase: None,
+            has_message: false,
         });
     }
     for w in hand
@@ -405,6 +437,10 @@ async fn needs_of(
             mirror: false,
             dispatch_id: Some(w.dispatch_id),
             forwarded: false,
+            notice_id: None,
+            watch_id: None,
+            phase: None,
+            has_message: false,
         });
     }
     needs.sort_by_key(|n| n.since);

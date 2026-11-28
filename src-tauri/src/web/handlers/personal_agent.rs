@@ -276,6 +276,107 @@ pub async fn personal_agent_cancel(
     Ok(Json(()))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelTurnParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub batch_id: i32,
+}
+
+pub async fn personal_agent_cancel_turn(
+    Json(params): Json<CancelTurnParams>,
+) -> Result<Json<bool>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_cancel_turn_core(params.bot_id, params.batch_id).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkRetryParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    #[serde(default)]
+    pub dispatch_id: Option<i32>,
+    #[serde(default)]
+    pub task_id: Option<i32>,
+    pub expect_updated_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    pub expect_task_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+pub async fn personal_agent_work_retry(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<WorkRetryParams>,
+) -> Result<Json<serde_json::Value>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_work_retry_core(
+            &state.db,
+            params.bot_id,
+            params.dispatch_id,
+            params.task_id,
+            params.expect_updated_at,
+            params.expect_task_updated_at,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DispatchHandParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub dispatch_id: i32,
+    pub expect_updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub async fn personal_agent_dispatch_hand(
+    Json(params): Json<DispatchHandParams>,
+) -> Result<Json<()>, AppCommandError> {
+    pa::personal_agent_dispatch_hand_core(
+        params.bot_id,
+        params.dispatch_id,
+        params.expect_updated_at,
+    )
+    .await?;
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrMergeParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub watch_id: i32,
+    pub head_sha: String,
+}
+
+pub async fn personal_agent_pr_merge(
+    Json(params): Json<PrMergeParams>,
+) -> Result<Json<serde_json::Value>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_pr_merge_core(params.bot_id, params.watch_id, params.head_sha).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageNudgeParams {
+    #[serde(default)]
+    pub bot_id: Option<i32>,
+    pub item_id: i32,
+}
+
+pub async fn personal_agent_message_nudge(
+    Json(params): Json<MessageNudgeParams>,
+) -> Result<Json<bool>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_message_nudge_core(params.bot_id, params.item_id).await?,
+    ))
+}
+
 pub async fn personal_agent_bots(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<Vec<crate::models::personal_agent_roster::RosterEntry>>, AppCommandError> {

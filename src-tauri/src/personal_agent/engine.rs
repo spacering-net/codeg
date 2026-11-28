@@ -325,6 +325,39 @@ enum TurnEnd {
     Lost(String),
 }
 
+/// How a question or plan approval of the brain's was settled, for its row.
+#[derive(Debug, Clone, PartialEq)]
+enum Settled {
+    /// The answer that took effect — this one, or whichever came first.
+    Answer(serde_json::Value),
+    /// Withdrawn before any answer (the tool call ended, the connection went).
+    Withdrawn,
+    /// No longer pending, and the event does not say how (an older client).
+    Unknown,
+}
+
+impl Settled {
+    /// From a resolved event's resolution.
+    fn of(resolution: Option<&crate::acp::types::AnswerResolution>) -> Self {
+        match resolution {
+            Some(r) => match &r.answer {
+                Some(a) => Self::Answer(a.clone()),
+                None => Self::Withdrawn,
+            },
+            None => Self::Unknown,
+        }
+    }
+
+    /// From what an answer came to: the answer that took effect either way.
+    fn by(outcome: &crate::acp::types::AnswerOutcome) -> Self {
+        use crate::acp::types::AnswerOutcome;
+        match outcome {
+            AnswerOutcome::Answered(r) | AnswerOutcome::AlreadyAnswered(r) => Self::of(Some(r)),
+            AnswerOutcome::Withdrawn => Self::Withdrawn,
+        }
+    }
+}
+
 /// A delivery's reply as it stood when its end was decided — taken then, not
 /// when it is settled: by then the next turn may have started on the
 /// connection.
@@ -1470,8 +1503,12 @@ impl PersonalAgentEngine {
                 self.record_question_request(&env.connection_id, question_id, questions)
                     .await;
             }
-            AcpEvent::QuestionResolved { question_id, .. } => {
-                self.settle_question_row(question_id, None).await;
+            AcpEvent::QuestionResolved {
+                question_id,
+                resolution,
+            } => {
+                self.settle_question_row(question_id, Settled::of(resolution.as_ref()))
+                    .await;
             }
             AcpEvent::PlanApprovalRequest {
                 approval_id,
@@ -1480,8 +1517,12 @@ impl PersonalAgentEngine {
             } => {
                 self.record_plan_request(approval_id, plan_markdown).await;
             }
-            AcpEvent::PlanApprovalResolved { approval_id, .. } => {
-                self.settle_question_row(approval_id, None).await;
+            AcpEvent::PlanApprovalResolved {
+                approval_id,
+                resolution,
+            } => {
+                self.settle_question_row(approval_id, Settled::of(resolution.as_ref()))
+                    .await;
             }
             AcpEvent::SessionConfigStale { stale: true, .. } => {
                 // The running process keeps its launch-time settings; a change
@@ -1753,37 +1794,37 @@ impl PersonalAgentEngine {
         self.emit(PersonalAgentChange::Status);
     }
 
-    /// Record the answer to a question or plan approval (`answer` from the
-    /// page), or — `None`, from the resolved event — that it is no longer
-    /// pending without codeg having seen the answer.
-    async fn settle_question_row(&self, ref_id: &str, answer: Option<serde_json::Value>) {
+    /// Record how a question or plan approval was settled — only while its
+    /// row is still pending, in one conditional write: the first settlement
+    /// stays, and a duplicate answer, a second window's, or a late event
+    /// never writes over it.
+    async fn settle_question_row(&self, ref_id: &str, how: Settled) {
         let Ok(Some(row)) = svc::row_by_ref(&self.db.conn, self.bot().await, TimelineKind::Question, ref_id).await
         else {
             return;
         };
-        let mut data = row
+        let pending = row
             .data
             .as_deref()
             .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
-        let pending = data.get("state").and_then(|v| v.as_str()) == Some("pending");
-        if let Some(map) = data.as_object_mut() {
-            match answer {
-                Some(a) => {
-                    let skipped = a.get("declined").and_then(|v| v.as_bool()).unwrap_or(false);
-                    map.insert(
-                        "state".into(),
-                        if skipped { "skipped" } else { "answered" }.into(),
-                    );
-                    map.insert("answer".into(), a);
-                }
-                None if pending => {
-                    map.insert("state".into(), "resolved".into());
-                }
-                None => return,
-            }
+            .is_some_and(|d| d.get("state").and_then(|v| v.as_str()) == Some("pending"));
+        if !pending {
+            return;
         }
-        let _ = svc::update_row_data(&self.db.conn, row.id, None, Some(data)).await;
+        let (state, answer) = match &how {
+            Settled::Answer(a) => {
+                let skipped = a.get("declined").and_then(|v| v.as_bool()).unwrap_or(false);
+                (if skipped { "skipped" } else { "answered" }, Some(a))
+            }
+            Settled::Withdrawn => ("withdrawn", None),
+            Settled::Unknown => ("resolved", None),
+        };
+        if !matches!(
+            svc::settle_row_if(&self.db.conn, row.id, "pending", state, answer).await,
+            Ok(true)
+        ) {
+            return;
+        }
         if let Ok(Some(updated)) = svc::get_row(&self.db.conn, row.id).await {
             self.sync_mirrors(&updated).await;
             self.emit_rows(vec![svc::to_row(updated)]);
@@ -1791,55 +1832,56 @@ impl PersonalAgentEngine {
         self.emit(PersonalAgentChange::Status);
     }
 
-    /// The owner answered the agent's question on the page: record it in full,
-    /// then hand it to the waiting tool call.
+    /// The owner answered the agent's question on the page. The manager
+    /// takes it first — the first answer there wins — and the row then
+    /// records the answer that took effect (this one, or the one before it),
+    /// never this one over an earlier one.
     pub async fn answer_question(
         &self,
         question_id: &str,
         answer: crate::acp::question::QuestionAnswer,
-    ) -> Result<(), String> {
+    ) -> Result<crate::acp::types::AnswerOutcome, String> {
         // Asked by another assistant, shown here too: answered there.
         if let Some(source) = self.mirror_source(TimelineKind::Question, question_id).await {
             return Box::pin(source.answer_question(question_id, answer)).await;
         }
         let conn_id = self.require_connection().await?;
-        let questions = match self.manager.get_state(&conn_id).await {
-            Some(state) => state
-                .read()
-                .await
-                .pending_question
-                .as_ref()
-                .filter(|q| q.question_id == question_id)
-                .map(|q| q.questions.clone()),
-            None => None,
-        };
-        if let Some(questions) = questions {
-            // A secret goes to the agent, not into the timeline.
-            let outcome = crate::acp::question::redacted_outcome(&questions, &answer);
-            let value = serde_json::to_value(&outcome).unwrap_or_default();
-            self.settle_question_row(question_id, Some(value)).await;
-        }
-        self.manager
-            .answer_question(&conn_id, question_id, answer)
-            .await
-            .map_err(|e| e.to_string())
+        // The manager records it redacted: a secret goes to the agent, not
+        // into the timeline.
+        let outcome = self
+            .manager
+            .answer_question_from(
+                &conn_id,
+                question_id,
+                answer,
+                crate::acp::types::AnswerOrigin::User,
+            )
+            .await;
+        self.settle_question_row(question_id, Settled::by(&outcome)).await;
+        Ok(outcome)
     }
 
+    /// As [`Self::answer_question`], for a plan approval.
     pub async fn answer_plan_approval(
         &self,
         approval_id: &str,
         answer: crate::acp::plan_approval::PlanApprovalAnswer,
-    ) -> Result<(), String> {
+    ) -> Result<crate::acp::types::AnswerOutcome, String> {
         if let Some(source) = self.mirror_source(TimelineKind::Question, approval_id).await {
             return Box::pin(source.answer_plan_approval(approval_id, answer)).await;
         }
         let conn_id = self.require_connection().await?;
-        let value = serde_json::to_value(&answer).unwrap_or_default();
-        self.settle_question_row(approval_id, Some(value)).await;
-        self.manager
-            .answer_plan_approval(&conn_id, approval_id, answer)
-            .await
-            .map_err(|e| e.to_string())
+        let outcome = self
+            .manager
+            .answer_plan_approval_from(
+                &conn_id,
+                approval_id,
+                answer,
+                crate::acp::types::AnswerOrigin::User,
+            )
+            .await;
+        self.settle_question_row(approval_id, Settled::by(&outcome)).await;
+        Ok(outcome)
     }
 
     pub async fn respond_permission(&self, request_id: &str, option_id: &str) -> Result<(), String> {
@@ -4691,6 +4733,7 @@ impl PersonalAgentEngine {
             None,
             None,
             answers,
+            None,
         )
         .await
     }
@@ -4742,9 +4785,41 @@ impl PersonalAgentEngine {
         card_click: Option<serde_json::Value>,
         reply_data: Option<serde_json::Value>,
     ) -> Result<TimelineRow, String> {
-        self.queue_owner_message_answering(text, blocks, reply_to, origin, card_click, reply_data, None)
-            .await
-            .map_err(String::from)
+        self.queue_owner_message_answering(
+            text, blocks, reply_to, origin, card_click, reply_data, None, None,
+        )
+        .await
+        .map_err(String::from)
+    }
+
+    /// The owner's message handing reminder card `card_row` over to the
+    /// assistant: written in one transaction with the card's `data`, the
+    /// message's id on it, the card answered and its matter waiting on the
+    /// assistant (M0-4). A card answered meanwhile refuses it, as
+    /// [`keys::REMINDER_ANSWERED`](super::refusal::keys::REMINDER_ANSWERED);
+    /// its matter written since it was read, as
+    /// [`keys::CHANGED`](super::refusal::keys::CHANGED).
+    /// Returns the card as it was written.
+    pub(super) async fn queue_owner_hand_over(
+        &self,
+        text: String,
+        card_row: i32,
+        data: serde_json::Value,
+        guard: svc::CardGuard,
+    ) -> Result<TimelineRow, super::refusal::Refusal> {
+        let (_, card) = self
+            .queue_owner_message_writing(
+                text,
+                Vec::new(),
+                Some(card_row),
+                Origin::Written,
+                None,
+                Some(data),
+                None,
+                Some(guard),
+            )
+            .await?;
+        card.ok_or_else(|| "the card's row is missing".into())
     }
 
     /// [`Self::queue_owner_message`], answering the assistant's question
@@ -4762,9 +4837,36 @@ impl PersonalAgentEngine {
         card_click: Option<serde_json::Value>,
         reply_data: Option<serde_json::Value>,
         answers: Option<i32>,
+        guard: Option<svc::CardGuard>,
     ) -> Result<TimelineRow, super::refusal::Refusal> {
+        self.queue_owner_message_writing(
+            text, blocks, reply_to, origin, card_click, reply_data, answers, guard,
+        )
+        .await
+        .map(|(row, _)| row)
+    }
+
+    /// [`Self::queue_owner_message_answering`], with the card row
+    /// `reply_data` was written to as its transaction read it back (none
+    /// for a message from no card).
+    #[allow(clippy::too_many_arguments)]
+    async fn queue_owner_message_writing(
+        &self,
+        text: String,
+        blocks: Vec<PromptInputBlock>,
+        reply_to: Option<i32>,
+        origin: Origin,
+        card_click: Option<serde_json::Value>,
+        reply_data: Option<serde_json::Value>,
+        answers: Option<i32>,
+        guard: Option<svc::CardGuard>,
+    ) -> Result<(TimelineRow, Option<TimelineRow>), super::refusal::Refusal> {
+        let mut written_card: Option<TimelineRow> = None;
         if answers.is_some() && (card_click.is_some() || reply_data.is_some()) {
             return Err("an answer to a question is not a card's button".into());
+        }
+        if guard.is_some() && (reply_to.is_none() || reply_data.is_none()) {
+            return Err("a hand-over is written with its card".into());
         }
         let Some(me) = self.agent_row().await else {
             return Err("configure the personal agent first".into());
@@ -4871,13 +4973,46 @@ impl PersonalAgentEngine {
             }
             // From a card's button: the press is kept with the message.
             (Some(card), Some(reply_data)) => {
-                let (inserted, card) =
-                    svc::insert_row_writing(&self.db.conn, self.bot().await, row, card, reply_data)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                let (inserted, card) = svc::insert_row_writing(
+                    &self.db.conn,
+                    self.bot().await,
+                    row,
+                    card,
+                    reply_data,
+                    guard.as_ref(),
+                )
+                .await
+                .map_err(|e| match e {
+                    crate::db::error::DbError::Conflict(why)
+                        if guard.is_some() && why == svc::HAND_CARD_ANSWERED =>
+                    {
+                        super::refusal::Refusal::new(
+                            super::refusal::keys::REMINDER_ANSWERED,
+                            "this reminder was answered already",
+                        )
+                    }
+                    crate::db::error::DbError::Conflict(why)
+                        if guard.is_some() && why == svc::HAND_MATTER_CHANGED =>
+                    {
+                        super::refusal::Refusal::new(
+                            super::refusal::keys::CHANGED,
+                            "the matter changed since it was shown: look at it again",
+                        )
+                    }
+                    crate::db::error::DbError::Conflict(why)
+                        if guard.is_some() && why == svc::CARD_MOVED =>
+                    {
+                        super::refusal::Refusal::new(
+                            super::refusal::keys::CHANGED,
+                            "it changed since it was shown: look at it again",
+                        )
+                    }
+                    e => e.to_string().into(),
+                })?;
                 let inserted = svc::to_row(inserted);
                 let mut rows = vec![inserted.clone()];
-                rows.extend(card.map(svc::to_row));
+                written_card = card.map(svc::to_row);
+                rows.extend(written_card.clone());
                 self.emit_rows(rows);
                 Some(inserted)
             }
@@ -4887,9 +5022,24 @@ impl PersonalAgentEngine {
             },
         };
         let Some(row) = written else {
+            // Handed again from its reminder meanwhile (6.5): that message
+            // has it.
+            if let Some(from) = resent_from {
+                if let Ok(Some(first)) = svc::get_row(&self.db.conn, from).await {
+                    if matter_svc::row_data(&first)
+                        .get("rehanded_as")
+                        .is_some_and(|v| !v.is_null())
+                    {
+                        return Err(
+                            "its reminder was handed over again since: that message stands for it"
+                                .into(),
+                        );
+                    }
+                }
+            }
             // Sent again already, by another send at once: that copy is the
             // one, and it went its way — not handed over a second time.
-            return Ok(self.copy_of(resent_from).await?);
+            return Ok((self.copy_of(resent_from).await?, None));
         };
         self.emit(PersonalAgentChange::Status);
         // The third request like it in a month: offered as a routine (6.7).
@@ -4898,7 +5048,7 @@ impl PersonalAgentEngine {
         }
         let row = self.give_way_to(row, &blocks).await;
         self.nudge();
-        Ok(row)
+        Ok((row, written_card))
     }
 
     /// Write the owner's message `row` answering question `item_id`: linked
@@ -5201,6 +5351,38 @@ impl PersonalAgentEngine {
             .map_err(|e| e.to_string())
     }
 
+    /// [`Self::cancel_turn`], only while the turn in flight is batch
+    /// `batch`'s — looked at and cancelled with the delivery lock held, so
+    /// no other turn begins between the two (the cancel only asks; it does
+    /// not wait for the turn's end, which takes that lock). `Ok(false)`:
+    /// that turn is not the one in flight.
+    pub(super) async fn cancel_turn_of(&self, batch: i32) -> Result<bool, String> {
+        let done = {
+            let _held = self.pump_lock.lock().await;
+            let conn = self
+                .state
+                .lock()
+                .await
+                .turn
+                .as_ref()
+                .filter(|t| t.batch_id == batch)
+                .map(|t| t.conn_id.clone());
+            match conn {
+                Some(conn) => self
+                    .manager
+                    .cancel(&self.db.conn, &conn)
+                    .await
+                    .map(|_| true)
+                    .map_err(|e| e.to_string()),
+                None => Ok(false),
+            }
+        };
+        // A delivery asked for while the lock was held here gave way to it:
+        // asked for again now.
+        self.nudge();
+        done
+    }
+
     /// The owner's compact button: between turns only, not counted toward the
     /// pause.
     pub async fn compact_now(self: &Arc<Self>) -> Result<(), String> {
@@ -5295,6 +5477,10 @@ impl PersonalAgentEngine {
         // Sent again already (a second click): that copy.
         if matter_svc::row_data(&row).get("resent_as").is_some_and(|v| !v.is_null()) {
             return self.copy_of(Some(row.id)).await;
+        }
+        // Handed again from its reminder (6.5): that message has it.
+        if matter_svc::row_data(&row).get("rehanded_as").is_some_and(|v| !v.is_null()) {
+            return Err("its reminder was handed over again since: that message stands for it".into());
         }
         let blocks = row
             .data

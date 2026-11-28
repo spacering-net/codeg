@@ -64,8 +64,10 @@ import { Callout, type CalloutTone } from "./aux-parts/kit/callout"
 
 /** The folding parts that start folded; every other one starts open. */
 const FOLDED_AT_FIRST: ReadonlySet<string> = new Set([
-  // What was done today, a line until opened (C2).
+  // What was done today, a line until opened (C2); what codeg watches go
+  // on outside, its head and count until opened (5.1).
   "activity.done",
+  "activity.watch",
   "stats.agents",
   "stats.tokens",
   "stats.usage",
@@ -211,7 +213,8 @@ export function PanelGroup({
   /** Its marker, in place of the dot. */
   icon?: LucideIcon
   label: string
-  count: number
+  /** Its rows, counted on its head; `null`: no count shown. */
+  count: number | null
   /** It is a part of the tab of its own (the routines): its name the
    *  part's title — in a part's title's weight and colour, as a part's
    *  title leads its groups' bars — and its heading to a screen reader. */
@@ -258,7 +261,9 @@ export function PanelGroup({
       >
         {label}
       </span>
-      <span className="shrink-0 tabular-nums">{count}</span>
+      {count != null ? (
+        <span className="shrink-0 tabular-nums">{count}</span>
+      ) : null}
     </>
   )
   const chevron = (className?: string) => (

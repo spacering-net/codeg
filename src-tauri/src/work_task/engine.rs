@@ -100,6 +100,14 @@ const COMPACTION_LIVENESS_TICK: Duration = Duration::from_secs(5);
 /// depends on what the user was doing.
 const WORKTREE_HOLDS_UNCOMMITTED: &str = "it still holds uncommitted files";
 
+/// A retry of a task that changed since the row asking read it: not run.
+pub(crate) const CHANGED_SINCE_READ: &str =
+    "the task changed since it was shown (or is not this one's to retry) — nothing was done; look at it again";
+
+/// A dialog's action on a task that ran again since it opened: nothing done.
+const RAN_AGAIN: &str =
+    "the task ran again since this was opened — nothing was done; look at it again";
+
 /// The reason plus the way out of it.
 pub(crate) fn worktree_kept(remedy: &str) -> String {
     format!("the worktree was kept: {WORKTREE_HOLDS_UNCOMMITTED}. {remedy}")
@@ -956,6 +964,33 @@ impl TaskEngine {
         allow_duplicate_source: bool,
         op_id: Option<String>,
     ) -> Result<(), String> {
+        self.retry_inner(task_id, note, attachments, allow_duplicate_source, op_id, None)
+            .await
+    }
+
+    /// [`Self::retry_with_op`] of the task as a row of the personal agent's
+    /// activity read it (`seen`: its version, and whose work it is) — one
+    /// changed since, or another's, is not run again (6.5).
+    pub async fn retry_seen(
+        self: &Arc<Self>,
+        task_id: i32,
+        note: Option<String>,
+        op_id: Option<String>,
+        seen: work_task_service::ClaimSeen,
+    ) -> Result<(), String> {
+        self.retry_inner(task_id, note, Vec::new(), false, op_id, Some(seen))
+            .await
+    }
+
+    async fn retry_inner(
+        self: &Arc<Self>,
+        task_id: i32,
+        note: Option<String>,
+        attachments: Vec<serde_json::Value>,
+        allow_duplicate_source: bool,
+        op_id: Option<String>,
+        seen: Option<work_task_service::ClaimSeen>,
+    ) -> Result<(), String> {
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -979,22 +1014,37 @@ impl TaskEngine {
         } else {
             op_id.map(|op| serde_json::json!({ "action": "agent_op", "op_id": op }))
         };
-        match work_task_service::claim_for_run_with_action(
-            &self.db.conn,
-            task_id,
-            WorkTaskStatus::Failed,
-            "user",
-            action,
-            allow_duplicate_source,
-        )
-        .await
-        .map_err(|e| e.to_string())?
-        {
+        let claimed = match seen {
+            Some(seen) => {
+                work_task_service::claim_for_run_seen(
+                    &self.db.conn,
+                    task_id,
+                    WorkTaskStatus::Failed,
+                    "user",
+                    action,
+                    seen,
+                )
+                .await
+            }
+            None => {
+                work_task_service::claim_for_run_with_action(
+                    &self.db.conn,
+                    task_id,
+                    WorkTaskStatus::Failed,
+                    "user",
+                    action,
+                    allow_duplicate_source,
+                )
+                .await
+            }
+        };
+        match claimed.map_err(|e| e.to_string())? {
             Some(_) => {
                 self.emit_upsert(task_id);
                 self.pump_folder(task.folder_id).await;
                 Ok(())
             }
+            None if seen.is_some() => Err(CHANGED_SINCE_READ.to_string()),
             None => Err("task is not in failed".to_string()),
         }
     }
@@ -1078,6 +1128,18 @@ impl TaskEngine {
         task_id: i32,
         reason: Option<String>,
     ) -> Result<(), String> {
+        self.cancel_seen(task_id, None, reason).await.map(|_| ())
+    }
+
+    /// [`Self::cancel`] of run `expect_run_seq` only — the one the dialog
+    /// asking for it showed: one run again since is left running. The run
+    /// it canceled.
+    pub async fn cancel_seen(
+        self: &Arc<Self>,
+        task_id: i32,
+        expect_run_seq: Option<i32>,
+        reason: Option<String>,
+    ) -> Result<i32, String> {
         let run_seq = {
             let txn = sea_orm::TransactionTrait::begin(&self.db.conn)
                 .await
@@ -1086,7 +1148,7 @@ impl TaskEngine {
                 &txn,
                 task_id,
                 work_task_service::CANCELABLE,
-                None,
+                expect_run_seq,
                 None,
                 "user",
                 reason.as_deref(),
@@ -1101,12 +1163,20 @@ impl TaskEngine {
                 }
                 None => {
                     let _ = txn.rollback().await;
+                    if let Some(r) = expect_run_seq {
+                        let now = work_task_service::get_model(&self.db.conn, task_id)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        if now.run_seq != r {
+                            return Err(RAN_AGAIN.to_string());
+                        }
+                    }
                     return Err("task cannot be canceled in its current state".to_string());
                 }
             }
         };
         self.teardown_canceled(task_id, run_seq).await;
-        Ok(())
+        Ok(run_seq)
     }
 
     /// What is left running of task `task_id`'s run `run_seq` once its
@@ -4581,10 +4651,35 @@ impl TaskEngine {
         instructions: Option<String>,
         auto: bool,
     ) -> Result<MergeDispatch, String> {
-        self.merge_task_inner(task_id, message, delete_worktree, instructions, auto, None)
+        self.merge_task_inner(task_id, message, delete_worktree, instructions, auto, None, None)
             .await
     }
 
+    /// [`Self::merge_task`] (by hand) of run `expect_run_seq` only — the one
+    /// the dialog asking for it showed. A task sent back and reviewed again
+    /// since is refused: the merge, queued or begun, binds to the run read
+    /// here.
+    pub async fn merge_task_seen(
+        self: &Arc<Self>,
+        task_id: i32,
+        expect_run_seq: Option<i32>,
+        message: Option<String>,
+        delete_worktree: bool,
+        instructions: Option<String>,
+    ) -> Result<MergeDispatch, String> {
+        self.merge_task_inner(
+            task_id,
+            message,
+            delete_worktree,
+            instructions,
+            false,
+            None,
+            expect_run_seq,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn merge_task_inner(
         self: &Arc<Self>,
         task_id: i32,
@@ -4593,12 +4688,16 @@ impl TaskEngine {
         instructions: Option<String>,
         auto: bool,
         claim: Option<&QueuedMergeClaim>,
+        expect_run_seq: Option<i32>,
     ) -> Result<MergeDispatch, String> {
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
             .map_err(|e| e.to_string())?;
         if task.status != WorkTaskStatus::Review {
             return Err("task is not in review".to_string());
+        }
+        if expect_run_seq.is_some_and(|r| r != task.run_seq) {
+            return Err(RAN_AGAIN.to_string());
         }
         // A pull-request task's work belongs on the pull request's own branch,
         // where its author and reviewers are looking. Landing it straight onto
@@ -5169,11 +5268,42 @@ impl TaskEngine {
         closes: Option<Vec<i64>>,
         commit_message: Option<String>,
     ) -> Result<String, String> {
+        self.deliver_pr_seen(
+            task_id,
+            None,
+            pr_title,
+            draft,
+            delete_worktree,
+            mark_done,
+            closes,
+            commit_message,
+        )
+        .await
+    }
+
+    /// [`Self::deliver_pr_closing`] of run `expect_run_seq` only — the one
+    /// the dialog asking for it showed: the delivery's claim binds to the
+    /// run read here.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn deliver_pr_seen(
+        self: &Arc<Self>,
+        task_id: i32,
+        expect_run_seq: Option<i32>,
+        pr_title: Option<String>,
+        draft: bool,
+        delete_worktree: bool,
+        mark_done: bool,
+        closes: Option<Vec<i64>>,
+        commit_message: Option<String>,
+    ) -> Result<String, String> {
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
             .map_err(|e| e.to_string())?;
         if task.status != WorkTaskStatus::Review {
             return Err("task is not in review".to_string());
+        }
+        if expect_run_seq.is_some_and(|r| r != task.run_seq) {
+            return Err(RAN_AGAIN.to_string());
         }
         // The gate lives HERE, not in the UI: this command is reachable by id
         // from an old frontend or a direct web API call.
@@ -6634,6 +6764,7 @@ impl TaskEngine {
                     intent.instructions.clone(),
                     false,
                     Some(&claim),
+                    None,
                 )
                 .await
             {
@@ -6949,6 +7080,16 @@ impl TaskEngine {
     /// those three is reachable while a folder lock is held (`launch` runs in
     /// its own spawned task, and `cancel`'s only nested wait is the pump lock).
     pub async fn cleanup_task(&self, task_id: i32) -> Result<(), CleanupBlocked> {
+        self.cleanup_task_of_run(task_id, None).await
+    }
+
+    /// [`Self::cleanup_task`] of run `run_seq` only — the one a cancel just
+    /// ended: a task run again since keeps its worktree, the new run's.
+    pub async fn cleanup_task_of_run(
+        &self,
+        task_id: i32,
+        run_seq: Option<i32>,
+    ) -> Result<(), CleanupBlocked> {
         /// Statuses whose worktree is either in use or about to be — the launch
         /// path owns it, not the user.
         fn in_use(status: &WorkTaskStatus) -> bool {
@@ -6981,8 +7122,26 @@ impl TaskEngine {
         if in_use(&task.status) {
             return Err(CleanupBlocked::failed(REFUSAL));
         }
+        if run_seq.is_some_and(|r| r != task.run_seq) {
+            return Err(CleanupBlocked::failed(
+                "the task ran again since it was canceled: its worktree is the new run's",
+            ));
+        }
         let lock = self.folder_lock(task.folder_id).await;
         let _guard = lock.lock().await;
+        // Run again while this waited for the project's lock (a claim takes
+        // neither lock): its worktree is the new run's — and a claim from here
+        // on waits for the task's lock this holds before it launches.
+        if run_seq.is_some() {
+            let now = work_task_service::get_model(&self.db.conn, task_id)
+                .await
+                .map_err(|e| CleanupBlocked::failed(e.to_string()))?;
+            if in_use(&now.status) || run_seq.is_some_and(|r| r != now.run_seq) {
+                return Err(CleanupBlocked::failed(
+                    "the task ran again since it was canceled: its worktree is the new run's",
+                ));
+            }
+        }
         // Uncommitted work is the one thing behind this call that git cannot
         // give back, and nothing on the way in ever named it: the cancel
         // dialog's checkbox promises "its worktree and work branch", the card's

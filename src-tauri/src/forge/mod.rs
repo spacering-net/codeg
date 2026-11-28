@@ -1689,6 +1689,35 @@ pub struct ForgeChangeDetail {
     /// commit's check collections are empty, and without this the panel says
     /// "no checks" over exactly the change that needs somebody to act.
     pub workflow_approval: Option<ForgeWorkflowApproval>,
+    /// Where its review stands, when the forge says and it is read: what a
+    /// watch tells "waiting for a review" by (6.6). `None` where nothing is
+    /// known — CNB, a GitHub pull not blocked, a GitLab one its status does
+    /// not tie to approvals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<ReviewGate>,
+}
+
+/// Where a proposed change's review stands (6.6).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReviewGate {
+    /// The forge says an approval is needed before it can land (`None`: it
+    /// does not say).
+    pub required: Option<bool>,
+    pub approved: bool,
+    pub changes_requested: bool,
+    /// Who was asked to review and has not yet: logins, team slugs.
+    pub requested: Vec<String>,
+}
+
+impl ReviewGate {
+    /// It waits on a review: changes asked for, someone asked who has not
+    /// answered yet (approvals from others do not make up for them — a
+    /// branch may want more than one), or one required and none given.
+    pub fn waiting(&self) -> bool {
+        self.changes_requested
+            || !self.requested.is_empty()
+            || (self.required == Some(true) && !self.approved)
+    }
 }
 
 /// How a check ended up, in ONE vocabulary.

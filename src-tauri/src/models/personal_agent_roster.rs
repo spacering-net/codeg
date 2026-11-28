@@ -117,6 +117,19 @@ pub struct NeedsYou {
     /// the assistant answering for them (7.3.1).
     #[serde(skip)]
     pub forwarded: bool,
+    /// A card's: its notice, what the activity panel answers it by.
+    #[serde(skip)]
+    pub notice_id: Option<i32>,
+    /// ... a watched pull request's card: the watch.
+    #[serde(skip)]
+    pub watch_id: Option<i32>,
+    /// ... where the card stands (a forge action's or a plan's phase, an
+    /// acceptance's state).
+    #[serde(skip)]
+    pub phase: Option<String>,
+    /// ... an acceptance's: it says what sending the work back would.
+    #[serde(skip)]
+    pub has_message: bool,
 }
 
 /// One step, as the page says it in a short line (8.4). The same shape says

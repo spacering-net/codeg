@@ -44,6 +44,10 @@ interface UseTaskDialogsOptions {
   /** The project a NEW task starts in — the board's folder filter, or the aux
    *  panel's project. */
   defaultFolderId: number | null
+  /** A cancel, merge or delivery acts on the run its dialog was opened on
+   *  only — one run again since is refused. Off (the board): on the run
+   *  there is when it is sent. */
+  pinRuns?: boolean
 }
 
 export interface TaskDialogs {
@@ -75,6 +79,7 @@ export function useTaskDialogs({
   refetch,
   folderNames,
   defaultFolderId,
+  pinRuns = false,
 }: UseTaskDialogsOptions): TaskDialogs {
   const [editorOpen, setEditorOpen] = useState(false)
   const [editorTask, setEditorTask] = useState<WorkTask | null>(null)
@@ -295,6 +300,7 @@ export function useTaskDialogs({
           mergeTask != null && isAnotherTaskMerging(tasks, mergeTask)
         }
         alreadyQueued={mergeLiveTask != null && isMergeQueued(mergeLiveTask)}
+        expectRunSeq={pinRuns ? mergeTask?.run_seq : undefined}
       />
       <TaskCompleteDialog
         open={completeOpen}
@@ -306,6 +312,7 @@ export function useTaskDialogs({
         open={deliverOpen}
         onOpenChange={setDeliverOpen}
         task={deliverTask}
+        expectRunSeq={pinRuns ? deliverTask?.run_seq : undefined}
       />
       {/* Rendered after the sheet, like the transcript viewer: both portal to
           body and the later mount stacks above, so a cancel / restart asked
@@ -314,6 +321,7 @@ export function useTaskDialogs({
         open={cancelOpen}
         onOpenChange={setCancelOpen}
         task={cancelTask}
+        expectRunSeq={pinRuns ? cancelTask?.run_seq : undefined}
       />
       <TaskRestartDialog
         open={restartOpen}

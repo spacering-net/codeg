@@ -36,6 +36,7 @@ import { useTranslations } from "next-intl"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
+import { readGroups } from "@/lib/activity-groups"
 import type { PersonalAgentSnapshot } from "@/lib/types"
 import { useActivity } from "@/stores/personal-agent-activity-store"
 import { useChatMotion } from "@/hooks/use-chat-motion"
@@ -69,10 +70,14 @@ export function PersonalAgentAuxPanel({
   const work = useWork()
   const { botId, itemVersion, dispatchVersion, routineVersion } =
     usePersonalAgent()
-  // What waits on the owner: the activity's own count (C6).
-  const waiting =
-    useActivity(botId, [itemVersion, dispatchVersion, routineVersion])
-      ?.waiting ?? 0
+  // What waits on the owner: the activity's own count (C6), no suggestion
+  // counted.
+  const activity = useActivity(botId, [
+    itemVersion,
+    dispatchVersion,
+    routineVersion,
+  ])
+  const waiting = activity ? readGroups(activity).waiting : 0
   // Another assistant shown: its panel comes in, as its conversation does.
   const asideRef = useRef<HTMLElement | null>(null)
   const motion = useChatMotion()

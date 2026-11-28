@@ -74,6 +74,16 @@ pub struct TodayView {
     /// the owner to them either.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub stale_acceptance: Vec<i32>,
+    /// Watched pull requests ready to merge whose card is gone (seen, put
+    /// aside): the activity panel's alone (6.1) — a brief lists a ready
+    /// one by its card only, as it always did.
+    #[serde(skip)]
+    pub ready_prs: Vec<TodayRow>,
+    /// Watched pull requests codeg gave up reading today (not found, read
+    /// after read): the activity's done today says so (6.6) — a brief
+    /// keeps to what it always listed.
+    #[serde(skip)]
+    pub gone_prs: Vec<TodayRow>,
 }
 
 /// One row: what it is, whose it is, and what opens it.
@@ -170,6 +180,41 @@ pub struct TodayRow {
     pub written: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub direction: Option<String>,
+    // The activity panel's alone (6.1): never written with a brief, which
+    // keeps these rows as they are serialized.
+    /// A watched pull request's card: the watch.
+    #[serde(skip)]
+    pub watch_id: Option<i32>,
+    /// A card: its notice, as the panel answers it.
+    #[serde(skip)]
+    pub card: Option<CardFacts>,
+    /// A board task's own work: what stops it.
+    #[serde(skip)]
+    pub work_dispatch_id: Option<i32>,
+    /// ... when its run began: a pull request delivered before it was of an
+    /// earlier run.
+    #[serde(skip)]
+    pub run_started_at: Option<DateTime<Utc>>,
+    /// ... which run it is: what the board's cancel of it holds to.
+    #[serde(skip)]
+    pub run_seq: Option<i32>,
+    /// ... its version as read: what a retry of it holds to.
+    #[serde(skip)]
+    pub task_updated_at: Option<DateTime<Utc>>,
+    /// What it asks the owner, answered on the row (7.5).
+    #[serde(skip)]
+    pub ask: Option<super::activity_view::RowAsk>,
+}
+
+/// A card a row of "today" is (the panel's alone).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardFacts {
+    pub notice_id: i32,
+    /// What it asks (`acceptance`, `confirm`, `mergeable`, ...).
+    pub kind: String,
+    pub phase: Option<String>,
+    /// An acceptance's: it says what sending the work back would.
+    pub has_message: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -210,6 +255,13 @@ impl TodayRow {
             matter_undo: None,
             written: None,
             direction: None,
+            watch_id: None,
+            card: None,
+            work_dispatch_id: None,
+            run_started_at: None,
+            run_seq: None,
+            task_updated_at: None,
+            ask: None,
         }
     }
 }
@@ -222,6 +274,9 @@ pub(crate) struct MessageSource {
     pub written: Option<String>,
     pub direction: Option<String>,
     pub peer: Option<Value>,
+    /// The message itself, when its line is its sender's: what it waits for
+    /// an answer to.
+    pub sent: Option<super::activity_view::SentMessage>,
 }
 
 /// [`MessageSource`] of matter `i`; empty for one that is not a message's,
@@ -281,11 +336,34 @@ fn source_from(
 ) -> MessageSource {
     let data = line_data(line);
     let direction = line_direction(&data);
+    let sent = if direction == Some("out") { sent_message(line, &data) } else { None };
     MessageSource {
         written: Some(line.body.clone()),
         direction: direction.map(str::to_string),
         peer: line_peer(line_peer_id(line), &data, bot),
+        sent,
     }
+}
+
+/// The message a sender's line (`data`) stands for: its id (the line's
+/// `m<id>` when its data does not say), its thread and its receiver.
+fn sent_message(
+    line: &crate::db::entities::personal_agent_timeline::Model,
+    data: &Value,
+) -> Option<super::activity_view::SentMessage> {
+    let int = |v: &Value| v.as_i64().and_then(|v| i32::try_from(v).ok());
+    let id = int(&data["message_id"]).or_else(|| {
+        line.ref_id
+            .as_deref()?
+            .strip_prefix('m')?
+            .parse::<i32>()
+            .ok()
+    })?;
+    Some(super::activity_view::SentMessage {
+        id,
+        thread: int(&data["thread_id"]),
+        to_bot: int(&data["to_bot_id"])?,
+    })
 }
 
 /// The assistant at the other end of a message's line (`data`), as read
@@ -315,8 +393,92 @@ fn line_peer(id: Option<i32>, data: &Value, bot: Option<&AgentModel>) -> Option<
 /// in a few more queries rather than failing.
 pub(crate) const IN_CHUNK: usize = 500;
 
+/// How handed-out work stands when the owner closing its matter gave it up:
+/// it failed, and they did not have it tried again (6.4).
+const GIVEN_UP_STATES: [DispatchState; 2] = [DispatchState::Failed, DispatchState::Interrupted];
+
+/// How many pieces of an assistant's failed work "today" lists, and how
+/// many it reads for them: the ones given up are not among those listed.
+pub(super) const FAILED_LISTED: usize = 20;
+pub(super) const FAILED_READ: u64 = 100;
+
+/// When work in [`GIVEN_UP_STATES`] failed: what a give-up of this failure
+/// comes after. A board task's (`task`, its work's) as the board settled it
+/// — its work's own end is when codeg read the board, which may be after
+/// the owner gave it up; and a task the board has moved on from since (run
+/// again, in review) failed before anything the owner did: its work's
+/// failure is an old one not read again yet. Any other's, its end.
+pub(super) fn failed_at(
+    d: &dispatch_entity::Model,
+    task: Option<&crate::db::entities::work_task::Model>,
+) -> DateTime<Utc> {
+    let task = task.filter(|t| d.mode == DispatchMode::Task && d.work_task_id == Some(t.id));
+    match task {
+        Some(t) if t.status != WorkTaskStatus::Failed => DateTime::<Utc>::MIN_UTC,
+        Some(t) => t.settled_at.unwrap_or_else(|| d.finished_at.unwrap_or(d.updated_at)),
+        None => d.finished_at.unwrap_or(d.updated_at),
+    }
+}
+
+/// Of failed work — each piece by id, with when it failed — what the owner
+/// gave up on: its matter closed by them since it failed (a failure after
+/// that is a new one, theirs to see).
+pub(super) async fn given_up(db: &AppDatabase, failed: &[(i32, DateTime<Utc>)]) -> HashSet<i32> {
+    use crate::db::entities::personal_agent_item::ItemKind;
+    if failed.is_empty() {
+        return HashSet::new();
+    }
+    let ended: HashMap<i32, DateTime<Utc>> = failed.iter().copied().collect();
+    let mut out = HashSet::new();
+    let ids: Vec<i32> = ended.keys().copied().collect();
+    for ids in ids.chunks(IN_CHUNK) {
+        out.extend(
+            item_entity::Entity::find()
+                .filter(item_entity::Column::DispatchId.is_in(ids.to_vec()))
+                .filter(item_entity::Column::Kind.eq(ItemKind::Dispatch))
+                .filter(item_entity::Column::Status.is_in([ItemStatus::Done, ItemStatus::Dropped]))
+                .filter(item_entity::Column::ClosedBy.eq("owner"))
+                .all(&db.conn)
+                .await
+                .or_failed()
+                .into_iter()
+                .filter_map(|i| {
+                    let d = i.dispatch_id?;
+                    (i.closed_at? >= *ended.get(&d)?).then_some(d)
+                }),
+        );
+    }
+    out
+}
+
+/// The board's failed tasks that were dispatched: their work, with when
+/// each failed — what [`given_up`] reads.
+pub(super) fn failed_tasks(tasks: &[crate::db::entities::work_task::Model]) -> Vec<(i32, DateTime<Utc>)> {
+    tasks
+        .iter()
+        .filter(|t| t.status == WorkTaskStatus::Failed)
+        .filter_map(|t| Some((t.personal_agent_dispatch_id?, t.settled_at.unwrap_or(t.updated_at))))
+        .collect()
+}
+
+/// Any matter but handed-out work's — that one only when the owner gave it
+/// up (dropped it: [`GIVEN_UP_STATES`]). One they marked done after it
+/// failed ("got it") leaves "waiting on you" ([`given_up`]) without saying
+/// they gave it up.
+fn not_work_or_closed_by_owner() -> sea_orm::Condition {
+    use crate::db::entities::personal_agent_item::ItemKind;
+    sea_orm::Condition::any()
+        .add(item_entity::Column::Kind.ne(ItemKind::Dispatch))
+        .add(
+            sea_orm::Condition::all()
+                .add(item_entity::Column::ClosedBy.eq("owner"))
+                .add(item_entity::Column::Status.eq(ItemStatus::Dropped)),
+        )
+}
+
 /// The matters of `bots` settled since `from` (§3.7): who settled each and
-/// how, the latest first — not handed-out work (its own rows say it), nor
+/// how, the latest first — not handed-out work (its own rows say it) but
+/// work the owner gave up on after it failed, nor
 /// one the assistant wrote settled from the start. An act of the owner's on
 /// the panel that can still be taken back carries what takes it back.
 ///
@@ -337,10 +499,10 @@ pub async fn closed_matters(
     use crate::db::entities::personal_agent_item::ItemKind;
     use crate::db::entities::personal_agent_message as message_entity;
     use crate::db::entities::personal_agent_timeline as timeline_entity;
-    let items: Vec<item_entity::Model> = item_entity::Entity::find()
+    let mut items: Vec<item_entity::Model> = item_entity::Entity::find()
         .filter(item_entity::Column::BotId.is_in(bots.to_vec()))
         .filter(item_entity::Column::ClosedAt.gte(from))
-        .filter(item_entity::Column::Kind.ne(ItemKind::Dispatch))
+        .filter(not_work_or_closed_by_owner())
         .filter(item_entity::Column::Status.is_in([ItemStatus::Done, ItemStatus::Dropped]))
         .order_by_desc(item_entity::Column::ClosedAt)
         .all(&db.conn)
@@ -354,6 +516,56 @@ pub async fn closed_matters(
             i.closed_at.is_some() && !born_dropped
         })
         .collect();
+    // Of handed-out work, only what the owner gave up on after it failed:
+    // the rest its own rows say.
+    let work_ids: Vec<i32> = items
+        .iter()
+        .filter(|i| i.kind == ItemKind::Dispatch)
+        .filter_map(|i| i.dispatch_id)
+        .collect();
+    let mut work: Vec<dispatch_entity::Model> = Vec::new();
+    for ids in work_ids.chunks(IN_CHUNK) {
+        work.extend(
+            dispatch_entity::Entity::find()
+                .filter(dispatch_entity::Column::Id.is_in(ids.to_vec()))
+                .filter(dispatch_entity::Column::State.is_in(GIVEN_UP_STATES))
+                .all(&db.conn)
+                .await
+                .or_failed(),
+        );
+    }
+    // A board task's failed as the board settled it.
+    let task_ids: Vec<i32> = work
+        .iter()
+        .filter(|d| d.mode == DispatchMode::Task)
+        .filter_map(|d| d.work_task_id)
+        .collect();
+    let mut work_tasks: HashMap<i32, crate::db::entities::work_task::Model> = HashMap::new();
+    for ids in task_ids.chunks(IN_CHUNK) {
+        for t in crate::db::entities::work_task::Entity::find()
+            .filter(crate::db::entities::work_task::Column::Id.is_in(ids.to_vec()))
+            .all(&db.conn)
+            .await
+            .or_failed()
+        {
+            work_tasks.insert(t.id, t);
+        }
+    }
+    let failed_work: HashMap<i32, DateTime<Utc>> = work
+        .iter()
+        .map(|d| {
+            let task = d.work_task_id.and_then(|t| work_tasks.get(&t));
+            (d.id, failed_at(d, task))
+        })
+        .collect();
+    // Closed after it failed: a closing before (of an earlier failure, the
+    // work run again since) is not a give-up of this one.
+    items.retain(|i| {
+        i.kind != ItemKind::Dispatch
+            || i.dispatch_id
+                .and_then(|d| failed_work.get(&d))
+                .is_some_and(|at| i.closed_at.is_some_and(|c| c >= *at))
+    });
     // The messages' lines, and the assistants at their other ends.
     let line_ids: Vec<i32> = items
         .iter()
@@ -520,7 +732,7 @@ pub(crate) async fn closed_matters_one_by_one(
     let items = item_entity::Entity::find()
         .filter(item_entity::Column::BotId.is_in(bots.to_vec()))
         .filter(item_entity::Column::ClosedAt.gte(from))
-        .filter(item_entity::Column::Kind.ne(ItemKind::Dispatch))
+        .filter(not_work_or_closed_by_owner())
         .filter(item_entity::Column::Status.is_in([ItemStatus::Done, ItemStatus::Dropped]))
         .order_by_desc(item_entity::Column::ClosedAt)
         .all(&db.conn)
@@ -531,6 +743,29 @@ pub(crate) async fn closed_matters_one_by_one(
         let Some(closed_at) = i.closed_at else {
             continue;
         };
+        if i.kind == ItemKind::Dispatch {
+            let work = match i.dispatch_id {
+                Some(d) => svc::get_dispatch(&db.conn, d).await.ok().flatten(),
+                None => None,
+            };
+            let task = match work.as_ref().filter(|d| d.mode == DispatchMode::Task) {
+                Some(d) => match d.work_task_id {
+                    Some(t) => crate::db::entities::work_task::Entity::find_by_id(t)
+                        .one(&db.conn)
+                        .await
+                        .ok()
+                        .flatten(),
+                    None => None,
+                },
+                None => None,
+            };
+            let failed = work.is_some_and(|d| {
+                GIVEN_UP_STATES.contains(&d.state) && closed_at >= failed_at(&d, task.as_ref())
+            });
+            if !failed {
+                continue;
+            }
+        }
         let born_dropped = i.closed_by.as_deref() == Some("agent")
             && i.closed_how.as_deref() == Some("dropped")
             && closed_at == i.created_at;
@@ -844,6 +1079,20 @@ async fn represent(
         row.bot_id = Some(bot);
         row.row_id = Some(card.id);
         row.state = Some("acceptance".into());
+        // What its row answers it by (the panel's alone), as a card read
+        // with the rest has it.
+        let payload = payload_of(&n.payload);
+        row.card = Some(CardFacts {
+            notice_id: n.id,
+            kind: "acceptance".into(),
+            phase: payload["phase"]
+                .as_str()
+                .or(payload["state"].as_str())
+                .map(str::to_string),
+            has_message: payload["message"]
+                .as_str()
+                .is_some_and(|m| !m.trim().is_empty()),
+        });
         needs.push(row);
     }
     for mut row in needs {
@@ -924,7 +1173,7 @@ fn payload_of(raw: &str) -> Value {
 }
 
 /// The owner's account preferences: the primary's settings.
-async fn account_prefs(db: &AppDatabase) -> Prefs {
+pub(crate) async fn account_prefs(db: &AppDatabase) -> Prefs {
     match svc::primary_bot(&db.conn).await.or_failed() {
         Some(p) => AccountView::from_settings(&p.settings).prefs,
         None => Prefs::default(),
@@ -1005,6 +1254,13 @@ pub async fn today_from(
             row.bot_id = Some(bot.id);
             row.row_id = n.row_id;
             row.state = Some(n.kind.clone());
+            row.watch_id = n.watch_id;
+            row.card = n.notice_id.map(|notice_id| CardFacts {
+                notice_id,
+                kind: n.kind.clone(),
+                phase: n.phase.clone(),
+                has_message: n.has_message,
+            });
             if let Some(d) = n.dispatch_id {
                 asking.insert(d);
                 waiting_dispatches.insert(d);
@@ -1146,17 +1402,32 @@ pub async fn today_from(
     // owner set aside or archived on the board is as they left it; one
     // other work took over is that work's.
     for bot in &bots {
-        for d in svc::list_dispatches(
+        let failed: Vec<dispatch_entity::Model> = svc::list_dispatches(
             &db.conn,
             bot.id,
-            &[DispatchState::Failed, DispatchState::Interrupted],
+            &GIVEN_UP_STATES,
             None,
-            20,
+            FAILED_READ,
         )
         .await
         .or_failed()
         .into_iter()
         .filter(|d| d.updated_at > now - Duration::days(FAILED_FRESH_DAYS))
+        .collect();
+        // Given up by the owner: gone from here, in today's done instead
+        // (`closed_matters`) — and not one of the twenty listed.
+        let pairs: Vec<(i32, DateTime<Utc>)> = failed
+            .iter()
+            .map(|d| {
+                let task = tasks.iter().find(|t| d.work_task_id == Some(t.id));
+                (d.id, failed_at(d, task))
+            })
+            .collect();
+        let gave_up = given_up(db, &pairs).await;
+        for d in failed
+            .into_iter()
+            .filter(|d| !gave_up.contains(&d.id))
+            .take(FAILED_LISTED)
         {
             if super::dispatch::superseded(db, &d).await {
                 continue;
@@ -1234,8 +1505,16 @@ pub async fn today_from(
     // Queued to merge: nothing left for the owner to do — watched, not
     // waiting on them.
     let mut queued: Vec<TodayRow> = Vec::new();
+    // A dispatched task that failed, given up by the owner on its matter:
+    // as its work, gone from here (6.4).
+    let tasks_given_up = given_up(db, &failed_tasks(&tasks)).await;
     for t in tasks.iter().filter(|t| task_needs_owner(t)) {
         if accepting.contains_key(&t.id) {
+            continue;
+        }
+        if t.status == WorkTaskStatus::Failed
+            && t.personal_agent_dispatch_id.is_some_and(|d| tasks_given_up.contains(&d))
+        {
             continue;
         }
         // Its failed run taken over by other work (B1): that work's row.
@@ -1268,6 +1547,10 @@ pub async fn today_from(
         });
         row.bot_id = prov.bot_of(t.personal_agent_dispatch_id);
         row.project = project_of(t.folder_id);
+        row.work_dispatch_id = t.personal_agent_dispatch_id;
+        row.run_started_at = t.started_at;
+        row.run_seq = Some(t.run_seq);
+        row.task_updated_at = Some(t.updated_at);
         row.text = (t.status == WorkTaskStatus::Failed)
             .then(|| t.last_error.as_deref().and_then(some_line))
             .flatten();
@@ -1500,6 +1783,11 @@ pub async fn today_from(
         );
         row.bot_id = prov.bot_of(t.personal_agent_dispatch_id);
         row.project = project_of(t.folder_id);
+        // Its own work stops it (the panel reads it, 6.2) — or, the owner's
+        // own, the board's cancel of this run.
+        row.work_dispatch_id = t.personal_agent_dispatch_id;
+        row.run_seq = Some(t.run_seq);
+        row.task_updated_at = Some(t.updated_at);
         row.state = Some(if accepting.contains_key(&t.id) {
             "checking".to_string()
         } else {
@@ -1545,12 +1833,17 @@ pub async fn today_from(
         .retain(|r| !(r.kind == "dispatch" && r.dispatch_id.is_some_and(|d| checks.contains(&d))));
 
     // The pull requests the assistants watch (7.4): one ready to merge
-    // waits on the owner (its card, above).
+    // waits on the owner — its card, above, while it stands for it; its own
+    // row on the panel once that card is gone (seen, put aside), never in a
+    // brief.
+    let carded: HashSet<i32> = view.needs.iter().filter_map(|r| r.watch_id).collect();
     for w in crate::db::service::personal_agent_watch_service::watching(&db.conn, None)
         .await
         .or_failed()
     {
-        if !bot_ids.contains(&w.bot_id) || w.kind != "pr" || w.phase.as_deref() == Some("mergeable")
+        if !bot_ids.contains(&w.bot_id)
+            || w.kind != "pr"
+            || (w.phase.as_deref() == Some("mergeable") && carded.contains(&w.id))
         {
             continue;
         }
@@ -1574,6 +1867,11 @@ pub async fn today_from(
         row.text = Some(label);
         row.state = Some(w.phase.clone().unwrap_or_else(|| "open".into()));
         row.task_id = w.work_task_id;
+        if w.phase.as_deref() == Some("mergeable") {
+            row.dispatch_id = w.dispatch_id;
+            view.ready_prs.push(row);
+            continue;
+        }
         if let Some(d) = w.dispatch_id {
             row.dispatch_id = Some(d);
             dispatch_ids.push(d);
@@ -1661,7 +1959,8 @@ pub async fn today_from(
         .await
         .or_failed()
     {
-        if !bot_ids.contains(&w.bot_id) || w.ended_reason.as_deref() != Some("merged") {
+        let gone = w.ended_reason.as_deref() == Some("gone");
+        if !bot_ids.contains(&w.bot_id) || !(gone || w.ended_reason.as_deref() == Some("merged")) {
             continue;
         }
         let label = format!(
@@ -1671,8 +1970,8 @@ pub async fn today_from(
             w.number
         );
         let mut row = TodayRow::new(
-            format!("pr_merged:{}", w.id),
-            "pr_merged",
+            format!("{}:{}", if gone { "pr_gone" } else { "pr_merged" }, w.id),
+            if gone { "pr_gone" } else { "pr_merged" },
             w.title
                 .as_deref()
                 .map(one_line)
@@ -1682,8 +1981,15 @@ pub async fn today_from(
         row.bot_id = Some(w.bot_id);
         row.project = w.folder_id.and_then(project_of);
         row.text = Some(label);
-        row.state = Some("merged".into());
+        row.state = Some(if gone { "gone" } else { "merged" }.into());
         row.task_id = w.work_task_id;
+        if gone {
+            // When it was given up (its watch ended), not when it last moved.
+            row.at = w.updated_at;
+            row.dispatch_id = w.dispatch_id;
+            view.gone_prs.push(row);
+            continue;
+        }
         if let Some(d) = w.dispatch_id {
             row.dispatch_id = Some(d);
             dispatch_ids.push(d);
@@ -1911,6 +2217,29 @@ pub async fn today_from(
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    /// The panel's own facts on a row (6.1) are never written with a
+    /// brief: the row serializes as it did without them.
+    #[test]
+    fn the_panels_own_facts_are_never_kept_with_a_brief() {
+        let mut row = TodayRow::new("task:1".into(), "task", "Fix".into(), Utc::now());
+        let plain = serde_json::to_value(&row).unwrap();
+        row.watch_id = Some(3);
+        row.work_dispatch_id = Some(4);
+        row.card = Some(CardFacts {
+            notice_id: 5,
+            kind: "confirm".into(),
+            phase: Some("approve".into()),
+            has_message: true,
+        });
+        row.run_seq = Some(6);
+        row.task_updated_at = Some(Utc::now());
+        row.ask = Some(super::super::activity_view::RowAsk::Choice {
+            notice_id: 5,
+            options: vec![],
+        });
+        assert_eq!(serde_json::to_value(&row).unwrap(), plain);
+    }
 
     #[test]
     fn the_day_runs_from_four_to_four_in_the_owners_zone() {

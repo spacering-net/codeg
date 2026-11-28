@@ -305,6 +305,12 @@ fn platform_ready(provider: ForgeProvider, d: &ForgeChangeDetail) -> bool {
     if d.mergeable != Some(true) || d.draft {
         return false;
     }
+    // Waiting for a review the forge read says it waits on (6.6): Gitea's
+    // own `mergeable` says nothing of approvals — what read it as ready
+    // whatever its reviews said.
+    if d.review.as_ref().is_some_and(|r| r.waiting()) {
+        return false;
+    }
     let state = d.merge_state.as_deref().map(str::to_ascii_lowercase);
     match provider {
         ForgeProvider::GitHub => {
@@ -318,6 +324,20 @@ fn platform_ready(provider: ForgeProvider, d: &ForgeChangeDetail) -> bool {
         }
         ForgeProvider::Gitea => true,
         ForgeProvider::Cnb => matches!(state.as_deref(), None | Some("mergeable")),
+    }
+}
+
+/// What kind of failure a read that came back with `e` is
+/// (`last_error_kind`, 6.6); the read's own time limit is `timeout`.
+fn error_kind(e: &ForgeError) -> &'static str {
+    match e {
+        ForgeError::Auth(_) => "auth",
+        ForgeError::NoAccount { .. } => "no_account",
+        ForgeError::UnsupportedHost { .. } | ForgeError::WrongForge { .. } => "config",
+        ForgeError::RateLimited { .. } => "rate_limited",
+        ForgeError::NotFound => "not_found",
+        ForgeError::Network(_) => "network",
+        ForgeError::Api { .. } | ForgeError::Invalid(_) | ForgeError::Refused { .. } => "api",
     }
 }
 
@@ -1007,29 +1027,49 @@ impl PersonalAgentEngine {
                     .unwrap_or_else(|| backoff_secs(w.failures + 1))
                     .clamp(60, MAX_BACKOFF_SECS);
                 let until = now + Duration::seconds(secs);
-                // Every watch on the account waits; their cards say so.
-                let held = wsvc::hold_account(&self.db.conn, &target, until)
+                // Every watch on the account waits, saying why (6.6): one
+                // held read after read is read too long ago in the end.
+                let held = wsvc::hold_account_failing(&self.db.conn, &target, until, "rate_limited")
                     .await
                     .unwrap_or_default();
                 for h in held.iter().filter(|h| h.id != w.id) {
                     self.emit_watch_change(h);
                 }
-                self.watch_failed(&w, "the forge's rate limit", Some(until), false)
+                self.watch_failed(&w, "the forge's rate limit", Some(until), false, "rate_limited")
                     .await;
                 Err(format!("rate limited until {}", until.to_rfc3339()))
             }
             Ok(Err(ForgeError::NotFound)) => {
-                self.watch_failed(&w, "not found", None, true).await;
+                self.watch_failed(&w, "not found", None, true, "not_found").await;
                 Err("the forge says it does not exist".into())
             }
-            Ok(Err(e)) => {
+            // The account cannot read it (signed out, gone): no watch on it
+            // can be read until the owner sees to it — each waits, none
+            // tried one by one meanwhile; they hear it once a day.
+            Ok(Err(e @ (ForgeError::Auth(_) | ForgeError::NoAccount { .. }))) => {
+                let kind = error_kind(&e);
                 let msg = e.to_string();
-                self.watch_failed(&w, &msg, None, false).await;
+                let until = now + Duration::seconds(MAX_BACKOFF_SECS);
+                let held = wsvc::hold_account_failing(&self.db.conn, &target, until, kind)
+                    .await
+                    .unwrap_or_default();
+                for h in held.iter().filter(|h| h.id != w.id) {
+                    self.emit_watch_change(h);
+                }
+                self.watch_failed(&w, &msg, Some(until), false, kind).await;
+                self.tell_account_unread(&w, &target, now).await;
                 Err(msg)
             }
+            Ok(Err(e)) => {
+                let kind = error_kind(&e);
+                let msg = e.to_string();
+                self.watch_failed(&w, &msg, None, false, kind).await;
+                Err(msg)
+            }
+            // The read's own limit: not the forge's word, its silence.
             Err(_) => {
                 let msg = format!("the forge did not answer within {READ_SECS} s");
-                self.watch_failed(&w, &msg, None, false).await;
+                self.watch_failed(&w, &msg, None, false, "timeout").await;
                 Err(msg)
             }
         }
@@ -1043,6 +1083,8 @@ impl PersonalAgentEngine {
         error: &str,
         until: Option<DateTime<Utc>>,
         not_found: bool,
+        // What kind of failure it was (`last_error_kind`).
+        kind: &str,
     ) -> Option<watch_entity::Model> {
         let failures = w.failures + 1;
         // Gone only when not found so many reads in a row: any other
@@ -1053,9 +1095,11 @@ impl PersonalAgentEngine {
             not_found: Some(missing),
             backoff: Some(true),
             last_error: Some(Some(error.chars().take(500).collect())),
-            next_poll_at: Some(Some(
+            last_error_kind: Some(Some(kind.to_string())),
+            // Never sooner than a hold on its account set meanwhile.
+            next_poll_at_least: Some(
                 until.unwrap_or_else(|| Utc::now() + Duration::seconds(backoff_secs(failures))),
-            )),
+            ),
             ..Default::default()
         };
         let gone = missing >= GONE_AFTER && w.state == WatchState::Watching;
@@ -1073,6 +1117,45 @@ impl PersonalAgentEngine {
         // Its card now says it may be out of date.
         self.emit_watch_change(w);
         saved
+    }
+
+    /// The owner told — once a day for the account — that the watched pull
+    /// requests on `target`'s account cannot be read: its sign-in to see to.
+    async fn tell_account_unread(
+        &self,
+        w: &watch_entity::Model,
+        target: &DeliveryTarget,
+        now: DateTime<Utc>,
+    ) {
+        let Some(host) = self.host_ref() else {
+            return;
+        };
+        let label = format!(
+            "{}{}{}",
+            w.owner_repo,
+            if w.provider == "gitlab" { "!" } else { "#" },
+            w.number
+        );
+        host.tell(super::reach::News {
+            key: format!(
+                "watch_auth:{}:{}:{}:{}",
+                target.provider.as_str(),
+                target.server_host,
+                target.account_id,
+                now.format("%Y-%m-%d")
+            ),
+            bot_id: w.bot_id,
+            kind: "pr",
+            what: super::reach::What::PrUnread {
+                text: format!("{} ({})", label, target.server_host),
+            },
+            link: Some(super::reach::NotifyLink::Bot {
+                bot_id: w.bot_id,
+                row_id: None,
+            }),
+            need: None,
+        })
+        .await;
     }
 
     /// The pages that show watch `w` read it again: its work's card, or the
@@ -1126,6 +1209,7 @@ impl PersonalAgentEngine {
             not_found: Some(0),
             backoff: Some(false),
             last_error: Some(None),
+            last_error_kind: Some(None),
             ..Default::default()
         };
         let head_key = head.clone().unwrap_or_default();
@@ -2250,7 +2334,66 @@ mod tests {
             checks: ForgeCheckList::available(checks),
             updated_at: None,
             workflow_approval: None,
+            review: None,
         }
+    }
+
+    /// 6.6: green, no conflict, but a review it waits on (asked of someone,
+    /// or changes asked for) — not ready, on Gitea too, whose `mergeable`
+    /// says nothing of approvals; approved, ready.
+    /// 6.6's table: each failure a read can come back with, its kind.
+    #[test]
+    fn a_failed_read_is_told_by_its_kind() {
+        let p = ForgeProvider::GitHub;
+        for (e, kind) in [
+            (ForgeError::Auth("dead token".into()), "auth"),
+            (ForgeError::NoAccount { provider: p, host: "github.com".into() }, "no_account"),
+            (ForgeError::UnsupportedHost { host: "bitbucket.org".into() }, "config"),
+            (ForgeError::WrongForge { host: "git.x".into(), detected: ForgeProvider::GitLab }, "config"),
+            (ForgeError::RateLimited { retry_after: Some(60) }, "rate_limited"),
+            (ForgeError::NotFound, "not_found"),
+            (ForgeError::Network("reset".into()), "network"),
+            (ForgeError::Api { status: 502, message: "bad gateway".into() }, "api"),
+            (ForgeError::Invalid("x".into()), "api"),
+            (
+                ForgeError::Refused { i18n_key: "k", message: "m".into(), forbidden: false },
+                "api",
+            ),
+        ] {
+            assert_eq!(error_kind(&e), kind, "{e}");
+        }
+    }
+
+    #[test]
+    fn a_review_it_waits_on_keeps_a_pull_request_from_being_ready() {
+        use ForgeCheckState as S;
+        let checks = vec![check("build", S::Success)];
+        let mut d = detail(checks, Some(true), None);
+        let t = CheckTally::of(&d.checks);
+        assert_eq!(phase_of(ForgeProvider::Gitea, &d, &t), Phase::Mergeable);
+        d.review = Some(crate::forge::ReviewGate {
+            requested: vec!["ann".into()],
+            ..Default::default()
+        });
+        assert_eq!(phase_of(ForgeProvider::Gitea, &d, &t), Phase::Open);
+        // Approved by one, another still asked: still waiting.
+        d.review = Some(crate::forge::ReviewGate {
+            approved: true,
+            requested: vec!["bob".into()],
+            ..Default::default()
+        });
+        assert_eq!(phase_of(ForgeProvider::Gitea, &d, &t), Phase::Open);
+        d.review = Some(crate::forge::ReviewGate {
+            approved: true,
+            ..Default::default()
+        });
+        assert_eq!(phase_of(ForgeProvider::Gitea, &d, &t), Phase::Mergeable);
+        d.review = Some(crate::forge::ReviewGate {
+            approved: true,
+            changes_requested: true,
+            ..Default::default()
+        });
+        assert_eq!(phase_of(ForgeProvider::GitHub, &d, &t), Phase::Open);
     }
 
     #[test]
