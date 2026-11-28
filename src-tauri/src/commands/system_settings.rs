@@ -1103,7 +1103,7 @@ mod tests {
     /// success), and "off" has to produce none. A boolean over `all()` would let
     /// the off case pass while leaking one of them.
     fn launch_env_color_vars() -> BTreeMap<String, String> {
-        crate::acp::connection::antigravity_launch_env(&BTreeMap::new(), None)
+        crate::acp::connection::antigravity_launch_env(&BTreeMap::new())
             .into_iter()
             .filter(|(key, _)| {
                 matches!(

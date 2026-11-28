@@ -504,6 +504,14 @@ pub struct SessionState {
     ///
     /// Backend-internal — not serialized, not carried on `to_snapshot()`.
     pub trae_pat_sign_in: bool,
+    /// 仅 Google Antigravity 使用：当用户在设置面板选择了非交互认证方式
+    /// （`gemini-api-key` 或 `agent-platform`）时，在 `initialize` 之后、
+    /// `session/new` 之前主动发送一次 ACP `authenticate`，避免 `agy acp`
+    /// 因未设置 `acp-auth-state.json` 而返回 `-32000 Authentication required`
+    /// 或继续沿用之前缓存的认证方式。
+    ///
+    /// 仅后端内部使用，不序列化。
+    pub antigravity_auth_method: Option<&'static str>,
     /// Pi's native `enabledModels` scope for this launch. The ACP adapter
     /// advertises every authenticated model, so the connection layer applies
     /// this Pi-only preference before publishing the model selector.
@@ -1057,6 +1065,7 @@ impl SessionState {
             agent_chosen_config_values: BTreeMap::new(),
             env_pinned_config_option_ids: Vec::new(),
             trae_pat_sign_in: false,
+            antigravity_auth_method: None,
             pi_enabled_model_patterns: None,
             prompt_capabilities: None,
             fork_supported: false,

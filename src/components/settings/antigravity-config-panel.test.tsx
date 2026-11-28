@@ -3,7 +3,6 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest"
 
 vi.mock("@/lib/api", () => ({
-  acpSyncAntigravitySettings: vi.fn(),
   acpAntigravityLoginStart: vi.fn(),
   acpAntigravityLoginFinish: vi.fn(),
   acpAntigravityLoginCancel: vi.fn(),
@@ -24,12 +23,12 @@ import {
   acpAntigravitySignOut,
   acpReclaimLeakedTemp,
   acpScanLeakedTemp,
-  acpSyncAntigravitySettings,
 } from "@/lib/api"
 import {
   ANTIGRAVITY_ENV_KEYS,
   AntigravityConfigPanel,
   antigravityIncompleteReason,
+  antigravityPermissionModeFromEnv,
   buildAntigravityEnv,
   inferAntigravityMethod,
   type AntigravityAuthMethod,
@@ -44,6 +43,7 @@ function values(
 ): AntigravityFormValues {
   return {
     method,
+    permissionMode: "default",
     geminiApiKey: "",
     googleApiKey: "",
     gcpProject: "",
@@ -55,7 +55,7 @@ function values(
 describe("inferAntigravityMethod", () => {
   it("defaults to the browser login and rejects anything unrecognized", () => {
     // The default matters: it is the one path that needs no credential, so a
-    // row with nothing recorded still produces a workable settings.json.
+    // row with nothing recorded still launches with a workable method.
     expect(inferAntigravityMethod({})).toBe("oauth-personal")
     expect(inferAntigravityMethod({ AGY_AUTH_METHOD: "vertex-ai" })).toBe(
       "oauth-personal"
@@ -69,11 +69,38 @@ describe("inferAntigravityMethod", () => {
   })
 })
 
+describe("antigravityPermissionModeFromEnv", () => {
+  // 与后端 `antigravity_skip_permissions_enabled` 保持一致：
+  // 仅显式 "1"/"true" 启用 Turbo 模式，其余保持默认。
+  it("reads the launch knob the way the backend does", () => {
+    expect(antigravityPermissionModeFromEnv({})).toBe("default")
+    expect(
+      antigravityPermissionModeFromEnv({
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
+      })
+    ).toBe("default")
+    expect(
+      antigravityPermissionModeFromEnv({
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "turbo",
+      })
+    ).toBe("default")
+    expect(
+      antigravityPermissionModeFromEnv({
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "1",
+      })
+    ).toBe("turbo")
+    expect(
+      antigravityPermissionModeFromEnv({
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: " TRUE ",
+      })
+    ).toBe("turbo")
+  })
+})
+
 describe("buildAntigravityEnv", () => {
   it("keeps only the credential the chosen method uses and preserves the rest", () => {
     // Switching away from API-key auth must DELETE the key. Leaving it would
-    // authenticate as something the user did not pick and would contradict the
-    // auth.type the same launch writes to settings.json.
+    // authenticate as something the user did not pick.
     const stale = {
       KEEP: "y",
       GEMINI_API_KEY: "old",
@@ -84,23 +111,28 @@ describe("buildAntigravityEnv", () => {
     expect(buildAntigravityEnv(stale, values("oauth-personal"))).toEqual({
       KEEP: "y",
       AGY_AUTH_METHOD: "oauth-personal",
+      AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
     })
 
     expect(
       buildAntigravityEnv(
         stale,
-        values("gemini-api-key", { geminiApiKey: "  AIza-new  " })
+        values("gemini-api-key", {
+          geminiApiKey: "  AIza-new  ",
+          permissionMode: "turbo",
+        })
       )
     ).toEqual({
       KEEP: "y",
       AGY_AUTH_METHOD: "gemini-api-key",
+      AGY_DANGEROUSLY_SKIP_PERMISSIONS: "1",
       GEMINI_API_KEY: "AIza-new",
     })
   })
 
   it("gives Gemini Enterprise its project and location", () => {
-    // oauth-business reads gcp.project/location from settings.json only, and
-    // the launch path copies them out of these very env values.
+    // oauth-business reads its project and location from these env values,
+    // which the launch passes through for this method.
     expect(
       buildAntigravityEnv(
         {},
@@ -108,6 +140,7 @@ describe("buildAntigravityEnv", () => {
       )
     ).toEqual({
       AGY_AUTH_METHOD: "oauth-business",
+      AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
       GOOGLE_CLOUD_PROJECT: "acme",
       GOOGLE_CLOUD_LOCATION: "eu",
     })
@@ -128,6 +161,7 @@ describe("buildAntigravityEnv", () => {
       )
     ).toEqual({
       AGY_AUTH_METHOD: "agent-platform",
+      AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
       GOOGLE_API_KEY: "AIza-vertex",
     })
 
@@ -138,6 +172,7 @@ describe("buildAntigravityEnv", () => {
       )
     ).toEqual({
       AGY_AUTH_METHOD: "agent-platform",
+      AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
       GOOGLE_CLOUD_PROJECT: "p",
       GOOGLE_CLOUD_LOCATION: "us",
     })
@@ -219,7 +254,7 @@ describe("AntigravityConfigPanel", () => {
       enabled: true,
       env: overrides?.env ?? {},
       config_json: null,
-      config_file_path: "/home/u/.gemini/antigravity-acp/settings.json",
+      config_file_path: "/home/u/.gemini/antigravity-cli/settings.json",
     } as unknown as AcpAgentInfo
   }
 
@@ -248,70 +283,18 @@ describe("AntigravityConfigPanel", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(acpSyncAntigravitySettings).mockResolvedValue({
-      path: "/home/u/.gemini/antigravity-acp/settings.json",
-      status: "written",
-      reason: null,
-    })
   })
 
-  /**
-   * Saving the row is only half of it, so "saved" is only half true.
-   *
-   * The choice is enforced by `auth.type` in the ACP server's settings.json,
-   * and that file is the user's — comments make it Hjson, which codeg refuses
-   * to rewrite rather than flatten. The launch skips it with a log line nobody
-   * reads. Claiming success anyway is how switching methods becomes a mystery
-   * failure hours later: the launch scrubs the credentials for the NEW method
-   * while the server keeps reading the OLD auth.type.
-   */
-  it("does not claim success when the settings file was left alone", async () => {
-    vi.mocked(acpSyncAntigravitySettings).mockResolvedValue({
-      path: "/home/u/.gemini/antigravity-acp/settings.json",
-      status: "skipped",
-      reason: "it is not strict JSON codeg can rewrite without losing content",
-    })
+  /** Storing the row is the whole save: `agy acp` reads no codeg-managed
+   *  settings file, so there is no second step that could disagree. */
+  it("reports a plain success once the row is stored", async () => {
     const onSaved = vi.fn()
     renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" }, onSaved })
-
-    fireEvent.click(screen.getByRole("button", { name: m.save }))
-
-    await waitFor(() => expect(toast.warning).toHaveBeenCalled())
-    expect(toast.success).not.toHaveBeenCalled()
-    // And it stays on screen: this is a standing disagreement between the form
-    // and the file, not a four-second event.
-    expect(await screen.findByText(m.syncSkipped)).toBeInTheDocument()
-    expect(
-      screen.getByText(
-        "it is not strict JSON codeg can rewrite without losing content"
-      )
-    ).toBeInTheDocument()
-    // The row itself DID save, so the panel still reports the save as done.
-    await waitFor(() => expect(onSaved).toHaveBeenCalled())
-  })
-
-  it("reports a plain success when the file was written", async () => {
-    renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
-    fireEvent.click(screen.getByRole("button", { name: m.save }))
-
-    await waitFor(() => expect(toast.success).toHaveBeenCalled())
-    expect(toast.warning).not.toHaveBeenCalled()
-    expect(screen.queryByText(m.syncSkipped)).not.toBeInTheDocument()
-  })
-
-  /** A transport failure on the REPORT must not turn a stored row into a
-   *  failed save — the launch-time sync still runs either way. */
-  it("still reports the save when the sync probe itself fails", async () => {
-    vi.mocked(acpSyncAntigravitySettings).mockRejectedValue(
-      new Error("offline")
-    )
-    const onSaved = vi.fn()
-    renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" }, onSaved })
-
     fireEvent.click(screen.getByRole("button", { name: m.save }))
 
     await waitFor(() => expect(onSaved).toHaveBeenCalled())
     expect(toast.success).toHaveBeenCalled()
+    expect(toast.warning).not.toHaveBeenCalled()
     expect(toast.error).not.toHaveBeenCalled()
   })
 
@@ -323,7 +306,7 @@ describe("AntigravityConfigPanel", () => {
       screen.getByText(m.methodHints["oauth-personal"])
     ).toBeInTheDocument()
     expect(
-      screen.getByText("/home/u/.gemini/antigravity-acp/settings.json")
+      screen.getByText("/home/u/.gemini/antigravity-cli/settings.json")
     ).toBeInTheDocument()
     // Nothing to fill in, so no warning.
     expect(screen.queryByText(m.missingGeminiApiKey)).not.toBeInTheDocument()
@@ -358,11 +341,45 @@ describe("AntigravityConfigPanel", () => {
       {
         KEEP: "y",
         AGY_AUTH_METHOD: "gemini-api-key",
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
         GEMINI_API_KEY: "AIza-new",
       },
       true
     )
     await waitFor(() => expect(onSaved).toHaveBeenCalled())
+  })
+
+  it("shows the turbo permission hint and persists AGY_DANGEROUSLY_SKIP_PERMISSIONS", async () => {
+    const onSaveEnv = vi.fn().mockResolvedValue(0)
+    const { rerender } = renderPanel({
+      env: {
+        AGY_AUTH_METHOD: "oauth-personal",
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "1",
+      },
+      onSaveEnv,
+    })
+
+    expect(screen.getByText(m.permissionModeTurboHint)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: m.save }))
+
+    await waitFor(() => expect(onSaveEnv).toHaveBeenCalledTimes(1))
+    expect(onSaveEnv).toHaveBeenCalledWith(
+      {
+        AGY_AUTH_METHOD: "oauth-personal",
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "1",
+      },
+      true
+    )
+
+    // 未处于编辑态时，持久化行变化会同步刷新权限模式显示
+    rerender({
+      env: {
+        AGY_AUTH_METHOD: "oauth-personal",
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
+      },
+      onSaveEnv,
+    })
+    expect(screen.getByText(m.permissionModeDefaultHint)).toBeInTheDocument()
   })
 
   it("keeps an in-progress edit when the persisted row changes underneath", () => {
@@ -400,15 +417,13 @@ describe("AntigravityConfigPanel", () => {
   })
 
   /**
-   * The headless sign-in. Antigravity's OAuth is run by the AGENT — it opens a
-   * browser on the machine the agent runs on — so on a server with no desktop
-   * the first session hangs for five minutes and dies. This section is the only
-   * way that user ever sees the link.
+   * The headless sign-in. It drives `agy acp --login`, which prints a Google
+   * consent link and waits for the code — the only way a server with no
+   * desktop ever gets a personal Google sign-in.
    */
   describe("browser-free sign-in", () => {
     const h = m.headless
     const started = {
-      alreadySignedIn: false,
       handle: "handle-1",
       authUrl: "https://accounts.google.com/o/oauth2/v2/auth?state=s1",
       redirectUri: "http://127.0.0.1:54926/",
@@ -435,12 +450,21 @@ describe("AntigravityConfigPanel", () => {
       expect(screen.queryByText(h.title)).not.toBeInTheDocument()
     })
 
-    /** Gemini Enterprise resolves a license against gcp.project/location during
-     *  sign-in, so starting one without them only burns an attempt. */
-    it("cannot be started while the form is still missing a credential", () => {
-      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-business" } })
-      expect(screen.getByText(m.missingEnterpriseConfig)).toBeInTheDocument()
-      expect(screen.getByRole("button", { name: h.start })).toBeDisabled()
+    /** `agy acp --login` signs a personal Google account in and nothing else,
+     *  so Gemini Enterprise (which the CLI signs in at session start) is not
+     *  offered a sign-in that would report success without authenticating it. */
+    it("is not offered for Gemini Enterprise", () => {
+      renderPanel({
+        env: {
+          AGY_AUTH_METHOD: "oauth-business",
+          GOOGLE_CLOUD_PROJECT: "acme",
+          GOOGLE_CLOUD_LOCATION: "eu",
+        },
+      })
+      expect(screen.queryByText(h.title)).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole("button", { name: h.start })
+      ).not.toBeInTheDocument()
     })
 
     it("shows the link and the dead-end address it will redirect to", async () => {
@@ -463,7 +487,6 @@ describe("AntigravityConfigPanel", () => {
         signedIn: true,
         message: null,
         retryable: false,
-        credentialPath: "/srv/gemini/antigravity-acp/acp_token.json",
       })
       renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
       fireEvent.click(screen.getByRole("button", { name: h.start }))
@@ -482,11 +505,6 @@ describe("AntigravityConfigPanel", () => {
         )
       )
       expect(await screen.findByText(h.signedIn)).toBeInTheDocument()
-      // The token is a portable file — worth naming so a second headless box
-      // can be signed in with a copy instead of another round trip.
-      expect(
-        screen.getByText("/srv/gemini/antigravity-acp/acp_token.json")
-      ).toBeInTheDocument()
       expect(toast.success).toHaveBeenCalled()
     })
 
@@ -498,7 +516,6 @@ describe("AntigravityConfigPanel", () => {
         signedIn: false,
         message: "Onboarding failed: ineligible user",
         retryable: false,
-        credentialPath: null,
       })
       renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
       fireEvent.click(screen.getByRole("button", { name: h.start }))
@@ -573,7 +590,6 @@ describe("AntigravityConfigPanel", () => {
         signedIn: false,
         message: "Onboarding failed: ineligible user",
         retryable: false,
-        credentialPath: null,
       })
       renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
       fireEvent.click(screen.getByRole("button", { name: h.start }))
@@ -600,7 +616,6 @@ describe("AntigravityConfigPanel", () => {
         signedIn: false,
         message: "No authorization code found.",
         retryable: true,
-        credentialPath: null,
       })
       renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
       fireEvent.click(screen.getByRole("button", { name: h.start }))
@@ -617,32 +632,6 @@ describe("AntigravityConfigPanel", () => {
       expect(
         screen.getByRole("button", { name: h.complete })
       ).toBeInTheDocument()
-    })
-
-    /**
-     * A user who copied a token file across, or who signed in earlier, gets no
-     * link at all — `authenticate` returns straight away. Without this the
-     * healthiest possible state would look like a 90-second stall followed by
-     * "Antigravity did not produce a sign-in link".
-     */
-    it("says so when the agent was already signed in", async () => {
-      vi.mocked(acpAntigravityLoginStart).mockResolvedValue({
-        alreadySignedIn: true,
-        handle: null,
-        authUrl: null,
-        redirectUri: null,
-        methodId: "oauth-personal",
-        expiresInSecs: 300,
-      })
-      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
-      fireEvent.click(screen.getByRole("button", { name: h.start }))
-
-      expect(await screen.findByText(h.signedIn)).toBeInTheDocument()
-      expect(screen.getByText(h.alreadySignedIn)).toBeInTheDocument()
-      // No link, so nothing to paste back.
-      expect(
-        screen.queryByRole("button", { name: h.complete })
-      ).not.toBeInTheDocument()
     })
 
     /**
@@ -704,40 +693,6 @@ describe("AntigravityConfigPanel", () => {
     })
 
     /**
-     * The backend builds the agent's environment from the DATABASE, so a
-     * project typed but not saved is a project the sign-in will not see.
-     * Allowing it would spend a whole Google consent round trip and only then
-     * fail license resolution.
-     */
-    it("waits for a save before offering an Enterprise sign-in", () => {
-      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-business" } })
-      const project = screen.getByLabelText(m.gcpProjectLabel)
-      const location = screen.getByLabelText(m.gcpLocationLabel)
-      fireEvent.change(project, { target: { value: "acme" } })
-      fireEvent.change(location, { target: { value: "eu" } })
-
-      // The form is now complete, so its own warning is gone...
-      expect(
-        screen.queryByText(m.missingEnterpriseConfig)
-      ).not.toBeInTheDocument()
-      // ...but the stored row is not, and that is what signs in.
-      expect(screen.getByText(h.saveFirst)).toBeInTheDocument()
-      expect(screen.getByRole("button", { name: h.start })).toBeDisabled()
-    })
-
-    it("offers the sign-in once the row actually carries the config", () => {
-      renderPanel({
-        env: {
-          AGY_AUTH_METHOD: "oauth-business",
-          GOOGLE_CLOUD_PROJECT: "acme",
-          GOOGLE_CLOUD_LOCATION: "eu",
-        },
-      })
-      expect(screen.queryByText(h.saveFirst)).not.toBeInTheDocument()
-      expect(screen.getByRole("button", { name: h.start })).toBeEnabled()
-    })
-
-    /**
      * The web transport throws the backend's `{code, message}` JSON verbatim —
      * it is not an `Error`. `String(e)` on that renders "[object Object]", and
      * it does so in SERVER mode, which is the only deployment this section
@@ -781,10 +736,9 @@ describe("AntigravityConfigPanel", () => {
      * The sharpest form of "the sign-in uses the STORED row". Switching to
      * personal OAuth needs no credential, so a field-only check passes it — and
      * the sign-in then genuinely succeeds. But the next launch reads the OLD
-     * method from the database and rewrites `auth.type` back to it, scrubbing
-     * this method's credentials on the way, so the user is returned to the
-     * five-minute failure they came here to escape after being told they were
-     * signed in.
+     * method from the database and scrubs this method's credentials on the
+     * way, so the user is told they were signed in and then cannot start a
+     * session.
      */
     it("waits for a save when the method itself is unsaved", () => {
       renderPanel({
@@ -823,21 +777,15 @@ describe("AntigravityConfigPanel", () => {
   /**
    * The escape hatch from a wrong account.
    *
-   * Antigravity refreshes its cached token by itself, so once a credential
-   * exists `authenticate` returns with no link and the sign-in above can only
-   * ever report `alreadySignedIn` — leaving the first Google account a user
-   * picks as the last one they get, through uninstalls and reinstalls alike.
+   * Antigravity refreshes its cached credential by itself, so once one exists
+   * every session silently reuses that account — the first Google account a
+   * user picks is the last one they get, through reinstalls alike.
    */
   describe("sign-out", () => {
     const s = m.signOut
-    const h = m.headless
 
     beforeEach(() => {
-      vi.mocked(acpAntigravitySignOut).mockResolvedValue({
-        path: "/home/u/.gemini/antigravity-acp/settings.json",
-        status: "written",
-        reason: null,
-      })
+      vi.mocked(acpAntigravitySignOut).mockResolvedValue(undefined)
     })
 
     it("offers itself only for the methods with a credential to discard", () => {
@@ -862,35 +810,6 @@ describe("AntigravityConfigPanel", () => {
     })
 
     /**
-     * The agent's `logout` removes `auth.type` on its way out and the backend
-     * writes the saved method straight back. When that write is refused the
-     * file now names NO method, and every later session fails outright with
-     * "Authentication required" — so this is the one outcome the panel must not
-     * report as a plain success.
-     */
-    it("warns when the settings file could not be rewritten afterwards", async () => {
-      vi.mocked(acpAntigravitySignOut).mockResolvedValue({
-        path: "/home/u/.gemini/antigravity-acp/settings.json",
-        status: "skipped",
-        reason:
-          "it is not strict JSON codeg can rewrite without losing content",
-      })
-      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
-      fireEvent.click(screen.getByRole("button", { name: s.action }))
-
-      await waitFor(() => expect(toast.warning).toHaveBeenCalled())
-      expect(toast.success).not.toHaveBeenCalled()
-      // And it stays on screen, because it stays true until someone edits that
-      // file — the same standing notice a refused save raises.
-      expect(await screen.findByText(m.syncSkipped)).toBeInTheDocument()
-      expect(
-        screen.getByText(
-          "it is not strict JSON codeg can rewrite without losing content"
-        )
-      ).toBeInTheDocument()
-    })
-
-    /**
      * A stored row missing its project or location gates the SIGN-IN, because
      * consenting without one only fails at license resolution. Signing out
      * needs none of it — and a half-configured row is exactly what a user
@@ -898,7 +817,7 @@ describe("AntigravityConfigPanel", () => {
      */
     it("stays available when the stored row cannot sign in", () => {
       renderPanel({ env: { AGY_AUTH_METHOD: "oauth-business" } })
-      expect(screen.getByRole("button", { name: h.start })).toBeDisabled()
+      expect(screen.getByText(m.missingEnterpriseConfig)).toBeInTheDocument()
       expect(screen.getByRole("button", { name: s.action })).toBeEnabled()
     })
 

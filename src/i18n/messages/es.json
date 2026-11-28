@@ -1131,7 +1131,7 @@
       "saveRawConfig": "Guardar archivo"
     },
     "antigravity": {
-      "configDescription": "Sin un método de autenticación (guardado en auth.type) las sesiones fallan con \"Authentication required\". El modelo y el modo se eligen en el campo de mensaje.",
+      "configDescription": "La CLI de Antigravity gestiona el inicio de sesión. codeg ejecuta `agy acp` directamente; esta opción solo decide cómo se autentica: los métodos de Google reutilizan el inicio de sesión en caché de la CLI (usa el acceso sin navegador de abajo si esta máquina no tiene navegador), y los métodos con clave de API leen la credencial ingresada aquí. El modelo y el modo de sesión no están aquí: Antigravity los reporta mediante ACP y los selectores del editor los gestionan por sesión.",
       "methodLabel": "Authentication method",
       "methods": {
         "oauth-personal": "Sign in with Google",
@@ -1140,8 +1140,8 @@
         "agent-platform": "Gemini Enterprise Agent Platform"
       },
       "methodHints": {
-        "oauth-personal": "Tu cuenta de Google, cualquier plan (incluido el gratuito). La primera sesión abre un navegador; ¿sin navegador? Usa el acceso sin navegador de abajo.",
-        "oauth-business": "Cuenta de Gemini Enterprise; requiere un proyecto y una ubicación de GCP. La primera sesión abre un navegador; ¿sin navegador? Usa el acceso sin navegador de abajo.",
+        "oauth-personal": "Tu cuenta de Google, en cualquier plan de Antigravity incluido el gratuito. La CLI de Antigravity almacena el inicio de sesión en caché y lo reutiliza para agy acp. ¿Sin navegador en esta máquina? Usa el acceso sin navegador de abajo.",
+        "oauth-business": "Tu cuenta de Gemini Enterprise. Necesita un proyecto y una ubicación de GCP. La CLI de Antigravity inicia sesión al empezar una sesión, en un navegador de la máquina donde se ejecuta codeg; el acceso sin navegador solo admite cuentas personales de Google.",
         "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
         "agent-platform": "Usa una clave API, o un proyecto y una ubicación con las credenciales predeterminadas de la aplicación. Ejecuta gcloud auth application-default login si hace falta."
       },
@@ -1153,25 +1153,28 @@
       "missingGeminiApiKey": "Enter a Gemini API key, or pick a different authentication method — sessions will fail to start without it.",
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
-      "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
-      "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
+      "settingsFileHint": "Archivo de configuración propio de Antigravity CLI (referencia de solo lectura; codeg no lo sobrescribe).",
       "save": "Save",
+      "permissionsTitle": "Permisos",
+      "permissionModeLabel": "Modo de permisos",
+      "permissionModeDefault": "Seguir modo de sesión (predeterminado)",
+      "permissionModeTurbo": "Turbo (--dangerously-skip-permissions)",
+      "permissionModeDefaultHint": "Inicia `agy acp` normalmente para que el selector de modo de sesión (default, accept-edits, auto, plan) y tus reglas de permisos controlen las aprobaciones.",
+      "permissionModeTurboHint": "Inicia `agy acp --dangerously-skip-permissions`: aprueba automáticamente todas las solicitudes de permisos de herramientas sin preguntar (las reglas deny explícitas y la lista de bloqueo del sistema siguen aplicando). Aplica a nuevas sesiones.",
       "headless": {
         "title": "Inicia sesión sin navegador en esta máquina",
-        "description": "¿Sin navegador donde corre el agente (p. ej., un servidor)? La primera sesión esperaría 5 min y fallaría. Abre el enlace en cualquier dispositivo y pega de vuelta la dirección a la que llegues.",
+        "description": "Antigravity CLI imprime un enlace de inicio de sesión de Google y espera el código de autorización. Esto funciona sin navegador en esta máquina: abre el enlace en cualquier dispositivo, aprueba el acceso y pega aquí el código de autorización (o la dirección completa a la que llegues).",
         "start": "Obtener enlace de acceso",
         "saveFirst": "Guarda primero: el inicio de sesión usa los ajustes guardados, no lo que acabas de escribir.",
         "step1": "1. Abre este enlace e inicia sesión en Google.",
-        "step2": "2. El navegador llega a {redirectUri} y no conecta; es lo esperado. Pega aquí esa dirección completa.",
+        "step2": "2. Abre el enlace de arriba y aprueba el acceso. Llegarás a {redirectUri}; pega aquí el código de autorización (o esa dirección completa).",
         "copyLink": "Copiar enlace",
         "openLink": "Abrir en una pestaña nueva",
         "complete": "Completar inicio de sesión",
         "cancel": "Cancelar",
         "signedIn": "Sesión iniciada. Las nuevas sesiones usarán esta cuenta.",
-        "alreadySignedIn": "Antigravity ya tenía un token válido, así que inició sesión sin necesidad de enlace.",
         "failed": "El inicio de sesión no se completó.",
-        "startFailed": "No se pudo iniciar el acceso",
-        "credentialHint": "Token guardado aquí. Copia este archivo a otra máquina sin escritorio para iniciar sesión también."
+        "startFailed": "No se pudo iniciar el acceso"
       },
       "signOut": {
         "title": "¿Iniciaste sesión con la cuenta equivocada?",
@@ -1743,7 +1746,6 @@
       "qoderSaved": "Configuración de Qoder guardada",
       "saveQoderConfigFailed": "No se pudo guardar la configuración de Qoder",
       "antigravitySaved": "Antigravity config saved",
-      "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Configuración de Kiro guardada",
       "saveKiroFailed": "No se pudo guardar la configuración de Kiro",

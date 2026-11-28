@@ -1131,7 +1131,7 @@
       "saveRawConfig": "ファイルを保存"
     },
     "antigravity": {
-      "configDescription": "認証方式（auth.type に保存）を設定しないとセッションは「Authentication required」で失敗します。モデルとモードは入力欄で選びます。",
+      "configDescription": "サインインは Antigravity CLI 自身が管理します。codeg は `agy acp` を直接起動し、この設定は認証方式の選択のみを行います。Google アカウント方式は CLI にキャッシュされたログインを再利用し（このマシンにブラウザがない場合は下のブラウザなしサインインを使用してください）、API キー方式はここに入力した認証情報を読み込みます。モデルとセッションモードは ACP 経由で通知されるため、入力欄のセレクターでセッションごとに管理されます。",
       "methodLabel": "Authentication method",
       "methods": {
         "oauth-personal": "Sign in with Google",
@@ -1140,8 +1140,8 @@
         "agent-platform": "Gemini Enterprise Agent Platform"
       },
       "methodHints": {
-        "oauth-personal": "Google アカウント（無料版を含む全プラン）。最初のセッションでブラウザが開きます。ブラウザがない場合は下のブラウザ不要のサインインを。",
-        "oauth-business": "Gemini Enterprise アカウント。GCP のプロジェクトとロケーションが必要です。最初のセッションでブラウザが開きます。ブラウザがない場合は下のブラウザ不要のサインインを。",
+        "oauth-personal": "無料プランを含むすべての Antigravity プランで利用できる Google アカウントです。Antigravity CLI がサインインをキャッシュし、agy acp で再利用します。このマシンにブラウザがない場合は下のブラウザなしサインインを使用してください。",
+        "oauth-business": "Gemini Enterprise アカウントです。GCP プロジェクトとロケーションが必要です。Antigravity CLI はセッション開始時に、codeg が動作するマシンのブラウザでサインインします。ブラウザなしサインインは個人の Google アカウントのみ対応です。",
         "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
         "agent-platform": "API キー、またはプロジェクトとロケーションをアプリケーションのデフォルト認証情報と併用します。必要なら gcloud auth application-default login を実行してください。"
       },
@@ -1153,25 +1153,28 @@
       "missingGeminiApiKey": "Enter a Gemini API key, or pick a different authentication method — sessions will fail to start without it.",
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
-      "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
-      "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
+      "settingsFileHint": "Antigravity CLI 自身の設定ファイル（参照用・codeg はこのファイルを上書きしません）。",
       "save": "Save",
+      "permissionsTitle": "権限",
+      "permissionModeLabel": "権限モード",
+      "permissionModeDefault": "セッションモードに従う（デフォルト）",
+      "permissionModeTurbo": "Turbo（--dangerously-skip-permissions）",
+      "permissionModeDefaultHint": "通常の `agy acp` で起動し、入力欄のセッションモード（default / accept-edits / auto / plan）と権限ルールに従ってツール承認を行います。",
+      "permissionModeTurboHint": "`agy acp --dangerously-skip-permissions` で起動します。確認なしで全ツールの権限リクエストを自動承認します（明示的な deny ルールとシステム拒否リストは引き続き有効）。新しいセッションから反映されます。",
       "headless": {
         "title": "ブラウザのないマシンでサインイン",
-        "description": "エージェントが動くマシンにブラウザがない（サーバーなど）場合、最初のセッションは 5 分待って失敗します。代わりに任意の端末でリンクを開き、移動先のアドレスを貼り戻してください。",
+        "description": "Antigravity CLI は Google サインイン用リンクを表示し、認可コードの入力を待ちます。このマシンにブラウザがなくても利用できます。任意の端末でリンクを開いてアクセスを承認し、認可コード（または移動先の完全な URL）をここに貼り付けてください。",
         "start": "サインインリンクを取得",
         "saveFirst": "先に保存してください。サインインは保存済みの設定を使用し、上の入力内容は参照しません。",
         "step1": "1. このリンクを開いて Google にサインインします。",
-        "step2": "2. ブラウザは {redirectUri} に移動して接続できません（想定どおり）。そのアドレス全体をここに貼り付けます。",
+        "step2": "2. 上のリンクを開いてアクセスを承認してください。{redirectUri} に移動しますので、認可コード（またはその完全な URL）をここに貼り付けてください。",
         "copyLink": "リンクをコピー",
         "openLink": "新しいタブで開く",
         "complete": "サインインを完了",
         "cancel": "キャンセル",
         "signedIn": "サインインしました。新しいセッションはこのアカウントを使用します。",
-        "alreadySignedIn": "Antigravity は有効なトークンを既に保持していたため、リンクなしでサインインしました。",
         "failed": "サインインが完了しませんでした。",
-        "startFailed": "サインインを開始できませんでした",
-        "credentialHint": "トークンはここにキャッシュ。このファイルを別のデスクトップなしマシンにコピーすればサインイン済みに。"
+        "startFailed": "サインインを開始できませんでした"
       },
       "signOut": {
         "title": "間違ったアカウントでサインインしましたか？",
@@ -1743,7 +1746,6 @@
       "qoderSaved": "Qoder の設定を保存しました",
       "saveQoderConfigFailed": "Qoder の設定の保存に失敗しました",
       "antigravitySaved": "Antigravity config saved",
-      "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Kiro 設定を保存しました",
       "saveKiroFailed": "Kiro 設定の保存に失敗しました",
