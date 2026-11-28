@@ -4886,8 +4886,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     `session_info_update` carrying `_meta.codex.threadStatus`
             //     and a `usage_update` with the restored context use, so the
             //     ring is right before the first turn. `threadStatus` also
-            //     marks each turn's start and end; codeg reads none of it
-            //     (see the idle loop's note on `codex_context_readings`).
+            //     marks each turn's start and end (`active` is re-sent
+            //     mid-turn whenever its `activeFlags` change); codeg's idle
+            //     loop opens a turn of its own on the idle→active edge of a
+            //     thread no prompt is running on (`codex_thread_activity`).
             //   * A goal still active when its session is reopened is resumed
             //     by codex on both tags; 2.2.2 forwarded none of that turn,
             //     2.3.0 streams it with no prompt in flight, which codeg's idle

@@ -868,8 +868,9 @@ pub struct SessionState {
     pub turn_in_flight: bool,
 
     /// Whether the open turn is one the AGENT started on its own (Grok's
-    /// follow-up to a background workflow), which the idle loop renders as a
-    /// turn so its content isn't dropped between turns. Such a turn never took
+    /// follow-up to a background workflow, Codex's `/goal` continuation),
+    /// which the idle loop renders as a turn so its content isn't dropped
+    /// between turns. Such a turn never took
     /// the `turn_in_flight` gate, so its `TurnComplete` must leave the gate
     /// alone: a prompt the manager admitted while it ran owns it. Set only by
     /// [`Self::begin_agent_initiated_turn`]; cleared by `TurnComplete`. Not
