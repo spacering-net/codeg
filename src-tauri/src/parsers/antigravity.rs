@@ -1233,7 +1233,7 @@ impl AgentParser for AntigravityParser {
         // per-turn sum: usage is recorded per step and every step re-sends the
         // whole prefix, so summing would re-count the cached prompt once per
         // step. Capacity is inferred from the model name — the trajectory
-        // records no window size of its own.
+        // records no window size of its own (see `agy_context_window`).
         let mut unplaced = TurnUsage::default();
         for (at, usage) in &parsed.spend_elsewhere {
             if !crate::parsers::add_usage_to_turn_current_at(&mut turns, *at, usage) {
@@ -1249,7 +1249,7 @@ impl AgentParser for AntigravityParser {
                 };
             }
         }
-        let max_tokens = infer_context_window_max_tokens(parsed.model.as_deref());
+        let max_tokens = agy_context_window(parsed.model.as_deref());
         let session_stats = merge_context_window_stats(
             crate::parsers::add_unplaced_usage_to_total(compute_session_stats(&turns), &unplaced),
             parsed.last_step_input_side,
@@ -2071,6 +2071,28 @@ fn project_steps(steps: &[Step]) -> SessionParse {
     parsed
 }
 
+/// The context window Antigravity serves a model with, for the HISTORY gauge.
+///
+/// The window is Antigravity's, not the model vendor's: `agy acp` (1.5.19)
+/// sends `usage_update {used: 0, size}` on `session/new` and after every model
+/// switch, and reports 250000 for both Claude models (Opus 4.6 Thinking,
+/// Sonnet 4.6 Thinking) and 131072 for GPT-OSS 120B. Both differ from the
+/// generic table (200K Claude, nothing for GPT-OSS), so a reopened session
+/// would show a different window than the live one. Gemini's 1048576 already
+/// matches the generic table. Matched on the lowercased prefix, because the
+/// trajectory may name the model by its id (`claude-opus-4-6-thinking`) or by
+/// its display name (`Claude Opus 4.6 (Thinking)`).
+fn agy_context_window(model: Option<&str>) -> Option<u64> {
+    let normalized = model?.trim().to_ascii_lowercase();
+    if normalized.starts_with("claude") {
+        return Some(250_000);
+    }
+    if normalized.starts_with("gpt-oss") {
+        return Some(131_072);
+    }
+    infer_context_window_max_tokens(model)
+}
+
 fn display_model_name(info: &ModelInfo) -> Option<String> {
     [&info.model_name, &info.display_name]
         .into_iter()
@@ -2735,6 +2757,32 @@ mod tests {
         assert_eq!(usage.cache_read_input_tokens, 900);
         let stats = detail.session_stats.expect("session stats");
         assert_eq!(stats.context_window_used_tokens, Some(1_000));
+    }
+
+    // The history gauge uses the window `agy acp` itself reports in
+    // `usage_update.size` (1.5.19), not the model vendor's.
+    #[test]
+    fn history_window_matches_what_agy_reports_live() {
+        for claude in [
+            "claude-opus-4-6-thinking",
+            "claude-sonnet-4-6",
+            "Claude Opus 4.6 (Thinking)",
+        ] {
+            assert_eq!(agy_context_window(Some(claude)), Some(250_000), "{claude}");
+        }
+        assert_eq!(
+            agy_context_window(Some("gpt-oss-120b-medium")),
+            Some(131_072)
+        );
+        assert_eq!(
+            agy_context_window(Some("GPT-OSS 120B (Medium)")),
+            Some(131_072)
+        );
+        assert_eq!(
+            agy_context_window(Some("gemini-3.8-flash")),
+            Some(1_048_576)
+        );
+        assert_eq!(agy_context_window(None), None);
     }
 
     // A turn ends when its own last step ended — NOT when the user came back.
