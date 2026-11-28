@@ -310,14 +310,17 @@ impl Sandbox {
             })
             .collect();
         let engine = EngineCtx {
+            codeg_dir: dir.path().to_path_buf(),
+            custom_agents: BTreeMap::new(),
             paths,
             lock_path: dir.path().join("locks").join("mcp.lock"),
+            paused_path: dir.path().join("mcp-paused.json"),
             backup_root: dir.path().join("backups"),
             lock_wait: LOCK_WAIT,
         };
         let installed = all_apps()
             .iter()
-            .map(|app| (*app, INSTALLED.contains(app)))
+            .map(|app| ((*app).into(), INSTALLED.contains(app)))
             .collect();
         let local = Local {
             engine,
@@ -369,7 +372,7 @@ impl Sandbox {
         inventory::inventory(&self.local.engine, &BTreeMap::new())
             .agents
             .into_iter()
-            .find(|agent| agent.agent == app)?
+            .find(|agent| agent.agent.builtin() == Some(app))?
             .entries
             .into_iter()
             .find(|entry| entry.key == key)
@@ -856,7 +859,7 @@ async fn a_config_changed_after_the_plan_stops_the_install_before_anything_is_wr
     assert!(apply
         .agents
         .iter()
-        .any(|agent| agent.agent == McpAppType::Gemini
+        .any(|agent| agent.agent.builtin() == Some(McpAppType::Gemini)
             && agent.status == McpAgentStatus::ChangedElsewhere));
     assert_eq!(sandbox.files(), before, "nothing written");
     assert!(sandbox.record().is_none());
@@ -1366,9 +1369,9 @@ async fn a_guard_that_refuses_calls_the_save_off_under_the_lock() {
     let sandbox = Sandbox::new().await;
     let lock_path = sandbox.local.engine.lock_path.clone();
     let request = McpApplyRequest {
-        basis: BTreeMap::from([(McpAppType::Gemini, "missing".to_string())]),
+        basis: BTreeMap::from([(McpAppType::Gemini.into(), "missing".to_string())]),
         ops: vec![McpOp {
-            agent: McpAppType::Gemini,
+            agent: McpAppType::Gemini.into(),
             key: "x".into(),
             action: McpOpAction::Set {
                 definition: npx("1.0.0", "t"),
@@ -1847,7 +1850,7 @@ async fn an_uninstall_removes_what_is_as_installed_and_a_changed_entry_only_when
         .unwrap()
         .agents
         .iter()
-        .map(|agent| (agent.agent, agent.basis.clone().unwrap()))
+        .map(|agent| (agent.agent.builtin().unwrap(), agent.basis.clone().unwrap()))
         .collect();
     assert_eq!(basis.len(), 2);
     assert!(drain(&mut events).is_empty(), "a preflight changes nothing");

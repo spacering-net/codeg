@@ -28,15 +28,16 @@ use std::path::PathBuf;
 use crate::acp::codex_catalog_commit::{LockedHome, McpCommitError, McpConfigChange};
 use crate::commands::mcp::McpAppType;
 
-use super::agents::{format_of, spec, AgentSpec, EngineCtx};
+use super::agents::{custom_spec, format_of, spec, AgentSpec, EngineCtx};
 use super::dialect;
 use super::fsio;
 use super::json_doc::OPENCODE_LEGACY_FLAG;
 use super::model::{
-    codes, is_valid_new_key, McpAgentResult, McpAgentStatus, McpApplyOutcome, McpApplyRequest,
-    McpApplyResult, McpConfigFormat, McpFileWrite, McpIssue, McpOp, McpOpAction, McpOpEffect,
-    McpOpIssue, McpOpResult, RESERVED_KEY,
+    codes, is_valid_new_key, McpAgentId, McpAgentResult, McpAgentStatus, McpApplyOutcome,
+    McpApplyRequest, McpApplyResult, McpConfigFormat, McpDisableMode, McpFileWrite, McpIssue,
+    McpOp, McpOpAction, McpOpEffect, McpOpIssue, McpOpResult, RESERVED_KEY,
 };
+use super::paused::{self, PausedEntries, PausedEntry, PausedFile};
 use super::plugin_gate;
 use super::store::{decode, open_store, read_view, DuplicateKey, EntryStore};
 use super::yaml_doc;
@@ -87,11 +88,14 @@ struct FilePlan {
 
 /// Everything about one agent's part in a run.
 struct Work {
-    app: McpAppType,
+    agent: McpAgentId,
     path: PathBuf,
     /// Set once something stops this agent's operations.
     blocked: Option<McpAgentStatus>,
     basis: Option<String>,
+    planned_basis: Option<String>,
+    /// Native bytes a paused-file-only transaction must still see on disk.
+    paused_native_basis: Option<String>,
     issues: Vec<McpOpIssue>,
     warnings: Vec<McpOpIssue>,
     op_results: Vec<McpOpResult>,
@@ -107,7 +111,7 @@ impl Work {
 
     fn result(&self, status: McpAgentStatus, backup_paths: Vec<String>) -> McpAgentResult {
         McpAgentResult {
-            agent: self.app,
+            agent: self.agent.clone(),
             path: self.path.display().to_string(),
             status,
             basis: self.basis.clone(),
@@ -148,8 +152,10 @@ fn run_ops(
     store: &mut dyn EntryStore,
     ops: &[(usize, &McpOp)],
     work: &mut Work,
+    paused: &mut PausedEntries,
 ) -> Vec<(String, bool)> {
     let app = spec.app;
+    let soft_disable = spec.disable_mode() == McpDisableMode::CodegPause;
     let mut gate = Vec::new();
     for (index, op) in ops {
         let index = *index;
@@ -182,7 +188,27 @@ fn run_ops(
                 continue;
             }
         }
-        match &op.action {
+        let resume;
+        let action = match op.action {
+            McpOpAction::SetEnabled { enabled: true } if soft_disable => {
+                if store.get(key).is_some() {
+                    done(McpOpEffect::Unchanged, &mut work.op_results);
+                    continue;
+                }
+                let Some(entry) = paused.get(key) else {
+                    work.issues.push(issue(codes::ENTRY_NOT_FOUND));
+                    continue;
+                };
+                resume = McpOpAction::Set {
+                    definition: entry.definition.clone(),
+                };
+                &resume
+            }
+            _ => &op.action,
+        };
+        let resuming =
+            matches!(op.action, McpOpAction::SetEnabled { enabled: true }) && soft_disable;
+        match action {
             McpOpAction::Set { definition } => {
                 let definition = dialect::tidy_definition(definition);
                 let mut refused = false;
@@ -199,9 +225,19 @@ fn run_ops(
                 if refused {
                     continue;
                 }
-                let fresh = dialect::fresh_fields(app, &definition);
+                let mut fresh = dialect::fresh_fields(app, &definition);
+                if resuming {
+                    if let Some(entry) = paused.get(key) {
+                        fresh.extend(
+                            entry
+                                .extra
+                                .iter()
+                                .map(|(key, value)| (key.clone(), value.clone())),
+                        );
+                    }
+                }
                 let Some(found) = store.get(key) else {
-                    if !is_valid_new_key(key) {
+                    if !resuming && !is_valid_new_key(key) {
                         work.issues.push(issue(codes::KEY_INVALID));
                         continue;
                     }
@@ -211,7 +247,15 @@ fn run_ops(
                     }
                     match store.create(key, &fresh) {
                         Ok(()) => {
-                            done(McpOpEffect::Created, &mut work.op_results);
+                            let had_pause = paused.remove(key).is_some();
+                            let effect = if resuming {
+                                McpOpEffect::Enabled
+                            } else if had_pause {
+                                McpOpEffect::Updated
+                            } else {
+                                McpOpEffect::Created
+                            };
+                            done(effect, &mut work.op_results);
                             gate.push((key.to_string(), true));
                         }
                         Err(detail) => work.issues.push(edit_failed(detail)),
@@ -256,7 +300,8 @@ fn run_ops(
                 };
                 match outcome {
                     Ok(changed) => {
-                        let effect = if changed || moved {
+                        let was_paused = paused.remove(key).is_some();
+                        let effect = if changed || moved || was_paused {
                             McpOpEffect::Updated
                         } else {
                             McpOpEffect::Unchanged
@@ -269,7 +314,8 @@ fn run_ops(
             }
             McpOpAction::Remove => match store.remove(key) {
                 Ok(removed) => {
-                    if removed {
+                    let removed_pause = paused.remove(key).is_some();
+                    if removed || removed_pause {
                         // A name in the agent's "off" list goes with the
                         // server it named.
                         if let Some(list) = spec.disable.root_list {
@@ -284,6 +330,37 @@ fn run_ops(
                 }
                 Err(detail) => work.issues.push(edit_failed(detail)),
             },
+            McpOpAction::SetEnabled { .. } if soft_disable => {
+                let Some(found) = store.get(key) else {
+                    if paused.contains_key(key) {
+                        done(McpOpEffect::Unchanged, &mut work.op_results);
+                    } else {
+                        work.issues.push(issue(codes::ENTRY_NOT_FOUND));
+                    }
+                    continue;
+                };
+                let read = dialect::read_entry(app, &found.value, spec.disable.entry);
+                let Some(definition) = read.definition.filter(|_| read.problems.is_empty()) else {
+                    work.issues.push(issue(codes::ENTRY_NOT_EDITABLE));
+                    continue;
+                };
+                match store.remove(key) {
+                    Ok(true) => {
+                        paused.insert(
+                            key.to_owned(),
+                            PausedEntry {
+                                definition,
+                                paused_at: chrono::Utc::now(),
+                                extra: read.extra,
+                            },
+                        );
+                        done(McpOpEffect::Disabled, &mut work.op_results);
+                        gate.push((key.to_string(), false));
+                    }
+                    Ok(false) => work.issues.push(issue(codes::ENTRY_NOT_FOUND)),
+                    Err(detail) => work.issues.push(edit_failed(detail)),
+                }
+            }
             McpOpAction::SetEnabled { enabled } => {
                 let enabled = *enabled;
                 if !spec.disable.is_supported() {
@@ -369,19 +446,26 @@ fn run_ops(
                         .push(issue(codes::KEY_STRUCTURAL).field("new_key"));
                     continue;
                 }
-                let Some(found) = store.get(key) else {
+                let found = store.get(key);
+                if found.is_none() && !paused.contains_key(key) {
                     work.issues.push(issue(codes::ENTRY_NOT_FOUND));
                     continue;
-                };
+                }
                 if new_key == key {
                     done(McpOpEffect::Unchanged, &mut work.op_results);
                     continue;
                 }
-                if store.get(new_key).is_some() {
+                if store.get(new_key).is_some() || paused.contains_key(new_key) {
                     work.issues
                         .push(issue(codes::KEY_EXISTS).field("new_key").detail(new_key));
                     continue;
                 }
+                let Some(found) = found else {
+                    let entry = paused.remove(key).expect("paused source was found");
+                    paused.insert(new_key.to_owned(), entry);
+                    done(McpOpEffect::Renamed, &mut work.op_results);
+                    continue;
+                };
                 let renamed = (if found.legacy {
                     store.promote(key)
                 } else {
@@ -403,6 +487,7 @@ fn run_ops(
                 });
                 match renamed {
                     Ok(()) => {
+                        paused.remove(key);
                         done(McpOpEffect::Renamed, &mut work.op_results);
                         gate.push((key.to_string(), false));
                         gate.push((new_key.to_string(), true));
@@ -419,22 +504,24 @@ fn run_ops(
 /// operations to it in memory.
 fn prepare(
     ctx: &EngineCtx,
-    app: McpAppType,
+    agent: &McpAgentId,
     ops: &[(usize, &McpOp)],
     request: &McpApplyRequest,
     codex: &CodexAccess<'_>,
+    paused_file: &mut std::io::Result<PausedFile>,
 ) -> Work {
-    let spec = spec(app);
-    let paths = ctx.paths_of(app).cloned();
+    let paths = ctx.paths_for(agent);
     let path = paths
         .as_ref()
         .map(|paths| paths.servers.clone())
         .unwrap_or_default();
     let mut work = Work {
-        app,
+        agent: agent.clone(),
         path: path.clone(),
         blocked: None,
         basis: None,
+        planned_basis: None,
+        paused_native_basis: None,
         issues: Vec::new(),
         warnings: Vec::new(),
         op_results: Vec::new(),
@@ -443,14 +530,29 @@ fn prepare(
     let Some(paths) = paths else {
         work.block(
             McpAgentStatus::ReadOnly,
-            McpOpIssue::new(codes::AGENT_READ_ONLY),
+            McpOpIssue::new(match agent {
+                McpAgentId::Builtin(_) => codes::AGENT_READ_ONLY,
+                McpAgentId::Custom(_) => codes::AGENT_NOT_WRITABLE,
+            }),
         );
         return work;
     };
+    let spec = match agent {
+        McpAgentId::Builtin(app) => spec(*app),
+        McpAgentId::Custom(id) if ctx.custom_agents[id].supports_mcp => custom_spec(true),
+        McpAgentId::Custom(_) => {
+            work.block(
+                McpAgentStatus::ReadOnly,
+                McpOpIssue::new(codes::MCP_DISABLED_IN_AGENT_SETTINGS),
+            );
+            return work;
+        }
+    };
+    let app = spec.app;
 
     // The file as it is now. Codex's is read under its lock when this run
     // holds it.
-    let is_codex = app == McpAppType::Codex;
+    let is_codex = agent.builtin() == Some(McpAppType::Codex);
     let read = match (is_codex, codex) {
         (true, CodexAccess::Locked(gate)) => gate.read(),
         (true, CodexAccess::Failed(problem)) => {
@@ -469,7 +571,22 @@ fn prepare(
             return work;
         }
     };
-    let basis = fsio::basis_of(original.as_deref());
+    let paused_file = if spec.disable_mode() == McpDisableMode::CodegPause {
+        match paused_file {
+            Ok(file) => Some(file),
+            Err(error) => {
+                work.block(
+                    McpAgentStatus::Unreadable,
+                    McpOpIssue::from_issue(&paused::read_issue(&ctx.paused_path, error)),
+                );
+                return work;
+            }
+        }
+    } else {
+        None
+    };
+    let original_entries = paused_file.as_ref().and_then(|file| file.entries(app));
+    let basis = paused::basis(&fsio::basis_of(original.as_deref()), original_entries);
     work.basis = Some(basis.clone());
 
     if spec.scan_only {
@@ -479,7 +596,7 @@ fn prepare(
         );
         return work;
     }
-    match request.basis.get(&app) {
+    match request.basis.get(agent) {
         Some(seen) if *seen != basis => {
             work.block(
                 McpAgentStatus::ChangedElsewhere,
@@ -544,7 +661,8 @@ fn prepare(
         );
         return work;
     }
-    let gate_changes = run_ops(&spec, store.as_mut(), ops, &mut work);
+    let mut paused_entries = original_entries.cloned().unwrap_or_default();
+    let gate_changes = run_ops(&spec, store.as_mut(), ops, &mut work, &mut paused_entries);
     let updated = store.finish();
     if !work.issues.is_empty() {
         work.blocked.get_or_insert(McpAgentStatus::Invalid);
@@ -611,6 +729,45 @@ fn prepare(
             }
         }
     }
+    let native_planned = work
+        .files
+        .iter()
+        .find(|file| file.role == "servers")
+        .map(|file| file.planned.as_slice())
+        .or(original.as_deref());
+    let native_basis = fsio::basis_of(native_planned);
+    work.planned_basis = Some(paused::basis(&native_basis, Some(&paused_entries)));
+    if let Some(file) = paused_file.filter(|_| work.blocked.is_none()) {
+        let changed = match file.entries(app) {
+            Some(entries) => *entries != paused_entries,
+            None => !paused_entries.is_empty(),
+        };
+        if changed {
+            if fsio::is_write_protected(&ctx.paused_path) {
+                work.block(
+                    McpAgentStatus::ReadOnly,
+                    McpOpIssue::new(codes::FILE_READ_ONLY)
+                        .field(&ctx.paused_path.display().to_string()),
+                );
+                return work;
+            }
+            work.paused_native_basis = Some(native_basis);
+            match file.stage(app, paused_entries) {
+                Ok(planned) => work.files.push(FilePlan {
+                    path: ctx.paused_path.clone(),
+                    role: "paused",
+                    original: file.bytes.replace(planned.clone()),
+                    planned,
+                    codex: false,
+                }),
+                Err(error) => work.block(
+                    McpAgentStatus::Invalid,
+                    io_issue(codes::EDIT_FAILED, &error),
+                ),
+            }
+        }
+    }
+
     work
 }
 
@@ -636,10 +793,21 @@ fn commit_issue(error: McpCommitError) -> McpOpIssue {
 /// Copy the file as it was, then replace it. Returns where the copy is.
 fn write_file(
     ctx: &EngineCtx,
-    app: McpAppType,
+    work: &Work,
     file: &FilePlan,
     codex: &CodexAccess<'_>,
 ) -> Result<Option<PathBuf>, McpOpIssue> {
+    if let Some(basis) = work
+        .paused_native_basis
+        .as_ref()
+        .filter(|_| file.role == "paused")
+    {
+        let native =
+            fsio::read_bytes(&work.path).map_err(|error| io_issue(codes::WRITE_FAILED, &error))?;
+        if fsio::basis_of(native.as_deref()) != *basis {
+            return Err(McpOpIssue::new(codes::BASIS_MISMATCH));
+        }
+    }
     let gate = match (file.codex, codex) {
         (true, CodexAccess::Locked(gate)) => Some(*gate),
         (true, _) => {
@@ -660,7 +828,7 @@ fn write_file(
     }
     let backup = match &file.original {
         Some(original) => Some(
-            fsio::backup(&ctx.backup_dir(app), &file.path, original)
+            fsio::backup(&ctx.backup_dir(&work.agent), &file.path, original)
                 .map_err(|e| io_issue(codes::BACKUP_FAILED, &e))?,
         ),
         None => None,
@@ -725,12 +893,12 @@ fn restore_file(written: &Written, codex: &CodexAccess<'_>) -> Undone {
 
 /// The agents the operations name, in the order they first appear, each with
 /// its operations and their positions.
-fn group_ops(ops: &[McpOp]) -> Vec<(McpAppType, Vec<(usize, &McpOp)>)> {
-    let mut groups: Vec<(McpAppType, Vec<(usize, &McpOp)>)> = Vec::new();
+fn group_ops(ops: &[McpOp]) -> Vec<(&McpAgentId, Vec<(usize, &McpOp)>)> {
+    let mut groups: Vec<(_, Vec<_>)> = Vec::new();
     for (index, op) in ops.iter().enumerate() {
-        match groups.iter_mut().find(|(app, _)| *app == op.agent) {
+        match groups.iter_mut().find(|(app, _)| *app == &op.agent) {
             Some((_, group)) => group.push((index, op)),
-            None => groups.push((op.agent, vec![(index, op)])),
+            None => groups.push((&op.agent, vec![(index, op)])),
         }
     }
     groups
@@ -745,9 +913,9 @@ pub(crate) fn busy_result(
     let agents = group_ops(&request.ops)
         .into_iter()
         .map(|(app, _)| McpAgentResult {
-            agent: app,
+            agent: app.clone(),
             path: ctx
-                .paths_of(app)
+                .paths_for(app)
                 .map(|paths| paths.servers.display().to_string())
                 .unwrap_or_default(),
             status: McpAgentStatus::NotWritten,
@@ -773,9 +941,10 @@ pub(crate) fn apply_locked(
     request: &McpApplyRequest,
     codex: &CodexAccess<'_>,
 ) -> McpApplyResult {
+    let mut paused_file = PausedFile::read(&ctx.paused_path);
     let mut works: Vec<Work> = group_ops(&request.ops)
         .iter()
-        .map(|(app, ops)| prepare(ctx, *app, ops, request, codex))
+        .map(|(app, ops)| prepare(ctx, app, ops, request, codex, &mut paused_file))
         .collect();
 
     let blocked = works.iter().any(|work| work.blocked.is_some());
@@ -825,7 +994,7 @@ pub(crate) fn apply_locked(
     let mut failure: Option<(usize, McpOpIssue)> = None;
     'agents: for (index, work) in works.iter().enumerate() {
         for file in &work.files {
-            match write_file(ctx, work.app, file, codex) {
+            match write_file(ctx, work, file, codex) {
                 Ok(backup) => written.push(Written {
                     work: index,
                     path: file.path.clone(),
@@ -859,10 +1028,7 @@ pub(crate) fn apply_locked(
                 let status = if work.files.is_empty() {
                     McpAgentStatus::Unchanged
                 } else {
-                    // The basis of what is on disk now.
-                    if let Some(servers) = work.files.iter().find(|file| file.role == "servers") {
-                        work.basis = Some(fsio::basis_of(Some(&servers.planned)));
-                    }
+                    work.basis = work.planned_basis.take();
                     McpAgentStatus::Written
                 };
                 work.result(status, backups_of(index))
@@ -883,6 +1049,7 @@ pub(crate) fn apply_locked(
             .or_default()
             .push((file.path.clone(), restore_file(file, codex)));
     }
+    let paused_file = PausedFile::read(&ctx.paused_path);
     let agents = works
         .iter_mut()
         .enumerate()
@@ -919,9 +1086,16 @@ pub(crate) fn apply_locked(
                 }
             }
             // Whatever is on disk now is what the next attempt starts from.
-            if let Ok(bytes) = fsio::read_bytes(&work.path) {
-                work.basis = Some(fsio::basis_of(bytes.as_deref()));
-            }
+            let paused = match work.agent.builtin() {
+                Some(app) if spec(app).disable_mode() == McpDisableMode::CodegPause => {
+                    paused_file.as_ref().map(|file| file.entries(app))
+                }
+                _ => Ok(None),
+            };
+            work.basis = paused
+                .ok()
+                .zip(fsio::read_bytes(&work.path).ok())
+                .map(|(entries, bytes)| paused::basis(&fsio::basis_of(bytes.as_deref()), entries));
             work.result(status, backups_of(index))
         })
         .collect();
@@ -933,7 +1107,7 @@ pub(crate) fn apply_locked(
 }
 
 /// The agents whose files a run left changed.
-pub(crate) fn changed_agents(result: &McpApplyResult) -> Vec<McpAppType> {
+pub(crate) fn changed_agents(result: &McpApplyResult) -> Vec<McpAgentId> {
     result
         .agents
         .iter()
@@ -945,7 +1119,7 @@ pub(crate) fn changed_agents(result: &McpApplyResult) -> Vec<McpAppType> {
                     | McpAgentStatus::RestoreFailed
             )
         })
-        .map(|agent| agent.agent)
+        .map(|agent| agent.agent.clone())
         .collect()
 }
 

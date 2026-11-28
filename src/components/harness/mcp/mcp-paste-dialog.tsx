@@ -30,7 +30,7 @@ import {
   type McpPasteChoice,
 } from "@/lib/mcp/paste"
 import { isSaved } from "@/lib/mcp/results"
-import type { McpAppType } from "@/lib/mcp/types"
+import type { McpAgentId } from "@/lib/mcp/types"
 import { Code } from "../discover/detail-sections"
 import { DiscoverMark } from "../discover/discover-card"
 import { MachineText } from "../machine-text"
@@ -89,7 +89,7 @@ function ServerCard({
   const skippedGroups: {
     id: string
     block: (typeof skipped)[number]["block"]
-    agents: McpAppType[]
+    agents: McpAgentId[]
   }[] = []
   for (const { agent, block } of skipped) {
     const id =
@@ -441,7 +441,7 @@ export function McpPasteDialog({
           <McpTargetList
             rows={targetRows}
             legend={t("addTo")}
-            onToggle={(agent: McpAppType, checked) =>
+            onToggle={(agent: McpAgentId, checked) =>
               updateDialog(slots, dialog.id, "paste", (prev) => ({
                 ...prev,
                 targets: checked

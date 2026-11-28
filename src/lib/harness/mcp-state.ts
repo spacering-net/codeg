@@ -21,7 +21,18 @@
  *   — and only what would write to that agent waits.
  */
 import { defineHarnessSlot, type HarnessSlotStore } from "@/lib/harness-slots"
-import { mcpApply, mcpInventory, mcpParseSnippet } from "@/lib/mcp/api"
+import {
+  mcpApply,
+  mcpInventory,
+  mcpParseSnippet,
+  mcpProbe,
+} from "@/lib/mcp/api"
+import {
+  planAgentBulkEnable,
+  planServerBulkDisable,
+  planServerBulkEnable,
+  type McpBulkPlan,
+} from "@/lib/mcp/bulk"
 import { draftFromDefinition, emptyDraft, type McpDraft } from "@/lib/mcp/draft"
 import {
   editorDefinition,
@@ -60,11 +71,13 @@ import {
 import { isSaved } from "@/lib/mcp/results"
 import { defaultCreateTargets } from "@/lib/mcp/targets"
 import type {
+  McpAgentId,
   McpApplyResult,
-  McpAppType,
   McpDefinition,
   McpInventory,
   McpOp,
+  McpProbeArgs,
+  McpProbeResult,
   McpSnippet,
 } from "@/lib/mcp/types"
 
@@ -139,6 +152,7 @@ export function reloadMcpInventory(slots: HarnessSlotStore): {
           error: null,
         })
       )
+      pruneStaleProbes(slots, inventory)
     } catch (error) {
       if (!current()) return
       slots.set(
@@ -319,6 +333,16 @@ export function openMcpServer(slots: HarnessSlotStore, key: string): void {
   slots.set(MCP_SELECTED_SERVER, key)
 }
 
+/**
+ * Open one agent in the agent view — what `openHarness({ section: "mcp",
+ * agentId })` asks for (e.g. from Session Details or the composer popover).
+ */
+export function openMcpAgent(slots: HarnessSlotStore, agentId: string): void {
+  slots.set(MCP_VIEW, "agents")
+  slots.set(MCP_FILTERS, DEFAULT_MCP_FILTERS)
+  slots.set(MCP_SELECTED_AGENT, agentId)
+}
+
 // ─── Saves from a row ─────────────────────────────────────────────────
 
 /** What a switch asks of one agent's entry. */
@@ -330,7 +354,7 @@ export type McpRowAction =
 
 export interface McpRowWrite {
   seq: number
-  agent: McpAppType
+  agent: McpAgentId
   key: string
   action: McpRowAction
   /** Where the switch is going: on, or off. */
@@ -355,7 +379,7 @@ export const rowId = (agent: string, key: string) => `${agent}\u0000${key}`
 /** What a screen reader is told about a row's save. */
 export interface McpAnnouncement {
   seq: number
-  agent: McpAppType
+  agent: McpAgentId
   key: string
   target: boolean
   saved: boolean
@@ -366,7 +390,7 @@ export const MCP_ANNOUNCEMENT = defineHarnessSlot<McpAnnouncement | null>(
   () => null
 )
 
-function rowOps(agent: McpAppType, key: string, action: McpRowAction): McpOp[] {
+function rowOps(agent: McpAgentId, key: string, action: McpRowAction): McpOp[] {
   switch (action.kind) {
     case "enable":
       return [enableOp(key, agent, true)]
@@ -386,7 +410,7 @@ function rowOps(agent: McpAppType, key: string, action: McpRowAction): McpOp[] {
  */
 export async function writeRow(
   slots: HarnessSlotStore,
-  agent: McpAppType,
+  agent: McpAgentId,
   key: string,
   action: McpRowAction,
   /** The basis the user decided on, when that was not now: a question that
@@ -515,7 +539,7 @@ export interface McpRemoveDialog {
   id: number
   key: string
   /** The agents ticked to remove it from. */
-  agents: McpAppType[]
+  agents: McpAgentId[]
   flow: McpFlow
 }
 
@@ -540,7 +564,7 @@ export interface McpPasteDialog {
     request: number
   }
   choices: McpPasteChoice[]
-  targets: McpAppType[]
+  targets: McpAgentId[]
   flow: McpFlow
 }
 
@@ -563,7 +587,7 @@ export interface McpConfirmChoice {
 export interface McpConfirmDialog {
   kind: "confirm"
   id: number
-  agent: McpAppType
+  agent: McpAgentId
   key: string
   action: "enable" | "disable" | "remove" | "add"
   /** `add`: the definitions on offer. */
@@ -576,12 +600,37 @@ export interface McpConfirmDialog {
   basis: string | null
 }
 
+export type McpBulkDialog =
+  | {
+      kind: "bulk"
+      id: number
+      mode: "server_enable"
+      serverKey: string
+      fingerprint: string
+      flow: McpFlow
+    }
+  | {
+      kind: "bulk"
+      id: number
+      mode: "server_disable"
+      serverKey: string
+      flow: McpFlow
+    }
+  | {
+      kind: "bulk"
+      id: number
+      mode: "agent_enable"
+      agent: McpAgentId
+      flow: McpFlow
+    }
+
 export type McpDialog =
   | McpEditorDialog
   | McpRemoveDialog
   | McpRenameDialog
   | McpPasteDialog
   | McpConfirmDialog
+  | McpBulkDialog
 
 export const MCP_DIALOG = defineHarnessSlot<McpDialog | null>("mcp", () => null)
 
@@ -760,8 +809,8 @@ export function keepEditorVersion(slots: HarnessSlotStore, id: number): void {
   updateDialog(slots, id, "editor", (dialog) => {
     if (!dialog.origin || !model) return dialog
     const server = model.server(dialog.key)
-    const snapshot: Partial<Record<McpAppType, string>> = {}
-    for (const agent of Object.keys(dialog.origin.snapshot) as McpAppType[]) {
+    const snapshot: Partial<Record<McpAgentId, string>> = {}
+    for (const agent of Object.keys(dialog.origin.snapshot) as McpAgentId[]) {
       const holder = server?.holders.find((entry) => entry.info.id === agent)
       if (holder?.entry.fingerprint) snapshot[agent] = holder.entry.fingerprint
     }
@@ -788,7 +837,7 @@ export function updateEditorDraft(
 
 /** The agents a server can be removed from or renamed in: those whose entry
  *  takes ops. */
-export function editableHolders(model: McpModel, key: string): McpAppType[] {
+export function editableHolders(model: McpModel, key: string): McpAgentId[] {
   const server = model.server(key)
   if (!server) return []
   const agents = server.holders.flatMap((holder) => {
@@ -928,6 +977,12 @@ export function planForDialog(
       const snippet = dialog.parse.snippet
       if (!snippet) return null
       ops = pasteOps(snippet, dialog.choices, dialog.targets, model)
+      break
+    }
+    case "bulk": {
+      const plan = bulkPlanForDialog(dialog, model)
+      if (!plan) return null
+      ops = plan.ops.map((item) => item.op)
       break
     }
     case "confirm":
@@ -1079,7 +1134,7 @@ function followSave(slots: HarnessSlotStore, id: number, plan: McpPlan) {
     const removed = new Set(agentsOf(plan.ops))
     const left = model
       ?.server(dialog.key)
-      ?.holders.filter((holder) => !removed.has(holder.info.id as McpAppType))
+      ?.holders.filter((holder) => !removed.has(holder.info.id as McpAgentId))
     if (!left || left.length === 0) slots.set(MCP_SELECTED_SERVER, null)
   }
 }
@@ -1193,4 +1248,242 @@ export function confirmSwitch(slots: HarnessSlotStore, id: number): void {
   }
   closeDialog(slots, id)
   void writeRow(slots, dialog.agent, dialog.key, action, dialog.basis)
+}
+
+// ─── Bulk allocation dialogs (#884) ───────────────────────────────────
+
+export function bulkPlanForDialog(
+  dialog: McpBulkDialog,
+  model: McpModel
+): McpBulkPlan | null {
+  switch (dialog.mode) {
+    case "server_enable": {
+      const server = model.server(dialog.serverKey)
+      const group = server?.groups.find(
+        (entry) => entry.fingerprint === dialog.fingerprint
+      )
+      if (!server || !group) return null
+      return planServerBulkEnable(server, group, model)
+    }
+    case "server_disable": {
+      const server = model.server(dialog.serverKey)
+      if (!server) return null
+      return planServerBulkDisable(server, model)
+    }
+    case "agent_enable": {
+      const info = model.agent(dialog.agent)
+      if (!info) return null
+      return planAgentBulkEnable(info, model)
+    }
+  }
+}
+
+export function openServerBulkEnableDialog(
+  slots: HarnessSlotStore,
+  serverKey: string,
+  fingerprint: string
+): void {
+  const model = currentModel(slots)
+  const server = model?.server(serverKey)
+  if (!server?.groups.some((group) => group.fingerprint === fingerprint)) return
+  slots.set(MCP_DIALOG, {
+    kind: "bulk",
+    id: ++lastDialog,
+    mode: "server_enable",
+    serverKey,
+    fingerprint,
+    flow: inputFlow(),
+  })
+}
+
+export function openServerBulkDisableDialog(
+  slots: HarnessSlotStore,
+  serverKey: string
+): void {
+  const model = currentModel(slots)
+  if (!model?.server(serverKey)) return
+  slots.set(MCP_DIALOG, {
+    kind: "bulk",
+    id: ++lastDialog,
+    mode: "server_disable",
+    serverKey,
+    flow: inputFlow(),
+  })
+}
+
+export function openAgentBulkEnableDialog(
+  slots: HarnessSlotStore,
+  agent: McpAgentId
+): void {
+  const model = currentModel(slots)
+  if (!model?.agent(agent)) return
+  slots.set(MCP_DIALOG, {
+    kind: "bulk",
+    id: ++lastDialog,
+    mode: "agent_enable",
+    agent,
+    flow: inputFlow(),
+  })
+}
+
+// ─── Health probes (#1296) ────────────────────────────────────────────
+
+export interface McpProbeRecord {
+  phase: "loading" | "ready" | "error"
+  /** Fingerprint of the definition when this probe ran, used to prune stale
+   *  results when an entry's definition changes. */
+  fingerprint: string | null
+  result: McpProbeResult | null
+  failure: McpFailure | null
+  request: number
+}
+
+export type McpProbeMap = Readonly<Record<string, McpProbeRecord>>
+
+export const MCP_PROBES = defineHarnessSlot<McpProbeMap>("mcp", () => ({}))
+
+export function probeEntryKey(agent: McpAgentId, key: string): string {
+  return `entry:${agent}:${key}`
+}
+
+export function probeGroupKey(serverKey: string, fingerprint: string): string {
+  return `group:${serverKey}:${fingerprint}`
+}
+
+function pruneStaleProbes(
+  slots: HarnessSlotStore,
+  inventory: McpInventory
+): void {
+  const prev = slots.get(MCP_PROBES)
+  const keys = Object.keys(prev)
+  if (keys.length === 0) return
+
+  const entryFingerprints = new Map<string, string | null>()
+  const groupKeys = new Set<string>()
+  for (const agent of inventory.agents) {
+    for (const entry of agent.entries) {
+      entryFingerprints.set(
+        `entry:${agent.agent}:${entry.key}`,
+        entry.fingerprint
+      )
+      if (entry.fingerprint) {
+        groupKeys.add(`group:${entry.key}:${entry.fingerprint}`)
+      }
+    }
+  }
+
+  let changed = false
+  const next: Record<string, McpProbeRecord> = {}
+  for (const key of keys) {
+    const record = prev[key]
+    if (record.phase === "loading") {
+      next[key] = record
+      continue
+    }
+    if (key.startsWith("entry:")) {
+      if (
+        entryFingerprints.has(key) &&
+        entryFingerprints.get(key) === record.fingerprint
+      ) {
+        next[key] = record
+      } else {
+        changed = true
+      }
+      continue
+    }
+    if (key.startsWith("group:")) {
+      if (groupKeys.has(key)) {
+        next[key] = record
+      } else {
+        changed = true
+      }
+      continue
+    }
+    next[key] = record
+  }
+  if (changed) slots.set(MCP_PROBES, next)
+}
+
+export async function runMcpProbe(
+  slots: HarnessSlotStore,
+  targetKey: string,
+  args: McpProbeArgs,
+  fingerprint: string | null
+): Promise<McpProbeResult | null> {
+  const request = newRequest()
+  slots.set(
+    MCP_PROBES,
+    (prev): McpProbeMap => ({
+      ...prev,
+      [targetKey]: {
+        phase: "loading",
+        fingerprint,
+        result: prev[targetKey]?.result ?? null,
+        failure: null,
+        request,
+      },
+    })
+  )
+  const isCurrent = () => slots.get(MCP_PROBES)[targetKey]?.request === request
+  try {
+    const result = await mcpProbe(args)
+    if (!isCurrent()) return null
+    slots.set(
+      MCP_PROBES,
+      (prev): McpProbeMap => ({
+        ...prev,
+        [targetKey]: {
+          phase: "ready",
+          fingerprint,
+          result,
+          failure: null,
+          request,
+        },
+      })
+    )
+    return result
+  } catch (error) {
+    if (!isCurrent()) return null
+    slots.set(
+      MCP_PROBES,
+      (prev): McpProbeMap => ({
+        ...prev,
+        [targetKey]: {
+          phase: "error",
+          fingerprint,
+          result: null,
+          failure: mcpFailureOf(error),
+          request,
+        },
+      })
+    )
+    return null
+  }
+}
+
+export async function runAgentBatchProbe(
+  slots: HarnessSlotStore,
+  agentId: string
+): Promise<void> {
+  const model = currentModel(slots)
+  const info = model?.agent(agentId)
+  if (!info || !info.agent) return
+  const agent = info.agent
+  const tasks: Promise<unknown>[] = []
+  for (const entry of info.inventory.entries) {
+    if (entry.reserved || !entry.definition) continue
+    tasks.push(
+      runMcpProbe(
+        slots,
+        probeEntryKey(agent, entry.key),
+        { agent, key: entry.key },
+        entry.fingerprint
+      )
+    )
+  }
+  await Promise.all(tasks)
+}
+
+export function clearMcpProbes(slots: HarnessSlotStore): void {
+  slots.set(MCP_PROBES, {})
 }

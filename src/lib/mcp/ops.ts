@@ -7,9 +7,9 @@
  * its file is not even opened for writing.
  */
 import {
-  isMcpAppType,
+  isMcpAgentId,
+  type McpAgentId,
   type McpApplyResult,
-  type McpAppType,
   type McpBasis,
   type McpDefinition,
   type McpInventory,
@@ -24,8 +24,8 @@ export interface McpPlan {
 
 /** The agents `ops` names, in order of first appearance — the order the
  *  engine handles and reports them in. */
-export function agentsOf(ops: readonly McpOp[]): McpAppType[] {
-  const seen = new Set<McpAppType>()
+export function agentsOf(ops: readonly McpOp[]): McpAgentId[] {
+  const seen = new Set<McpAgentId>()
   for (const op of ops) seen.add(op.agent)
   return [...seen]
 }
@@ -34,7 +34,7 @@ export function agentsOf(ops: readonly McpOp[]): McpAppType[] {
  *  could not be read has none, and the engine says so for it. */
 export function basisOf(
   inventory: McpInventory,
-  agents: readonly McpAppType[]
+  agents: readonly McpAgentId[]
 ): McpBasis {
   const basis: McpBasis = {}
   for (const agent of agents) {
@@ -58,7 +58,7 @@ export function planOf(ops: McpOp[], inventory: McpInventory): McpPlan {
 export function basisFromResult(result: McpApplyResult): McpBasis {
   const basis: McpBasis = {}
   for (const agent of result.agents) {
-    if (isMcpAppType(agent.agent) && agent.basis !== null) {
+    if (isMcpAgentId(agent.agent) && agent.basis !== null) {
       basis[agent.agent] = agent.basis
     }
   }
@@ -68,12 +68,12 @@ export function basisFromResult(result: McpApplyResult): McpBasis {
 export function setOps(
   key: string,
   definition: McpDefinition,
-  agents: readonly McpAppType[]
+  agents: readonly McpAgentId[]
 ): McpOp[] {
   return agents.map((agent) => ({ agent, key, action: "set", definition }))
 }
 
-export function removeOps(key: string, agents: readonly McpAppType[]): McpOp[] {
+export function removeOps(key: string, agents: readonly McpAgentId[]): McpOp[] {
   return agents.map((agent) => ({ agent, key, action: "remove" }))
 }
 
@@ -81,7 +81,7 @@ export function removeOps(key: string, agents: readonly McpAppType[]): McpOp[] {
 export function renameOps(
   key: string,
   newKey: string,
-  agents: readonly McpAppType[]
+  agents: readonly McpAgentId[]
 ): McpOp[] {
   return agents.map((agent) => ({
     agent,
@@ -93,7 +93,7 @@ export function renameOps(
 
 export function enableOp(
   key: string,
-  agent: McpAppType,
+  agent: McpAgentId,
   enabled: boolean
 ): McpOp {
   return { agent, key, action: "set_enabled", enabled }

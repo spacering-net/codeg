@@ -93,6 +93,7 @@ import type {
   SessionConfigOptionInfo,
   SessionConfigSelectOptionInfo,
   SessionFailureRecord,
+  SessionMcpState,
   SessionModeStateInfo,
   SessionUsageUpdateInfo,
   PromptCapabilitiesInfo,
@@ -180,6 +181,8 @@ import {
   type AttentionIndex,
 } from "@/lib/conversation-attention"
 import { rememberModelLabels } from "@/lib/model-label-store"
+import { extractAppCommandError, toErrorMessage } from "@/lib/app-error"
+import { combineMcpFailureErrorTexts } from "@/lib/mcp/failure-recovery"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 
 /**
@@ -542,6 +545,8 @@ export interface ConnectionState {
   configStale: boolean
   /** Which settings surface drifted, for the banner's wording. `null` when not stale. */
   configStaleKind: ConfigStaleKind | null
+  /** Running session MCP delivery and per-server runtime state snapshot. */
+  mcpState: SessionMcpState | null
   /**
    * Launched-but-unresolved background tasks (async sub-agents / background
    * shells) on this connection, mirrored from `background_activity` events
@@ -863,6 +868,11 @@ type Action =
       contextKey: string
       stale: boolean
       kind: ConfigStaleKind
+    }
+  | {
+      type: "SESSION_MCP_STATE"
+      contextKey: string
+      state: SessionMcpState
     }
   | {
       type: "DISMISS_CONFIG_STALE"
@@ -2198,6 +2208,7 @@ function connectionsReducer(
         isViewer: action.isViewer ?? false,
         configStale: false,
         configStaleKind: null,
+        mcpState: null,
         configStaleDismissed: false,
         backgroundOutstanding: 0,
         backgroundTasks: EMPTY_BACKGROUND_TASKS,
@@ -2267,6 +2278,7 @@ function connectionsReducer(
         isViewer: false,
         configStale: false,
         configStaleKind: null,
+        mcpState: null,
         configStaleDismissed: false,
         backgroundOutstanding: 0,
         backgroundTasks: EMPTY_BACKGROUND_TASKS,
@@ -2320,6 +2332,7 @@ function connectionsReducer(
         current.availableCommands ?? action.patch.availableCommands
       const mergedPromptCapabilities =
         action.patch.promptCapabilities ?? current.promptCapabilities
+      const mergedMcpState = current.mcpState ?? action.patch.mcpState
       // Latched like `selectorsReady`: a turn that ran stays run, however old
       // the snapshot that reports it.
       const mergedHasPrompted = action.patch.hasPrompted || current.hasPrompted
@@ -2387,6 +2400,7 @@ function connectionsReducer(
           mergedConfigOptions === current.configOptions &&
           mergedAvailableCommands === current.availableCommands &&
           mergedPromptCapabilities === current.promptCapabilities &&
+          mergedMcpState === current.mcpState &&
           mergedHasPrompted === current.hasPrompted &&
           mergedSessionFailures === current.sessionFailures &&
           mergedToolApprovals === current.toolApprovals &&
@@ -2401,6 +2415,7 @@ function connectionsReducer(
           configOptions: mergedConfigOptions,
           availableCommands: mergedAvailableCommands,
           promptCapabilities: mergedPromptCapabilities,
+          mcpState: mergedMcpState,
           selectorsReady: mergedSelectorsReady,
           supportsFork: mergedSupportsFork,
           supportsRewind: mergedSupportsRewind,
@@ -2473,6 +2488,7 @@ function connectionsReducer(
         // preserved via `...current`.
         configStale: action.patch.configStale,
         configStaleKind: action.patch.configStaleKind,
+        mcpState: action.patch.mcpState,
         // Current-state field like `status`: a client attaching mid-episode
         // recovers the pending-background count the one-shot events won't
         // replay for it, so its teardown gates hold.
@@ -3195,6 +3211,17 @@ function connectionsReducer(
         configStale: action.stale,
         configStaleKind: kind,
         configStaleDismissed: dismissed,
+      })
+      return next
+    }
+
+    case "SESSION_MCP_STATE": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      const next = new Map(state)
+      next.set(action.contextKey, {
+        ...conn,
+        mcpState: action.state,
       })
       return next
     }
@@ -4008,6 +4035,11 @@ export function useAcpActions(): AcpActionsValue {
   return ctx
 }
 
+/** The actions API, or `null` outside `AcpConnectionsProvider`. */
+export function useOptionalAcpActions(): AcpActionsValue | null {
+  return useContext(AcpActionsContext)
+}
+
 // ── Event subscriber context ──
 //
 // JS-level fanout of `acp://event` envelopes. The provider owns the single
@@ -4101,8 +4133,16 @@ function getAffectedKey(action: Action): string | null {
 }
 
 function normalizeErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return String(error)
+  const appError = extractAppCommandError(error)
+  if (appError) {
+    const message = appError.message.trim()
+    const detail = appError.detail?.trim() ?? ""
+    if (detail && message && detail !== message && !detail.includes(message)) {
+      return `${message}\n${detail}`
+    }
+    return detail || message
+  }
+  return toErrorMessage(error)
 }
 
 type AlertedError = Error & { alerted: true }
@@ -4177,6 +4217,10 @@ interface TurnFailureState {
 
 export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   const t = useTranslations("Folder.chat.acpConnections")
+  const tRef = useRef(t)
+  useLayoutEffect(() => {
+    tRef.current = t
+  }, [t])
   // Separate namespace: the agent-supplied vocabulary this provider has to
   // re-label lives under its own catalogue (see `lib/agent-label-vocabulary`).
   const vocabularyT = useTranslations("AgentVocabulary")
@@ -4472,10 +4516,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   const rememberResolvedIdentity = useCallback(
     (
       contextKey: string,
-      patch: { sessionId?: string; conversationId?: number }
+      patch: { sessionId?: string; conversationId?: number },
+      expectedAgentType?: AgentType
     ) => {
       const remembered = lastConnectParamsRef.current.get(contextKey)
       if (!remembered) return
+      if (
+        expectedAgentType !== undefined &&
+        remembered.agentType !== expectedAgentType
+      ) {
+        return
+      }
       lastConnectParamsRef.current.set(contextKey, { ...remembered, ...patch })
       // A connection that was parked on a prompt before its conversation id was
       // known (a brand-new conversation answers a question in its first turn)
@@ -4498,9 +4549,13 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
    */
   const captureIdentityBeforeRemoval = useCallback(
     (contextKey: string) => {
-      const sessionId = storeRef.current.connections.get(contextKey)?.sessionId
-      if (!sessionId) return
-      rememberResolvedIdentity(contextKey, { sessionId })
+      const conn = storeRef.current.connections.get(contextKey)
+      if (!conn?.sessionId) return
+      rememberResolvedIdentity(
+        contextKey,
+        { sessionId: conn.sessionId },
+        conn.agentType
+      )
     },
     [rememberResolvedIdentity]
   )
@@ -6186,7 +6241,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             }
           }
           break
-        case "session_started":
+        case "session_started": {
           flushStreamingQueue(contextKey)
           dispatch({
             type: "SESSION_STARTED",
@@ -6196,8 +6251,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // The id that turns a later reconnect into a RESUME. It reaches us
           // only here, and only the store entry holds it — which is precisely
           // what a backend GC / idle sweep removes.
-          rememberResolvedIdentity(contextKey, { sessionId: e.session_id })
+          const sessionConn = storeRef.current.connections.get(contextKey)
+          rememberResolvedIdentity(
+            contextKey,
+            { sessionId: e.session_id },
+            sessionConn?.agentType
+          )
           break
+        }
         case "native_session_title":
           // Title is applied on the conversation row by the lifecycle worker
           // and reaches the sidebar via `conversation://changed`. Do not flush
@@ -6222,9 +6283,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // Same reason as session_started: a reconnect needs the conversation
           // id to be able to attach as a viewer to a surviving owner.
           if (e.conversation_id > 0) {
-            rememberResolvedIdentity(contextKey, {
-              conversationId: e.conversation_id,
-            })
+            const linkedConn = storeRef.current.connections.get(contextKey)
+            rememberResolvedIdentity(
+              contextKey,
+              {
+                conversationId: e.conversation_id,
+              },
+              linkedConn?.agentType
+            )
           }
           break
         case "session_modes": {
@@ -6298,6 +6364,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             contextKey,
             stale: e.stale,
             kind: e.kind,
+          })
+          break
+        }
+        case "session_mcp_state": {
+          flushStreamingQueue(contextKey)
+          dispatch({
+            type: "SESSION_MCP_STATE",
+            contextKey,
+            state: e.state,
           })
           break
         }
@@ -6735,6 +6810,24 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               message: text,
               level: route.level,
             })
+            // When a session error arrives during startup/handshake (before a
+            // session is established or while still connecting), also persist
+            // it in `connectErrors` so an immediate `connection_gone` teardown
+            // does not wipe the failure (and its raw `MCP load failed for ...`
+            // text) before the recovery strip can render it.
+            if (nc && (!nc.sessionId || nc.status === "connecting")) {
+              const rawDetail = combineMcpFailureErrorTexts([
+                reason,
+                e.message,
+                evidence,
+              ])
+              setConnectError(contextKey, {
+                agentType: nc.agentType,
+                title: text,
+                detail: rawDetail && rawDetail !== text ? rawDetail : null,
+                opensAgentSettings: false,
+              })
+            }
           }
           // OS notification: only for a session that broke, and message-only —
           // notification centers persist their payload outside the app, so
@@ -6979,6 +7072,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       retireTurnFailures,
       sessionFailureNotifyActions,
       sessionNotification,
+      setConnectError,
       settleRetryIncidentsOnProgress,
       t,
       tChat,
@@ -7267,6 +7361,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // a connection nobody touches once its turn is over).
           const gone = storeRef.current.connections.get(contextKey)
           if (gone?.status === "prompting") noteTurnEndedUnseen(gone)
+          if (gone?.error && !storeRef.current.connectErrors.has(contextKey)) {
+            setConnectError(contextKey, {
+              agentType: gone.agentType,
+              title: tRef.current("connectFailedTitle", {
+                agent: getAgentLabel(gone.agentType),
+              }),
+              detail: gone.error,
+              opensAgentSettings: false,
+            })
+          }
           // The composer that survives this is exactly the one whose Reconnect
           // button has to resume the session rather than start a new one.
           captureIdentityBeforeRemoval(contextKey)
@@ -7284,6 +7388,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       dispatch,
       flushStreamingQueue,
       seedDelegationsFromSnapshot,
+      setConnectError,
     ]
   )
 

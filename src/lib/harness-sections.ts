@@ -131,6 +131,8 @@ export type HarnessOpenRequest =
       section: "mcp"
       /** An MCP server's key in the agents' configuration. */
       serverKey?: string
+      /** An agent id (built-in slug or `custom:<id>`) to focus in the Agents view. */
+      agentId?: string
     }
   | {
       section: "skills"
@@ -154,7 +156,7 @@ export type HarnessOpenRequest =
  */
 export type HarnessOpenTarget =
   | { section: "discover"; itemRef: string; intent?: HarnessOpenIntent }
-  | { section: "mcp"; serverKey: string }
+  | { section: "mcp"; serverKey?: string; agentId?: string }
   | { section: "skills"; skillId: string }
   | { section: "plugins"; itemId: string }
   | { section: "packs"; tab: HarnessPackTab }
@@ -183,9 +185,13 @@ export function harnessTargetOf(
         ? { section: "discover", itemRef: request.itemRef, intent: "install" }
         : { section: "discover", itemRef: request.itemRef }
     case "mcp":
-      return request.serverKey
-        ? { section: "mcp", serverKey: request.serverKey }
-        : null
+      if (request.serverKey) {
+        return { section: "mcp", serverKey: request.serverKey }
+      }
+      if (request.agentId) {
+        return { section: "mcp", agentId: request.agentId }
+      }
+      return null
     case "skills":
       return request.skillId
         ? { section: "skills", skillId: request.skillId }

@@ -2446,6 +2446,51 @@
       },
       "moreActions": "Más acciones"
     },
+    "sessionMcp": {
+      "title": "MCP",
+      "deliverySession": "Inyección de sesión de Codeg",
+      "deliveryFile": "Archivo local del agente",
+      "capabilitiesHint": "La sesión admite {transports}",
+      "capabilitiesStdioOnly": "La sesión solo admite stdio",
+      "codegMcpAttached": "codeg-mcp adjunto",
+      "mcpDisabled": "El soporte MCP está desactivado para este agente personalizado.",
+      "openAgentSettings": "Ajustes del agente",
+      "reconnectNotice": "La configuración de MCP cambió después de iniciar esta sesión.",
+      "reconnect": "Reconectar para aplicar",
+      "reconnecting": "Reconectando…",
+      "reconnectDisabledDuringTurn": "Disponible cuando termine el turno actual",
+      "reconnected": "Configuración de MCP aplicada",
+      "loading": "Cargando servidores MCP…",
+      "noServers": "No hay servidores MCP configurados para este agente.",
+      "test": "Probar",
+      "testing": "Probando…",
+      "testAll": "Probar todo",
+      "manageMcp": "Gestionar MCP",
+      "pauseAndReconnect": "Pausar y reconectar",
+      "pausing": "Pausando…",
+      "pausedAndReconnecting": "{server} pausado; reconectando…",
+      "pauseFailed": "No se pudo pausar \"{server}\".",
+      "toolsCount": "{count} herramientas",
+      "confirmedTools": "Usado en la sesión",
+      "authRequiredHint": "Se requiere autenticación (HTTP 401 / OAuth). Inicia sesión o revisa las credenciales.",
+      "skippedTransportHint": "Omitido porque esta sesión no anunció soporte para {transport}.",
+      "removedPendingHint": "Eliminado de la configuración; reconecta para aplicar.",
+      "pausedPendingHint": "Pausado en la configuración; reconecta para aplicar.",
+      "probeRpcFailed": "Error en la comprobación",
+      "latency": "{ms} ms",
+      "triggerAria": "Estado MCP de la sesión ({count})",
+      "triggerTooltip": "MCP · {summary}",
+      "status": {
+        "session_confirmed": "Confirmado",
+        "probe_healthy": "Saludable",
+        "auth_required": "Requiere auth",
+        "connection_failed": "Error",
+        "saved_pending_reconnect": "Pendiente de reconexión",
+        "skipped_transport": "Omitido",
+        "configured": "Configurado",
+        "paused": "Pausado"
+      }
+    },
     "sessionDetails": {
       "menuLabel": "Detalles de la sesión",
       "noActiveSession": "No hay ninguna sesión activa",
@@ -4357,6 +4402,7 @@
       "configStale": {
         "agentConfigTitle": "Configuración del agente actualizada",
         "modelProviderTitle": "Proveedor de modelo actualizado",
+        "mcpConfigTitle": "Configuración de MCP actualizada",
         "description": "Esta sesión sigue usando su configuración anterior. Vuelve a conectarte para aplicarla (se conserva el historial de la conversación).",
         "reconnect": "Reconectar para aplicar",
         "reconnecting": "Reconectando…",
@@ -4430,6 +4476,16 @@
         "toggleDetails": "Mostrar u ocultar detalles",
         "dismiss": "Descartar",
         "moreIncidents": "+{count} más"
+      },
+      "mcpRecovery": {
+        "title": "El servidor MCP \"{server}\" no pudo inicializarse",
+        "pauseAndReconnect": "Pausar {server} y reconectar",
+        "pausing": "Pausando…",
+        "openSettings": "Abrir configuración de MCP",
+        "pausedAndReconnecting": "Se pausó {server}; reconectando…",
+        "serverNotFound": "No se encontró \"{server}\" en la configuración MCP de este agente.",
+        "cannotPause": "No se puede pausar \"{server}\" automáticamente para este agente.",
+        "pauseFailed": "No se pudo pausar \"{server}\"."
       },
       "backgroundTasks": {
         "settledFallback": "Tarea en segundo plano finalizada ({status})",
@@ -8126,7 +8182,9 @@
         "reserved": "nombre del servidor integrado, solo se muestra",
         "readOnly": "solo lectura",
         "skipped": "se omite en sus sesiones",
-        "entryUnreadable": "Codeg no puede leer esta entrada"
+        "entryUnreadable": "Codeg no puede leer esta entrada",
+        "paused": "En pausa",
+        "pausedNote": "Pausado temporalmente por Codeg; volver a activarlo restaura toda su configuración."
       },
       "agents": {
         "showAll": "Mostrar todos los agentes ({count, number} sin instalar)",
@@ -8171,7 +8229,9 @@
         "skipped": "Se omite en sesiones",
         "builtIn": "<code>codeg-mcp</code> (integrado)",
         "builtInNote": "El servidor de colaboración de Codeg. No está en este archivo; se activa y desactiva en Configuración › Colaboración.",
-        "openCollaboration": "Abrir Configuración"
+        "openCollaboration": "Abrir Configuración",
+        "openAgentSettings": "Abrir ajustes del agente",
+        "pauseReversible": "Desactivar un servidor aquí lo pausa de forma reversible en Codeg sin perder sus argumentos, variables de entorno ni cabeceras."
       },
       "blocks": {
         "unknownAgent": "Este Codeg no conoce este agente; actualiza Codeg para gestionarlo.",
@@ -8400,7 +8460,76 @@
         "disableTitle": "¿Desactivar <code>{key}</code> en {agent}?",
         "enableAction": "Activar",
         "disableAction": "Desactivar",
+        "pauseTitle": "¿Pausar <code>{key}</code> en {agent}?",
+        "pauseBody": "Codeg quitará temporalmente esta entrada de la configuración de {agent} y guardará una copia para que, al volver a activarla, se restauren todos los argumentos, variables de entorno y cabeceras.",
+        "pauseAction": "Pausar",
         "commentsLost": "Este archivo tiene comentarios y guardar los elimina."
+      },
+      "probe": {
+        "testConnection": "Probar conexión",
+        "retest": "Probar de nuevo",
+        "testing": "Probando…",
+        "checkAll": "Comprobar todos",
+        "latency": "{ms} ms",
+        "unsupported": "Este Codeg es demasiado antiguo para probar servidores MCP. Actualízalo.",
+        "rpcFailed": "No se pudo contactar con Codeg para probar este servidor.",
+        "authRequiredHint": "Este servidor requiere inicio de sesión OAuth interactivo. Páusalo si este agente no puede completar OAuth.",
+        "sessionIdMismatchHint": "El servidor rechazó o cambió el ID de sesión MCP (por ejemplo, detrás de un proxy).",
+        "showTools": "{count, plural, one {Mostrar # herramienta} other {Mostrar # herramientas}}",
+        "hideTools": "Ocultar herramientas",
+        "showStderr": "Mostrar stderr",
+        "hideStderr": "Ocultar stderr",
+        "status": {
+          "ok": "{count, plural, one {Saludable · # herramienta} other {Saludable · # herramientas}}",
+          "auth_required": "Requiere OAuth",
+          "forbidden": "403 Prohibido",
+          "session_id_mismatch": "ID de sesión no coincide",
+          "spawn_failed": "Error al iniciar",
+          "timeout": "Tiempo agotado",
+          "protocol_error": "Error de protocolo",
+          "network_error": "Error de red",
+          "config_error": "Error de configuración",
+          "unknown": "Error de comprobación ({status})"
+        }
+      },
+      "bulk": {
+        "applyCompatible": "Aplicar a agentes compatibles",
+        "pauseAll": "Pausar en todos",
+        "enableAllCompatible": "Activar todos los compatibles",
+        "enableServerTitle": "Aplicar <code>{key}</code> a agentes compatibles",
+        "enableServerDescription": "Añade o activa este servidor en cada agente compatible, instalado y editable.",
+        "disableServerTitle": "Pausar <code>{key}</code> en todos los agentes",
+        "disableServerDescription": "Desactiva o pausa este servidor donde sea compatible sin eliminar ninguna configuración.",
+        "enableAgentTitle": "Activar servidores compatibles en {agent}",
+        "enableAgentDescription": "Añade o activa todos los servidores MCP locales compatibles para {agent}.",
+        "unavailable": "Esta acción masiva ya no está disponible para la configuración actual.",
+        "nothingToDo": "No hay cambios elegibles para aplicar.",
+        "sectionWillApply": "Se aplicará ({count, number})",
+        "sectionWillDisable": "Se pausará / desactivará ({count, number})",
+        "sectionAlreadyActive": "Ya activo ({count, number})",
+        "sectionAlreadyOff": "Ya desactivado ({count, number})",
+        "sectionSkipped": "Omitido ({count, number})",
+        "effect": {
+          "add": "Añadir",
+          "enable": "Activar",
+          "update": "Actualizar",
+          "disable": "Desactivar",
+          "pause": "Pausar"
+        },
+        "skip": {
+          "notInstalled": "No instalado",
+          "unknownAgent": "Agente desconocido",
+          "readOnly": "Configuración de solo lectura",
+          "unreadable": "Configuración ilegible",
+          "unsupportedTransport": "No admite servidores {transport}",
+          "reservedKey": "Nombre de servidor reservado",
+          "keyNotNew": "El nombre no se puede crear aquí",
+          "entryReadOnly": "Entrada de solo lectura",
+          "duplicateKey": "Clave duplicada en la configuración",
+          "cannotDisable": "No admite desactivación (se mantiene intacto)",
+          "noDefinition": "Sin definición legible",
+          "differentDefinition": "Usa una definición diferente"
+        }
       },
       "paste": {
         "title": "Pegar configuración",
@@ -8452,6 +8581,7 @@
         "duplicate_key_related": "<code>{key}</code> aparece dos veces en <code>{path}</code>, así que Codeg no puede saber cuál cuenta. Corrige ese archivo a mano.",
         "container_invalid": "<code>{key}</code> en este archivo no es una lista de servidores, así que Codeg no toca el archivo.",
         "managed_by_agent": "El agente gestiona este archivo él mismo; Codeg solo muestra sus servidores.",
+        "mcp_disabled_in_agent_settings": "El soporte MCP está desactivado en los ajustes de este agente personalizado. Actívalo en Ajustes del agente para gestionar sus servidores.",
         "file_not_writable": "El archivo es de solo lectura.",
         "related_file_unreadable": "<code>{path}</code> tiene que cambiar a la vez y no se puede leer ni editar.",
         "entry_not_an_object": "La entrada no es un objeto.",

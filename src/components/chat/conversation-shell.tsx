@@ -52,6 +52,11 @@ interface ConversationShellProps {
    *  every surface with a live store — dismissing is client-local, so viewers
    *  get it too. */
   onSessionFailureDismiss?: (ids: string[]) => void
+  /** Optional error text (e.g. `acpLoadError` / `autoConnectError`) scanned
+   *  for MCP server initialization failures (#1295). */
+  mcpFailureErrorText?: string | null
+  /** Reconnect callback triggered after pausing a failing MCP server (#1295). */
+  onReconnect?: () => void | Promise<void>
   /** Claude Code's Remote Control while it is on; its strip shows the
    *  session's link and QR code. Omit/`null` renders nothing. */
   remoteControl?: RemoteControlInfo | null
@@ -168,6 +173,8 @@ export function ConversationShell({
   claudeApiRetry,
   sessionFailures,
   onSessionFailureDismiss,
+  mcpFailureErrorText,
+  onReconnect,
   remoteControl,
   onRemoteControlOff,
   pendingPermission,
@@ -359,6 +366,9 @@ export function ConversationShell({
         claudeApiRetry={claudeApiRetry}
         sessionFailures={sessionFailures}
         onSessionFailureDismiss={onSessionFailureDismiss}
+        agentType={agentType}
+        mcpFailureErrorText={mcpFailureErrorText}
+        onReconnect={onReconnect}
       />
     </div>
   )
