@@ -247,12 +247,6 @@
         "appliedToast": "壁紙を適用しました",
         "credit": "画像提供 wallhaven.cc · SFW のみ"
       }
-    },
-    "paAccent": {
-      "title": "アシスタントのアクセントカラー",
-      "description": "アシスタントとの会話で、カードの縁取りとカードのボタンに使う色です。あなたの吹き出しは常にアシスタントの色になります。",
-      "default": "デフォルト",
-      "bot": "アシスタントの色に合わせる"
     }
   },
   "SystemSettings": {

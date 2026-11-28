@@ -247,12 +247,6 @@
         "appliedToast": "Hintergrund angewendet",
         "credit": "Bilder von wallhaven.cc · nur SFW"
       }
-    },
-    "paAccent": {
-      "title": "Akzentfarbe der Assistenten",
-      "description": "Die Farbe der Kartenränder und Kartenschaltflächen im Gespräch mit einem Assistenten; deine Sprechblasen haben immer die Farbe des Assistenten.",
-      "default": "Standard",
-      "bot": "Farbe des Assistenten übernehmen"
     }
   },
   "SystemSettings": {

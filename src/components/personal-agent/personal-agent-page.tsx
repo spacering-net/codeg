@@ -88,7 +88,6 @@ import { toErrorMessage } from "@/lib/app-error"
 import type { TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
-import { usePaAccent } from "@/lib/personal-agent-accent"
 import {
   PERSONAL_AGENT_EVENTS,
   usePersonalAgentUi,
@@ -470,9 +469,7 @@ export function PersonalAgentPage() {
   useRosterUpkeep(readOnly)
   const agentName = agent?.name?.trim() || t("title")
   // Its face's colour (a text avatar's, as one), which the owner's bubbles
-  // take; with "follow the assistant's colour" on, the theme's colour in
-  // its conversation too (10.7).
-  const [accent] = usePaAccent()
+  // take (10.7).
   const faceColor = faceColorOf(agent?.avatar)
   const liveRowId = liveRowOf(rows, status?.live_reply?.row_id ?? null)
   const rowsById = useMemo(() => {
@@ -626,9 +623,6 @@ export function PersonalAgentPage() {
             bar
             className="flex min-w-0 flex-1 flex-col"
             data-pa-face={faceColor ?? undefined}
-            data-pa-accent={
-              (accent === "bot" && faceColor != null) || undefined
-            }
           >
             {readOnly || workOff ? (
               <div className="mx-auto flex w-full chat-content-w shrink-0 flex-col gap-1 px-4 pt-2">

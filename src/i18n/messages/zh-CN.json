@@ -247,12 +247,6 @@
         "appliedToast": "壁纸已应用",
         "credit": "图片来源 wallhaven.cc · 仅 SFW 内容"
       }
-    },
-    "paAccent": {
-      "title": "助手强调色",
-      "description": "助手对话里卡片的强调边和卡片按钮用什么颜色；你的气泡始终用助手的颜色。",
-      "default": "默认",
-      "bot": "跟随助手颜色"
     }
   },
   "SystemSettings": {

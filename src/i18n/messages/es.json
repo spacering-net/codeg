@@ -247,12 +247,6 @@
         "appliedToast": "Fondo aplicado",
         "credit": "Imágenes de wallhaven.cc · solo SFW"
       }
-    },
-    "paAccent": {
-      "title": "Color de acento de los asistentes",
-      "description": "El color de los bordes y botones de las tarjetas en la conversación de un asistente; tus burbujas siempre llevan el color del asistente.",
-      "default": "Predeterminado",
-      "bot": "Seguir el color del asistente"
     }
   },
   "SystemSettings": {

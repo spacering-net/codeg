@@ -247,12 +247,6 @@
         "appliedToast": "桌布已套用",
         "credit": "圖片來源 wallhaven.cc · 僅 SFW 內容"
       }
-    },
-    "paAccent": {
-      "title": "助手強調色",
-      "description": "助手對話中卡片強調邊框與卡片按鈕所用的顏色；你的對話泡泡一律使用助手的顏色。",
-      "default": "預設",
-      "bot": "跟隨助手顏色"
     }
   },
   "SystemSettings": {

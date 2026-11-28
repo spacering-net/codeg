@@ -247,12 +247,6 @@
         "appliedToast": "Wallpaper applied",
         "credit": "Images from wallhaven.cc · SFW only"
       }
-    },
-    "paAccent": {
-      "title": "Assistant accent colour",
-      "description": "The colour of the card edges and card buttons in an assistant's conversation; your own bubbles always take the assistant's colour.",
-      "default": "Default",
-      "bot": "Follow the assistant's colour"
     }
   },
   "SystemSettings": {

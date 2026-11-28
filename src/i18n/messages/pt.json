@@ -247,12 +247,6 @@
         "appliedToast": "Papel de parede aplicado",
         "credit": "Imagens de wallhaven.cc · apenas SFW"
       }
-    },
-    "paAccent": {
-      "title": "Cor de destaque dos assistentes",
-      "description": "A cor das bordas e dos botões dos cartões na conversa de um assistente; os seus balões têm sempre a cor do assistente.",
-      "default": "Padrão",
-      "bot": "Seguir a cor do assistente"
     }
   },
   "SystemSettings": {

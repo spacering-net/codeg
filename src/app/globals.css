@@ -4510,103 +4510,72 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 }
 
 /* Personal agent: an assistant's face colour (10.7), on its conversation
-   (`data-pa-face`): once for the light theme and once for the dark, with
-   the text that reads on it. With "follow the assistant's colour" on
-   (`data-pa-accent`) it is the theme's colour there — the cards' accent
-   edges and buttons. The unread dot keeps its blue (it is not the theme's
-   colour). */
+   (`data-pa-face`): once for the light theme and once for the dark. */
 [data-pa-face="black"] {
   --pa-face: oklch(0.205 0 0);
-  --pa-face-foreground: oklch(0.985 0 0);
 }
 .dark [data-pa-face="black"] {
   --pa-face: oklch(0.87 0 0);
-  --pa-face-foreground: oklch(0.205 0 0);
 }
 [data-pa-face="brown"] {
   --pa-face: oklch(0.473 0.137 46.201);
-  --pa-face-foreground: oklch(0.985 0 0);
 }
 .dark [data-pa-face="brown"] {
   --pa-face: oklch(0.666 0.179 58.318);
-  --pa-face-foreground: oklch(0.205 0 0);
 }
 [data-pa-face="red"] {
   --pa-face: oklch(0.577 0.245 27.325);
-  --pa-face-foreground: oklch(0.985 0 0);
 }
 .dark [data-pa-face="red"] {
   --pa-face: oklch(0.704 0.191 22.216);
-  --pa-face-foreground: oklch(0.205 0 0);
 }
 [data-pa-face="orange"] {
   --pa-face: oklch(0.646 0.222 41.116);
-  --pa-face-foreground: oklch(0.985 0 0);
 }
 .dark [data-pa-face="orange"] {
   --pa-face: oklch(0.75 0.183 55.934);
-  --pa-face-foreground: oklch(0.205 0 0);
 }
 [data-pa-face="yellow"] {
   --pa-face: oklch(0.795 0.184 86.047);
-  --pa-face-foreground: oklch(0.205 0 0);
 }
 .dark [data-pa-face="yellow"] {
   --pa-face: oklch(0.905 0.182 98.111);
-  --pa-face-foreground: oklch(0.205 0 0);
 }
 [data-pa-face="green"] {
   --pa-face: oklch(0.627 0.194 149.214);
-  --pa-face-foreground: oklch(0.985 0 0);
 }
 .dark [data-pa-face="green"] {
   --pa-face: oklch(0.792 0.209 151.711);
-  --pa-face-foreground: oklch(0.205 0 0);
 }
 [data-pa-face="teal"] {
   --pa-face: oklch(0.6 0.118 184.704);
-  --pa-face-foreground: oklch(0.985 0 0);
 }
 .dark [data-pa-face="teal"] {
   --pa-face: oklch(0.777 0.152 181.912);
-  --pa-face-foreground: oklch(0.205 0 0);
 }
 [data-pa-face="blue"] {
   --pa-face: oklch(0.546 0.245 262.881);
-  --pa-face-foreground: oklch(0.985 0 0);
 }
 .dark [data-pa-face="blue"] {
   --pa-face: oklch(0.707 0.165 254.624);
-  --pa-face-foreground: oklch(0.205 0 0);
 }
 [data-pa-face="purple"] {
   --pa-face: oklch(0.541 0.281 293.009);
-  --pa-face-foreground: oklch(0.985 0 0);
 }
 .dark [data-pa-face="purple"] {
   --pa-face: oklch(0.702 0.183 293.541);
-  --pa-face-foreground: oklch(0.205 0 0);
 }
 [data-pa-face="magenta"] {
   --pa-face: oklch(0.591 0.293 322.896);
-  --pa-face-foreground: oklch(0.985 0 0);
 }
 .dark [data-pa-face="magenta"] {
   --pa-face: oklch(0.74 0.238 322.16);
-  --pa-face-foreground: oklch(0.205 0 0);
 }
 [data-pa-face="gray"] {
   --pa-face: oklch(0.446 0.043 257.281);
-  --pa-face-foreground: oklch(0.985 0 0);
 }
 .dark [data-pa-face="gray"] {
   --pa-face: oklch(0.704 0.04 256.788);
-  --pa-face-foreground: oklch(0.205 0 0);
-}
-[data-pa-accent][data-pa-face] {
-  --primary: var(--pa-face);
-  --primary-foreground: var(--pa-face-foreground);
-  --ring: var(--pa-face);
 }
 
 /* Personal agent: the owner's bubble is the assistant's face — its body's
@@ -4704,6 +4673,34 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 [data-workspace-bg="on"] .pa-agent-bubble {
   background-color: color-mix(in oklab, var(--muted) 58%, transparent);
   box-shadow: inset 0 0 0 1px var(--border);
+}
+/* Over a workspace background image a card in the conversation turns
+   see-through as the bubble does: the card's colour at the bubble's
+   strength, its own edge round it, the image showing through — a card of
+   its own, one on a bubble, an assistant's. Only the outermost: a card on
+   a card is a wash of the text's colour already, and a part drawn flat on
+   its card stays so. What is white on a bubble (`INSET_SURFACE`: a work
+   row, a pill, a quote) turns so too, each step under the pointer at the
+   same strength. */
+[data-workspace-bg="on"]
+  [data-pa-list]
+  :is([data-pa-surface], [data-slot="card"]):not(
+    :is([data-pa-surface], [data-slot="card"]) *
+  ) {
+  background-color: color-mix(in oklab, var(--card) 58%, transparent);
+}
+[data-workspace-bg="on"] .pa-agent-bubble {
+  --pa-object: color-mix(in oklab, var(--card) 58%, transparent);
+  --pa-object-hover: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--foreground) 4%, var(--card)) 58%,
+    transparent
+  );
+  --pa-object-active: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--foreground) 7%, var(--card)) 58%,
+    transparent
+  );
 }
 /* Markdown's own surfaces, in the bubble, by the same steps: inline code, a
    code block and a diagram are the bubble a step deeper, instead of their
@@ -4971,6 +4968,23 @@ button.pa-choice:enabled:not(.pa-choice-chosen):hover {
 }
 .dark .pa-choice-other:enabled:hover {
   background-color: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+/* Over a workspace background image a choice is see-through as the card
+   under it is: the page's colour at part strength (in the dark theme a
+   step of the text's colour), the one picked a wash of the theme's
+   colour — the hairlines as they are. */
+[data-workspace-bg="on"] .pa-choice {
+  background-color: color-mix(in oklab, var(--background) 55%, transparent);
+}
+[data-workspace-bg="on"].dark .pa-choice {
+  background-color: color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+[data-workspace-bg="on"].dark
+  button.pa-choice:enabled:not(.pa-choice-chosen):hover {
+  background-color: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+[data-workspace-bg="on"] .pa-choice.pa-choice-chosen {
+  background-color: color-mix(in oklab, var(--primary) 12%, transparent);
 }
 
 /* Personal agent: the bubble a right-click opened its menu on, ringed in the

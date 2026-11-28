@@ -247,12 +247,6 @@
         "appliedToast": "배경화면이 적용되었습니다",
         "credit": "이미지 제공 wallhaven.cc · SFW만 표시"
       }
-    },
-    "paAccent": {
-      "title": "어시스턴트 강조 색상",
-      "description": "어시스턴트와의 대화에서 카드 테두리와 카드 버튼에 쓰이는 색상입니다. 내 말풍선은 항상 어시스턴트의 색을 씁니다.",
-      "default": "기본값",
-      "bot": "어시스턴트 색상 따르기"
     }
   },
   "SystemSettings": {

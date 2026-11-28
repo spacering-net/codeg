@@ -247,12 +247,6 @@
         "appliedToast": "Fond d'écran appliqué",
         "credit": "Images de wallhaven.cc · SFW uniquement"
       }
-    },
-    "paAccent": {
-      "title": "Couleur d’accent des assistants",
-      "description": "La couleur des bordures et des boutons des cartes dans la conversation d’un assistant ; vos bulles prennent toujours la couleur de l’assistant.",
-      "default": "Par défaut",
-      "bot": "Suivre la couleur de l’assistant"
     }
   },
   "SystemSettings": {
