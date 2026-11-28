@@ -1093,23 +1093,24 @@ pub async fn token_usage_sync_core_with(
     let _running = RunningFlag;
 
     // Rows written under older accounting are wrong, not stale, so no stamp
-    // will ever mark them for re-parse. Upgrading the mode is what actually
-    // delivers a counting fix to history the user already has.
-    let recorded_schema =
-        app_metadata_service::get_value(conn, FACT_SCHEMA_VERSION_KEY)
-            .await
-            .map_err(AppCommandError::from)?;
-    let schema_changed = recorded_schema.as_deref() != Some(FACT_SCHEMA_VERSION);
-    let mode = if schema_changed {
+    // will ever mark them for re-parse. Marking every one is what delivers a
+    // counting fix to history the user already has — marked up front, with
+    // the new version, so a rebuild cut short resumes where it stopped.
+    let recorded_schema = app_metadata_service::get_value(conn, FACT_SCHEMA_VERSION_KEY)
+        .await
+        .map_err(AppCommandError::from)?;
+    if recorded_schema.as_deref() != Some(FACT_SCHEMA_VERSION) {
+        let marked =
+            usage_service::begin_fact_rebuild(conn, FACT_SCHEMA_VERSION_KEY, FACT_SCHEMA_VERSION)
+                .await
+                .map_err(AppCommandError::from)?;
         tracing::info!(
             from = recorded_schema.as_deref().unwrap_or("<none>"),
             to = FACT_SCHEMA_VERSION,
+            marked,
             "token usage sync: fact accounting changed, rebuilding every conversation"
         );
-        TokenUsageSyncMode::Full
-    } else {
-        mode
-    };
+    }
 
     let mut result = TokenUsageSyncResult {
         pruned_conversations: usage_service::prune_orphaned_facts(conn)
@@ -1131,9 +1132,6 @@ pub async fn token_usage_sync_core_with(
 
     let total = stale.len() as u32;
     if total == 0 {
-        if schema_changed {
-            record_fact_schema_version(conn).await?;
-        }
         emit_event(
             emitter,
             TOKEN_USAGE_SYNC_PROGRESS_EVENT,
@@ -1196,7 +1194,6 @@ pub async fn token_usage_sync_core_with(
                             "token usage sync: failed to settle a lost transcript"
                         );
                         result.failed += 1;
-                        keep_eligible_for_rebuild(conn, schema_changed, candidate.id).await;
                     }
                 }
             }
@@ -1226,7 +1223,6 @@ pub async fn token_usage_sync_core_with(
                             "token usage sync: failed to write facts"
                         );
                         result.failed += 1;
-                        keep_eligible_for_rebuild(conn, schema_changed, candidate.id).await;
                     }
                 }
             }
@@ -1241,7 +1237,6 @@ pub async fn token_usage_sync_core_with(
                     "token usage sync: failed to parse transcript"
                 );
                 result.failed += 1;
-                keep_eligible_for_rebuild(conn, schema_changed, candidate.id).await;
             }
         }
 
@@ -1261,62 +1256,7 @@ pub async fn token_usage_sync_core_with(
         }
     }
 
-    if schema_changed {
-        record_fact_schema_version(conn).await?;
-    }
-
     Ok(result)
-}
-
-/// Keep a conversation that failed a schema rebuild eligible for the next pass.
-///
-/// The two real-fault arms above (a write that failed, a transcript that would
-/// not parse) leave the sync stamp untouched so the conversation keeps its
-/// recorded facts and gets another try. For a conversation that was already
-/// stale that is enough — it stays stale and the next pass retries it. But a
-/// schema rebuild also re-parses conversations that are perfectly *current*,
-/// and one of those that fails would still look current afterwards: the marker
-/// advances, the pass never runs again, and it keeps serving numbers from the
-/// accounting this change exists to replace.
-///
-/// Stamping it for re-parse is what closes that door. The marker preserves both
-/// the facts and `turn_count`, so the "an empty parse must not erase recorded
-/// usage" guard stays armed.
-///
-/// A transcript that is simply *gone* does not come here — it settles instead
-/// (see [`usage_service::settle_lost_source`]). Retrying only pays off for a
-/// fault that might clear; re-deriving a deleted file will not start working on
-/// the ninth attempt, so that case keeps the numbers it has and stops asking.
-async fn keep_eligible_for_rebuild(
-    conn: &sea_orm::DatabaseConnection,
-    schema_changed: bool,
-    conversation_id: i32,
-) {
-    if !schema_changed {
-        return;
-    }
-    if let Err(e) = usage_service::mark_stale_for_reparse(conn, conversation_id).await {
-        tracing::warn!(
-            conversation_id,
-            error = %e,
-            "token usage sync: could not keep a failed conversation eligible for rebuild"
-        );
-    }
-}
-
-/// Mark the stored facts as produced under [`FACT_SCHEMA_VERSION`].
-///
-/// Written only after a pass has walked every conversation, so a sync
-/// interrupted halfway leaves the marker behind and the next one resumes the
-/// rebuild. Conversations that failed inside the pass are handled separately by
-/// [`keep_eligible_for_rebuild`], which stamps them so the advancing marker
-/// cannot strand them on the old accounting.
-async fn record_fact_schema_version(
-    conn: &sea_orm::DatabaseConnection,
-) -> Result<(), AppCommandError> {
-    app_metadata_service::upsert_value(conn, FACT_SCHEMA_VERSION_KEY, FACT_SCHEMA_VERSION)
-        .await
-        .map_err(AppCommandError::from)
 }
 
 // ─── Tauri commands ─────────────────────────────────────────────────────
@@ -2098,6 +2038,83 @@ mod tests {
         );
     }
 
+    /// A schema rebuild cut short (the app quit halfway) resumes at the
+    /// conversations it had not reached: the version is recorded and every
+    /// conversation marked when it starts, and each leaves the set as it lands.
+    #[tokio::test]
+    async fn a_schema_rebuild_cut_short_resumes_where_it_stopped() {
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+
+        let _serial = SYNC_TESTS_SERIAL.lock().await;
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/tu-schema-resume").await;
+        let mut convs = Vec::new();
+        for _ in 0..3 {
+            let conv = seed_conversation(&db, folder, crate::models::AgentType::ClaudeCode).await;
+            let updated_at = crate::db::entities::conversation::Entity::find_by_id(conv)
+                .one(&db.conn)
+                .await
+                .expect("query")
+                .expect("row")
+                .updated_at;
+            usage_service::replace_conversation_facts(&db.conn, conv, updated_at, &[])
+                .await
+                .expect("stamp");
+            convs.push((conv, updated_at));
+        }
+        assert!(usage_service::list_sync_candidates(&db.conn)
+            .await
+            .expect("candidates")
+            .iter()
+            .all(|c| !c.is_stale()));
+
+        // The rebuild starts: the version is recorded and all three marked.
+        let marked = usage_service::begin_fact_rebuild(
+            &db.conn,
+            FACT_SCHEMA_VERSION_KEY,
+            FACT_SCHEMA_VERSION,
+        )
+        .await
+        .expect("begin rebuild");
+        assert_eq!(marked, 3);
+        assert_eq!(
+            app_metadata_service::get_value(&db.conn, FACT_SCHEMA_VERSION_KEY)
+                .await
+                .expect("read marker")
+                .as_deref(),
+            Some(FACT_SCHEMA_VERSION)
+        );
+        let status = token_usage_status_core(&db.conn).await.expect("status");
+        assert_eq!(status.stale_conversations, 3);
+
+        // It lands two, then the app quits. (The one left keeps the resumed
+        // pass to a single parse: the one-connection test database cannot
+        // have a parse running ahead of a write.)
+        for &(done, updated_at) in &convs[..2] {
+            usage_service::replace_conversation_facts(&db.conn, done, updated_at, &[])
+                .await
+                .expect("land one");
+        }
+
+        // The next pass takes up only the one it had not reached.
+        let next = token_usage_sync_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            TokenUsageSyncMode::Incremental,
+        )
+        .await
+        .expect("resumed sync");
+        assert_eq!(next.scanned, 3);
+        assert_eq!(next.skipped, 2, "the ones it landed are not parsed again");
+        assert_eq!(
+            token_usage_status_core(&db.conn)
+                .await
+                .expect("status")
+                .stale_conversations,
+            0
+        );
+    }
+
     #[tokio::test]
     async fn a_failed_lost_source_stamp_during_schema_rebuild_stays_retryable() {
         use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
@@ -2131,15 +2148,15 @@ mod tests {
         .await
         .expect("seed facts");
 
-        // A schema rebuild selects this otherwise-current row. Fail only the
-        // no-op current-to-current update used to settle the missing source;
-        // the recovery write to the epoch marker must remain available.
+        // A schema rebuild marks this otherwise-current row for re-parse (a
+        // write back to the epoch marker). Fail only the write forward from
+        // there — the settle of its missing source.
         db.conn
             .execute(Statement::from_string(
                 DbBackend::Sqlite,
                 r#"CREATE TRIGGER fail_current_token_usage_stamp
                    BEFORE UPDATE OF source_updated_at ON token_usage_sync
-                   WHEN NEW.source_updated_at = OLD.source_updated_at
+                   WHEN NEW.source_updated_at > OLD.source_updated_at
                    BEGIN
                      SELECT RAISE(ABORT, 'simulated settle failure');
                    END"#
@@ -2162,12 +2179,22 @@ mod tests {
             "a failed settle must survive the advancing schema marker"
         );
 
-        // The trigger allows epoch-to-current, proving the next incremental
-        // pass actually revisits the row and can settle it normally.
-        let second =
-            token_usage_sync_core(&db.conn, &EventEmitter::Noop, TokenUsageSyncMode::Incremental)
-                .await
-                .expect("retry");
+        // With the fault gone, the next incremental pass revisits the row and
+        // settles it normally.
+        db.conn
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "DROP TRIGGER fail_current_token_usage_stamp".to_owned(),
+            ))
+            .await
+            .expect("drop failure trigger");
+        let second = token_usage_sync_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            TokenUsageSyncMode::Incremental,
+        )
+        .await
+        .expect("retry");
         assert_eq!(second.failed, 0);
         assert_eq!(second.lost, 1);
         assert!(!usage_service::list_sync_candidates(&db.conn)

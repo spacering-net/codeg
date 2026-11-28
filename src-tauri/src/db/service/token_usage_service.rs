@@ -503,6 +503,33 @@ pub async fn mark_stale_for_reparse(
     Ok(())
 }
 
+/// Start a rebuild under new fact accounting: every conversation marked for
+/// re-parse (as [`mark_stale_for_reparse`] marks one) and `schema_key` set to
+/// `schema_version`, in one transaction. The rebuild is then the ordinary
+/// stale-only pass, and each conversation leaves the set as its parse lands —
+/// a pass cut short (the app quit halfway) resumes at the rest, not from the
+/// start. Returns how many were marked.
+pub async fn begin_fact_rebuild(
+    conn: &DatabaseConnection,
+    schema_key: &str,
+    schema_version: &str,
+) -> Result<u64, DbError> {
+    use sea_orm::sea_query::Expr;
+    let txn = conn.begin().await?;
+    let marked = token_usage_sync::Entity::update_many()
+        .col_expr(
+            token_usage_sync::Column::SourceUpdatedAt,
+            Expr::value(force_reparse_marker()),
+        )
+        .exec(&txn)
+        .await?
+        .rows_affected;
+    crate::db::service::app_metadata_service::upsert_value(&txn, schema_key, schema_version)
+        .await?;
+    txn.commit().await?;
+    Ok(marked)
+}
+
 /// Accept a transcript that is gone for good: keep the recorded facts, advance
 /// the stamp so no future pass revisits the conversation.
 ///
