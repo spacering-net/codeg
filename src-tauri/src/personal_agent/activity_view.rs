@@ -426,13 +426,58 @@ pub struct ActivityRow {
 /// again, a new question) shows again. A reminder is held to its matter as
 /// it last changed: the same matter is "today"'s `reminder:` row on the day
 /// it came due and the matter's own row once that day is over.
+///
+/// Any other row is held to what it waits on too ([`why_mark`]): a watched
+/// pull request's row moves only when a read finds a change, so one ignored
+/// while its checks ran long would otherwise stay out of sight once it
+/// cannot be read at all. A matter's own marks need it not — what it waits on
+/// changes with the matter — and must not take it: its reminder's row and its
+/// own are one mark.
+///
+/// `@` and `#` part the mark: the thing is all before the last `@`
+/// ([`super::activity_dismiss`] keeps one mark per thing).
 pub fn dismiss_mark(row: &ActivityRow) -> String {
     let at = match (&row.item, &row.today) {
         (Some(i), None) => i.updated_at,
         (Some(i), Some(t)) if t.kind == "reminder" => i.updated_at,
-        _ => moved(row),
+        _ => {
+            let at = moved(row).timestamp_millis();
+            return match row.why.as_ref() {
+                Some(why) => format!("{}@{at}#{}", row.thing, why_mark(why)),
+                None => format!("{}@{at}", row.thing),
+            };
+        }
     };
     format!("{}@{}", row.thing, at.timestamp_millis())
+}
+
+/// What a row waits on, as an ignore mark holds to it: the kind, and what
+/// tells one such wait from another (a read failing on its token vs on the
+/// network, a conflict vs failed checks). Not the hours or days a wait has
+/// run — that grows on its own, and an ignored row would show every hour.
+fn why_mark(why: &RowWhy) -> String {
+    match why {
+        RowWhy::NoReply { peer } => format!("no_reply:{peer}"),
+        RowWhy::Unfinished => "unfinished".into(),
+        RowWhy::NobodyFixing { cause } => format!("nobody_fixing:{cause}"),
+        RowWhy::FixPending => "fix_pending".into(),
+        RowWhy::Fixing => "fixing".into(),
+        RowWhy::PlatformBlocked => "platform_blocked".into(),
+        RowWhy::MergeQueued => "merge_queued".into(),
+        RowWhy::Merging => "merging".into(),
+        RowWhy::CheckPreparing => "check_preparing".into(),
+        RowWhy::CheckSettling => "check_settling".into(),
+        RowWhy::Queued { bot } => format!("queued:{bot}"),
+        RowWhy::Redelivering { bot } => format!("redelivering:{bot}"),
+        RowWhy::InTurn { bot } => format!("in_turn:{bot}"),
+        RowWhy::Looking { bot } => format!("looking:{bot}"),
+        RowWhy::NoTrigger => "no_trigger".into(),
+        RowWhy::Failed => "failed".into(),
+        RowWhy::ReadFailed { error } => format!("read_failed:{error}"),
+        RowWhy::ChecksSlow { .. } => "checks_slow".into(),
+        RowWhy::ReviewPending => "review_pending".into(),
+        RowWhy::ReviewSlow { .. } => "review_slow".into(),
+    }
 }
 
 /// A board task as a row read it.
@@ -2595,5 +2640,54 @@ mod tests {
             ("watch", Some(RowWhy::ReviewPending))
         );
         assert_eq!(at("open", WatchHealth::Fine), ("watch", Some(RowWhy::PlatformBlocked)));
+    }
+
+    /// A watched pull request's row moves only when a read finds a change:
+    /// one ignored while its checks ran long shows again once it cannot be
+    /// read — the same row, waiting on something else — but not because its
+    /// checks have run another hour.
+    #[test]
+    fn an_ignored_pull_request_shows_again_when_it_waits_on_something_else() {
+        let t0 = Utc::now();
+        let view = |health: WatchHealth, dismissed: &[String]| {
+            let mut facts = Facts::default();
+            let mut w = watch_facts(1, "waiting_checks");
+            w.health = health;
+            facts.watches.insert(1, w);
+            let mut row = pr_row(1, "waiting_checks");
+            row.at = t0;
+            let mut inp = inputs(
+                2,
+                false,
+                TodayView {
+                    watching: vec![row],
+                    ..TodayView::default()
+                },
+                vec![],
+            );
+            inp.facts = facts;
+            inp.dismissed = dismissed.iter().cloned().collect();
+            let v = merge(inp);
+            invariants(&v);
+            v
+        };
+        let v = view(WatchHealth::ChecksSlow(5), &[]);
+        let mark = find(&v, "pr:1")
+            .1
+            .dismiss
+            .clone()
+            .expect("waits on the owner");
+        assert!(mark.ends_with("#checks_slow"), "{mark}");
+
+        let ignored = [mark];
+        let v = view(WatchHealth::ChecksSlow(6), &ignored);
+        assert!(v.groups.needs.is_empty(), "another hour is not moving on");
+        let v = view(WatchHealth::ReadFailed("auth".into()), &ignored);
+        let (g, r) = find(&v, "pr:1");
+        assert_eq!(g, "needs");
+        assert!(r
+            .dismiss
+            .as_ref()
+            .is_some_and(|m| m.ends_with("#read_failed:auth")));
     }
 }

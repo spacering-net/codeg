@@ -2,12 +2,14 @@
 //! panel ([`super::activity_view::dismiss_mark`]): each kept as the row
 //! stood when it was ignored, so the same thing moving on shows again.
 //! Every assistant's list reads the one set — a row is the same thing on
-//! the primary's page and on its own assistant's. Kept in `app_metadata`;
-//! a mark long ignored is let go, as its row is long gone by then.
+//! the primary's page and on its own assistant's. Kept in `app_metadata`,
+//! for good: an ignored row is out of sight until it moves on, however long
+//! that takes. One mark per thing — ignoring it again, moved on, takes the
+//! old mark's place — so the set grows only by the things ever ignored.
 
 use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use sea_orm::{ConnectionTrait, DatabaseConnection};
 use tokio::sync::Mutex;
 
@@ -15,11 +17,6 @@ use crate::db::error::DbError;
 use crate::db::service::app_metadata_service;
 
 const KEY: &str = "personal_agent.activity_dismissed";
-
-/// How long a mark is kept after it was ignored.
-const KEEP_DAYS: i64 = 30;
-/// The most marks kept: the latest ignored stay.
-const KEEP_MAX: usize = 500;
 
 /// One write at a time: two ignored at once both kept.
 static WRITE: Mutex<()> = Mutex::const_new(());
@@ -38,27 +35,26 @@ pub async fn load<C: ConnectionTrait>(conn: &C) -> HashSet<String> {
     parse(raw).into_keys().collect()
 }
 
-/// Ignore `mark` from now on; the old marks let go.
+/// Ignore `mark` from now on, in place of any mark of the same thing.
 pub async fn dismiss(conn: &DatabaseConnection, mark: &str) -> Result<(), DbError> {
     let _guard = WRITE.lock().await;
-    let now = Utc::now();
     let mut marks = parse(app_metadata_service::get_value(conn, KEY).await?);
-    marks.insert(mark.to_string(), now);
-    let value = serde_json::to_string(&kept(marks, now)).unwrap_or_default();
+    put(&mut marks, mark, Utc::now());
+    let value = serde_json::to_string(&marks).unwrap_or_default();
     app_metadata_service::upsert_value(conn, KEY, &value).await
 }
 
-/// The marks still kept at `now`: none older than [`KEEP_DAYS`], at most
-/// [`KEEP_MAX`] of the latest.
-fn kept(
-    marks: HashMap<String, DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> HashMap<String, DateTime<Utc>> {
-    let from = now - Duration::days(KEEP_DAYS);
-    let mut fresh: Vec<_> = marks.into_iter().filter(|(_, at)| *at >= from).collect();
-    fresh.sort_by_key(|(_, at)| std::cmp::Reverse(*at));
-    fresh.truncate(KEEP_MAX);
-    fresh.into_iter().collect()
+/// The thing a mark is of: all before its last `@`.
+fn thing_of(mark: &str) -> &str {
+    mark.rsplit_once('@').map_or(mark, |(thing, _)| thing)
+}
+
+/// `mark` in, at `at`, and the same thing's older mark out: once a thing
+/// has moved on, its old mark can never match again.
+fn put(marks: &mut HashMap<String, DateTime<Utc>>, mark: &str, at: DateTime<Utc>) {
+    let thing = thing_of(mark);
+    marks.retain(|kept, _| thing_of(kept) != thing);
+    marks.insert(mark.to_string(), at);
 }
 
 #[cfg(test)]
@@ -66,18 +62,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn old_marks_and_the_overflow_are_let_go() {
-        let now = Utc::now();
+    fn a_thing_keeps_one_mark_however_old() {
+        let long_ago = Utc::now() - chrono::Duration::days(400);
         let mut marks = HashMap::new();
-        marks.insert("old@1".to_string(), now - Duration::days(KEEP_DAYS + 1));
-        for i in 0..KEEP_MAX + 3 {
-            marks.insert(format!("r:{i}@1"), now - Duration::seconds(i as i64));
+        put(&mut marks, "item:1@100", long_ago);
+        put(&mut marks, "pr:7@200#checks_slow", long_ago);
+        for i in 0..600 {
+            put(&mut marks, &format!("dispatch:{i}@1"), Utc::now());
         }
-        let out = kept(marks, now);
-        assert_eq!(out.len(), KEEP_MAX);
-        assert!(!out.contains_key("old@1"));
-        assert!(out.contains_key("r:0@1"));
-        assert!(!out.contains_key(&format!("r:{}@1", KEEP_MAX + 2)));
+        // Nothing let go for its age or for how many there are.
+        assert_eq!(marks.len(), 602);
+        assert!(marks.contains_key("item:1@100"));
+
+        // Ignored again, moved on: the new mark takes the old one's place.
+        put(&mut marks, "pr:7@200#read_failed:auth", Utc::now());
+        assert!(!marks.contains_key("pr:7@200#checks_slow"));
+        assert!(marks.contains_key("pr:7@200#read_failed:auth"));
+        assert_eq!(marks.len(), 602);
+        // A thing whose name has an `@` in it is still one thing.
+        put(&mut marks, "msg:a@b@1", Utc::now());
+        put(&mut marks, "msg:a@b@2", Utc::now());
+        assert!(!marks.contains_key("msg:a@b@1"));
+        assert!(marks.contains_key("msg:a@b@2"));
+    }
+
+    #[tokio::test]
+    async fn an_ignored_mark_is_kept_for_good() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let long_ago = Utc::now() - chrono::Duration::days(400);
+        let stored =
+            serde_json::to_string(&HashMap::from([("item:1@100".to_string(), long_ago)])).unwrap();
+        app_metadata_service::upsert_value(&db.conn, KEY, &stored)
+            .await
+            .unwrap();
+        dismiss(&db.conn, "item:2@5").await.unwrap();
+        let marks = load(&db.conn).await;
+        assert!(marks.contains("item:1@100"), "{marks:?}");
+        assert!(marks.contains("item:2@5"), "{marks:?}");
     }
 
     #[test]
