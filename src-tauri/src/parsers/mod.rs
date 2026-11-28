@@ -583,9 +583,8 @@ fn sanitize_text(text: &mut String) -> bool {
 /// it on unix, and Node's does not. Resolving another account's home here would
 /// mean duplicating that lookup to guess at a directory, so the value is passed
 /// through instead — and because a literal `~user/...` is not an absolute path,
-/// every consumer of this treats it as unresolvable and fails closed (the fs
-/// sandbox refuses the slot; the Antigravity settings sync refuses the write).
-/// The cost is that this rare form is unsupported, not that it resolves wrongly.
+/// the fs sandbox treats it as unresolvable and refuses the slot. The cost is
+/// that this rare form is unsupported, not that it resolves wrongly.
 ///
 /// Deliberately NOT applied everywhere. Antigravity runs `os.path.expanduser`
 /// on `GEMINI_HOME` (`acp_server/paths.py`) and DeepSeek expands `DSH_HOME`
