@@ -257,6 +257,10 @@ pub fn label_of(repo: &DeliveryTarget, kind: &str, number: i64) -> String {
     format!("{}{sigil}{number}", repo.owner_repo)
 }
 
+/// The tail of the card key of an owner's merge again, from the activity,
+/// of a head whose merge card they declined.
+pub(super) const WATCH_MERGE_AGAIN: &str = ":again";
+
 /// What a watch's merge (7.4, phase 3) came to.
 #[derive(Debug, Clone)]
 pub(super) enum WatchMerge {
@@ -977,10 +981,28 @@ impl PersonalAgentEngine {
         head: &str,
         ask: bool,
     ) -> WatchMerge {
+        self.watch_merge_card_keyed(w, head, ask, false).await
+    }
+
+    /// [`Self::watch_merge_card`]; `again`: the owner's own merge from the
+    /// activity of a head whose card they declined — a card of its own, the
+    /// declined one left as it was (the same operation: one per head).
+    pub(super) async fn watch_merge_card_keyed(
+        self: &Arc<Self>,
+        w: &crate::db::entities::personal_agent_watch::Model,
+        head: &str,
+        ask: bool,
+        again: bool,
+    ) -> WatchMerge {
         let Some(repo) = crate::db::service::personal_agent_watch_service::target_of(w) else {
             return WatchMerge::Unread("the watch names no forge codeg knows".into());
         };
-        let subject = format!("watch-merge:{}:{}", w.id, head.to_ascii_lowercase());
+        let subject = format!(
+            "watch-merge:{}:{}{}",
+            w.id,
+            head.to_ascii_lowercase(),
+            if again { WATCH_MERGE_AGAIN } else { "" }
+        );
         if svc::notice_of_subject(&self.db.conn, self.bot().await, NoticeKind::Forge, &subject)
             .await
             .ok()
@@ -1079,6 +1101,9 @@ impl PersonalAgentEngine {
             Ok(id) => id,
             Err(e) => return WatchMerge::Unread(e),
         };
+        // One operation per head, the owner's merge again or not: a
+        // second for the same head (another assistant's card, a press
+        // after the watch changed hands) is the same merge.
         let op_id = format!("pa-watch-merge-{}-{}", w.id, head.to_ascii_lowercase());
         let (state, text) = Box::pin(self.run_forge(&call, LedgerSlot::outside(op_id), id)).await;
         self.tell_forge(id, state, &text).await;
@@ -1116,10 +1141,12 @@ impl PersonalAgentEngine {
             if phase.as_deref() != Some("approve") {
                 continue;
             }
+            // The head it is for (an owner's merge again of one: its head).
             let card_head = n
                 .subject_key
                 .as_deref()
                 .and_then(|k| k.strip_prefix(prefix.as_str()))
+                .map(|k| k.strip_suffix(WATCH_MERGE_AGAIN).unwrap_or(k))
                 .unwrap_or("");
             let why = match detail.state.as_str() {
                 "merged" => "the pull request was merged meanwhile",

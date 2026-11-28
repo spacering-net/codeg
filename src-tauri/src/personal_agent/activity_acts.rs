@@ -245,8 +245,9 @@ impl PersonalAgentEngine {
     /// that did not pass are refused). Once per head: under the watches'
     /// lock, so two presses (or a press and a read of the watch) never put
     /// two cards up; one pressed again reads back the merge its card has.
-    /// Merged, the watch is read at once: its ready card goes as it goes
-    /// for any merge.
+    /// A card the owner declined at this head stays as it was: the press is
+    /// their say now, a merge on a card of its own. Merged, the watch is
+    /// read at once: its ready card goes as it goes for any merge.
     pub(crate) async fn merge_watched_pr(
         self: &Arc<Self>,
         watch_id: i32,
@@ -259,18 +260,35 @@ impl PersonalAgentEngine {
             .map_err(|e| e.to_string())?
             .filter(|w| w.bot_id == bot)
             .ok_or_else(|| Refusal::new(keys::GONE, format!("no watched pull request #{watch_id}")))?;
-        // Asked for at this head already: what its card came to.
+        // Asked for at this head already: what its card came to — the
+        // owner's merge again of it, once there is one.
         let subject = format!("watch-merge:{}:{}", w.id, head.to_ascii_lowercase());
-        if let Some(n) = svc::notice_of_subject(&self.db.conn, bot, NoticeKind::Forge, &subject)
+        let again_subject = format!("{subject}{}", super::forge_acts::WATCH_MERGE_AGAIN);
+        let again_card = svc::notice_of_subject(&self.db.conn, bot, NoticeKind::Forge, &again_subject)
             .await
-            .map_err(|e| e.to_string())?
-        {
+            .map_err(|e| e.to_string())?;
+        let first = match again_card {
+            Some(_) => None,
+            None => svc::notice_of_subject(&self.db.conn, bot, NoticeKind::Forge, &subject)
+                .await
+                .map_err(|e| e.to_string())?,
+        };
+        let phase_of = |n: &notice_entity::Model| {
+            serde_json::from_str::<Value>(&n.payload)
+                .ok()
+                .and_then(|p| p["phase"].as_str().map(str::to_string))
+        };
+        // Declined at this head, and pressed now: the owner's say this time
+        // — a merge of their own, on a card of its own (the declined one
+        // stays as it was).
+        let again = first
+            .as_ref()
+            .is_some_and(|n| n.state == NoticeState::Dismissed && phase_of(n).as_deref() == Some("approve"));
+        if let Some(n) = again_card.or(first).filter(|_| !again) {
             // As the first press read it: waiting for the owner's approval,
             // or a merge on its way — in doubt (its outcome unknown) all the
             // same, its card asking to look again.
-            let phase = serde_json::from_str::<Value>(&n.payload)
-                .ok()
-                .and_then(|p| p["phase"].as_str().map(str::to_string));
+            let phase = phase_of(&n);
             let outcome = match n.state {
                 NoticeState::Acting => "merging",
                 NoticeState::Acted => "merged",
@@ -282,6 +300,15 @@ impl PersonalAgentEngine {
                         "outcome": "failed",
                         "notice_id": n.id,
                         "why": "the merge at this head did not go through: its card says why",
+                    }));
+                }
+                // Let be while in doubt (whether it went through is the
+                // forge's to tell), or its own card declined.
+                NoticeState::Dismissed => {
+                    return Ok(json!({
+                        "outcome": "failed",
+                        "notice_id": n.id,
+                        "why": "the merge at this head was let be or declined: its card says how it stands",
                     }));
                 }
                 _ => "changed",
@@ -296,7 +323,7 @@ impl PersonalAgentEngine {
         if !ready || !same {
             return Ok(json!({ "outcome": "changed" }));
         }
-        let out = match Box::pin(self.watch_merge_card(&w, head, false)).await {
+        let out = match Box::pin(self.watch_merge_card_keyed(&w, head, false, again)).await {
             super::forge_acts::WatchMerge::Merging(id, None) => {
                 let merged = svc::get_notice(&self.db.conn, id)
                     .await
@@ -314,6 +341,28 @@ impl PersonalAgentEngine {
             // Its head moved since.
             super::forge_acts::WatchMerge::Not => json!({ "outcome": "changed" }),
         };
+        // Its card recorded on the watch, as codeg's own merge records it:
+        // the merge read back is told by that card, not by another. Not one
+        // that did not go through (one already sent for this head stopped
+        // it): that is not the card of the merge.
+        let carried = out["outcome"] != "failed";
+        if let Some(id) = out["notice_id"]
+            .as_i64()
+            .and_then(|n| i32::try_from(n).ok())
+            .filter(|_| carried)
+        {
+            let fresh = crate::db::service::personal_agent_watch_service::get(&self.db.conn, w.id)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| w.clone());
+            let mut auto = super::pr_auto::auto_of(&fresh);
+            auto.merge = Some(super::pr_auto::MergeMark {
+                head: head.to_string(),
+                notice_id: id,
+            });
+            self.save_auto(&fresh, &auto).await;
+        }
         drop(guard);
         if out["outcome"] == "merged" {
             if let Err(e) = self.poll_watch(w.id).await {

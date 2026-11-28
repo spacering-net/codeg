@@ -672,7 +672,7 @@ impl PersonalAgentEngine {
     // ── reading the watch's record ──────────────────────────────────────────
 
     /// Write `auto` onto watch `w`, while it still reads as `w` read it.
-    async fn save_auto(&self, w: &watch_entity::Model, auto: &Auto) -> bool {
+    pub(super) async fn save_auto(&self, w: &watch_entity::Model, auto: &Auto) -> bool {
         let text = serde_json::to_string(auto).ok();
         matches!(
             wsvc::update(
@@ -788,12 +788,36 @@ impl PersonalAgentEngine {
         event: PrEvent,
         detail: &ForgeChangeDetail,
     ) -> Hint {
+        let auto = auto_of(w);
+        let head = detail.head_sha.clone().unwrap_or_default();
+        // codeg's own merge — done on its card, by itself or pressed from
+        // the activity — has said so already, whatever the watch is for.
+        if event == PrEvent::Merged {
+            let ours = match auto
+                .merge
+                .as_ref()
+                .filter(|m| m.head.eq_ignore_ascii_case(&head))
+            {
+                Some(m) => svc::get_notice(&self.db.conn, m.notice_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|n| n.state == NoticeState::Acted),
+                None => false,
+            };
+            if ours {
+                return Hint {
+                    no_card: true,
+                    quiet: true,
+                    wake: Some(false),
+                    ..Default::default()
+                };
+            }
+        }
         if !handles(w) {
             return Hint::default();
         }
         let prefs = self.prefs().await;
-        let auto = auto_of(w);
-        let head = detail.head_sha.clone().unwrap_or_default();
         let provider = ForgeProvider::parse(&w.provider).ok();
         match event {
             PrEvent::ChecksFailed | PrEvent::Conflict => {
@@ -832,33 +856,9 @@ impl PersonalAgentEngine {
                 then: Then::Merge { ask: true },
                 ..Default::default()
             },
-            // codeg's own merge — done on its card — has said so already;
-            // one merged otherwise (on the forge, its approval card still
-            // open) is told as ever.
-            PrEvent::Merged => {
-                let ours = match auto
-                    .merge
-                    .as_ref()
-                    .filter(|m| m.head.eq_ignore_ascii_case(&head))
-                {
-                    Some(m) => svc::get_notice(&self.db.conn, m.notice_id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .is_some_and(|n| n.state == NoticeState::Acted),
-                    None => false,
-                };
-                if ours {
-                    Hint {
-                        no_card: true,
-                        quiet: true,
-                        wake: Some(false),
-                        ..Default::default()
-                    }
-                } else {
-                    Hint::default()
-                }
-            }
+            // codeg's own merge said so above; one merged otherwise (on the
+            // forge, its approval card still open) is told as ever.
+            PrEvent::Merged => Hint::default(),
             _ => Hint::default(),
         }
     }

@@ -1698,7 +1698,7 @@ pub struct ForgeChangeDetail {
 }
 
 /// Where a proposed change's review stands (6.6).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReviewGate {
     /// The forge says an approval is needed before it can land (`None`: it
     /// does not say).

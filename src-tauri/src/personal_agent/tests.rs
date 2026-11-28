@@ -15025,7 +15025,28 @@ mod against_a_forge {
             assert_eq!((data["state"].as_str(), data["why"].as_str(), data["head"].as_str()), (Some("open"), Some("confirm"), Some("k1")));
             let row = primary_ref.agent_row().await.unwrap();
             assert!(super::super::live::db_facts(&primary_ref.db, &row).await.needs.iter().any(|x| x.kind == "confirm"));
-            primary_ref.act_on_notice(card_id(&card), "accept").await.unwrap();
+            // Declined, then merged from the activity's row: the press is
+            // the owner's say now — a merge on a card of its own, once; the
+            // declined card stays as it was.
+            primary_ref.act_on_notice(card_id(&card), "dismiss").await.unwrap();
+            assert_eq!(state_ref.lock().unwrap().merges.len(), 1, "declined: not merged");
+            let w = wsvc::get(&primary_ref.db.conn, watch.id).await.unwrap().unwrap();
+            assert_eq!((w.phase.as_deref(), w.head_sha.as_deref()), (Some("mergeable"), Some("k1")));
+            let out = primary_ref.merge_watched_pr(watch.id, "k1").await.unwrap();
+            assert_eq!(out["outcome"], "merged", "{out}");
+            assert_ne!(out["notice_id"].as_i64(), Some(card_id(&card) as i64));
+            assert_eq!(state_ref.lock().unwrap().merges.len(), 2);
+            let declined = svc::get_notice(&primary_ref.db.conn, card_id(&card)).await.unwrap().unwrap();
+            assert_eq!(declined.state, crate::db::entities::personal_agent_notice::NoticeState::Dismissed);
+            // Read back merged: told by its card, no second one.
+            assert!(
+                !pr_cards(primary_ref).await.iter().any(|c| c["event"] == "merged" && c["watch_id"] == watch.id),
+                "the merge's own card tells it"
+            );
+            // Pressed again: what its card came to, not a second merge.
+            let again = primary_ref.merge_watched_pr(watch.id, "k1").await.unwrap();
+            assert_eq!(again["outcome"], "merged", "{again}");
+            assert_eq!(again["notice_id"], out["notice_id"]);
             assert_eq!(state_ref.lock().unwrap().merges.len(), 2);
 
             // An approval card for a head the pull request moved on from no
