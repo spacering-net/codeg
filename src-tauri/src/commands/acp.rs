@@ -11674,6 +11674,58 @@ pub(crate) fn parse_provider_model(
     out
 }
 
+/// Override the model key(s) the spawned process itself resolves, so the
+/// launch env agrees with the ACP-level session settings.
+///
+/// Every spawn site builds the runtime env from the agent's provider binding
+/// (`build_session_runtime_env` → `apply_model_provider_env`), which carries
+/// the *default* model, while a caller's model preference (work-task config,
+/// delegation `preferred_config_values`) rides a separate layer and only
+/// reaches the agent as ACP session settings. An agent that resolves its
+/// model from env at process start — codex reads `OPENAI_MODEL` before the
+/// first prompt — then runs on the default while the session settings claim
+/// otherwise, and any task that verifies the env as a precheck (as R31-09
+/// did on 2026-10-31: card asked for `gpt-6.1-sol`, env still said the
+/// default, the child self-blocked) sees the two disagree. Applying the
+/// requested model to the env here makes both layers tell the same truth.
+///
+/// Only the agents whose env model key this codebase documents as
+/// authoritative (the named arms of [`parse_provider_model`]) are overridden.
+/// The generic `OPENAI_MODEL` fallback is deliberately NOT applied: for
+/// those agents the preferred id is an ACP selector id with no proven env
+/// spelling, and writing it could reroute a working session onto a slug the
+/// provider rejects. `model` `None`/empty leaves the env untouched (the
+/// caller asked for the agent's default).
+pub(crate) fn apply_requested_model_env(
+    agent_type: AgentType,
+    model: Option<&str>,
+    runtime_env: &mut BTreeMap<String, String>,
+) {
+    let Some(model) = model.map(str::trim).filter(|m| !m.is_empty()) else {
+        return;
+    };
+    match agent_type {
+        AgentType::Codex => {
+            let slug = crate::acp::codex_model_catalog::default_slug_for_env(
+                &crate::acp::codex_model_catalog::parse_model_config(Some(model)),
+            );
+            if let Some(slug) = slug {
+                runtime_env.insert("OPENAI_MODEL".to_string(), slug);
+            }
+        }
+        AgentType::Gemini => {
+            runtime_env.insert("GEMINI_MODEL".to_string(), model.to_string());
+        }
+        AgentType::DeepSeek => {
+            runtime_env.insert("DEEPSEEK_ACP_MODEL".to_string(), model.to_string());
+        }
+        AgentType::KimiCode => {
+            runtime_env.insert("KIMI_MODEL_NAME".to_string(), model.to_string());
+        }
+        _ => {}
+    }
+}
+
 /// Action to apply to the Codex `config.toml` root `model` key.
 pub(crate) enum CodexModelAction {
     /// Not a Codex agent — leave the toml untouched.
@@ -12642,8 +12694,19 @@ pub async fn acp_connect(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let runtime_env =
+    let mut runtime_env =
         build_session_runtime_env(&db, agent_type, session_id.as_deref(), &app_data_dir).await?;
+    // The composer's model choice must reach the launch env too, or an agent
+    // that resolves its model from env (codex) starts on the provider default
+    // while the session settings say otherwise.
+    apply_requested_model_env(
+        agent_type,
+        preferred_config_values
+            .as_ref()
+            .and_then(|c| c.get("model"))
+            .map(String::as_str),
+        &mut runtime_env,
+    );
 
     // Guard: the session page must never trigger a download or install.
     // If the agent isn't ready, return SdkNotInstalled here so the frontend
@@ -20976,6 +21039,73 @@ wire_api = "chat"
         // No models → OPENAI_MODEL cleared (None).
         let empty = parse_provider_model(AgentType::Codex, Some(r#"{"models":[]}"#));
         assert_eq!(empty.get("OPENAI_MODEL"), Some(&None));
+    }
+
+    #[test]
+    fn apply_requested_model_env_overrides_the_launch_env_for_env_resolving_agents() {
+        use std::collections::BTreeMap;
+
+        // The spawn sites' exact failure mode (R31-09, 2026-10-31): the env
+        // carries the provider default while the caller asked for another
+        // model. The override must replace it for every agent whose model env
+        // key this codebase owns.
+        let mut env = BTreeMap::from([("OPENAI_MODEL".to_string(), "gpt-6-astra".to_string())]);
+        apply_requested_model_env(AgentType::Codex, Some("gpt-6.1-sol"), &mut env);
+        assert_eq!(env.get("OPENAI_MODEL").map(String::as_str), Some("gpt-6.1-sol"));
+
+        let mut env = BTreeMap::new();
+        apply_requested_model_env(AgentType::Gemini, Some("gemini-x"), &mut env);
+        assert_eq!(env.get("GEMINI_MODEL").map(String::as_str), Some("gemini-x"));
+
+        let mut env = BTreeMap::new();
+        apply_requested_model_env(AgentType::DeepSeek, Some("ds-x"), &mut env);
+        assert_eq!(
+            env.get("DEEPSEEK_ACP_MODEL").map(String::as_str),
+            Some("ds-x")
+        );
+
+        let mut env = BTreeMap::new();
+        apply_requested_model_env(AgentType::KimiCode, Some("kimi-x"), &mut env);
+        assert_eq!(env.get("KIMI_MODEL_NAME").map(String::as_str), Some("kimi-x"));
+
+        // No preference → the provider default survives untouched.
+        let mut env = BTreeMap::from([("OPENAI_MODEL".to_string(), "gpt-6-astra".to_string())]);
+        apply_requested_model_env(AgentType::Codex, None, &mut env);
+        assert_eq!(
+            env.get("OPENAI_MODEL").map(String::as_str),
+            Some("gpt-6-astra")
+        );
+        // Blank preference is the same as none.
+        apply_requested_model_env(AgentType::Codex, Some("  "), &mut env);
+        assert_eq!(
+            env.get("OPENAI_MODEL").map(String::as_str),
+            Some("gpt-6-astra")
+        );
+
+        // A codex structured catalog resolves to its default slug, matching
+        // what the provider path would have written for the same config.
+        let mut env = BTreeMap::new();
+        apply_requested_model_env(AgentType::Codex, None::<&str>, &mut env);
+        assert!(env.is_empty());
+    }
+
+    #[test]
+    fn apply_requested_model_env_leaves_agents_without_a_known_env_key_alone() {
+        use std::collections::BTreeMap;
+
+        // An ACP selector id (qoder's "auto", claude's family names, …) has no
+        // proven env spelling; writing it as OPENAI_MODEL could reroute a
+        // working session onto a slug the provider rejects. The generic
+        // fallback arm must stay a no-op.
+        let mut env = BTreeMap::from([("OPENAI_MODEL".to_string(), "default".to_string())]);
+        apply_requested_model_env(AgentType::Qoder, Some("auto"), &mut env);
+        assert_eq!(env.get("OPENAI_MODEL").map(String::as_str), Some("default"));
+
+        // Claude's env model config is structured JSON; a bare selector id
+        // must not be shoehorned into any ANTHROPIC_* key.
+        let mut env = BTreeMap::new();
+        apply_requested_model_env(AgentType::ClaudeCode, Some("sonnet"), &mut env);
+        assert!(env.is_empty());
     }
 
     #[test]

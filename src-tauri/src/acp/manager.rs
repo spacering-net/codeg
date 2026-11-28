@@ -5715,7 +5715,7 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         // user-initiated session — disabled check, settings overrides,
         // model provider creds, git helper. Without this, delegated
         // subagents would skip the user's configuration entirely.
-        let runtime_env = crate::commands::acp::build_session_runtime_env(
+        let mut runtime_env = crate::commands::acp::build_session_runtime_env(
             &self.db,
             agent_type,
             None,
@@ -5723,6 +5723,14 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         )
         .await
         .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
+        // The requested model must reach the launch env, not just the ACP
+        // session settings, or the process resolves the provider default
+        // instead (codex reads OPENAI_MODEL at process start).
+        crate::commands::acp::apply_requested_model_env(
+            agent_type,
+            preferred_config_values.get("model").map(String::as_str),
+            &mut runtime_env,
+        );
 
         let connection_id = self
             .manager
@@ -5839,7 +5847,7 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         };
         let effective_working_dir = working_dir.or(parent_working_dir);
 
-        let runtime_env = crate::commands::acp::build_session_runtime_env(
+        let mut runtime_env = crate::commands::acp::build_session_runtime_env(
             &self.db,
             agent_type,
             None,
@@ -5847,6 +5855,14 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         )
         .await
         .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
+        // The requested model must reach the launch env, not just the ACP
+        // session settings, or the process resolves the provider default
+        // instead (codex reads OPENAI_MODEL at process start).
+        crate::commands::acp::apply_requested_model_env(
+            agent_type,
+            preferred_config_values.get("model").map(String::as_str),
+            &mut runtime_env,
+        );
 
         // `session_id = Some(..)` is the whole difference vs `spawn`: the
         // connection loads the child's prior agent session (and its context)

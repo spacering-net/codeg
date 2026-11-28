@@ -87,7 +87,7 @@ pub async fn acp_connect(
     let db = &state.db;
     let manager = &state.connection_manager;
 
-    let runtime_env = acp_commands::build_session_runtime_env(
+    let mut runtime_env = acp_commands::build_session_runtime_env(
         db,
         params.agent_type,
         params.session_id.as_deref(),
@@ -95,6 +95,17 @@ pub async fn acp_connect(
     )
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    // Mirror the Tauri `acp_connect`: the requested model belongs in the
+    // launch env as well, not only in the ACP session settings.
+    acp_commands::apply_requested_model_env(
+        params.agent_type,
+        params
+            .preferred_config_values
+            .as_ref()
+            .and_then(|c| c.get("model"))
+            .map(String::as_str),
+        &mut runtime_env,
+    );
 
     // Guard: the session page must never trigger a download or install.
     // If the agent isn't ready, return SdkNotInstalled here so the frontend
