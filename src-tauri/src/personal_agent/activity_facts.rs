@@ -359,79 +359,6 @@ fn health_of(
     }
 }
 
-#[cfg(test)]
-mod health_tests {
-    use super::super::activity_view::WatchHealth;
-    use super::*;
-
-    fn read<'a>(
-        kind: Option<&'a str>,
-        read_hours_ago: Option<i64>,
-        changed_hours_ago: i64,
-        phase: &'a str,
-        review: Option<&'a crate::forge::ReviewGate>,
-        now: DateTime<Utc>,
-    ) -> WatchRead<'a> {
-        WatchRead {
-            error_kind: kind,
-            last_read_at: read_hours_ago.map(|h| now - Duration::hours(h)),
-            last_change_at: Some(now - Duration::hours(changed_hours_ago)),
-            created_at: now - Duration::days(30),
-            phase: Some(phase),
-            review,
-        }
-    }
-
-    /// 6.6's table: each kind of read failure, when it is the owner's.
-    #[test]
-    fn a_watch_not_read_is_the_owners_as_its_kind_says() {
-        let now = Utc::now();
-        let h = |kind: &str, read: Option<i64>| {
-            health_of(read_of(kind, read, now), 2, 1, now)
-        };
-        fn read_of(kind: &str, read: Option<i64>, now: DateTime<Utc>) -> WatchRead<'_> {
-            WatchRead {
-                error_kind: Some(kind),
-                last_read_at: read.map(|h| now - Duration::hours(h)),
-                last_change_at: None,
-                created_at: now - Duration::days(30),
-                phase: Some("open"),
-                review: None,
-            }
-        }
-        for kind in ["auth", "no_account", "config"] {
-            assert_eq!(h(kind, Some(0)), WatchHealth::ReadFailed(kind.into()), "{kind}: at once");
-        }
-        for kind in ["network", "api", "timeout", "rate_limited"] {
-            assert_eq!(h(kind, Some(1)), WatchHealth::Fine, "{kind}: read an hour ago");
-            assert_eq!(h(kind, Some(3)), WatchHealth::ReadFailed(kind.into()), "{kind}: read long ago");
-            assert_eq!(h(kind, None), WatchHealth::ReadFailed(kind.into()), "{kind}: never read");
-        }
-        assert_eq!(h("not_found", Some(100)), WatchHealth::Fine, "gone after a few reads, not told");
-    }
-
-    #[test]
-    fn checks_and_a_review_waited_on_past_their_thresholds_are_the_owners() {
-        let now = Utc::now();
-        assert_eq!(health_of(read(None, Some(0), 1, "waiting_checks", None, now), 2, 1, now), WatchHealth::Fine);
-        assert_eq!(
-            health_of(read(None, Some(0), 5, "waiting_checks", None, now), 2, 1, now),
-            WatchHealth::ChecksSlow(5)
-        );
-        let asked = crate::forge::ReviewGate { requested: vec!["ann".into()], ..Default::default() };
-        assert_eq!(
-            health_of(read(None, Some(0), 5, "open", Some(&asked), now), 2, 1, now),
-            WatchHealth::ReviewPending
-        );
-        assert_eq!(
-            health_of(read(None, Some(0), 50, "open", Some(&asked), now), 2, 1, now),
-            WatchHealth::ReviewSlow(2)
-        );
-        let approved = crate::forge::ReviewGate { approved: true, ..Default::default() };
-        assert_eq!(health_of(read(None, Some(0), 50, "open", Some(&approved), now), 2, 1, now), WatchHealth::Fine);
-    }
-}
-
 /// Where a message stands at its receiver (6.2): queued for its turn, in
 /// it, or its turn over without an answer.
 async fn message_standing(db: &AppDatabase, turns: &mut Turns, m: &SentMessage) -> Standing {
@@ -813,4 +740,77 @@ async fn session_ask(
         });
     }
     AskRead::Settled
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::super::activity_view::WatchHealth;
+    use super::*;
+
+    fn read<'a>(
+        kind: Option<&'a str>,
+        read_hours_ago: Option<i64>,
+        changed_hours_ago: i64,
+        phase: &'a str,
+        review: Option<&'a crate::forge::ReviewGate>,
+        now: DateTime<Utc>,
+    ) -> WatchRead<'a> {
+        WatchRead {
+            error_kind: kind,
+            last_read_at: read_hours_ago.map(|h| now - Duration::hours(h)),
+            last_change_at: Some(now - Duration::hours(changed_hours_ago)),
+            created_at: now - Duration::days(30),
+            phase: Some(phase),
+            review,
+        }
+    }
+
+    /// 6.6's table: each kind of read failure, when it is the owner's.
+    #[test]
+    fn a_watch_not_read_is_the_owners_as_its_kind_says() {
+        let now = Utc::now();
+        let h = |kind: &str, read: Option<i64>| {
+            health_of(read_of(kind, read, now), 2, 1, now)
+        };
+        fn read_of(kind: &str, read: Option<i64>, now: DateTime<Utc>) -> WatchRead<'_> {
+            WatchRead {
+                error_kind: Some(kind),
+                last_read_at: read.map(|h| now - Duration::hours(h)),
+                last_change_at: None,
+                created_at: now - Duration::days(30),
+                phase: Some("open"),
+                review: None,
+            }
+        }
+        for kind in ["auth", "no_account", "config"] {
+            assert_eq!(h(kind, Some(0)), WatchHealth::ReadFailed(kind.into()), "{kind}: at once");
+        }
+        for kind in ["network", "api", "timeout", "rate_limited"] {
+            assert_eq!(h(kind, Some(1)), WatchHealth::Fine, "{kind}: read an hour ago");
+            assert_eq!(h(kind, Some(3)), WatchHealth::ReadFailed(kind.into()), "{kind}: read long ago");
+            assert_eq!(h(kind, None), WatchHealth::ReadFailed(kind.into()), "{kind}: never read");
+        }
+        assert_eq!(h("not_found", Some(100)), WatchHealth::Fine, "gone after a few reads, not told");
+    }
+
+    #[test]
+    fn checks_and_a_review_waited_on_past_their_thresholds_are_the_owners() {
+        let now = Utc::now();
+        assert_eq!(health_of(read(None, Some(0), 1, "waiting_checks", None, now), 2, 1, now), WatchHealth::Fine);
+        assert_eq!(
+            health_of(read(None, Some(0), 5, "waiting_checks", None, now), 2, 1, now),
+            WatchHealth::ChecksSlow(5)
+        );
+        let asked = crate::forge::ReviewGate { requested: vec!["ann".into()], ..Default::default() };
+        assert_eq!(
+            health_of(read(None, Some(0), 5, "open", Some(&asked), now), 2, 1, now),
+            WatchHealth::ReviewPending
+        );
+        assert_eq!(
+            health_of(read(None, Some(0), 50, "open", Some(&asked), now), 2, 1, now),
+            WatchHealth::ReviewSlow(2)
+        );
+        let approved = crate::forge::ReviewGate { approved: true, ..Default::default() };
+        assert_eq!(health_of(read(None, Some(0), 50, "open", Some(&approved), now), 2, 1, now), WatchHealth::Fine);
+    }
 }

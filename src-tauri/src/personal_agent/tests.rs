@@ -17314,8 +17314,26 @@ async fn a_brief_goes_after_the_owners_message_in_a_turn_of_its_own() {
 /// owner's "tonight I can do", not their switch over the assistants'
 /// suggestions. What they say yes to is tonight's work: while it runs the
 /// computer is kept awake, and the next brief says how it went.
-#[tokio::test]
-async fn the_owner_wraps_up_the_day_and_what_they_say_yes_to_tonight_the_brief_reports() {
+#[test]
+fn the_owner_wraps_up_the_day_and_what_they_say_yes_to_tonight_the_brief_reports() {
+    // A thread of its own with room: in a debug build the steps' poll keeps a
+    // slot for every future it starts, more than a Windows test thread's
+    // stack.
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(wrap_up_and_tonight_steps())
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+async fn wrap_up_and_tonight_steps() {
     let (host, w, _tmp) = briefing(owner_here(None)).await;
     let primary = host.primary();
     let worker = host.engine_for(Some(w)).await.unwrap();
