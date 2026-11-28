@@ -276,10 +276,7 @@ impl EngineHost {
 /// page drew it, side by side — open, blinking, glancing left, right, up —
 /// or one picture.
 pub fn tray_png(data_dir: &Path, bot: i32) -> PathBuf {
-    data_dir
-        .join("personal-agent")
-        .join("avatars")
-        .join(format!("{bot}-tray.png"))
+    super::workdir::avatars_dir(data_dir).join(format!("{bot}-tray.png"))
 }
 
 /// One frame, RGBA.

@@ -406,6 +406,80 @@ pub fn default_workdir_of_bot(data_dir: &Path, row: &crate::db::entities::person
     }
 }
 
+/// Where the page's rendered faces are kept: the notification icons and the
+/// menu bar's strips. A cache beside the working directories, never inside
+/// one — a directory has to be empty to be made a working directory
+/// ([`init_workdir_with`]), and a cache written into it first would keep it
+/// from ever being made.
+pub fn avatars_dir(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join("cache")
+        .join("personal-agent")
+        .join("avatars")
+}
+
+/// Whether `name` is one of the pictures the page hands over for an
+/// assistant: `<bot>.png` or `<bot>-tray.png`, or one of them half written
+/// (`.png.tmp`, an interrupted write's leftover).
+fn is_avatar_png(name: &str) -> bool {
+    let name = name.strip_suffix(".tmp").unwrap_or(name);
+    let Some(stem) = name.strip_suffix(".png") else {
+        return false;
+    };
+    let bot = stem.strip_suffix("-tray").unwrap_or(stem);
+    !bot.is_empty() && bot.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Take the face cache an older build wrote into the primary's default
+/// working directory (`<data dir>/personal-agent/avatars`) out to
+/// [`avatars_dir`], so a directory that was never made can still be made.
+/// Only what is this cache — a folder of the page's `<bot>.png` and
+/// `<bot>-tray.png` pictures and nothing else: anything else is the
+/// owner's, and stays where it is. Nothing once the directory is a working
+/// directory: it is the owner's then, whatever it holds.
+pub fn adopt_legacy_avatar_cache(data_dir: &Path) -> Option<PathBuf> {
+    let workdir = default_workdir(data_dir);
+    if is_workdir(&workdir) {
+        return None;
+    }
+    let legacy = workdir.join("avatars");
+    // A real folder only: a link's target is not this cache's to move or
+    // empty.
+    if !std::fs::symlink_metadata(&legacy).ok()?.is_dir() {
+        return None;
+    }
+    for entry in std::fs::read_dir(&legacy).ok()? {
+        let entry = entry.ok()?;
+        if !entry.file_type().ok()?.is_file()
+            || !is_avatar_png(&entry.file_name().to_string_lossy())
+        {
+            return None;
+        }
+    }
+    let target = avatars_dir(data_dir);
+    if let Some(parent) = target.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // None of this cache kept yet: the whole folder goes over, in one step
+    // where it can (not across volumes).
+    if !target.exists() && std::fs::rename(&legacy, &target).is_ok() {
+        return Some(target);
+    }
+    // Kept already, or the folder would not go over whole (another volume,
+    // or no cache folder to be had): picture by picture. The page draws these again on every start, so one that will
+    // not move only has to stop blocking the directory.
+    let _ = std::fs::create_dir_all(&target);
+    for entry in std::fs::read_dir(&legacy).ok()? {
+        let entry = entry.ok()?;
+        let to = target.join(entry.file_name());
+        if to.exists() || std::fs::rename(entry.path(), &to).is_err() {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    std::fs::remove_dir(&legacy).ok()?;
+    Some(target)
+}
+
 /// Every claim of a working directory — an assistant made, its directory
 /// moved, an assistant deleted with its directory — one at a time across
 /// all assistants: what is looked at is what is taken.
@@ -4494,6 +4568,123 @@ mod tests {
         std::fs::write(dir.join(SOUL_FILE), "mine").unwrap();
         assert!(!ensure_initialized(&dir, AppLocale::En).await.unwrap());
         assert_eq!(read_text(&dir, SOUL_FILE), "mine");
+    }
+
+    /// A face cache an older build left in the primary's default directory
+    /// keeps it from ever being made: it is not empty. Out it goes first,
+    /// and then the directory is made as any other.
+    #[tokio::test]
+    async fn the_face_cache_an_older_build_left_moves_out_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path();
+        let dir = default_workdir(data);
+        let legacy = dir.join("avatars");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("3.png"), b"png").unwrap();
+        std::fs::write(legacy.join("3-tray.png"), b"png").unwrap();
+        // Left as it was, the directory cannot be made.
+        assert!(ensure_initialized(&dir, AppLocale::En).await.is_err());
+        assert!(adopt_legacy_avatar_cache(data).is_some());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read(avatars_dir(data).join("3-tray.png")).unwrap(),
+            b"png"
+        );
+        assert!(ensure_initialized(&dir, AppLocale::En).await.unwrap());
+        assert!(is_workdir(&dir));
+    }
+
+    /// Anything beside the pictures is the owner's: nothing moves, and the
+    /// directory stays as it was.
+    #[tokio::test]
+    async fn a_directory_of_more_than_the_cache_is_left_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path();
+        let legacy = default_workdir(data).join("avatars");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("3.png"), b"png").unwrap();
+        std::fs::write(legacy.join("notes.md"), b"mine").unwrap();
+        assert!(adopt_legacy_avatar_cache(data).is_none());
+        assert!(legacy.join("notes.md").exists());
+        assert!(!avatars_dir(data).exists());
+        assert!(ensure_initialized(&default_workdir(data), AppLocale::En)
+            .await
+            .is_err());
+    }
+
+    /// Some of the cache kept already (a newer build ran, then an older
+    /// one): what is new goes over, what is kept stays, and the folder is
+    /// gone — a half-written picture too.
+    #[tokio::test]
+    async fn a_face_cache_kept_already_takes_the_rest_over() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path();
+        let dir = default_workdir(data);
+        let legacy = dir.join("avatars");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("3.png"), b"old").unwrap();
+        std::fs::write(legacy.join("4-tray.png"), b"tray").unwrap();
+        std::fs::write(legacy.join("5.png.tmp"), b"half").unwrap();
+        std::fs::create_dir_all(avatars_dir(data)).unwrap();
+        std::fs::write(avatars_dir(data).join("3.png"), b"new").unwrap();
+        assert!(adopt_legacy_avatar_cache(data).is_some());
+        assert!(!legacy.exists());
+        assert_eq!(
+            std::fs::read(avatars_dir(data).join("3.png")).unwrap(),
+            b"new"
+        );
+        assert_eq!(
+            std::fs::read(avatars_dir(data).join("4-tray.png")).unwrap(),
+            b"tray"
+        );
+        assert!(ensure_initialized(&dir, AppLocale::En).await.unwrap());
+    }
+
+    /// A linked `avatars` is not this cache: what it points at is left
+    /// alone, link and all.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_face_folder_is_left_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("data");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("3.png"), b"mine").unwrap();
+        std::fs::create_dir_all(default_workdir(&data)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, default_workdir(&data).join("avatars")).unwrap();
+        std::fs::create_dir_all(avatars_dir(&data)).unwrap();
+        std::fs::write(avatars_dir(&data).join("3.png"), b"new").unwrap();
+        assert!(adopt_legacy_avatar_cache(&data).is_none());
+        assert_eq!(std::fs::read(elsewhere.join("3.png")).unwrap(), b"mine");
+        assert!(default_workdir(&data).join("avatars").exists());
+    }
+
+    /// No cache folder to be had (a file where it would go): the old
+    /// pictures are dropped all the same, and the directory can be made.
+    #[tokio::test]
+    async fn a_face_cache_with_nowhere_to_go_is_dropped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path();
+        let dir = default_workdir(data);
+        std::fs::create_dir_all(dir.join("avatars")).unwrap();
+        std::fs::write(dir.join("avatars").join("3.png"), b"png").unwrap();
+        std::fs::write(data.join("cache"), b"").unwrap();
+        assert!(adopt_legacy_avatar_cache(data).is_some());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        assert!(ensure_initialized(&dir, AppLocale::En).await.unwrap());
+    }
+
+    /// Once made, the directory is the owner's: what is in it stays.
+    #[test]
+    fn a_workdir_already_made_keeps_its_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path();
+        let dir = default_workdir(data);
+        std::fs::create_dir_all(dir.join("avatars")).unwrap();
+        std::fs::write(dir.join("avatars").join("3.png"), b"png").unwrap();
+        std::fs::write(dir.join(MARKER_FILE), b"{}").unwrap();
+        assert!(adopt_legacy_avatar_cache(data).is_none());
+        assert!(dir.join("avatars").join("3.png").exists());
     }
 
     /// Every file a new working directory starts with, in the owner's

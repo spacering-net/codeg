@@ -9,10 +9,12 @@
  * these" turns the rule off. A card whose thing is gone says so. The weekly
  * review's questions (6.6) are such cards too: show the changes the owner
  * keeps undoing first; hide or delete a work assistant nobody woke for two
- * weeks (the delete goes through the usual confirmation).
+ * weeks (the delete goes through the usual confirmation). A run of one
+ * rule's cards raised together is one card (`RuleGroupCard`): the first
+ * few, each with its own steps, the rest behind [Show all].
  */
 
-import { useState } from "react"
+import { useContext, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   BellRing,
@@ -34,12 +36,12 @@ import { useTabActions } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { personalAgentNoticeAct, type NoticeAction } from "@/lib/api"
 import { openUrl } from "@/lib/platform"
-import type { ProposalRule } from "@/lib/types"
+import type { ProposalRule, TimelineRow } from "@/lib/types"
 import { PROPOSAL_RULES } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 import type { MessageItem } from "./message-items"
-import { MessageRow } from "./message-row"
+import { JumpRowContext, MessageRow } from "./message-row"
 import { BotDeleteDialog } from "./bot-delete-dialog"
 import { MutedNote, MuteKindButton } from "./mute-kind"
 import { useWhen } from "./routine-bits"
@@ -127,15 +129,17 @@ function nameOf(rule: ProposalRule, f: Facts): string {
   }
 }
 
-export function RuleCard({ item }: { item: NoticeItem }) {
+/**
+ * What one rule card's row says and does, wherever it is drawn: on a card
+ * of its own (`RuleCard`), or as one of a run of its rule's cards drawn as
+ * one (`RuleGroupCard`) — each keeps its own steps, its own answer.
+ */
+function useRuleRow(row: TimelineRow) {
   const t = useTranslations("PersonalAgent.rules")
   const botId = useBotId()
-  const { readOnly } = usePageScope()
-  const when = useWhen()
   const openSession = useSessionLinkOpener()
   const { openConversations } = useWorkbenchRoute()
   const { openNewConversationTab } = useTabActions()
-  const row = item.row
   const data = (row.data ?? {}) as Record<string, unknown>
   const noticeId = Number(row.ref_id)
   const [busy, setBusy] = useState<NoticeAction | null>(null)
@@ -143,13 +147,11 @@ export function RuleCard({ item }: { item: NoticeItem }) {
   const [deleting, setDeleting] = useState<number | null>(null)
 
   const rule = asRule(str(data, "rule"))
-  if (!rule) return null
   const facts = (data.facts ?? {}) as Facts
   const state = str(data, "state") ?? "open"
   const open = state === "open"
   const since = str(data, "since")
-  const name = nameOf(rule, facts)
-  const Icon = ICONS[rule] ?? BellRing
+  const name = rule ? nameOf(rule, facts) : ""
   const error = failed ?? (open ? str(data, "error") : null)
 
   /** The owner's words a step hands over, in their language. */
@@ -270,6 +272,145 @@ export function RuleCard({ item }: { item: NoticeItem }) {
       ? "off"
       : "done"
 
+  /** The assistant deleted through the usual confirmation: the card
+   *  settles. */
+  const onDeleted = () => {
+    setBusy("delete")
+    personalAgentNoticeAct(noticeId, "delete", botId)
+      .catch((e) => setFailed(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(null))
+  }
+
+  return {
+    data,
+    noticeId,
+    rule,
+    facts,
+    state,
+    open,
+    since,
+    name,
+    detail,
+    stateNote,
+    stateTone,
+    error,
+    busy,
+    setFailed,
+    deleting,
+    setDeleting,
+    act,
+    onDeleted,
+  }
+}
+
+type RuleRow = ReturnType<typeof useRuleRow>
+
+/** A card's step buttons, the first the main one, and [Not now]. */
+function RuleSteps({ r }: { r: RuleRow }) {
+  const t = useTranslations("PersonalAgent.rules")
+  if (!r.rule) return null
+  const rule = r.rule
+  return (
+    <>
+      {(STEPS[rule] ?? []).map((a, i) => (
+        <Button
+          key={a}
+          size="sm"
+          variant={i === 0 ? "default" : "secondary"}
+          disabled={r.busy != null}
+          onClick={() => void r.act(a)}
+          data-pa-rule-act={a}
+        >
+          {r.busy === a ? <SyncedSpinner small className="size-3.5" /> : null}
+          {t(`step.${rule}.${a}` as "step.failed.retry")}
+        </Button>
+      ))}
+      {rule === "pr_review" && str(r.facts, "url") ? (
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => void openUrl(str(r.facts, "url") ?? "")}
+          data-pa-rule-act="open_pr"
+        >
+          {t("openPr")}
+        </Button>
+      ) : null}
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={r.busy != null}
+        onClick={() => void r.act("dismiss")}
+        data-pa-rule-act="dismiss"
+      >
+        {t("notNow")}
+      </Button>
+    </>
+  )
+}
+
+/** What it is about (and `after` it, what more a card says there), and
+ *  how it stands. */
+function RuleFacts({ r, after }: { r: RuleRow; after?: React.ReactNode }) {
+  const t = useTranslations("PersonalAgent.rules")
+  return (
+    <>
+      {r.name ? (
+        <p className={SHEET_TITLE} data-pa-rule-name>
+          {r.name}
+        </p>
+      ) : null}
+      {after}
+      {r.detail ? (
+        <p
+          className={cn(
+            "line-clamp-3 text-xs leading-5 break-words",
+            r.rule === "failed"
+              ? "text-red-700 dark:text-red-400"
+              : "text-muted-foreground"
+          )}
+        >
+          {r.detail}
+        </p>
+      ) : null}
+      {r.data.lowered === true && r.open ? (
+        <OutcomeLine tone="info" data-pa-rule-lowered>
+          {t("lowered")}
+        </OutcomeLine>
+      ) : null}
+      {r.stateNote ? (
+        <OutcomeLine tone={r.stateTone} data-pa-rule-note>
+          {r.stateNote}
+        </OutcomeLine>
+      ) : null}
+    </>
+  )
+}
+
+/** The confirmation an idle assistant's [Delete…] goes through. */
+function RuleDeleteDialog({ r }: { r: RuleRow }) {
+  if (r.rule !== "idle_bot") return null
+  return (
+    <BotDeleteDialog
+      botId={r.deleting}
+      onOpenChange={(o) => {
+        if (!o) r.setDeleting(null)
+      }}
+      onDeleted={r.onDeleted}
+    />
+  )
+}
+
+export function RuleCard({ item }: { item: NoticeItem }) {
+  const t = useTranslations("PersonalAgent.rules")
+  const { readOnly } = usePageScope()
+  const when = useWhen()
+  const row = item.row
+  const r = useRuleRow(row)
+  const { data, rule, state, open, since, name, detail, stateNote, error } = r
+
+  if (!rule) return null
+  const Icon = ICONS[rule] ?? BellRing
+
   return (
     <MessageRow
       rowId={row.id}
@@ -305,80 +446,17 @@ export function RuleCard({ item }: { item: NoticeItem }) {
         {/* What it is about, and how it stands. */}
         {name || detail || (data.lowered === true && open) || stateNote ? (
           <SheetPart className="flex flex-col gap-1.5">
-            {name ? (
-              <p className={SHEET_TITLE} data-pa-rule-name>
-                {name}
-              </p>
-            ) : null}
-            {detail ? (
-              <p
-                className={cn(
-                  "line-clamp-3 text-xs leading-5 break-words",
-                  rule === "failed"
-                    ? "text-red-700 dark:text-red-400"
-                    : "text-muted-foreground"
-                )}
-              >
-                {detail}
-              </p>
-            ) : null}
-            {data.lowered === true && open ? (
-              <OutcomeLine tone="info" data-pa-rule-lowered>
-                {t("lowered")}
-              </OutcomeLine>
-            ) : null}
-            {stateNote ? (
-              <OutcomeLine tone={stateTone} data-pa-rule-note>
-                {stateNote}
-              </OutcomeLine>
-            ) : null}
+            <RuleFacts r={r} />
           </SheetPart>
         ) : null}
         {open && !readOnly ? (
           <SheetActions>
-            {open ? (
-              <>
-                {(STEPS[rule] ?? []).map((a, i) => (
-                  <Button
-                    key={a}
-                    size="sm"
-                    variant={i === 0 ? "default" : "secondary"}
-                    disabled={busy != null}
-                    onClick={() => void act(a)}
-                    data-pa-rule-act={a}
-                  >
-                    {busy === a ? (
-                      <SyncedSpinner small className="size-3.5" />
-                    ) : null}
-                    {t(`step.${rule}.${a}` as "step.failed.retry")}
-                  </Button>
-                ))}
-                {rule === "pr_review" && str(facts, "url") ? (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => void openUrl(str(facts, "url") ?? "")}
-                    data-pa-rule-act="open_pr"
-                  >
-                    {t("openPr")}
-                  </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy != null}
-                  onClick={() => void act("dismiss")}
-                  data-pa-rule-act="dismiss"
-                >
-                  {t("notNow")}
-                </Button>
-                <MuteKindButton
-                  noticeId={noticeId}
-                  disabled={busy != null}
-                  onFailed={setFailed}
-                />
-              </>
-            ) : null}
+            <RuleSteps r={r} />
+            <MuteKindButton
+              noticeId={r.noticeId}
+              disabled={r.busy != null}
+              onFailed={r.setFailed}
+            />
           </SheetActions>
         ) : null}
         {str(data, "muted") || error ? (
@@ -392,22 +470,195 @@ export function RuleCard({ item }: { item: NoticeItem }) {
           </SheetNote>
         ) : null}
       </CardMessage>
-      {rule === "idle_bot" ? (
-        <BotDeleteDialog
-          botId={deleting}
-          onOpenChange={(o) => {
-            if (!o) setDeleting(null)
-          }}
-          onDeleted={() => {
-            setBusy("delete")
-            personalAgentNoticeAct(noticeId, "delete", botId)
-              .catch((e) =>
-                setFailed(e instanceof Error ? e.message : String(e))
-              )
-              .finally(() => setBusy(null))
-          }}
-        />
-      ) : null}
+      <RuleDeleteDialog r={r} />
     </MessageRow>
+  )
+}
+
+/** How many of a run of one rule's cards drawn as one show before
+ *  [Show all]. */
+export const RULE_GROUP_PREVIEW = 5
+
+/**
+ * A run of one rule's cards raised together (`ruleOfRow` in
+ * message-items), drawn as one card: the first [`RULE_GROUP_PREVIEW`] of
+ * them, each with what it found, since when and its own steps; the rest
+ * behind [Show all], which says how many more there are, and folds back.
+ * "Don't suggest these" is the rule's, so it is once, on the card's last
+ * band, while any of them is open; a mute from one of them the card says,
+ * with the way back. A jump to one folded away unfolds it; a right-click
+ * on one quotes or copies that one.
+ */
+export function RuleGroupCard({ item }: { item: NoticeItem }) {
+  const t = useTranslations("PersonalAgent.rules")
+  const { readOnly } = usePageScope()
+  const rows = item.rules ?? [item.row]
+  // A jump to one folded away unfolds the card, so it lands on it.
+  const jump = useContext(JumpRowContext)
+  const folded = (to: { id: number } | null) =>
+    to != null && rows.slice(RULE_GROUP_PREVIEW).some((r) => r.id === to.id)
+  const [expanded, setExpanded] = useState(() => folded(jump))
+  const [seenJump, setSeenJump] = useState(jump)
+  if (jump !== seenJump) {
+    setSeenJump(jump)
+    if (folded(jump)) setExpanded(true)
+  }
+  const [muteFailed, setMuteFailed] = useState<string | null>(null)
+  const rule = asRule(str(item.row.data, "rule"))
+  if (!rule || rows.length === 0) return null
+  const Icon = ICONS[rule] ?? BellRing
+  const shown = expanded ? rows : rows.slice(0, RULE_GROUP_PREVIEW)
+  const rest = rows.length - RULE_GROUP_PREVIEW
+  const muted = rows.find((r) => str(r.data, "muted"))
+  // "Don't suggest these" while any of them is open — as each card of its
+  // own offers it — whatever an earlier mute (the rule may be on again).
+  const firstOpen = rows.find((r) => str(r.data, "state") === "open")
+  const heading = t(`heading.${rule}` as "heading.failed")
+  const nameOfRow = (r: TimelineRow) =>
+    nameOf(rule, (r.data?.facts ?? {}) as Facts)
+  // Each quoted and copied on its own from its menu; the whole copies
+  // every one.
+  const parts = Object.fromEntries(
+    rows.map((r) => [r.id, [heading, nameOfRow(r)].filter(Boolean).join(" · ")])
+  )
+  const copyText = [
+    `${heading} · ${t("group.count", { count: rows.length })}`,
+    ...rows.map(nameOfRow).filter(Boolean),
+  ].join("\n")
+
+  return (
+    <MessageRow
+      rowId={item.row.id}
+      side="start"
+      gap={item.gap}
+      tail={item.tail}
+      roomy
+      actions={{
+        rowId: item.row.id,
+        text: copyText,
+        at: item.row.created_at,
+        parts,
+      }}
+    >
+      <CardMessage
+        data-pa-rule-card={rule}
+        data-pa-rule-group={rows.length}
+        head={
+          <>
+            <Icon aria-hidden />
+            <span className="font-medium">{heading}</span>
+            <span data-pa-rule-group-count>
+              · {t("group.count", { count: rows.length })}
+            </span>
+          </>
+        }
+      >
+        {shown.map((r) => (
+          <RuleGroupEntry key={r.id} row={r} nested={r.id !== item.row.id} />
+        ))}
+        {rest > 0 || (firstOpen && !readOnly) ? (
+          <SheetActions>
+            {rest > 0 ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  aria-expanded={expanded}
+                  onClick={() => setExpanded((v) => !v)}
+                  data-pa-rule-group-toggle={expanded ? "collapse" : "expand"}
+                >
+                  {expanded ? t("group.collapse") : t("group.expand")}
+                </Button>
+                {!expanded ? (
+                  <span
+                    className="text-xs text-muted-foreground"
+                    data-pa-rule-group-rest
+                  >
+                    {t("group.more", { count: rest })}
+                  </span>
+                ) : null}
+              </>
+            ) : null}
+            {firstOpen && !readOnly ? (
+              <span className="ms-auto">
+                <MuteKindButton
+                  noticeId={Number(firstOpen.ref_id)}
+                  onFailed={setMuteFailed}
+                />
+              </span>
+            ) : null}
+          </SheetActions>
+        ) : null}
+        {muted || muteFailed ? (
+          <SheetNote>
+            <MutedNote data={muted?.data} className="" />
+            {muteFailed ? (
+              <p role="alert" className="break-words text-destructive">
+                {t("failed", { error: muteFailed })}
+              </p>
+            ) : null}
+          </SheetNote>
+        ) : null}
+      </CardMessage>
+    </MessageRow>
+  )
+}
+
+/** One of a run's cards: what it found, since when, how it stands, and
+ *  its own steps while it is open. */
+function RuleGroupEntry({
+  row,
+  nested,
+}: {
+  row: TimelineRow
+  /** Not the card's first: its row id is its own (a jump lands on it). */
+  nested: boolean
+}) {
+  const t = useTranslations("PersonalAgent.rules")
+  const { readOnly } = usePageScope()
+  const when = useWhen()
+  const r = useRuleRow(row)
+  if (!r.rule) return null
+  const mutedHere = r.state === "dismissed" && str(r.data, "muted") != null
+  return (
+    <SheetPart
+      className="flex flex-col gap-1.5"
+      data-row-id={nested ? row.id : undefined}
+      data-pa-part-row={row.id}
+      data-pa-rule-entry={r.state}
+    >
+      <RuleFacts
+        r={r}
+        after={
+          r.since || r.state === "acting" ? (
+            <p
+              className="flex items-center gap-1 text-xs leading-4 text-muted-foreground"
+              data-pa-rule-since
+            >
+              {r.state === "acting" ? (
+                <SyncedSpinner small className="size-3 shrink-0" />
+              ) : null}
+              {r.since ? t("since", { when: when(r.since) }) : null}
+            </p>
+          ) : null
+        }
+      />
+      {mutedHere ? (
+        <OutcomeLine tone="off" data-pa-rule-note>
+          {t("group.mutedEntry")}
+        </OutcomeLine>
+      ) : null}
+      {r.open && !readOnly ? (
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <RuleSteps r={r} />
+        </div>
+      ) : null}
+      {r.error ? (
+        <p role="alert" className="text-xs break-words text-destructive">
+          {t("failed", { error: r.error })}
+        </p>
+      ) : null}
+      <RuleDeleteDialog r={r} />
+    </SheetPart>
   )
 }

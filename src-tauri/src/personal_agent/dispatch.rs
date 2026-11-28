@@ -1821,7 +1821,10 @@ impl PersonalAgentEngine {
         // A stop that came between the check above and the send found an
         // idle connection: the turn the send started is stopped here.
         if self.was_stopped(d.id).await {
-            let _ = self.manager.cancel(&self.db.conn, &conn_id).await;
+            let _ = self
+                .manager
+                .cancel_with_delegated_children(&self.db.conn, &conn_id)
+                .await;
         }
         Ok(())
     }

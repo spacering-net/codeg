@@ -26,11 +26,12 @@ export type InvocationPrefix = "/" | "$"
  * `availableCommands`.
  *
  * - Codex: `$`, its own skill-mention syntax. Its `$` menu is the disk list.
- * - Antigravity: `/`, beside its commands. Its ACP server advertises only its
- *   built-ins (`/plan`, `/logout`, `/usage`) and never a skill, although it
- *   loads every skill in its skill directories and names each one to the
- *   model. A `/<skill>` the user sends reaches the model as written, next to
- *   that list.
+ * - Antigravity: `/`, beside its commands. The retired standalone server
+ *   advertised only its built-ins (`/plan`, `/logout`, `/usage`), never a
+ *   skill. `agy acp` advertises the skills it loads as commands too, so once
+ *   connected each disk skill is dropped as a duplicate of its command, and
+ *   before that (no connection yet) the disk list fills the `/` menu. A
+ *   `/<skill>` the user sends reaches the model as written.
  * - OpenCode: `/`, the same way. OpenCode 1.x turned every skill into a
  *   command, but 2.x keeps skills apart from commands: its ACP server
  *   advertises only its commands (`/init`, `/review`, `/goal`, `/compact`, plus

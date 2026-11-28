@@ -1131,7 +1131,7 @@
       "saveRawConfig": "儲存檔案"
     },
     "antigravity": {
-      "configDescription": "未設定認證方式（存於 auth.type）時工作階段會報「Authentication required」。模型與模式在輸入框選擇。",
+      "configDescription": "Antigravity 的登入由 Antigravity CLI 自行管理。codeg 會直接啟動 `agy acp`，這裡只決定它使用哪種方式認證：Google 帳號沿用 CLI 已快取的登入（本機沒有瀏覽器時請使用下方的免瀏覽器登入），API Key 方式則讀取下方填寫的憑證。模型與工作階段模式不在這裡：Antigravity 會透過 ACP 回報它們，由輸入框的選擇器按工作階段管理。",
       "methodLabel": "認證方式",
       "methods": {
         "oauth-personal": "使用 Google 帳號登入",
@@ -1140,8 +1140,8 @@
         "agent-platform": "Gemini Enterprise Agent Platform"
       },
       "methodHints": {
-        "oauth-personal": "你的 Google 帳號，任意方案（含免費版）。首次工作階段會開啟瀏覽器；沒有瀏覽器？用下面的免瀏覽器登入。",
-        "oauth-business": "Gemini Enterprise 帳號，需填 GCP 專案與區域。首次工作階段會開啟瀏覽器；沒有瀏覽器？用下面的免瀏覽器登入。",
+        "oauth-personal": "你的 Google 帳號，任意 Antigravity 方案（含免費版）皆適用。登入由 Antigravity CLI 快取並重複使用；本機沒有瀏覽器時請使用下方的免瀏覽器登入。",
+        "oauth-business": "你的 Gemini Enterprise 帳號。需要填寫 GCP 專案與區域。Antigravity CLI 會在工作階段啟動時，於執行 codeg 的機器上以瀏覽器完成登入；免瀏覽器登入僅支援個人 Google 帳號。",
         "gemini-api-key": "Gemini Developer API 的金鑰，以 GEMINI_API_KEY 傳給智慧體。",
         "agent-platform": "使用 API Key，或專案和區域搭配應用程式預設憑證。如有需要，執行 gcloud auth application-default login。"
       },
@@ -1153,25 +1153,28 @@
       "missingGeminiApiKey": "請填寫 Gemini API Key，或改用其他認證方式 —— 否則工作階段無法啟動。",
       "missingAgentPlatformConfig": "請填寫 API Key，或同時填寫專案與區域 —— 兩者缺一不可，否則工作階段無法啟動。",
       "missingEnterpriseConfig": "Gemini Enterprise 需要同時填寫專案與區域。",
-      "settingsFileHint": "auth.type 會儲存到這個檔案；你自己寫在裡面的其他鍵會原樣保留。",
-      "syncSkipped": "你的選擇已儲存，但 codeg 無法寫入 ACP 伺服器的 settings.json，所以 Antigravity 仍會依照該檔案的設定進行認證。請自行在檔案中設定 auth.type，或先把檔案移開再儲存一次。",
+      "settingsFileHint": "Antigravity CLI 自己的設定檔（僅供參考，codeg 不會改寫此檔案）。",
       "save": "儲存",
+      "permissionsTitle": "權限",
+      "permissionModeLabel": "權限模式",
+      "permissionModeDefault": "遵循工作階段模式（預設）",
+      "permissionModeTurbo": "Turbo（--dangerously-skip-permissions）",
+      "permissionModeDefaultHint": "以預設參數啟動 `agy acp`，由輸入框的工作階段模式（default / accept-edits / auto / plan）與權限規則控制工具審核。",
+      "permissionModeTurboHint": "以 `agy acp --dangerously-skip-permissions` 啟動工作階段：自動核准所有工具權限請求、不再彈出確認（明確的 deny 規則與系統封鎖清單仍然有效）。對新工作階段生效。",
       "headless": {
         "title": "在沒有瀏覽器的機器上登入",
-        "description": "執行智慧體的機器沒有瀏覽器（如伺服器）？首次工作階段會等 5 分鐘後失敗。改為在任意裝置開啟連結，再把跳轉後的網址貼回來。",
+        "description": "Antigravity CLI 會列印一個 Google 登入連結並等待授權碼。此流程不需本機安裝瀏覽器：將連結拿到任意裝置上開啟並授權，再把授權碼（或跳轉後的完整網址）貼回這裡即可。",
         "start": "取得登入連結",
         "saveFirst": "請先儲存——登入用的是已儲存的設定，而不是上面剛填的內容。",
         "step1": "1. 開啟這個連結並登入 Google 帳號。",
-        "step2": "2. 瀏覽器會跳到 {redirectUri} 並無法連線——這是正常的。把完整網址貼到下面。",
+        "step2": "2. 開啟上方連結並授權。頁面會跳轉至 {redirectUri}，請把授權碼（或該完整網址）貼到下方。",
         "copyLink": "複製連結",
         "openLink": "在新分頁開啟",
         "complete": "完成登入",
         "cancel": "取消",
         "signedIn": "已登入，新的工作階段將使用此帳號。",
-        "alreadySignedIn": "Antigravity 本來就持有有效權杖，無需連結即已登入。",
         "failed": "登入未完成。",
-        "startFailed": "無法開始登入",
-        "credentialHint": "權杖快取於此。將此檔案複製到其他無桌面機器即可讓其登入。"
+        "startFailed": "無法開始登入"
       },
       "signOut": {
         "title": "登入了錯誤的帳號？",
@@ -1743,7 +1746,6 @@
       "qoderSaved": "Qoder 設定已儲存",
       "saveQoderConfigFailed": "儲存 Qoder 設定失敗",
       "antigravitySaved": "Antigravity 設定已儲存",
-      "antigravitySyncSkipped": "已儲存，但未變更 Antigravity 的 settings.json",
       "saveAntigravityConfigFailed": "儲存 Antigravity 設定失敗",
       "kiroSaved": "Kiro 設定已儲存",
       "saveKiroFailed": "儲存 Kiro 設定失敗",
@@ -10564,7 +10566,7 @@
           "standard": "標準",
           "ask_more": "多問我",
           "custom": "自訂",
-          "standardHint": "一切自動，做了都出卡告訴你。",
+          "standardHint": "大多自動，做了出卡片告訴你；合併 PR、關 issue、在 forge 上留言、修看護 PR 的檢查失敗或衝突，都先問你。",
           "ask_moreHint": "續作與重試、中斷後的重試、傳訊息給其他助理、對話裡的變更、會改程式碼的派工，都先出卡片，你點了才做；執行工作階段的提問和計畫審批一律轉給你。",
           "customHint": "下面有幾項是你自己調過的。",
           "confirmTitle": "切換到「{level}」？",
@@ -11912,8 +11914,8 @@
       },
       "workspace": {
         "empty": "目前沒有在跑的工作",
-        "open": "開啟",
-        "emptyHint": "派出去的工作在執行時，這裡即時顯示它的工作階段。",
+        "viewSession": "查看工作階段",
+        "emptyHint": "派出去的工作在執行時，會顯示在這裡。",
         "whose": "{name} 的工作區"
       },
       "notifyOn": "已開啟",
@@ -12887,7 +12889,14 @@
         }
       },
       "undoDetail": "最近兩週按你的話直接做的 {made} 處改動，你撤銷了 {undone} 處。",
-      "idleBotDetail": "已經兩週沒被叫醒了。"
+      "idleBotDetail": "已經兩週沒被叫醒了。",
+      "group": {
+        "count": "{count} 則",
+        "expand": "展開全部",
+        "collapse": "收起",
+        "more": "還有 {count} 則",
+        "mutedEntry": "已關掉，這類也不再提。"
+      }
     },
     "brief": {
       "title": "晨報",

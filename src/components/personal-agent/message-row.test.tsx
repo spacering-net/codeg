@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -433,6 +434,72 @@ describe("the message menu", () => {
       expect(writeText).toHaveBeenCalledWith("The whole reply")
     )
     await waitFor(() => expect(toasts.success).toHaveBeenCalledWith("Copied"))
+  })
+
+  it("quotes and copies the part of its own a right-click was on", async () => {
+    const quote = vi.fn()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    })
+    const { container } = draw(
+      <MessageRow
+        rowId={7}
+        side="start"
+        gap="side"
+        tail={false}
+        actions={{
+          rowId: 7,
+          text: "All of them",
+          at: AT,
+          parts: { 7: "The first", 8: "The second" },
+        }}
+      >
+        <div data-bubble>
+          <p data-pa-part-row={7}>one</p>
+          <p data-pa-part-row={8} data-testid="second">
+            two
+          </p>
+          <p data-testid="foot">foot</p>
+        </div>
+      </MessageRow>,
+      { onQuote: quote }
+    )
+    fireEvent.contextMenu(screen.getByTestId("second"))
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Quote" }))
+    expect(quote).toHaveBeenLastCalledWith(8)
+    fireEvent.contextMenu(screen.getByTestId("second"))
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Copy" }))
+    await waitFor(() =>
+      expect(writeText).toHaveBeenLastCalledWith("The second")
+    )
+    // Off any part: the whole.
+    fireEvent.contextMenu(screen.getByTestId("foot"))
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Quote" }))
+    expect(quote).toHaveBeenLastCalledWith(7)
+    fireEvent.contextMenu(screen.getByTestId("foot"))
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Copy" }))
+    await waitFor(() =>
+      expect(writeText).toHaveBeenLastCalledWith("All of them")
+    )
+    expect(container.querySelector("[data-row-id='7']")).not.toBeNull()
+    // A long press (touch) on one: that one too.
+    vi.useFakeTimers()
+    try {
+      const touch = new MouseEvent("pointerdown", { bubbles: true, button: 0 })
+      Object.defineProperty(touch, "pointerType", { value: "touch" })
+      act(() => {
+        screen.getByTestId("second").dispatchEvent(touch)
+      })
+      act(() => {
+        vi.advanceTimersByTime(800)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Quote" }))
+    expect(quote).toHaveBeenLastCalledWith(8)
   })
 
   it("offers to copy what of the bubble is selected, first", async () => {

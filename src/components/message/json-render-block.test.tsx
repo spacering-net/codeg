@@ -188,6 +188,45 @@ describe("json-render Card in Codeg", () => {
   })
 })
 
+describe("json-render Table in Codeg", () => {
+  it("is as wide as its container in a Stack, so a wide one scrolls rather than spilling out", () => {
+    const { container } = render(
+      <JsonRenderBlock
+        source={[
+          line({ op: "add", path: "/root", value: "main" }),
+          line({
+            op: "add",
+            path: "/elements/main",
+            value: { type: "Stack", props: {}, children: ["table"] },
+          }),
+          line({
+            op: "add",
+            path: "/elements/table",
+            value: {
+              type: "Table",
+              props: {
+                columns: ["Module", "Gap"],
+                rows: [["Overview", "a very long line ".repeat(20)]],
+              },
+            },
+          }),
+        ].join("\n")}
+        fallback={null}
+      />
+    )
+    // json-render's Stack puts its children at the start, each as wide as
+    // what it holds: the table's box must take its container's width for
+    // its cells, which never wrap, to scroll inside it.
+    const stack = container.querySelector("[data-json-render] > div")
+    expect(stack?.classList.contains("items-start")).toBe(true)
+    const box = container.querySelector("[data-json-render-table]")
+    expect(box?.classList.contains("w-full")).toBe(true)
+    expect(box?.classList.contains("overflow-hidden")).toBe(true)
+    expect(box?.querySelector('[data-slot="table"]')).not.toBeNull()
+    expect(screen.getByText("Overview")).toBeInTheDocument()
+  })
+})
+
 describe("json-render fallback", () => {
   it("shows the fence as code when the spec cannot render", () => {
     render(

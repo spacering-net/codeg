@@ -1131,7 +1131,7 @@
       "saveRawConfig": "Datei speichern"
     },
     "antigravity": {
-      "configDescription": "Ohne Authentifizierungsmethode (gespeichert in auth.type) scheitern Sitzungen mit „Authentication required“. Modell und Modus wählst du im Eingabefeld.",
+      "configDescription": "Die Antigravity-CLI verwaltet die Anmeldung selbst. codeg startet `agy acp` direkt; diese Auswahl bestimmt nur die Authentifizierungsmethode: Die Google-Methoden nutzen die zwischengespeicherte Anmeldung der CLI wieder (nutze die browserfreie Anmeldung unten, wenn auf diesem Rechner kein Browser vorhanden ist), und die API-Key-Methoden lesen die hier eingetragenen Zugangsdaten. Modell und Sitzungsmodus sind nicht hier: Antigravity meldet sie über ACP, sodass die eigenen Auswahlfelder des Editors sie pro Sitzung verwalten.",
       "methodLabel": "Authentication method",
       "methods": {
         "oauth-personal": "Sign in with Google",
@@ -1140,8 +1140,8 @@
         "agent-platform": "Gemini Enterprise Agent Platform"
       },
       "methodHints": {
-        "oauth-personal": "Dein Google-Konto, jeder Tarif inkl. kostenlos. Die erste Sitzung öffnet einen Browser – kein Browser? Nutze die browserfreie Anmeldung unten.",
-        "oauth-business": "Gemini-Enterprise-Konto; braucht GCP-Projekt und -Standort. Die erste Sitzung öffnet einen Browser – kein Browser? Nutze die browserfreie Anmeldung unten.",
+        "oauth-personal": "Dein Google-Konto, in jedem Antigravity-Tarif einschließlich der kostenlosen Stufe. Die Antigravity-CLI speichert die Anmeldung zwischen und nutzt sie für agy acp wieder. Kein Browser auf diesem Rechner? Nutze die browserfreie Anmeldung unten.",
+        "oauth-business": "Dein Gemini-Enterprise-Konto. Benötigt ein GCP-Projekt und einen Standort. Die Antigravity-CLI meldet sich beim Start einer Sitzung in einem Browser auf dem Rechner an, auf dem codeg läuft; die browserfreie Anmeldung unterstützt nur persönliche Google-Konten.",
         "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
         "agent-platform": "API-Schlüssel oder Projekt und Standort mit Application Default Credentials verwenden. Bei Bedarf gcloud auth application-default login ausführen."
       },
@@ -1153,25 +1153,28 @@
       "missingGeminiApiKey": "Enter a Gemini API key, or pick a different authentication method — sessions will fail to start without it.",
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
-      "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
-      "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
+      "settingsFileHint": "Eigene Einstellungsdatei der Antigravity-CLI (nur zur Ansicht – codeg überschreibt sie nicht).",
       "save": "Save",
+      "permissionsTitle": "Berechtigungen",
+      "permissionModeLabel": "Berechtigungsmodus",
+      "permissionModeDefault": "Sitzungsmodus folgen (Standard)",
+      "permissionModeTurbo": "Turbo (--dangerously-skip-permissions)",
+      "permissionModeDefaultHint": "Startet `agy acp` regulär, sodass der Sitzungsmodus-Auswähler (default, accept-edits, auto, plan) und deine Berechtigungsregeln Werkzeugfreigaben steuern.",
+      "permissionModeTurboHint": "Startet `agy acp --dangerously-skip-permissions`: genehmigt alle Werkzeugberechtigungsanfragen automatisch ohne Rückfrage (explizite Deny-Regeln und System-Sperrlisten gelten weiterhin). Wirkt ab neuen Sitzungen.",
       "headless": {
         "title": "Ohne Browser auf diesem Rechner anmelden",
-        "description": "Kein Browser, wo der Agent läuft (z. B. Server)? Die erste Sitzung würde 5 Min. warten und fehlschlagen. Öffne stattdessen den Link auf einem beliebigen Gerät und füge die Zieladresse zurück ein.",
+        "description": "Die Antigravity-CLI gibt einen Google-Anmeldelink aus und wartet auf den Autorisierungscode. Das funktioniert ohne Browser auf diesem Rechner: Öffne den Link auf einem beliebigen Gerät, bestätige den Zugriff und füge den Autorisierungscode (oder die vollständige Zieladresse) hier ein.",
         "start": "Anmeldelink holen",
         "saveFirst": "Zuerst speichern – die Anmeldung nutzt die gespeicherten Einstellungen, nicht das oben Eingetippte.",
         "step1": "1. Öffne diesen Link und melde dich bei Google an.",
-        "step2": "2. Der Browser landet auf {redirectUri} ohne Verbindung – so gewollt. Füge die vollständige Adresse hier ein.",
+        "step2": "2. Öffne den Link oben und bestätige den Zugriff. Du landest auf {redirectUri}; füge den Autorisierungscode (oder diese vollständige Adresse) hier ein.",
         "copyLink": "Link kopieren",
         "openLink": "In neuem Tab öffnen",
         "complete": "Anmeldung abschließen",
         "cancel": "Abbrechen",
         "signedIn": "Angemeldet. Neue Sitzungen verwenden dieses Konto.",
-        "alreadySignedIn": "Antigravity hatte bereits ein gültiges Token und hat sich ohne Link angemeldet.",
         "failed": "Die Anmeldung wurde nicht abgeschlossen.",
-        "startFailed": "Anmeldung konnte nicht gestartet werden",
-        "credentialHint": "Token liegt hier. Kopiere die Datei auf andere Rechner ohne Desktop, um sie anzumelden."
+        "startFailed": "Anmeldung konnte nicht gestartet werden"
       },
       "signOut": {
         "title": "Mit dem falschen Konto angemeldet?",
@@ -1743,7 +1746,6 @@
       "qoderSaved": "Qoder-Konfiguration gespeichert",
       "saveQoderConfigFailed": "Qoder-Konfiguration konnte nicht gespeichert werden",
       "antigravitySaved": "Antigravity config saved",
-      "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Kiro-Konfiguration gespeichert",
       "saveKiroFailed": "Kiro-Konfiguration konnte nicht gespeichert werden",
@@ -10564,7 +10566,7 @@
           "standard": "Standard",
           "ask_more": "Frag mich öfter",
           "custom": "Benutzerdefiniert",
-          "standardHint": "Alles läuft von selbst und wird dir auf einer Karte gemeldet.",
+          "standardHint": "Das meiste läuft von selbst und wird dir auf einer Karte gemeldet; PRs mergen, Issues schließen, auf einer Forge kommentieren und fehlgeschlagene Checks oder Konflikte eines beobachteten PRs beheben fragt dich zuerst.",
           "ask_moreHint": "Nachfassen und Wiederholungen, das Wiederholen von Arbeit, die ein Neustart unterbrochen hat, Nachrichten an andere Assistenten, Änderungen, um die du im Gespräch bittest, und Zuweisungen, die Code ändern, kommen erst als Karte zu dir; Fragen und Plan-Freigaben der Sitzungen gehen an dich.",
           "customHint": "Einige der Punkte unten hast du selbst eingestellt.",
           "confirmTitle": "Zu „{level}“ wechseln?",
@@ -11912,8 +11914,8 @@
       },
       "workspace": {
         "empty": "Gerade läuft nichts",
-        "open": "Öffnen",
-        "emptyHint": "Solange delegierte Arbeit läuft, wird ihre Sitzung hier live angezeigt.",
+        "viewSession": "Sitzung ansehen",
+        "emptyHint": "Solange delegierte Arbeit läuft, wird sie hier angezeigt.",
         "whose": "Arbeitsbereich von {name}"
       },
       "notifyOn": "an",
@@ -12887,7 +12889,14 @@
         }
       },
       "undoDetail": "Du hast {undone} der {made} auf dein Wort hin gemachten Änderungen der letzten zwei Wochen rückgängig gemacht.",
-      "idleBotDetail": "Seit zwei Wochen hat ihn niemand geweckt."
+      "idleBotDetail": "Seit zwei Wochen hat ihn niemand geweckt.",
+      "group": {
+        "count": "{count, plural, one {# Karte} other {# Karten}}",
+        "expand": "Alle anzeigen",
+        "collapse": "Weniger anzeigen",
+        "more": "{count, plural, one {# weitere nicht angezeigt} other {# weitere nicht angezeigt}}",
+        "mutedEntry": "Verworfen, und diese Art ist abgeschaltet."
+      }
     },
     "brief": {
       "title": "Morgen-Briefing",

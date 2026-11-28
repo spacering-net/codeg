@@ -110,7 +110,10 @@ import {
   serializeDocToText,
 } from "@/components/chat/composer/to-prompt-blocks"
 import { textToInlineContent } from "@/components/chat/composer/plain-text-content"
-import { isEmbeddedReferenceUri } from "@/components/chat/composer/reference-uri"
+import {
+  isEmbeddedReferenceUri,
+  stripEmbeddedReferences,
+} from "@/components/chat/composer/reference-uri"
 import {
   applyExpertReference,
   blankLineAfter,
@@ -303,29 +306,6 @@ interface MessageInputProps {
 // path (no collision with a genuine attachment) and survives the transcript's
 // sanitize/harden pipeline, so it renders as an inert file badge, not a blocked
 // link — see {@link buildEmbeddedReferenceUri} / {@link isEmbeddedReferenceUri}.
-
-/** Drop embedded-attachment reference badges from a draft document before it is
- *  persisted: their bytes live only in the in-memory `embeddedPayloadsRef` map
- *  (never serialized into the draft), so a restored badge would send nothing.
- *  Identified purely by the unambiguous `codeg://embedded/…` display uri (no map
- *  needed) — a real `file://` attachment is never matched. Stripping at save
- *  keeps the live badge visible this session but matches the pre-existing
- *  behavior where out-of-band pasted bytes don't survive a draft round-trip. */
-function stripEmbeddedReferences(doc: JSONContent): JSONContent {
-  if (!doc.content) return doc
-  const content: JSONContent[] = []
-  for (const child of doc.content) {
-    if (
-      child.type === "reference" &&
-      typeof child.attrs?.uri === "string" &&
-      isEmbeddedReferenceUri(child.attrs.uri)
-    ) {
-      continue
-    }
-    content.push(stripEmbeddedReferences(child))
-  }
-  return { ...doc, content }
-}
 
 /** The notice for a send held while the agent is still responding (see
  *  `handleSend`), under one id: pressing Enter into the hold again updates the

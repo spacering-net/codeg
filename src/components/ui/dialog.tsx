@@ -93,8 +93,12 @@ function attachOverlayScrollbars(node: HTMLElement): (() => void) | null {
   const style = getComputedStyle(node)
   if (!scrolls(style.overflowY)) return null
   const x = scrolls(style.overflowX) ? "scroll" : "hidden"
-  const rail = node.querySelector<HTMLElement>(
-    ':scope > [data-slot="dialog-scrollbar-rail"]'
+  // Its own child, looked for among its children: jsdom's selector engine
+  // cannot read `:scope` on an element whose classes hold a colon.
+  const rail = Array.from(node.children).find(
+    (child): child is HTMLElement =>
+      child instanceof HTMLElement &&
+      child.dataset.slot === "dialog-scrollbar-rail"
   )
   if (!rail || typeof ResizeObserver === "undefined") return null
   const placeRail = () => {
@@ -177,17 +181,30 @@ function DialogContent({
     (contentNode: HTMLDivElement | null) => {
       const detach = setNode(contentNode)
       const release = acquireNativeSurfaceOcclusionFor("dialog", true)
-      const detachScrollbars = contentNode
-        ? attachOverlayScrollbars(contentNode)
-        : null
       return () => {
-        detachScrollbars?.()
         release()
         if (typeof detach === "function") detach()
       }
     },
     [setNode]
   )
+  // The scrollbar, once per content element — not from the ref above. Radix's
+  // `FocusScope` inside the content composes its ref anew on every render, so
+  // React detaches and re-attaches every ref of the content each time the
+  // dialog renders (an open dialog does, with whatever renders above it: the
+  // roster as an assistant works). Built there, the scrollbar was torn down
+  // and set up again on each render; every setup measures the box by
+  // scrolling it to its ends and back and re-focuses the focused field, so
+  // the pointer resting still got a fresh mouse move each time (in WebKit,
+  // hover replayed over and over) and a field being typed into lost its
+  // composition. `node` is state: a detach and re-attach in one commit
+  // leaves it as it was, so this runs again only for a new element — or for
+  // new classes, which may change whether and how the box scrolls (a string,
+  // the same from one render to the next).
+  React.useLayoutEffect(() => {
+    if (!node) return
+    return attachOverlayScrollbars(node) ?? undefined
+  }, [node, className])
   return (
     <DialogPortal>
       <DialogOverlay />

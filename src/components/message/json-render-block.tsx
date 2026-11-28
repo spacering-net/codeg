@@ -102,12 +102,19 @@ function Card({ props, ...rest }: BaseComponentProps<ShadcnProps<"Card">>) {
 /** json-render's table — the same markup, classes and slots — scrolled
  *  sideways in Codeg's ScrollArea: a table wider than its message takes the
  *  thin overlay bar the conversation scrolls with, not the platform's thick
- *  one under its last row. */
+ *  one under its last row. Its box is its container's width (`w-full`, as
+ *  the library's own table container): a `Stack` lines its children up at
+ *  the start, sizing each to what it holds, and a table whose cells never
+ *  wrap would otherwise grow past the card to its widest row rather than
+ *  scroll. */
 function Table({ props }: BaseComponentProps<ShadcnProps<"Table">>) {
   const columns = props.columns ?? []
   const rows = (props.rows ?? []).map((row) => row.map(String))
   return (
-    <div className="overflow-hidden rounded-md border border-border">
+    <div
+      data-json-render-table
+      className="w-full min-w-0 overflow-hidden rounded-md border border-border"
+    >
       <ScrollArea x="scroll" y="hidden">
         <table data-slot="table" className="w-full caption-bottom text-sm">
           {props.caption ? (

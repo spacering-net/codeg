@@ -52,35 +52,9 @@ vi.mock("@/lib/platform", () => ({
   isDesktop: () => false,
 }))
 vi.mock("sonner", () => ({ toast: toasts }))
-vi.mock("@/components/message/live-transcript-view", () => ({
-  LiveTranscriptView: ({
-    conversationId,
-    connectionId,
-  }: {
-    conversationId: number
-    connectionId: string | null
-  }) => (
-    <div
-      data-live-transcript={conversationId}
-      data-connection={connectionId ?? ""}
-    />
-  ),
-}))
-const acp = vi.hoisted(() => ({
-  attachDelegationChild: vi.fn(),
-  detachDelegationChild: vi.fn(),
-}))
-vi.mock("@/contexts/acp-connections-context", () => ({
-  useAcpActions: () => acp,
-}))
 const board = vi.hoisted(() => ({ tasks: [] as unknown[] }))
 vi.mock("@/contexts/tasks-view-context", () => ({
   useTasksView: () => ({ tasks: board.tasks, loading: false }),
-}))
-vi.mock("@/components/tasks/task-transcript-dialog", () => ({
-  TaskTranscriptView: ({ task }: { task: { id: number } }) => (
-    <div data-task-preview={task.id} />
-  ),
 }))
 vi.mock("@/contexts/personal-agent-context", () => ({
   useBotId: () => null,
@@ -1577,7 +1551,7 @@ describe("the output tab", () => {
 })
 
 describe("the workspace tab", () => {
-  it("follows each piece of work live, a task's from the board, and stands aside while the drawer shows one", async () => {
+  it("shows each piece of work as a card only, no live session, and opens its session from the card", async () => {
     usePersonalAgentUi.setState({ auxTab: "workspace" })
     board.tasks = [{ id: 7, conversation_id: 70, status: "running" }]
     api.personalAgentDispatches.mockResolvedValue([
@@ -1594,21 +1568,23 @@ describe("the workspace tab", () => {
     ])
     const { unmount } = draw()
     await screen.findByText("#2 Look at the checkout")
-    // The session's connection attached, hydrated, for the preview.
-    expect(acp.attachDelegationChild).toHaveBeenCalledWith(
-      expect.objectContaining({ connectionId: "c-31", hydrate: true })
-    )
-    expect(
-      document
-        .querySelector("[data-live-transcript='31']")
-        ?.getAttribute("data-connection")
-    ).toBe("c-31")
-    // The task's session, from the board.
-    expect(document.querySelector("[data-task-preview='7']")).toBeTruthy()
-    // The drawer opens one: the previews stand aside, and let go.
-    act(() => usePersonalAgentUi.setState({ workOpen: true }))
+    expect(screen.getByText("#3 Fix the bug")).toBeTruthy()
+    // No live view of either session.
     expect(document.querySelector("[data-pa-workspace-preview]")).toBeNull()
-    expect(acp.detachDelegationChild).toHaveBeenCalledWith("c-31")
+    expect(document.querySelector("[data-live-transcript]")).toBeNull()
+    expect(document.querySelector("[data-task-preview]")).toBeNull()
+    // [View session] opens the work, as the old [Open] did.
+    const item = document.querySelector<HTMLElement>(
+      "[data-pa-workspace-item='2']"
+    )!
+    const view = item.querySelector<HTMLElement>(
+      "[data-pa-workspace-open='2']"
+    )!
+    expect(view.textContent).toBe("View session")
+    fireEvent.click(view)
+    expect(usePersonalAgentUi.getState().work).toMatchObject({
+      dispatchId: 2,
+    })
     unmount()
     board.tasks = []
   })
@@ -1644,8 +1620,7 @@ describe("the workspace tab", () => {
     draw()
     const card = await screen.findByText("#2 Run the build")
     const item = card.closest<HTMLElement>("[data-pa-workspace-item]")!
-    expect(item.querySelector("[data-live-transcript='31']")).toBeTruthy()
-    // Where it stands under its title; the view opens it, as [Open] does.
+    // Where it stands under its title; [View session] opens it.
     expect(item.querySelector("[data-pa-ladder]")).toBeTruthy()
     fireEvent.click(item.querySelector("[data-pa-workspace-open='2']")!)
     expect(usePersonalAgentUi.getState().work).toMatchObject({

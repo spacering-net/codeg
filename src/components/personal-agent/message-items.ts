@@ -29,7 +29,8 @@
  * the newest pill of work under way. Lines that cannot say where (written
  * before lines recorded it) come first. A question or permission request
  * another assistant's brain raised for something that began here (a mirror)
- * is a card of its own.
+ * is a card of its own. A run of one proposal rule's cards raised together
+ * (right after one another, of one look of the rule's) is one card.
  *
  * Pure, so it can be tested on rows alone.
  */
@@ -50,6 +51,11 @@ export { turnMarkOf, type TurnMark } from "./turn-texts"
 const GROUPED_KINDS = new Set(["question", "permission", "dispatch"])
 /** A gap longer than this between two messages gets a time line. */
 export const TIME_GAP_MS = 5 * 60 * 1000
+/** A card written before cards said the look that raised them (`scan`):
+ *  how far after the first of a run of one rule's cards another may come
+ *  and still be of the run (`ruleOfRow`) — one look writes its cards at
+ *  once, and the rules look every minute. */
+export const RULE_RUN_MS = 30 * 1000
 
 /** The room above a message: close under the one before on its side
  *  (whoever spoke it), or after the other side — under the actions the last
@@ -115,8 +121,10 @@ export type MessageItem =
       pills: TimelineRow[]
     })
   /** A native card codeg wrote itself (a proposal): on the assistants'
-   *  side, standing alone. */
-  | (ItemBase & { kind: "notice"; row: TimelineRow })
+   *  side, standing alone. `rules`: a run of one proposal rule's cards
+   *  raised together (`ruleOfRow`), drawn as one card — `row` is the first
+   *  of them; absent on any other card. */
+  | (ItemBase & { kind: "notice"; row: TimelineRow; rules?: TimelineRow[] })
   /** Messages between assistants, in the middle: `row` is the first of
    *  `rows`, a run of lines with nothing between them. */
   | (ItemBase & { kind: "exchange"; row: TimelineRow; rows: TimelineRow[] })
@@ -152,6 +160,35 @@ export interface AcceptanceFold {
   /** Every row folded in — earlier rounds' too: a jump to any lands on
    *  the head. */
   rows: TimelineRow[]
+}
+
+/** The proposal rule a card one of codeg's rules raised is of (6.7);
+ *  `null` for any other row. */
+export function ruleOfRow(row: TimelineRow): string | null {
+  if (row.kind !== "notice" || row.data?.notice !== "rule") return null
+  const rule = row.data.rule
+  return typeof rule === "string" && rule !== "" ? rule : null
+}
+
+/** The rows a notice item draws: a run of rule cards' every one, or its
+ *  own. */
+export function noticeRowsOf(
+  item: Extract<MessageItem, { kind: "notice" }>
+): TimelineRow[] {
+  return item.rules ?? [item.row]
+}
+
+/** Whether rule card `row` is of the same run as `first`, its run's
+ *  first, raised `ms` before it: the same look of the rule's (`scan`), or
+ *  — neither saying one (written before cards did) — within
+ *  `RULE_RUN_MS`. */
+function sameRuleRun(first: TimelineRow, row: TimelineRow, ms: number) {
+  const scanOf = (r: TimelineRow) =>
+    typeof r.data?.scan === "string" ? r.data.scan : null
+  const a = scanOf(first)
+  const b = scanOf(row)
+  if (a != null || b != null) return a === b
+  return ms <= RULE_RUN_MS
 }
 
 function numIn(row: TimelineRow, key: string): number | null {
@@ -260,6 +297,8 @@ function quotableIds(item: MessageItem): number[] {
     case "exchange":
       return item.rows.map((r) => r.id)
     default:
+      // A run of rule cards is the first of them: a quote of another is
+      // shown as one, which of them saying.
       return [item.row.id]
   }
 }
@@ -413,6 +452,28 @@ export function buildMessageItems(
     const before = items[items.length - 1]
     if (item.kind === "exchange" && !timed && before?.kind === "exchange") {
       before.rows.push(...item.rows)
+      prev = { at, item: before }
+      return
+    }
+    // A run of one rule's cards raised together (a scan that found many
+    // at once — the board's backlog on the first look) is one card: right
+    // after one another, no time line between them, of one look of the
+    // rule's (`sameRuleRun`: the next look's are a card of their own).
+    const rule = item.kind === "notice" ? ruleOfRow(item.row) : null
+    if (
+      item.kind === "notice" &&
+      rule != null &&
+      !timed &&
+      before?.kind === "notice" &&
+      ruleOfRow(before.row) === rule &&
+      sameRuleRun(
+        before.row,
+        item.row,
+        at - (Date.parse(before.row.created_at) || at)
+      )
+    ) {
+      before.rules ??= [before.row]
+      before.rules.push(item.row)
       prev = { at, item: before }
       return
     }
@@ -804,6 +865,7 @@ export function itemRowIds(item: MessageItem): number[] {
     ]
   }
   if (item.kind === "exchange") return item.rows.map((r) => r.id)
+  if (item.kind === "notice") return noticeRowsOf(item).map((r) => r.id)
   if (item.kind === "event") {
     return [
       item.row.id,
@@ -866,9 +928,11 @@ export function newLineIndex(
         ? item.anchor.id === rowId || item.row?.id === rowId
         : item.kind === "exchange"
           ? item.rows.some((r) => r.id === rowId)
-          : item.row.id === rowId ||
-            (item.kind === "event" &&
-              (item.acceptance?.rows.some((r) => r.id === rowId) ?? false))
+          : item.kind === "notice"
+            ? noticeRowsOf(item).some((r) => r.id === rowId)
+            : item.row.id === rowId ||
+              (item.kind === "event" &&
+                (item.acceptance?.rows.some((r) => r.id === rowId) ?? false))
   )
   const found = items[i]
   if (found?.kind === "reply" && found.row != null && found.batchId != null) {

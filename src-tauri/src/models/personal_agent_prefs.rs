@@ -395,14 +395,26 @@ pub enum AskFirst {
     Ask,
 }
 
+/// The default of the items that act outside codeg or on a pull request by
+/// themselves (merging, closing, commenting, resolving a conflict): asked
+/// first until the owner says otherwise.
+fn ask_first() -> AskFirst {
+    AskFirst::Ask
+}
+
+fn lenient_ask<'de, D: Deserializer<'de>>(d: D) -> Result<AskFirst, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or(AskFirst::Ask))
+}
+
 /// What codeg does when a watched pull request's checks fail (7.4).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CiFailure {
     /// Its task fixes it: a follow-up, or a new task on the pull request.
-    #[default]
     Fix,
     /// The owner is asked on its card first.
+    #[default]
     Ask,
     /// Only the card.
     Tell,
@@ -928,14 +940,14 @@ pub struct Prefs {
     pub accept_rounds: u32,
     /// A comment an assistant posts on a forge (7.4): posted at once, or
     /// put to the owner on an approval card first.
-    #[serde(default, deserialize_with = "lenient")]
+    #[serde(default = "ask_first", deserialize_with = "lenient_ask")]
     pub forge_comment: AskFirst,
     /// An issue an assistant closes on a forge.
-    #[serde(default, deserialize_with = "lenient")]
+    #[serde(default = "ask_first", deserialize_with = "lenient_ask")]
     pub issue_close: AskFirst,
     /// A pull request an assistant merges: when its head is the version to
     /// merge and its checks are green; CNB always asks.
-    #[serde(default, deserialize_with = "lenient")]
+    #[serde(default = "ask_first", deserialize_with = "lenient_ask")]
     pub pr_merge: AskFirst,
     /// The work a dispatch routine hands out (6.9): handed out at once, or
     /// put to the owner on a confirm card first.
@@ -956,7 +968,7 @@ pub struct Prefs {
     pub ci_failure: CiFailure,
     /// A watched pull request that conflicts with its base: its task brings
     /// it up to date at once, or the owner is asked first.
-    #[serde(default, deserialize_with = "lenient")]
+    #[serde(default = "ask_first", deserialize_with = "lenient_ask")]
     pub pr_conflict: AskFirst,
     /// Review feedback from those who can write to the repository: handed
     /// to the pull request's task at once, or the owner asked first.
@@ -1220,14 +1232,14 @@ impl Default for Prefs {
             flush: OnOff::On,
             accept_revise: AskFirst::default(),
             accept_rounds: DEFAULT_ACCEPT_ROUNDS,
-            forge_comment: AskFirst::default(),
-            issue_close: AskFirst::default(),
-            pr_merge: AskFirst::default(),
+            forge_comment: AskFirst::Ask,
+            issue_close: AskFirst::Ask,
+            pr_merge: AskFirst::Ask,
             routine_dispatch: AskFirst::default(),
             plans: AskFirst::default(),
             tidy: TidyMode::default(),
             ci_failure: CiFailure::default(),
-            pr_conflict: AskFirst::default(),
+            pr_conflict: AskFirst::Ask,
             review_feedback: AskFirst::default(),
             outsider_comments: AskFirst::default(),
             ci_rounds: DEFAULT_CI_ROUNDS,
@@ -1997,14 +2009,14 @@ pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             ("exec_questions", json!("assistant")),
             ("exec_plans", json!("assistant")),
             ("accept_revise", json!("auto")),
-            ("forge_comment", json!("auto")),
-            ("issue_close", json!("auto")),
-            ("pr_merge", json!("auto")),
+            ("forge_comment", json!("ask")),
+            ("issue_close", json!("ask")),
+            ("pr_merge", json!("ask")),
             ("routine_dispatch", json!("auto")),
             ("plans", json!("auto")),
             ("tidy", json!("auto")),
-            ("ci_failure", json!("fix")),
-            ("pr_conflict", json!("auto")),
+            ("ci_failure", json!("ask")),
+            ("pr_conflict", json!("ask")),
             ("review_feedback", json!("auto")),
             ("outsider_comments", json!("auto")),
         ]),
@@ -3034,6 +3046,57 @@ mod tests {
         let more: Prefs = serde_json::from_value(Value::Object(map)).unwrap();
         assert_eq!(more.disturb_level(), "more");
         assert_eq!(more.automation_level(), "standard", "the presets are apart");
+    }
+
+    #[test]
+    fn acting_on_a_forge_and_fixing_pull_requests_ask_first_by_default() {
+        let asks = |p: &Prefs| {
+            assert_eq!(p.pr_merge, AskFirst::Ask);
+            assert_eq!(p.issue_close, AskFirst::Ask);
+            assert_eq!(p.forge_comment, AskFirst::Ask);
+            assert_eq!(p.ci_failure, CiFailure::Ask);
+            assert_eq!(p.pr_conflict, AskFirst::Ask);
+        };
+        asks(&Prefs::default());
+        asks(&Prefs::parse(None));
+        asks(&Prefs::parse(Some(&json!({}))));
+        asks(&Prefs::parse(Some(&json!({
+            "pr_merge": "maybe",
+            "issue_close": 3,
+            "forge_comment": null,
+            "ci_failure": "later",
+            "pr_conflict": ["auto"],
+        }))));
+        let map = Prefs::default().to_map();
+        for k in [
+            "pr_merge",
+            "issue_close",
+            "forge_comment",
+            "ci_failure",
+            "pr_conflict",
+        ] {
+            assert_eq!(map.get(k), Some(&json!("ask")), "{k}");
+        }
+        // What the owner saved stays theirs.
+        let p = Prefs::parse(Some(&json!({
+            "pr_merge": "auto",
+            "issue_close": "auto",
+            "forge_comment": "auto",
+            "ci_failure": "fix",
+            "pr_conflict": "auto",
+        })));
+        assert_eq!(p.pr_merge, AskFirst::Auto);
+        assert_eq!(p.issue_close, AskFirst::Auto);
+        assert_eq!(p.forge_comment, AskFirst::Auto);
+        assert_eq!(p.ci_failure, CiFailure::Fix);
+        assert_eq!(p.pr_conflict, AskFirst::Auto);
+        let p = Prefs::parse(Some(&json!({ "ci_failure": "tell" })));
+        assert_eq!(p.ci_failure, CiFailure::Tell);
+        // The other ask-first items keep theirs.
+        let d = Prefs::default();
+        assert_eq!(d.followups, AskFirst::Auto);
+        assert_eq!(d.review_feedback, AskFirst::Auto);
+        assert_eq!(d.routine_dispatch, AskFirst::Auto);
     }
 
     #[test]

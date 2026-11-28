@@ -70,6 +70,10 @@ export function bubbleCorners(side: "start" | "end", tail: boolean): string {
  */
 export const MessageEnterContext = createContext(false)
 
+/** The row the list's latest jump went to (a new object each jump): a card
+ *  that draws it folded away unfolds, so the jump lands on it. */
+export const JumpRowContext = createContext<{ id: number } | null>(null)
+
 /** The class that makes what came in rise into place, or none. */
 export function useEnterClass(): string | false {
   return useContext(MessageEnterContext) && "motion-message-enter"
@@ -113,6 +117,20 @@ function selectedIn(el: HTMLElement): string {
   return selectionIn(el) ? window.getSelection()!.toString() : ""
 }
 
+/** The part of its own (`MessageActionsSpec.parts`) `target`, inside
+ *  `frame`, is in, if any. */
+function partAt(
+  target: EventTarget | null,
+  frame: HTMLElement,
+  spec: MessageActionsSpec
+): number | null {
+  if (!spec.parts || !(target instanceof Element)) return null
+  const on = target.closest("[data-pa-part-row]")
+  if (!on || !frame.contains(on)) return null
+  const id = Number(on.getAttribute("data-pa-part-row"))
+  return Number.isFinite(id) && id in spec.parts ? id : null
+}
+
 export function MessageRow({
   rowId,
   side,
@@ -154,6 +172,9 @@ export function MessageRow({
   const press = useRef<{ at: number; text: string } | null>(null)
   // The menu opens from our contextmenu handler (rather than a long press).
   const fromEvent = useRef(false)
+  // The part of its own (`actions.parts`) the right-click was on, if any.
+  const [part, setPart] = useState<number | null>(null)
+  const pressPart = useRef<number | null>(null)
   const enter = useEnterClass()
 
   const frame = (
@@ -176,6 +197,13 @@ export function MessageRow({
       onPointerDownCapture={
         actions
           ? (event) => {
+              // Where a press began: the part a long press opens the menu
+              // on (it brings no contextmenu event of ours).
+              pressPart.current = partAt(
+                event.target,
+                event.currentTarget,
+                actions
+              )
               if (event.button === 2 || (event.button === 0 && event.ctrlKey))
                 press.current = {
                   at: performance.now(),
@@ -209,6 +237,7 @@ export function MessageRow({
                   ? (selectionIn(event.currentTarget)?.cloneRange() ?? null)
                   : null
               }
+              setPart(partAt(event.target, event.currentTarget, actions))
               fromEvent.current = true
             }
           : undefined
@@ -250,6 +279,7 @@ export function MessageRow({
             if (open && !fromEvent.current) {
               setSelection("")
               selectedRange.current = null
+              setPart(pressPart.current)
             }
             if (!open) selectedRange.current = null
             fromEvent.current = false
@@ -257,7 +287,11 @@ export function MessageRow({
         >
           <ContextMenuTrigger asChild>{frame}</ContextMenuTrigger>
           <MessageMenu
-            spec={actions}
+            spec={
+              part != null && actions.parts?.[part] != null
+                ? { ...actions, rowId: part, text: actions.parts[part] }
+                : actions
+            }
             selection={selection}
             onFocusInside={() => {
               // WebKit drops the page's selection whenever focus moves to

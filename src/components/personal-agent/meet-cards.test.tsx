@@ -59,7 +59,7 @@ vi.mock("@/contexts/tab-context", () => ({
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { buildMessageItems, type MessageItem } from "./message-items"
-import { leadText } from "./meet-cards"
+import { leadText, promiseOn, PROMISES } from "./meet-cards"
 import { NoticeCard } from "./notice-card"
 import { DEFAULT_PREFS } from "./settings/pref-pages"
 import { PageScopeContext, type PageScope } from "./shared"
@@ -438,7 +438,8 @@ describe("what I'll do on my own", () => {
     )!
     expect(screen.queryByRole("switch")).toBeNull()
     expect(toggle.getAttribute("aria-expanded")).toBe("false")
-    expect(toggle.textContent).toContain("What I do: 8 of 10 on")
+    // Fixing red pull requests asks first by default: not on.
+    expect(toggle.textContent).toContain("What I do: 7 of 10 on")
     expect(toggle.textContent).toContain("Show")
     fireEvent.click(toggle)
     expect(toggle.getAttribute("aria-expanded")).toBe("true")
@@ -497,11 +498,57 @@ describe("what I'll do on my own", () => {
         null
       )
     )
-    fireEvent.click(
-      screen.getByRole("switch", {
-        name: /Fix watched pull requests that go red/,
-      })
+    // Asked first by default: off, and only turning it on fixes by itself.
+    const fix = screen.getByRole("switch", {
+      name: /Fix watched pull requests that go red/,
+    })
+    expect(fix.getAttribute("aria-checked")).toBe("false")
+    fireEvent.click(fix)
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenLastCalledWith(
+        [{ key: "prefs.ci_failure", value: "fix" }],
+        null
+      )
     )
+  })
+
+  it("leaves a fresh account's red pull requests asked first when it is done", async () => {
+    draw(open())
+    unfold()
+    expect(
+      screen
+        .getByRole("switch", { name: /Fix watched pull requests that go red/ })
+        .getAttribute("aria-checked")
+    ).toBe("false")
+    fireEvent.click(screen.getByRole("button", { name: "Done" }))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenLastCalledWith(
+        12,
+        "done",
+        null,
+        undefined
+      )
+    )
+    expect(api.personalAgentSettingsPatch).not.toHaveBeenCalled()
+  })
+
+  it("reads fixing red pull requests as on only when they are fixed by themselves", async () => {
+    for (const [value, on] of [
+      ["fix", true],
+      ["ask", false],
+      ["tell", false],
+    ] as const) {
+      const ci = PROMISES.find((p) => p.key === "ci_failure")!
+      expect(promiseOn(ci, value), value).toBe(on)
+    }
+    ctx.account = account({ prefs: { ...DEFAULT_PREFS, ci_failure: "fix" } })
+    draw(open())
+    unfold()
+    const fix = screen.getByRole("switch", {
+      name: /Fix watched pull requests that go red/,
+    })
+    expect(fix.getAttribute("aria-checked")).toBe("true")
+    fireEvent.click(fix)
     await waitFor(() =>
       expect(api.personalAgentSettingsPatch).toHaveBeenLastCalledWith(
         [{ key: "prefs.ci_failure", value: "tell" }],

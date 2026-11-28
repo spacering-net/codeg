@@ -516,7 +516,13 @@ impl PersonalAgentEngine {
             (DispatchMode::Task, _, _) => {}
             _ => {
                 if let Some(conn) = d.connection_id.as_deref() {
-                    let _ = self.manager.cancel(&self.db.conn, conn).await;
+                    // Stopping only the turn would leave its delegated
+                    // sub-agents running (an interrupt is not a stop); this
+                    // stop is.
+                    let _ = self
+                        .manager
+                        .cancel_with_delegated_children(&self.db.conn, conn)
+                        .await;
                 }
             }
         }

@@ -721,7 +721,7 @@ impl EngineHost {
                     }
                 }
             }
-            if let Err(e) = engine.raise_rule_card(&f, &look.prefs, lowered).await {
+            if let Err(e) = engine.raise_rule_card(&f, &look.prefs, lowered, look.now).await {
                 tracing::warn!("[personal-agent] rule {rule}: no card for {}: {e}", f.object);
             }
         }
@@ -1421,12 +1421,15 @@ fn data_of_row(raw: Option<&str>) -> Value {
 
 impl PersonalAgentEngine {
     /// Put what a rule found in front of the owner: the card, its news,
-    /// and a line for the assistant.
+    /// and a line for the assistant. `scan`: the look that found it — the
+    /// cards one look raised carry the same, and the timeline draws a run
+    /// of one rule's of one look as one card.
     pub(super) async fn raise_rule_card(
         &self,
         f: &Found,
         prefs: &Prefs,
         lowered: bool,
+        scan: DateTime<Utc>,
     ) -> Result<i32, String> {
         let bot = self.bot().await;
         let kind = news_kind(f.rule, lowered);
@@ -1441,6 +1444,7 @@ impl PersonalAgentEngine {
             "since": f.since,
             "lowered": lowered,
             "facts": f.facts,
+            "scan": scan.to_rfc3339(),
         }));
         let (notice, card) = svc::create_notice_with_row(
             &self.db.conn,

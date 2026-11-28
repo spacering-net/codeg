@@ -1386,3 +1386,134 @@ describe("partEntries", () => {
     ).toEqual(["text"])
   })
 })
+
+describe("a run of one rule's cards raised together", () => {
+  const AT = "2026-11-27T08:00:00Z"
+  const rule = (id: number, which = "review", at = AT) =>
+    row(id, "notice", {
+      created_at: at,
+      ref_id: String(100 + id),
+      data: {
+        notice: "rule",
+        rule: which,
+        state: "open",
+        object: `task:${id}`,
+        facts: { title: `Task ${id}` },
+      },
+    })
+  const notices = (items: MessageItem[]) =>
+    items.filter(
+      (i): i is Extract<MessageItem, { kind: "notice" }> => i.kind === "notice"
+    )
+
+  it("is one card holding every one of them, the first its row", () => {
+    const rows = Array.from({ length: 41 }, (_, i) => rule(i + 2))
+    const items = buildMessageItems(rows)
+    expect(shape(items)).toEqual(["time", "notice:2"])
+    const [card] = notices(items)
+    expect(card.rules?.map((r) => r.id)).toEqual(rows.map((r) => r.id))
+    // A jump to any of them, and the new-messages line, find the card.
+    expect(itemRowIds(card)).toEqual(rows.map((r) => r.id))
+    expect(newLineIndex(items, 30)).toBe(0)
+    expect(drawnRowIds(items).has(42)).toBe(true)
+  })
+
+  it("the next scan's (a minute on) are a card of their own", () => {
+    const items = buildMessageItems([
+      rule(2),
+      rule(3, "review", "2026-11-27T08:00:20Z"),
+      rule(4, "review", "2026-11-27T08:01:00Z"),
+      rule(5, "review", "2026-11-27T08:01:01Z"),
+    ])
+    expect(shape(items)).toEqual(["time", "notice:2", "notice:4"])
+    expect(notices(items).map((c) => c.rules?.map((r) => r.id))).toEqual([
+      [2, 3],
+      [4, 5],
+    ])
+    expect(itemRowIds(notices(items)[1])).toEqual([4, 5])
+  })
+
+  it("cards that say their look: a run is one look's, however far apart", () => {
+    const at = (id: number, t: string, scan?: string) => {
+      const r = rule(id, "idle", t)
+      if (scan) r.data = { ...r.data, scan }
+      return r
+    }
+    const items = buildMessageItems([
+      // A slow look writes its last 45 s on; the next one's comes right
+      // after.
+      at(2, "2026-11-27T08:00:00Z", "2026-11-27T08:00:00Z"),
+      at(3, "2026-11-27T08:00:45Z", "2026-11-27T08:00:00Z"),
+      at(4, "2026-11-27T08:01:00Z", "2026-11-27T08:01:00Z"),
+      at(5, "2026-11-27T08:01:01Z", "2026-11-27T08:01:00Z"),
+      // One saying none, after one saying its look: a card of its own.
+      at(6, "2026-11-27T08:01:02Z"),
+    ])
+    expect(notices(items).map((c) => c.rules?.map((r) => r.id))).toEqual([
+      [2, 3],
+      [4, 5],
+      undefined,
+    ])
+  })
+
+  it("a reply quoting one of them but the first shows its quote", () => {
+    const items = buildMessageItems([
+      rule(2),
+      rule(3),
+      row(4, "reply", { created_at: AT, reply_to: 3 }),
+    ])
+    const replies = items.filter(
+      (i): i is Extract<MessageItem, { kind: "reply" }> => i.kind === "reply"
+    )
+    expect(replies[0].quotesPrevious).toBe(false)
+  })
+
+  it("a card on its own stays one, with no run", () => {
+    const [card] = notices(buildMessageItems([rule(2)]))
+    expect(card.rules).toBeUndefined()
+    expect(notices(buildMessageItems([]))).toEqual([])
+  })
+
+  it("only the same rule's, right after one another, with no time line between", () => {
+    const items = buildMessageItems([
+      rule(2),
+      rule(3),
+      rule(4, "failed"),
+      rule(5),
+      row(6, "owner", { created_at: AT }),
+      rule(7),
+      rule(8, "review", "2026-11-27T09:00:00Z"),
+      row(9, "notice", {
+        created_at: "2026-11-27T09:00:00Z",
+        data: { notice: "proposal" },
+      }),
+      row(10, "notice", {
+        created_at: "2026-11-27T09:00:00Z",
+        data: { notice: "proposal" },
+      }),
+    ])
+    expect(shape(items)).toEqual([
+      "time",
+      "notice:2",
+      "notice:4",
+      "notice:5",
+      "owner:6",
+      "notice:7",
+      "time",
+      "notice:8",
+      "notice:9",
+      "notice:10",
+    ])
+    const cards = notices(items)
+    expect(cards.map((c) => c.rules?.map((r) => r.id) ?? null)).toEqual([
+      [2, 3],
+      null,
+      null,
+      null,
+      null,
+      // Other cards never run together.
+      null,
+      null,
+    ])
+  })
+})
