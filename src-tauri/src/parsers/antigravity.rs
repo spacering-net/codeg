@@ -435,8 +435,8 @@ struct ModelUsageStats {
 }
 
 /// `exa.codeium_common_pb.ModelInfo` — only the two human-readable names.
-/// `generator_model` next to it is an ENUM, not a string, so it is useless as a
-/// display model and deliberately not decoded.
+/// Only the standalone server wrote it into step metadata; `agy acp` leaves it
+/// out and names the model in `gen_metadata` instead (see [`GenMetadata`]).
 #[derive(Clone, PartialEq, ::prost::Message)]
 struct ModelInfo {
     #[prost(string, tag = "8")]
@@ -456,8 +456,37 @@ struct StepMetadata {
     completed_at: Option<Timestamp>,
     #[prost(message, optional, tag = "9")]
     model_usage: Option<ModelUsageStats>,
+    /// `generator_model` — the model ENUM the step was generated with. Not a
+    /// display name, but the key that finds one in [`GenMetadata`].
+    #[prost(int32, tag = "11")]
+    generator_model: i32,
+    /// The execution (one per prompt) the step belongs to — the
+    /// `gen_metadata` rows carry the same id.
+    #[prost(string, tag = "12")]
+    execution_id: String,
     #[prost(message, optional, tag = "24")]
     model_info: Option<ModelInfo>,
+}
+
+/// One `gen_metadata.data` row: what a model call was sent with. Only the
+/// model is read — `agy acp` writes no `model_info` into step metadata, so
+/// this is where its sessions name the model (`request.model_name`, e.g.
+/// `gemini-3.8-flash-low`, the same spelling the old `model_info` used).
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct GenMetadata {
+    #[prost(message, optional, tag = "3")]
+    request: Option<GenRequest>,
+    #[prost(string, tag = "4")]
+    execution_id: String,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct GenRequest {
+    /// The model enum — the same value as the step's `generator_model`.
+    #[prost(int32, tag = "1")]
+    model: i32,
+    #[prost(string, tag = "28")]
+    model_name: String,
 }
 
 /// `exa.codeium_common_pb.TextOrScopeItem` — one chunk of a structured prompt.
@@ -951,11 +980,11 @@ pub(crate) fn newest_round_failure(
         return None;
     }
     let fallback = default_trajectory_dir();
-    let (steps, _) = read_trajectory(&session_db_path(
-        sessions_dir,
-        fallback.as_deref(),
-        session_id,
-    ));
+    // Steps only: the failure needs no model, so skip `gen_metadata`.
+    let db_path = session_db_path(sessions_dir, fallback.as_deref(), session_id);
+    let (steps, _) = open_trajectory(&db_path)
+        .map(|conn| read_steps(&conn, &db_path))
+        .unwrap_or_default();
     let prompt = steps.iter().rposition(|step| step.user_input.is_some())?;
     let prompted_at = steps[prompt]
         .metadata
@@ -1242,6 +1271,99 @@ fn read_trajectory(db_path: &Path) -> (Vec<Step>, Option<u64>) {
     let Some(conn) = open_trajectory(db_path) else {
         return (Vec::new(), None);
     };
+    let (mut steps, watermark) = read_steps(&conn, db_path);
+    backfill_step_models(&mut steps, &read_gen_models(&conn));
+    (steps, watermark)
+}
+
+/// Model names from `gen_metadata`. Several keys because neither half is
+/// unique alone: one execution (prompt) can call more than one model, and an
+/// enum can be a placeholder that names a different model after a switch.
+/// Later rows win, so a key reused across a switch reads as the newer model.
+#[derive(Default)]
+struct GenModels {
+    by_call: HashMap<(String, i32), String>,
+    by_execution: HashMap<String, String>,
+    by_enum: HashMap<i32, String>,
+}
+
+/// Read every `gen_metadata` row that names its model. A missing table (the
+/// standalone server's older stores) or an undecodable row just yields fewer
+/// entries — the model is display data, never a reason to drop the session.
+fn read_gen_models(conn: &Connection) -> GenModels {
+    let mut models = GenModels::default();
+    let Ok(mut stmt) = conn.prepare("SELECT data FROM gen_metadata ORDER BY idx") else {
+        return models;
+    };
+    let Ok(rows) = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0)) else {
+        return models;
+    };
+    for data in rows.flatten() {
+        let Ok(gen) = GenMetadata::decode(data.as_slice()) else {
+            continue;
+        };
+        let Some(request) = gen.request else {
+            continue;
+        };
+        let name = request.model_name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        if request.model != 0 {
+            models.by_enum.insert(request.model, name.to_string());
+        }
+        if !gen.execution_id.is_empty() {
+            if request.model != 0 {
+                models
+                    .by_call
+                    .insert((gen.execution_id.clone(), request.model), name.to_string());
+            }
+            models
+                .by_execution
+                .insert(gen.execution_id, name.to_string());
+        }
+    }
+    models
+}
+
+/// Give each generated step that carries no `model_info` (every `agy acp`
+/// step) the name `gen_metadata` recorded for it — by its execution and model
+/// enum together, then by either alone. Only steps with a `generator_model` qualify, which
+/// is exactly the set the standalone server stamped `model_info` on.
+fn backfill_step_models(steps: &mut [Step], models: &GenModels) {
+    if models.by_enum.is_empty() && models.by_execution.is_empty() {
+        return;
+    }
+    let lookup = |execution: &str, model: i32| {
+        models
+            .by_call
+            .get(&(execution.to_string(), model))
+            .or_else(|| models.by_execution.get(execution))
+            .or_else(|| models.by_enum.get(&model))
+    };
+    for step in steps {
+        let Some(metadata) = step.metadata.as_mut() else {
+            continue;
+        };
+        if metadata.generator_model == 0
+            || metadata
+                .model_info
+                .as_ref()
+                .and_then(display_model_name)
+                .is_some()
+        {
+            continue;
+        }
+        if let Some(name) = lookup(&metadata.execution_id, metadata.generator_model) {
+            metadata.model_info = Some(ModelInfo {
+                model_name: name.clone(),
+                display_name: String::new(),
+            });
+        }
+    }
+}
+
+fn read_steps(conn: &Connection, db_path: &Path) -> (Vec<Step>, Option<u64>) {
     let Ok(mut stmt) = conn.prepare("SELECT idx, step_payload FROM steps ORDER BY idx") else {
         return (Vec::new(), None);
     };
@@ -2770,6 +2892,96 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    /// `agy acp` stamps no `model_info` on its steps; the model is named only
+    /// in `gen_metadata`, joined through the step's execution id and model
+    /// enum. Shape measured on agy 1.5.18 / 1.5.19 trajectories. The two
+    /// prompts share one (placeholder) enum across a model switch, so each
+    /// reply must take its own execution's model, not the latest one.
+    #[test]
+    fn agy_replies_take_their_model_from_gen_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let generated = |at: i64, text: &str, execution: &str| {
+            let mut step = reply_step(at, text);
+            let metadata = step.metadata.as_mut().unwrap();
+            metadata.generator_model = 1320;
+            metadata.execution_id = execution.into();
+            step
+        };
+        write_steps(
+            dir.path(),
+            "s-agy-model",
+            &[
+                prompt_step(1_700_000_000, "hi"),
+                generated(1_700_000_002, "hello", "exec-1"),
+                prompt_step(1_700_000_010, "again"),
+                generated(1_700_000_012, "hello again", "exec-2"),
+            ],
+        );
+        let conn = Connection::open(dir.path().join("s-agy-model.db")).unwrap();
+        conn.execute(
+            "CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER NOT NULL DEFAULT 0)",
+            [],
+        )
+        .unwrap();
+        let rows = [
+            // A title/summary call: no request, so it names no model.
+            GenMetadata {
+                request: None,
+                execution_id: "exec-1".into(),
+            },
+            GenMetadata {
+                request: Some(GenRequest {
+                    model: 1320,
+                    model_name: "gemini-3.8-flash-low".into(),
+                }),
+                execution_id: "exec-1".into(),
+            },
+            GenMetadata {
+                request: Some(GenRequest {
+                    model: 1320,
+                    model_name: "gemini-3.1-pro-low".into(),
+                }),
+                execution_id: "exec-2".into(),
+            },
+        ];
+        for (idx, row) in rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO gen_metadata (idx, data) VALUES (?1, ?2)",
+                rusqlite::params![idx as i64, row.encode_to_vec()],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let parser = AntigravityParser::with_base_dir(dir.path().to_path_buf());
+        let detail = parser.get_conversation("s-agy-model").unwrap();
+        let models: Vec<_> = detail
+            .turns
+            .iter()
+            .filter(|turn| matches!(turn.role, TurnRole::Assistant))
+            .map(|turn| turn.model.as_deref())
+            .collect();
+        assert_eq!(
+            models,
+            vec![Some("gemini-3.8-flash-low"), Some("gemini-3.1-pro-low")]
+        );
+        assert_eq!(detail.summary.model.as_deref(), Some("gemini-3.1-pro-low"));
+
+        // A store with no `gen_metadata` table (older standalone-server
+        // files) still parses, just without a model.
+        write_steps(
+            dir.path(),
+            "s-no-gen",
+            &[
+                prompt_step(1_700_000_000, "hi"),
+                generated(1_700_000_002, "hello", "exec-1"),
+            ],
+        );
+        let detail = parser.get_conversation("s-no-gen").unwrap();
+        assert_eq!(detail.turns.len(), 2);
+        assert!(detail.turns.iter().all(|turn| turn.model.is_none()));
     }
 
     // A turn the executor died in before the model said anything (the 403
