@@ -6566,6 +6566,10 @@ export interface ConnectionInfo {
   id: string
   agent_type: AgentType
   status: ConnectionStatus
+  /** 连接绑定的会话 id；草稿或游离连接为 null。 */
+  conversation_id?: number | null
+  /** 是否仍有未结束的后台工作（回合以 end_turn 收尾但后台还在跑）。 */
+  background_running?: boolean
 }
 
 // Live connection bound to a conversation, returned by

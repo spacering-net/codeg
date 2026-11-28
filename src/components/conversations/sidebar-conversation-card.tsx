@@ -29,6 +29,7 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
+import { useBackgroundConversationRunning } from "@/hooks/use-background-conversation-running"
 import { useTabStore } from "@/contexts/tab-context"
 import { emitAttachSessionToSession } from "@/lib/session-attachment-events"
 import type { DbConversationSummary, ConversationStatus } from "@/lib/types"
@@ -408,7 +409,13 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   // "running" is true but useless there, while "waiting for you" is the one
   // thing the user has to act on. Everything else keeps its old precedence.
   const isAwaiting = awaiting != null
-  const isRunning = status === "in_progress" && !isAwaiting
+  // 回合以 end_turn 收尾后状态会落到待复查，但后台任务还挂在后端连接上；
+  // 连接清单说它还在跑，就继续显示运行中，而不是当成已经停下。
+  const backgroundRunning = useBackgroundConversationRunning(conversation.id)
+  const isRunning =
+    (status === "in_progress" ||
+      (status === "pending_review" && backgroundRunning)) &&
+    !isAwaiting
   const isCancelled = status === "cancelled" && !isAwaiting
   const isPinned = conversation.pinned_at != null
   const isCompleted = status === "completed"
