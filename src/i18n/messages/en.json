@@ -3895,6 +3895,7 @@
         "errorUnsupportedLinkProtocol": "This link protocol is not supported."
       },
       "fileActions": {
+        "openWithDefaultApp": "Open with default app",
         "openInFinder": "Open in Finder",
         "openInExplorer": "Open in Explorer",
         "openInFileManager": "Open in file manager",

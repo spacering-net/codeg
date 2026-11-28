@@ -32,6 +32,74 @@ pub async fn open_in_code(path: String) -> Result<(), AppCommandError> {
     open_in_code_core(path).await
 }
 
+/// Open an existing local file with whatever the OS has registered for its
+/// type — the "open with default app" row of a file reference's menu.
+///
+/// Desktop-only, and only meaningful for a local workspace: the handler lives
+/// on the machine drawing the window, while a remote workspace's paths belong
+/// to another host (the frontend never offers the row there). Server mode has
+/// no such machine at all, so there is no `_core` and no HTTP route.
+///
+/// Deliberately its own command rather than a widened `opener` scope: the
+/// plugin's `open_path` is scope-checked against `$HOME`, which a workspace on
+/// another drive fails, and raising that scope to `**` would hand every other
+/// renderer path — agent markdown included — the same reach plus a free choice
+/// of `with` program. Here the errand is exactly one path, `with` is never
+/// passed, and the path must be an existing local file or directory.
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub fn open_local_file(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<(), AppCommandError> {
+    let target = validate_open_local_file_path(&path)?;
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_path(target.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|err| {
+            AppCommandError::external_command("Failed to open the file", err.to_string())
+        })
+}
+
+/// Reject anything that is not a plain, existing absolute filesystem path.
+///
+/// The renderer resolves paths itself (line suffixes stripped, `~` expanded,
+/// dot segments collapsed), so a leftover scheme means the target was never a
+/// file — handing `https://…` or `file://…` to the OS handler would be a
+/// different errand than the one this command promises.
+///
+/// `test` is in the cfg so the unit tests can reach it in a server-mode build,
+/// where the command itself does not exist.
+#[cfg(any(test, feature = "tauri-runtime"))]
+fn validate_open_local_file_path(path: &str) -> Result<PathBuf, AppCommandError> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(AppCommandError::invalid_input(
+            "path is required to open a file",
+        ));
+    }
+    if trimmed.contains(['\n', '\r', '\0']) {
+        return Err(AppCommandError::invalid_input(
+            "path must not contain control characters",
+        ));
+    }
+    if trimmed.contains("://") {
+        return Err(AppCommandError::invalid_input(
+            "path must be a local filesystem path",
+        ));
+    }
+    let target = PathBuf::from(trimmed);
+    if !target.is_absolute() {
+        return Err(AppCommandError::invalid_input("path must be absolute"));
+    }
+    if !target.exists() {
+        return Err(AppCommandError::not_found(format!(
+            "path does not exist: {trimmed}"
+        )));
+    }
+    Ok(target)
+}
+
 fn validate_open_in_code_path(path: &str) -> Result<PathBuf, AppCommandError> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -385,5 +453,46 @@ mod tests {
             .await
             .expect_err("missing path");
         assert!(err.message.contains("does not exist"), "{err:?}");
+    }
+
+    #[test]
+    fn local_file_rejects_empty_and_control_characters() {
+        assert!(validate_open_local_file_path("  ").is_err());
+        assert!(validate_open_local_file_path("/tmp/a\nb").is_err());
+    }
+
+    /// A URL is not a file: `openUrl` is the errand for those, and letting one
+    /// through here would aim the OS handler at something else entirely.
+    #[test]
+    fn local_file_rejects_urls() {
+        let err = validate_open_local_file_path("https://example.com/a.md")
+            .expect_err("url");
+        assert!(err.message.contains("local filesystem path"), "{err:?}");
+    }
+
+    #[test]
+    fn local_file_rejects_relative_and_missing_paths() {
+        assert!(validate_open_local_file_path("src/app.ts").is_err());
+        // Built from the temp root: `/no/such` is not absolute on Windows,
+        // where the rejection would come from the wrong check.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("does-not-exist.md");
+        let err = validate_open_local_file_path(missing.to_str().expect("utf8"))
+            .expect_err("missing");
+        assert!(err.message.contains("does not exist"), "{err:?}");
+    }
+
+    /// The path handed over is the one the renderer resolved, unchanged — a
+    /// file that exists passes whether its name holds spaces or not.
+    #[test]
+    fn local_file_accepts_an_existing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("方案 a.md");
+        fs::write(&file, "x").expect("write file");
+        let resolved = validate_open_local_file_path(
+            file.to_str().expect("utf8"),
+        )
+        .expect("existing file");
+        assert_eq!(resolved, file);
     }
 }

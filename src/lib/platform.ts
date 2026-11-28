@@ -118,6 +118,21 @@ export async function openUrl(url: string): Promise<void> {
 }
 
 /**
+ * Open a local file with the application the OS has registered for its type
+ * (desktop only, local workspace only).
+ *
+ * Goes through the backend's `open_local_file` command rather than the opener
+ * plugin's `openPath`: that one is scope-checked against `$HOME`, so a
+ * workspace on another drive would be refused, and widening the scope to `**`
+ * would give every other renderer path the same reach — plus a free choice of
+ * program. The command takes one existing absolute path and opens it.
+ */
+export async function openLocalFile(path: string): Promise<void> {
+  if (!isLocalDesktop()) return
+  await getTransport().call("open_local_file", { path })
+}
+
+/**
  * Open a path in the system file manager (desktop only).
  * No-op in web mode.
  */

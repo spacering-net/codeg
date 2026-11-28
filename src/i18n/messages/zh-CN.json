@@ -3895,6 +3895,7 @@
         "errorUnsupportedLinkProtocol": "不支持该链接协议。"
       },
       "fileActions": {
+        "openWithDefaultApp": "用默认应用打开",
         "openInFinder": "在访达打开",
         "openInExplorer": "在资源管理器打开",
         "openInFileManager": "在文件管理器打开",

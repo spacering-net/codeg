@@ -3895,6 +3895,7 @@
         "errorUnsupportedLinkProtocol": "不支援此連結協議。"
       },
       "fileActions": {
+        "openWithDefaultApp": "使用預設應用程式開啟",
         "openInFinder": "在 Finder 開啟",
         "openInExplorer": "在檔案總管開啟",
         "openInFileManager": "在檔案管理器開啟",
