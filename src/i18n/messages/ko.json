@@ -3895,6 +3895,7 @@
         "errorUnsupportedLinkProtocol": "이 링크 프로토콜은 지원되지 않습니다."
       },
       "fileActions": {
+        "openWithDefaultApp": "기본 앱으로 열기",
         "openInFinder": "Finder에서 열기",
         "openInExplorer": "Explorer에서 열기",
         "openInFileManager": "파일 관리자에서 열기",

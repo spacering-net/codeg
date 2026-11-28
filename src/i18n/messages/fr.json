@@ -3895,6 +3895,7 @@
         "errorUnsupportedLinkProtocol": "Ce protocole de lien n’est pas pris en charge."
       },
       "fileActions": {
+        "openWithDefaultApp": "Ouvrir avec l’application par défaut",
         "openInFinder": "Ouvrir dans Finder",
         "openInExplorer": "Ouvrir dans Explorer",
         "openInFileManager": "Ouvrir dans le gestionnaire de fichiers",

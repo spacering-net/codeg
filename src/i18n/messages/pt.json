@@ -3895,6 +3895,7 @@
         "errorUnsupportedLinkProtocol": "Este protocolo de link não é compatível."
       },
       "fileActions": {
+        "openWithDefaultApp": "Abrir com o aplicativo padrão",
         "openInFinder": "Abrir no Finder",
         "openInExplorer": "Abrir no Explorer",
         "openInFileManager": "Abrir no gerenciador de arquivos",

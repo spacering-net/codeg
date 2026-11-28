@@ -6,7 +6,9 @@ import enMessages from "@/i18n/messages/en.json"
 
 const mocks = vi.hoisted(() => ({
   isLocalDesktop: vi.fn(() => true),
+  openLocalFile: vi.fn(async () => {}),
   revealItemInDir: vi.fn(async () => {}),
+  getHomeDirectory: vi.fn(async () => "/home/me"),
   copyTextFromMenu: vi.fn(async () => true),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
@@ -26,6 +28,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/platform", () => ({
   isLocalDesktop: mocks.isLocalDesktop,
+  openLocalFile: mocks.openLocalFile,
   revealItemInDir: mocks.revealItemInDir,
 }))
 
@@ -33,6 +36,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>()
   return {
     ...actual,
+    getHomeDirectory: mocks.getHomeDirectory,
     isWorkspaceFileApiAvailable: mocks.isWorkspaceFileApiAvailable,
     downloadWorkspaceFile: mocks.downloadWorkspaceFile,
   }
@@ -59,6 +63,7 @@ import {
   resolveFileReferenceTarget,
   systemFileManagerLabelKey,
 } from "./file-reference-actions"
+import { resetHomeDirCacheForTests } from "@/lib/file-open-target"
 
 function renderActions(target: string) {
   return render(
@@ -175,7 +180,12 @@ describe("systemFileManagerLabelKey", () => {
 describe("FileReferenceActions", () => {
   beforeEach(() => {
     mocks.isLocalDesktop.mockReturnValue(true)
+    mocks.openLocalFile.mockReset()
+    mocks.openLocalFile.mockResolvedValue(undefined)
     mocks.revealItemInDir.mockResolvedValue(undefined)
+    mocks.getHomeDirectory.mockReset()
+    mocks.getHomeDirectory.mockResolvedValue("/home/me")
+    resetHomeDirCacheForTests()
     mocks.copyTextFromMenu.mockResolvedValue(true)
     mocks.copyTextFromMenu.mockClear()
     mocks.revealItemInDir.mockClear()
@@ -233,6 +243,59 @@ describe("FileReferenceActions", () => {
     expect(mocks.ancestorContextMenu).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ["file:///repo/src/app.ts#L10-25", "/repo/src/app.ts"],
+    ["./src/../notes/方案.md:12", "/repo/notes/方案.md"],
+    ["/F:/github/codeg/docs/方案.md#L10", "F:/github/codeg/docs/方案.md"],
+    ["file:///elsewhere/a.pdf", "/elsewhere/a.pdf"],
+  ])("opens %s with the default application", async (target, absolute) => {
+    renderActions(target)
+    openMenu()
+
+    fireEvent.click(item("Open with default app"))
+    await waitFor(() => {
+      expect(mocks.openLocalFile).toHaveBeenCalledWith(absolute)
+    })
+    expect(mocks.revealItemInDir).not.toHaveBeenCalled()
+  })
+
+  it("expands the home directory before opening with the default app", async () => {
+    renderActions("~/notes/方案.md:12")
+    openMenu()
+
+    fireEvent.click(item("Open with default app"))
+    await waitFor(() => {
+      expect(mocks.openLocalFile).toHaveBeenCalledWith("/home/me/notes/方案.md")
+    })
+  })
+
+  it("reports a default-application failure", async () => {
+    mocks.openLocalFile.mockRejectedValue(
+      new Error("No associated application")
+    )
+    renderActions("file:///repo/src/app.ts")
+    openMenu()
+
+    fireEvent.click(item("Open with default app"))
+    await waitFor(() => {
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        "Failed to open local file",
+        { description: "No associated application" }
+      )
+    })
+  })
+
+  it("disables system opening when a relative path cannot be resolved", () => {
+    mocks.folderPath = undefined
+    renderActions("./src/app.ts")
+    openMenu()
+
+    expect(item("Open with default app")).toHaveAttribute("data-disabled")
+    expect(screen.getByRole("menuitem", { name: /^Open in/ })).toHaveAttribute(
+      "data-disabled"
+    )
+  })
+
   it("reveals the absolute path in the file manager", async () => {
     renderActions("file:///repo/src/app.ts#L10-25")
     openMenu()
@@ -241,6 +304,7 @@ describe("FileReferenceActions", () => {
     await waitFor(() => {
       expect(mocks.revealItemInDir).toHaveBeenCalledWith("/repo/src/app.ts")
     })
+    expect(mocks.openLocalFile).not.toHaveBeenCalled()
   })
 
   it("copies the relative and the absolute path", async () => {
@@ -280,12 +344,17 @@ describe("FileReferenceActions", () => {
     expect(item("Copy absolute path")).not.toHaveAttribute("data-disabled")
   })
 
-  it("hides the reveal row when the file manager is unreachable (web / remote)", () => {
+  /** In web / remote-desktop mode both system rows would be dead: the file is
+   * on a host this window cannot reach. */
+  it("hides the system rows when the file is on another host (web / remote)", () => {
     mocks.isLocalDesktop.mockReturnValue(false)
     renderActions("file:///repo/src/app.ts")
     openMenu()
 
     expect(screen.queryByRole("menuitem", { name: /^Open in/ })).toBeNull()
+    expect(
+      screen.queryByRole("menuitem", { name: "Open with default app" })
+    ).toBeNull()
     expect(item("Copy absolute path")).toBeInTheDocument()
   })
 

@@ -3895,6 +3895,7 @@
         "errorUnsupportedLinkProtocol": "بروتوكول الرابط هذا غير مدعوم."
       },
       "fileActions": {
+        "openWithDefaultApp": "فتح بالتطبيق الافتراضي",
         "openInFinder": "فتح في Finder",
         "openInExplorer": "فتح في Explorer",
         "openInFileManager": "فتح في مدير الملفات",
