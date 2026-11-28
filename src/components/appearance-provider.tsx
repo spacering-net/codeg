@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react"
+import { useLocale } from "next-intl"
 import {
   THEME_COLORS,
   DEFAULT_THEME_COLOR,
@@ -63,16 +64,24 @@ import {
   STORAGE_KEY_CUSTOM_CSS,
   STORAGE_KEY_CUSTOM_CSS_ENABLED,
   STORAGE_KEY_CUSTOM_STYLE_SUSPENDED,
+  STORAGE_KEY_PLUGIN_THEME,
 } from "@/lib/appearance-script"
 import {
   applyCustomCss,
   applyTokenOverrides,
   isSafeStyleRequested,
   parseStoredCustomTheme,
+  parseStoredPluginThemeMap,
   sanitizeCustomTheme,
   type CustomTheme,
   type CustomThemeToken,
 } from "@/lib/custom-style"
+import {
+  selectPluginThemes,
+  useHostPlugins,
+  usePluginHostScope,
+  type ResolvedPluginTheme,
+} from "@/lib/host-plugins"
 import { readableAccent } from "@/lib/readable-accent"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import {
@@ -214,6 +223,16 @@ type AppearanceContextValue = {
   setCustomStyleSuspended: (on: boolean) => void
   /** 本窗口是否由 `?safeStyle=1` 打开 —— 只影响本窗口，不写入偏好。 */
   safeStyleRequested: boolean
+  /** 当前已连接 host 上所有已启用插件贡献的主题列表（已按当前语言解析标题）。 */
+  pluginThemes: ResolvedPluginTheme[]
+  /** 当前 host 持久化的插件主题 key（`${pluginId}:${themeId}`），未选择时为 null。 */
+  selectedPluginThemeKey: string | null
+  /** 当前 host 上真正生效的插件主题（仅当已选择、transport 就绪且该插件处于启用状态时非 null）。 */
+  activePluginTheme: ResolvedPluginTheme | null
+  /** 选择或取消选择当前 host 的插件主题（传 null 回到预设外观）。 */
+  setPluginThemeKey: (key: string | null) => void
+  /** 声明当前视图需要加载插件主题目录（例如 Settings → Appearance）。 */
+  requestPluginThemesCatalog: () => void
 }
 
 export const AppearanceContext = createContext<AppearanceContextValue | null>(
@@ -296,6 +315,17 @@ function readBool(key: string, def: boolean): boolean {
     return v === null ? def : v === "1"
   } catch {
     return def
+  }
+}
+
+function useSafeLocale(): string {
+  try {
+    return useLocale()
+  } catch {
+    if (typeof document !== "undefined" && document.documentElement.lang) {
+      return document.documentElement.lang
+    }
+    return "en"
   }
 }
 
@@ -553,6 +583,56 @@ export function AppearanceProvider({
   // 逃生舱其一：本窗口由 `?safeStyle=1` 打开时，本窗口内一切自定义样式不生效，
   // 但不写入偏好 —— 用「安全外观」打开设置页去关自定义 CSS，不该顺手改掉别的窗口。
   const [safeStyleRequested] = useState<boolean>(() => isSafeStyleRequested())
+
+  // 插件主题（按已连接 host 隔离持久化，不写进用户的 customTheme / themeColor）。
+  const locale = useSafeLocale()
+  const hostScope = usePluginHostScope()
+  const [pluginThemeMap, setPluginThemeMap] = useState<Record<string, string>>(
+    () => parseStoredPluginThemeMap(readStored(STORAGE_KEY_PLUGIN_THEME))
+  )
+  const [pluginCatalogRequested, setPluginCatalogRequested] = useState(false)
+  const requestPluginThemesCatalog = useCallback(() => {
+    setPluginCatalogRequested(true)
+  }, [])
+  const selectedPluginThemeKey = hostScope.transportReady
+    ? (pluginThemeMap[hostScope.scopeKey] ?? null)
+    : null
+  const shouldLoadPluginThemes =
+    hostScope.transportReady &&
+    (selectedPluginThemeKey !== null || pluginCatalogRequested)
+  const { data: hostPlugins } = useHostPlugins(shouldLoadPluginThemes)
+  const pluginThemes = useMemo(
+    () =>
+      hostScope.transportReady ? selectPluginThemes(hostPlugins, locale) : [],
+    [hostPlugins, hostScope.transportReady, locale]
+  )
+  const activePluginTheme = useMemo(
+    () =>
+      selectedPluginThemeKey
+        ? (pluginThemes.find((item) => item.key === selectedPluginThemeKey) ??
+          null)
+        : null,
+    [pluginThemes, selectedPluginThemeKey]
+  )
+  const setPluginThemeKey = useCallback(
+    (nextKey: string | null) => {
+      if (!hostScope.transportReady) return
+      const normalized = nextKey?.trim() || null
+      setPluginThemeMap((prev) => {
+        const current = prev[hostScope.scopeKey] ?? null
+        if (current === normalized) return prev
+        const next = { ...prev }
+        if (normalized) {
+          next[hostScope.scopeKey] = normalized
+        } else {
+          delete next[hostScope.scopeKey]
+        }
+        persistLocalOnly(STORAGE_KEY_PLUGIN_THEME, JSON.stringify(next))
+        return next
+      })
+    },
+    [hostScope.scopeKey, hostScope.transportReady]
+  )
 
   // 明暗模式取自 <html> 的 dark 类，而不是 next-themes 的 resolvedTheme：后者在
   // 水合完成前是 undefined，按它挑 token 组会先套一帧浅色再跳到深色，正好毁掉
@@ -893,12 +973,19 @@ export function AppearanceProvider({
   // applyTokenOverrides 会把不在本组里的 token 一并移除，所以明暗切换、关闭开关、
   // 清空覆盖都自动回落到基底预设，无需额外清理路径。
   useEffect(() => {
-    const active =
+    const pluginPalette = customStyleSuppressed
+      ? {}
+      : ((isDarkMode ? activePluginTheme?.dark : activePluginTheme?.light) ??
+        {})
+    const userPalette =
       customStyleSuppressed || !customThemeEnabled
         ? {}
         : isDarkMode
           ? customTheme.dark
           : customTheme.light
+    const active = customStyleSuppressed
+      ? {}
+      : { ...pluginPalette, ...userPalette }
     applyTokenOverrides(document.documentElement, active)
     // The timeline's accent follows a primary set here, held to a readable
     // lightness like each preset's (globals.css); without one, the preset's.
@@ -910,7 +997,13 @@ export function AppearanceProvider({
     } else {
       document.documentElement.style.removeProperty("--activity-accent")
     }
-  }, [customStyleSuppressed, customThemeEnabled, customTheme, isDarkMode])
+  }, [
+    activePluginTheme,
+    customStyleSuppressed,
+    customThemeEnabled,
+    customTheme,
+    isDarkMode,
+  ])
 
   useEffect(() => {
     applyCustomCss(
@@ -1153,6 +1246,9 @@ export function AppearanceProvider({
           readBool(STORAGE_KEY_CUSTOM_STYLE_SUSPENDED, false)
         )
       }
+      if (e.key === STORAGE_KEY_PLUGIN_THEME) {
+        setPluginThemeMap(parseStoredPluginThemeMap(e.newValue))
+      }
       // Sync appearance mode to Tauri DB when changed in another window
       if (e.key === "theme") {
         syncAppearanceMode(e.newValue ?? "system")
@@ -1225,6 +1321,11 @@ export function AppearanceProvider({
         customStyleSuspended,
         setCustomStyleSuspended,
         safeStyleRequested,
+        pluginThemes,
+        selectedPluginThemeKey,
+        activePluginTheme,
+        setPluginThemeKey,
+        requestPluginThemesCatalog,
       }}
     >
       <ChatAnimationsContext.Provider value={chatAnimations}>

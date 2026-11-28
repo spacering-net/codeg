@@ -28,6 +28,7 @@ pub mod app_state;
 pub mod appimage_env;
 pub mod automation;
 pub mod backgrounds;
+pub mod host_plugins;
 /// Built-in browser. Only its wire types and its grant rules compile in server
 /// mode — see `browser/mod.rs` for why those two, and only those two.
 pub mod browser;
@@ -827,6 +828,20 @@ mod tauri_app {
                 // plain launch would open a database Tauri's directory does
                 // not hold.
                 let effective_data_dir = paths::resolve_effective_data_dir(&app_data_dir);
+                {
+                    let plugins = std::sync::Arc::new(crate::host_plugins::HostPlugins::new(
+                        &effective_data_dir,
+                    ));
+                    let events = app
+                        .state::<std::sync::Arc<crate::acp::InternalEventBus>>()
+                        .subscribe();
+                    let connections = app.state::<ConnectionManager>().clone_ref();
+                    let emitter = web::event_bridge::EventEmitter::from_app(app.handle());
+                    app.manage(plugins.clone());
+                    tauri::async_runtime::spawn(async move {
+                        plugins.observe_sessions(events, connections, emitter).await;
+                    });
+                }
                 let derived_data_dir = paths::desktop_data_dir(
                     None,
                     dirs::data_dir().as_deref(),
@@ -2421,6 +2436,18 @@ mod tauri_app {
                 quick_messages_commands::quick_messages_update,
                 quick_messages_commands::quick_messages_delete,
                 quick_messages_commands::quick_messages_reorder,
+                crate::commands::host_plugins::host_plugins_list,
+                crate::commands::host_plugins::host_plugins_apply,
+                crate::commands::host_plugins::host_plugins_activity,
+                crate::commands::host_plugins::host_plugins_call,
+                crate::commands::host_plugins::host_plugins_usage_query,
+                crate::commands::host_plugins::host_plugins_client_html,
+                crate::commands::host_plugins::host_plugins_settings,
+                crate::commands::host_plugins::host_plugins_install_source,
+                crate::commands::host_plugins::host_plugins_preview_install,
+                crate::commands::host_plugins::host_plugins_confirm_install,
+                crate::commands::host_plugins::host_plugins_update,
+                crate::commands::host_plugins::host_plugins_fetch_index,
                 automation_commands::automation_list,
                 automation_commands::automation_get,
                 automation_commands::automation_runs,

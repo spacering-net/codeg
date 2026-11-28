@@ -295,13 +295,16 @@ pub struct GitWorktreeAddParams {
 }
 
 pub async fn git_worktree_add(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<GitWorktreeAddParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    folder_commands::git_worktree_add(
-        params.path,
-        params.branch_name,
-        params.worktree_path,
-        params.base,
+    folder_commands::git_worktree_add_with_plugins(
+        &state.emitter,
+        &state.db,
+        &params.path,
+        &params.branch_name,
+        &params.worktree_path,
+        params.base.as_deref(),
     )
     .await?;
     Ok(Json(()))
