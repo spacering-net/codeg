@@ -1525,14 +1525,6 @@ pub fn build_router_with_srn(
             post(handlers::acp::acp_clear_binary_cache),
         )
         .route(
-            "/acp_scan_leaked_temp",
-            post(handlers::acp::acp_scan_leaked_temp),
-        )
-        .route(
-            "/acp_reclaim_leaked_temp",
-            post(handlers::acp::acp_reclaim_leaked_temp),
-        )
-        .route(
             "/acp_update_agent_preferences",
             post(handlers::acp::acp_update_agent_preferences),
         )

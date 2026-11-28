@@ -1161,6 +1161,10 @@
       "permissionModeTurbo": "Turbo (--dangerously-skip-permissions)",
       "permissionModeDefaultHint": "Inicia `agy acp` normalmente para que o seletor de modo de sessão (default, accept-edits, auto, plan) e suas regras de permissão controlem as aprovações.",
       "permissionModeTurboHint": "Inicia `agy acp --dangerously-skip-permissions`: aprova automaticamente todas as solicitações de permissão de ferramentas sem perguntar (regras deny explícitas e a lista de bloqueio do sistema continuam válidas). Vale para novas sessões.",
+      "sandboxLabel": "Sandbox do terminal",
+      "sandboxHint": "Inicia `agy acp --sandbox`: os comandos de terminal do agente são executados com as restrições de sandbox da CLI. Vale para novas sessões.",
+      "telemetryTitle": "Desativar telemetria",
+      "telemetryHint": "Inicia `agy acp --disable-telemetry`, para que a CLI não envie telemetria de uso. Vale para novas sessões.",
       "headless": {
         "title": "Entrar sem navegador nesta máquina",
         "description": "A Antigravity CLI imprime um link de login do Google e aguarda o código de autorização. Isso funciona sem navegador nesta máquina: abra o link em qualquer dispositivo, aprove o acesso e cole aqui o código de autorização (ou o endereço completo aonde você chegar).",
@@ -1182,21 +1186,7 @@
         "action": "Sair",
         "done": "Sessão encerrada. Entre novamente para escolher outra conta.",
         "failed": "Não foi possível sair"
-      },
-      "tempReclaimTitle": "Espaço temporário remanescente",
-      "tempReclaimHint": "Procura diretórios temporários que este agente deixou em versões anteriores do codeg. Nada é excluído até você confirmar, e o que estiver em uso é ignorado.",
-      "tempReclaimScan": "Verificar",
-      "tempReclaimDelete": "Excluir resíduos",
-      "tempReclaimNone": "Nada a recuperar.",
-      "tempReclaimFound": "{count} item(ns) remanescente(s), {size} recuperável(is).",
-      "tempReclaimSkipped": "{count} ignorado(s) (ainda em uso ou muito recente).",
-      "tempReclaimed": "Recuperado(s) {size} de {count} item(ns).",
-      "tempReclaimSelectAll": "Selecionar tudo",
-      "tempReclaimAgeHours": "{hours} h",
-      "tempReclaimConfirmTitle": "Excluir {count} item(ns)?",
-      "tempReclaimConfirmBody": "Isto exclui permanentemente {size}. A pasta temporária do sistema é compartilhada com outros aplicativos, então confira cada caminho antes de confirmar; o que ainda estiver em uso é ignorado.",
-      "tempReclaimConfirmAction": "Excluir",
-      "tempReclaimCancel": "Cancelar"
+      }
     },
     "kiro": {
       "configManagement": "Configuração",

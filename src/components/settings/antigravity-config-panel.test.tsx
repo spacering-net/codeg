@@ -7,8 +7,6 @@ vi.mock("@/lib/api", () => ({
   acpAntigravityLoginFinish: vi.fn(),
   acpAntigravityLoginCancel: vi.fn(),
   acpAntigravitySignOut: vi.fn(),
-  acpScanLeakedTemp: vi.fn(),
-  acpReclaimLeakedTemp: vi.fn(),
 }))
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
@@ -21,8 +19,6 @@ import {
   acpAntigravityLoginFinish,
   acpAntigravityLoginStart,
   acpAntigravitySignOut,
-  acpReclaimLeakedTemp,
-  acpScanLeakedTemp,
 } from "@/lib/api"
 import {
   ANTIGRAVITY_ENV_KEYS,
@@ -44,6 +40,8 @@ function values(
   return {
     method,
     permissionMode: "default",
+    sandbox: false,
+    disableTelemetry: false,
     geminiApiKey: "",
     googleApiKey: "",
     gcpProject: "",
@@ -112,6 +110,8 @@ describe("buildAntigravityEnv", () => {
       KEEP: "y",
       AGY_AUTH_METHOD: "oauth-personal",
       AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
+      AGY_SANDBOX: "0",
+      AGY_DISABLE_TELEMETRY: "0",
     })
 
     expect(
@@ -126,6 +126,8 @@ describe("buildAntigravityEnv", () => {
       KEEP: "y",
       AGY_AUTH_METHOD: "gemini-api-key",
       AGY_DANGEROUSLY_SKIP_PERMISSIONS: "1",
+      AGY_SANDBOX: "0",
+      AGY_DISABLE_TELEMETRY: "0",
       GEMINI_API_KEY: "AIza-new",
     })
   })
@@ -141,6 +143,8 @@ describe("buildAntigravityEnv", () => {
     ).toEqual({
       AGY_AUTH_METHOD: "oauth-business",
       AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
+      AGY_SANDBOX: "0",
+      AGY_DISABLE_TELEMETRY: "0",
       GOOGLE_CLOUD_PROJECT: "acme",
       GOOGLE_CLOUD_LOCATION: "eu",
     })
@@ -162,6 +166,8 @@ describe("buildAntigravityEnv", () => {
     ).toEqual({
       AGY_AUTH_METHOD: "agent-platform",
       AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
+      AGY_SANDBOX: "0",
+      AGY_DISABLE_TELEMETRY: "0",
       GOOGLE_API_KEY: "AIza-vertex",
     })
 
@@ -173,8 +179,24 @@ describe("buildAntigravityEnv", () => {
     ).toEqual({
       AGY_AUTH_METHOD: "agent-platform",
       AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
+      AGY_SANDBOX: "0",
+      AGY_DISABLE_TELEMETRY: "0",
       GOOGLE_CLOUD_PROJECT: "p",
       GOOGLE_CLOUD_LOCATION: "us",
+    })
+  })
+
+  it("writes the sandbox and telemetry switches as explicit 1/0", () => {
+    expect(
+      buildAntigravityEnv(
+        { AGY_SANDBOX: "1", AGY_DISABLE_TELEMETRY: "1" },
+        values("oauth-personal", { sandbox: true })
+      )
+    ).toEqual({
+      AGY_AUTH_METHOD: "oauth-personal",
+      AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
+      AGY_SANDBOX: "1",
+      AGY_DISABLE_TELEMETRY: "0",
     })
   })
 
@@ -342,6 +364,8 @@ describe("AntigravityConfigPanel", () => {
         KEEP: "y",
         AGY_AUTH_METHOD: "gemini-api-key",
         AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
+        AGY_SANDBOX: "0",
+        AGY_DISABLE_TELEMETRY: "0",
         GEMINI_API_KEY: "AIza-new",
       },
       true
@@ -367,6 +391,8 @@ describe("AntigravityConfigPanel", () => {
       {
         AGY_AUTH_METHOD: "oauth-personal",
         AGY_DANGEROUSLY_SKIP_PERMISSIONS: "1",
+        AGY_SANDBOX: "0",
+        AGY_DISABLE_TELEMETRY: "0",
       },
       true
     )
@@ -380,6 +406,31 @@ describe("AntigravityConfigPanel", () => {
       onSaveEnv,
     })
     expect(screen.getByText(m.permissionModeDefaultHint)).toBeInTheDocument()
+  })
+
+  it("persists the sandbox and telemetry switches", async () => {
+    const onSaveEnv = vi.fn().mockResolvedValue(0)
+    renderPanel({
+      env: { AGY_AUTH_METHOD: "oauth-personal", AGY_SANDBOX: "1" },
+      onSaveEnv,
+    })
+
+    const sandbox = screen.getByRole("switch", { name: m.sandboxLabel })
+    expect(sandbox).toHaveAttribute("data-state", "checked")
+    fireEvent.click(sandbox)
+    fireEvent.click(screen.getByRole("switch", { name: m.telemetryTitle }))
+    fireEvent.click(screen.getByRole("button", { name: m.save }))
+
+    await waitFor(() => expect(onSaveEnv).toHaveBeenCalledTimes(1))
+    expect(onSaveEnv).toHaveBeenCalledWith(
+      {
+        AGY_AUTH_METHOD: "oauth-personal",
+        AGY_DANGEROUSLY_SKIP_PERMISSIONS: "0",
+        AGY_SANDBOX: "0",
+        AGY_DISABLE_TELEMETRY: "1",
+      },
+      true
+    )
   })
 
   it("keeps an in-progress edit when the persisted row changes underneath", () => {
@@ -837,101 +888,6 @@ describe("AntigravityConfigPanel", () => {
       await waitFor(() =>
         expect(screen.getByRole("button", { name: s.action })).toBeEnabled()
       )
-    })
-  })
-  /**
-   * The temp reclaim is a delete against the SYSTEM temp directory, which every
-   * PyInstaller application on the machine shares. The panel's own copy admits
-   * codeg cannot tell its own leftovers from someone else's — so consent has to
-   * be per path, and it cannot be the default.
-   */
-  describe("leaked temp reclaim", () => {
-    const r = enMessages.AcpAgentSettings.antigravity
-
-    const scan = {
-      root: "/tmp",
-      total_bytes: 3_000_000,
-      skipped: 1,
-      entries: [
-        {
-          path: "/tmp/_MEI111111",
-          bytes: 2_000_000,
-          age_hours: 30,
-          is_dir: true,
-        },
-        {
-          path: "/tmp/_MEI222222",
-          bytes: 1_000_000,
-          age_hours: 5,
-          is_dir: true,
-        },
-      ],
-    }
-
-    it("lists every path and pre-selects none of them", async () => {
-      vi.mocked(acpScanLeakedTemp).mockResolvedValue(scan)
-      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
-
-      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimScan }))
-
-      await screen.findByText("/tmp/_MEI111111")
-      expect(screen.getByText("/tmp/_MEI222222")).toBeInTheDocument()
-      for (const box of screen.getAllByRole("checkbox")) {
-        expect(box).toHaveAttribute("data-state", "unchecked")
-      }
-      // Nothing selected means nothing to delete, so the destructive action is
-      // not reachable at all.
-      expect(
-        screen.getByRole("button", { name: r.tempReclaimDelete })
-      ).toBeDisabled()
-    })
-
-    it("deletes only what was ticked, and only after a confirmation", async () => {
-      vi.mocked(acpScanLeakedTemp).mockResolvedValue(scan)
-      vi.mocked(acpReclaimLeakedTemp).mockResolvedValue({
-        removed: 1,
-        freed_bytes: 2_000_000,
-        failed: [],
-      })
-      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
-      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimScan }))
-      await screen.findByText("/tmp/_MEI111111")
-
-      // Tick the first entry only. Index 0 is the select-all header box.
-      fireEvent.click(screen.getAllByRole("checkbox")[1])
-      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimDelete }))
-
-      // The click opens the dialog; it must not have deleted anything yet.
-      expect(acpReclaimLeakedTemp).not.toHaveBeenCalled()
-      fireEvent.click(
-        await screen.findByRole("button", { name: r.tempReclaimConfirmAction })
-      )
-
-      await waitFor(() => expect(acpReclaimLeakedTemp).toHaveBeenCalled())
-      expect(acpReclaimLeakedTemp).toHaveBeenCalledWith(["/tmp/_MEI111111"])
-    })
-
-    it("shows every path the backend refused, not just the first", async () => {
-      vi.mocked(acpScanLeakedTemp).mockResolvedValue(scan)
-      vi.mocked(acpReclaimLeakedTemp).mockResolvedValue({
-        removed: 0,
-        freed_bytes: 0,
-        failed: ["/tmp/_MEI111111: in use", "/tmp/_MEI222222: access denied"],
-      })
-      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
-      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimScan }))
-      await screen.findByText("/tmp/_MEI111111")
-
-      fireEvent.click(screen.getAllByRole("checkbox")[0])
-      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimDelete }))
-      fireEvent.click(
-        await screen.findByRole("button", { name: r.tempReclaimConfirmAction })
-      )
-
-      await screen.findByText("/tmp/_MEI111111: in use")
-      expect(
-        screen.getByText("/tmp/_MEI222222: access denied")
-      ).toBeInTheDocument()
     })
   })
 })

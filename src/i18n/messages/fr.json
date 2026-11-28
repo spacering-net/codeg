@@ -1161,6 +1161,10 @@
       "permissionModeTurbo": "Turbo (--dangerously-skip-permissions)",
       "permissionModeDefaultHint": "Lance `agy acp` normalement afin que le sélecteur de mode de session (default, accept-edits, auto, plan) et vos règles d'autorisation gèrent les approbations.",
       "permissionModeTurboHint": "Lance `agy acp --dangerously-skip-permissions` : approuve automatiquement toutes les demandes d'autorisation d'outils sans confirmation (les règles deny explicites et la liste de blocage système restent actives). S'applique aux nouvelles sessions.",
+      "sandboxLabel": "Bac à sable du terminal",
+      "sandboxHint": "Lance `agy acp --sandbox` : les commandes de terminal de l'agent s'exécutent avec les restrictions du bac à sable de la CLI. S'applique aux nouvelles sessions.",
+      "telemetryTitle": "Désactiver la télémétrie",
+      "telemetryHint": "Lance `agy acp --disable-telemetry`, la CLI n'envoie alors aucune télémétrie d'utilisation. S'applique aux nouvelles sessions.",
       "headless": {
         "title": "Se connecter sans navigateur sur cette machine",
         "description": "Antigravity CLI affiche un lien de connexion Google et attend le code d’autorisation. Cela fonctionne sans navigateur sur cette machine : ouvrez le lien sur n’importe quel appareil, autorisez l’accès, puis collez ici le code d’autorisation (ou l’adresse complète sur laquelle vous arrivez).",
@@ -1182,21 +1186,7 @@
         "action": "Se déconnecter",
         "done": "Déconnecté. Reconnectez-vous pour choisir un autre compte.",
         "failed": "Impossible de se déconnecter"
-      },
-      "tempReclaimTitle": "Espace temporaire résiduel",
-      "tempReclaimHint": "Recherche les répertoires temporaires laissés par cet agent avec les anciennes versions de codeg. Rien n'est supprimé avant votre confirmation ; les éléments utilisés sont ignorés.",
-      "tempReclaimScan": "Analyser",
-      "tempReclaimDelete": "Supprimer les résidus",
-      "tempReclaimNone": "Rien à récupérer.",
-      "tempReclaimFound": "{count} élément(s) résiduel(s), {size} récupérable(s).",
-      "tempReclaimSkipped": "{count} ignoré(s) (encore utilisé(s) ou trop récent(s)).",
-      "tempReclaimed": "{size} récupéré(s) sur {count} élément(s).",
-      "tempReclaimSelectAll": "Tout sélectionner",
-      "tempReclaimAgeHours": "{hours} h",
-      "tempReclaimConfirmTitle": "Supprimer {count} élément(s) ?",
-      "tempReclaimConfirmBody": "Cette action supprime définitivement {size}. Le dossier temporaire du système est partagé avec d'autres applications : vérifiez chaque chemin avant de confirmer. Les éléments encore utilisés sont ignorés.",
-      "tempReclaimConfirmAction": "Supprimer",
-      "tempReclaimCancel": "Annuler"
+      }
     },
     "kiro": {
       "configManagement": "Configuration",

@@ -1161,6 +1161,10 @@
       "permissionModeTurbo": "Turbo (--dangerously-skip-permissions)",
       "permissionModeDefaultHint": "يشغّل `agy acp` بشكل اعتيادي بحيث يتحكم محدد وضع الجلسة (default / accept-edits / auto / plan) وقواعد الأذونات لديك في الموافقات.",
       "permissionModeTurboHint": "يشغّل `agy acp --dangerously-skip-permissions`: يوافق تلقائيًا على جميع طلبات أذونات الأدوات دون مطالبة (تبقى قواعد deny الصريحة وقائمة الحظر للنظام سارية). يسري على الجلسات الجديدة.",
+      "sandboxLabel": "بيئة معزولة للطرفية",
+      "sandboxHint": "يشغّل `agy acp --sandbox`: تُنفَّذ أوامر الطرفية التي يشغّلها الوكيل ضمن قيود البيئة المعزولة في CLI. يسري على الجلسات الجديدة.",
+      "telemetryTitle": "تعطيل القياس عن بُعد",
+      "telemetryHint": "يشغّل `agy acp --disable-telemetry` فلا ترسل CLI أي بيانات قياس للاستخدام. يسري على الجلسات الجديدة.",
       "headless": {
         "title": "تسجيل الدخول دون متصفح على هذا الجهاز",
         "description": "يطبع Antigravity CLI رابط تسجيل دخول Google وينتظر رمز التفويض. يعمل هذا دون متصفح على هذا الجهاز: افتح الرابط على أي جهاز، وافق على الوصول، ثم الصق رمز التفويض (أو العنوان الكامل الذي وصلت إليه) هنا.",
@@ -1182,21 +1186,7 @@
         "action": "تسجيل الخروج",
         "done": "تم تسجيل الخروج. سجّل الدخول مرة أخرى لاختيار حساب آخر.",
         "failed": "تعذّر تسجيل الخروج"
-      },
-      "tempReclaimTitle": "مساحة مؤقتة متبقية",
-      "tempReclaimHint": "يبحث عن الأدلة المؤقتة التي تركها هذا الوكيل مع إصدارات codeg القديمة. لا يُحذف شيء قبل تأكيدك، ويُتخطّى ما هو قيد الاستخدام.",
-      "tempReclaimScan": "فحص",
-      "tempReclaimDelete": "حذف البقايا",
-      "tempReclaimNone": "لا يوجد ما يمكن استرجاعه.",
-      "tempReclaimFound": "{count} عنصرًا متبقيًا، يمكن استرجاع {size}.",
-      "tempReclaimSkipped": "تم تخطي {count} (لا يزال قيد الاستخدام أو حديث جدًا).",
-      "tempReclaimed": "تم استرجاع {size} من {count} عنصرًا.",
-      "tempReclaimSelectAll": "تحديد الكل",
-      "tempReclaimAgeHours": "{hours} ساعة",
-      "tempReclaimConfirmTitle": "حذف {count} عنصر؟",
-      "tempReclaimConfirmBody": "سيؤدي هذا إلى حذف {size} نهائيًا. مجلد النظام المؤقت مشترك مع تطبيقات أخرى، لذا تحقّق من كل مسار قبل التأكيد؛ وسيتم تخطّي أي عنصر قيد الاستخدام.",
-      "tempReclaimConfirmAction": "حذف",
-      "tempReclaimCancel": "إلغاء"
+      }
     },
     "kiro": {
       "configManagement": "إدارة الإعدادات",

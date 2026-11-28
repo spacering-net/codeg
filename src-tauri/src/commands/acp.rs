@@ -13508,28 +13508,6 @@ pub async fn acp_clear_binary_cache(agent_type: AgentType) -> Result<(), AcpErro
     Ok(())
 }
 
-/// Scan the system temp directory for artifacts leaked by agent launches from
-/// BEFORE per-launch temp isolation shipped. Read-only.
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn acp_scan_leaked_temp(
-) -> Result<crate::acp::temp_reclaim::LeakedTempScan, AcpError> {
-    tokio::task::spawn_blocking(crate::acp::temp_reclaim::scan)
-        .await
-        .map_err(|e| AcpError::protocol(e.to_string()))
-}
-
-/// Delete the given leaked artifacts. Every path is re-validated immediately
-/// before deletion — see `temp_reclaim::reclaim`, which does not trust this
-/// list.
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn acp_reclaim_leaked_temp(
-    paths: Vec<String>,
-) -> Result<crate::acp::temp_reclaim::LeakedTempReclaim, AcpError> {
-    tokio::task::spawn_blocking(move || crate::acp::temp_reclaim::reclaim(paths))
-        .await
-        .map_err(|e| AcpError::protocol(e.to_string()))
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn acp_update_agent_preferences_core(
     agent_type: AgentType,

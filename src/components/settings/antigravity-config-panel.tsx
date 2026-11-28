@@ -14,7 +14,6 @@ import {
   Copy,
   Eye,
   EyeOff,
-  HardDrive,
   Loader2,
   Save,
   ShieldCheck,
@@ -27,28 +26,14 @@ import {
   AgentPanelGroup,
   AgentPanelSaveBar,
 } from "@/components/settings/agent-panel-layout"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
 import { BrowserLink } from "@/components/ui/browser-link"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import {
   acpAntigravityLoginCancel,
   acpAntigravityLoginFinish,
   acpAntigravityLoginStart,
   acpAntigravitySignOut,
-  acpReclaimLeakedTemp,
-  acpScanLeakedTemp,
   type AntigravityLoginOutcome,
   type AntigravityLoginStart,
 } from "@/lib/api"
@@ -61,7 +46,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { AcpAgentInfo, LeakedTempScan } from "@/lib/types"
+import { Switch } from "@/components/ui/switch"
+import type { AcpAgentInfo } from "@/lib/types"
 
 /**
  * codeg 侧记录所选认证方式的开关。`agy acp` 不会读取它，启动路径用它决定：
@@ -81,6 +67,11 @@ const GOOGLE_CLOUD_LOCATION_ENV = "GOOGLE_CLOUD_LOCATION"
  * （Turbo 模式，自动批准所有工具权限请求），"0" 或未设置则保持默认，由会话 mode
  * 与权限规则决定。`agy` 本身不读取该环境变量，由后端启动路径转换为 CLI 参数。 */
 const AGY_DANGEROUSLY_SKIP_PERMISSIONS_ENV = "AGY_DANGEROUSLY_SKIP_PERMISSIONS"
+/** codeg-side knob: "1" launches `agy acp --sandbox` (terminal commands run
+ * under the CLI's sandbox restrictions). Read by `antigravity_knob_args`. */
+const AGY_SANDBOX_ENV = "AGY_SANDBOX"
+/** codeg-side knob: "1" launches `agy acp --disable-telemetry`. */
+const AGY_DISABLE_TELEMETRY_ENV = "AGY_DISABLE_TELEMETRY"
 
 /** Every key this panel owns, so the settings page can fold the whole set into
  * the raw env draft (see `persistEnv`'s `draftEnvPatch`). */
@@ -91,6 +82,8 @@ export const ANTIGRAVITY_ENV_KEYS = [
   GOOGLE_CLOUD_PROJECT_ENV,
   GOOGLE_CLOUD_LOCATION_ENV,
   AGY_DANGEROUSLY_SKIP_PERMISSIONS_ENV,
+  AGY_SANDBOX_ENV,
+  AGY_DISABLE_TELEMETRY_ENV,
 ] as const
 
 /**
@@ -137,9 +130,18 @@ export function antigravityPermissionModeFromEnv(
   return value === "1" || value === "true" ? "turbo" : "default"
 }
 
+/** Same reading as the backend's `antigravity_knob_args`: only an explicit
+ * `"1"` / `"true"` turns a launch switch on. */
+function knobOn(env: Record<string, string>, key: string): boolean {
+  const value = (env[key] ?? "").trim().toLowerCase()
+  return value === "1" || value === "true"
+}
+
 export interface AntigravityFormValues {
   method: AntigravityAuthMethod
   permissionMode: AntigravityPermissionMode
+  sandbox: boolean
+  disableTelemetry: boolean
   geminiApiKey: string
   googleApiKey: string
   gcpProject: string
@@ -182,6 +184,8 @@ export function buildAntigravityEnv(
   // 两种状态都显式写入（"1" / "0"），确保原始 env 草稿同步准确。
   env[AGY_DANGEROUSLY_SKIP_PERMISSIONS_ENV] =
     values.permissionMode === "turbo" ? "1" : "0"
+  env[AGY_SANDBOX_ENV] = values.sandbox ? "1" : "0"
+  env[AGY_DISABLE_TELEMETRY_ENV] = values.disableTelemetry ? "1" : "0"
   for (const key of [
     GEMINI_API_KEY_ENV,
     GOOGLE_API_KEY_ENV,
@@ -655,245 +659,6 @@ function SignOut({ disabled }: { disabled: boolean }) {
  * 模型与会话模式不放在此处：`agy acp` 通过标准 ACP `configOptions` 上报，
  * 由输入框选择器按会话独立管理。
  */
-/** Human-readable byte count. Binary units — these are disk sizes. */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  const units = ["KB", "MB", "GB", "TB"]
-  let value = bytes / 1024
-  let unit = 0
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024
-    unit += 1
-  }
-  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`
-}
-
-/**
- * One-time reclamation of temp directories leaked by launches from BEFORE
- * per-launch isolation shipped.
- *
- * Scan-then-confirm rather than a silent sweep, and the copy says why: the
- * directories live in the system temp dir, which every PyInstaller application
- * shares. codeg cannot tell its own leftovers from another app's, so deleting
- * them is the user's call, not codeg's.
- */
-function LeakedTempSection() {
-  const t = useTranslations("AcpAgentSettings")
-  const [scan, setScan] = useState<LeakedTempScan | null>(null)
-  /** Paths the user has explicitly opted in. Starts empty — see the render. */
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [failed, setFailed] = useState<string[]>([])
-  const [busy, setBusy] = useState(false)
-  const [confirming, setConfirming] = useState(false)
-
-  const runScan = useCallback(async () => {
-    setBusy(true)
-    try {
-      setScan(await acpScanLeakedTemp())
-      // A new scan is a new set of paths; carrying ticks across would let a
-      // path the user never looked at arrive pre-approved.
-      setSelected(new Set())
-      setFailed([])
-    } catch (err) {
-      toast.error(toErrorMessage(err))
-    } finally {
-      setBusy(false)
-    }
-  }, [])
-
-  const chosen = useMemo(
-    () => scan?.entries.filter((entry) => selected.has(entry.path)) ?? [],
-    [scan, selected]
-  )
-  const chosenBytes = chosen.reduce((total, entry) => total + entry.bytes, 0)
-
-  const runReclaim = useCallback(async () => {
-    setConfirming(false)
-    if (chosen.length === 0) return
-    setBusy(true)
-    try {
-      const result = await acpReclaimLeakedTemp(chosen.map((e) => e.path))
-      toast.success(
-        t("antigravity.tempReclaimed", {
-          count: result.removed,
-          size: formatBytes(result.freed_bytes),
-        })
-      )
-      // Every failure, not just the first: "removed 3 of 5" with three
-      // unexplained survivors is the report that wastes the next hour.
-      setFailed(result.failed)
-      setScan(await acpScanLeakedTemp())
-      setSelected(new Set())
-    } catch (err) {
-      toast.error(toErrorMessage(err))
-    } finally {
-      setBusy(false)
-    }
-  }, [chosen, t])
-
-  const toggle = useCallback((path: string, on: boolean) => {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (on) next.add(path)
-      else next.delete(path)
-      return next
-    })
-  }, [])
-
-  const allChecked: boolean | "indeterminate" =
-    scan && scan.entries.length > 0 && selected.size === scan.entries.length
-      ? true
-      : selected.size > 0
-        ? "indeterminate"
-        : false
-
-  return (
-    <AgentPanelCard
-      icon={HardDrive}
-      title={t("antigravity.tempReclaimTitle")}
-      description={t("antigravity.tempReclaimHint")}
-    >
-      {scan ? (
-        <div className="space-y-1">
-          <p className="text-2xs">
-            {scan.entries.length === 0
-              ? t("antigravity.tempReclaimNone")
-              : t("antigravity.tempReclaimFound", {
-                  count: scan.entries.length,
-                  size: formatBytes(scan.total_bytes),
-                })}
-          </p>
-          {scan.skipped > 0 ? (
-            <p className="text-2xs text-muted-foreground">
-              {t("antigravity.tempReclaimSkipped", { count: scan.skipped })}
-            </p>
-          ) : null}
-          <code className="block overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-3xs whitespace-nowrap text-muted-foreground">
-            {scan.root}
-          </code>
-
-          {/* Nothing is pre-ticked, and every path is shown. The hint above
-              says codeg cannot tell its own leftovers from another
-              application's; a single button that deleted all of them would be
-              asking the user to take responsibility for a list they were never
-              shown. */}
-          {scan.entries.length > 0 ? (
-            <div className="rounded border">
-              <label className="flex items-center gap-2 border-b px-2 py-1">
-                <Checkbox
-                  checked={allChecked}
-                  disabled={busy}
-                  onCheckedChange={(value) =>
-                    setSelected(
-                      value === true
-                        ? new Set(scan.entries.map((e) => e.path))
-                        : new Set()
-                    )
-                  }
-                />
-                <span className="text-3xs text-muted-foreground">
-                  {t("antigravity.tempReclaimSelectAll")}
-                </span>
-              </label>
-              <div className="max-h-40 overflow-y-auto">
-                {scan.entries.map((entry) => (
-                  <label
-                    className="flex items-center gap-2 px-2 py-1 hover:bg-muted/50"
-                    key={entry.path}
-                  >
-                    <Checkbox
-                      checked={selected.has(entry.path)}
-                      disabled={busy}
-                      onCheckedChange={(value) =>
-                        toggle(entry.path, value === true)
-                      }
-                    />
-                    <span className="min-w-0 flex-1 truncate font-mono text-3xs">
-                      {entry.path}
-                    </span>
-                    <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">
-                      {formatBytes(entry.bytes)}
-                    </span>
-                    <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">
-                      {t("antigravity.tempReclaimAgeHours", {
-                        hours: entry.age_hours,
-                      })}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {failed.length > 0 ? (
-            <ul className="space-y-0.5">
-              {failed.map((message) => (
-                <li className="text-3xs text-destructive" key={message}>
-                  {message}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      ) : null}
-
-      <div className="flex justify-end gap-1.5">
-        <Button
-          className="h-7 gap-1.5 px-2.5 text-xs"
-          disabled={busy}
-          onClick={() => void runScan()}
-          size="sm"
-          type="button"
-          variant="outline"
-        >
-          {busy && !scan ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : null}
-          {t("antigravity.tempReclaimScan")}
-        </Button>
-        {scan && scan.entries.length > 0 ? (
-          <AlertDialog onOpenChange={setConfirming} open={confirming}>
-            <AlertDialogTrigger asChild>
-              <Button
-                className="h-7 gap-1.5 px-2.5 text-xs"
-                disabled={busy || chosen.length === 0}
-                size="sm"
-                type="button"
-                variant="destructive"
-              >
-                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                {t("antigravity.tempReclaimDelete")}
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>
-                  {t("antigravity.tempReclaimConfirmTitle", {
-                    count: chosen.length,
-                  })}
-                </AlertDialogTitle>
-                <AlertDialogDescription>
-                  {t("antigravity.tempReclaimConfirmBody", {
-                    size: formatBytes(chosenBytes),
-                  })}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>
-                  {t("antigravity.tempReclaimCancel")}
-                </AlertDialogCancel>
-                <AlertDialogAction onClick={() => void runReclaim()}>
-                  {t("antigravity.tempReclaimConfirmAction")}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        ) : null}
-      </div>
-    </AgentPanelCard>
-  )
-}
-
 export function AntigravityConfigPanel({
   agent,
   saving,
@@ -914,6 +679,12 @@ export function AntigravityConfigPanel({
     useState<AntigravityPermissionMode>(() =>
       antigravityPermissionModeFromEnv(agent.env)
     )
+  const [sandbox, setSandbox] = useState(() =>
+    knobOn(agent.env, AGY_SANDBOX_ENV)
+  )
+  const [disableTelemetry, setDisableTelemetry] = useState(() =>
+    knobOn(agent.env, AGY_DISABLE_TELEMETRY_ENV)
+  )
   const [geminiApiKey, setGeminiApiKey] = useState(
     () => agent.env[GEMINI_API_KEY_ENV] ?? ""
   )
@@ -948,6 +719,8 @@ export function AntigravityConfigPanel({
     () => ({
       method: inferAntigravityMethod(agent.env),
       permissionMode: antigravityPermissionModeFromEnv(agent.env),
+      sandbox: knobOn(agent.env, AGY_SANDBOX_ENV),
+      disableTelemetry: knobOn(agent.env, AGY_DISABLE_TELEMETRY_ENV),
       geminiApiKey: agent.env[GEMINI_API_KEY_ENV] ?? "",
       googleApiKey: agent.env[GOOGLE_API_KEY_ENV] ?? "",
       gcpProject: agent.env[GOOGLE_CLOUD_PROJECT_ENV] ?? "",
@@ -962,6 +735,8 @@ export function AntigravityConfigPanel({
     const changed =
       previous.method !== persisted.method ||
       previous.permissionMode !== persisted.permissionMode ||
+      previous.sandbox !== persisted.sandbox ||
+      previous.disableTelemetry !== persisted.disableTelemetry ||
       previous.geminiApiKey !== persisted.geminiApiKey ||
       previous.googleApiKey !== persisted.googleApiKey ||
       previous.gcpProject !== persisted.gcpProject ||
@@ -971,6 +746,8 @@ export function AntigravityConfigPanel({
     if (dirty.current) return
     setMethod(persisted.method)
     setPermissionMode(persisted.permissionMode)
+    setSandbox(persisted.sandbox)
+    setDisableTelemetry(persisted.disableTelemetry)
     setGeminiApiKey(persisted.geminiApiKey)
     setGoogleApiKey(persisted.googleApiKey)
     setGcpProject(persisted.gcpProject)
@@ -980,6 +757,8 @@ export function AntigravityConfigPanel({
   const values: AntigravityFormValues = {
     method,
     permissionMode,
+    sandbox,
+    disableTelemetry,
     geminiApiKey,
     googleApiKey,
     gcpProject,
@@ -1228,8 +1007,6 @@ export function AntigravityConfigPanel({
         ) : null}
       </AgentPanelCard>
 
-      <LeakedTempSection />
-
       {/* 权限模式（Turbo 开关）：映射为 `agy acp --dangerously-skip-permissions` */}
       <AgentPanelCard
         icon={ShieldCheck}
@@ -1273,7 +1050,43 @@ export function AntigravityConfigPanel({
               : t("antigravity.permissionModeDefaultHint")}
           </p>
         </div>
+
+        <label className="flex cursor-pointer items-start justify-between gap-2 border-t pt-3">
+          <span className="min-w-0">
+            <span className="block text-xs font-medium">
+              {t("antigravity.sandboxLabel")}
+            </span>
+            <span className="mt-0.5 block text-2xs text-muted-foreground">
+              {t("antigravity.sandboxHint")}
+            </span>
+          </span>
+          <Switch
+            aria-label={t("antigravity.sandboxLabel")}
+            checked={sandbox}
+            disabled={busy}
+            onCheckedChange={(checked) => {
+              markDirty()
+              setSandbox(checked)
+            }}
+          />
+        </label>
       </AgentPanelCard>
+
+      <AgentPanelCard
+        title={t("antigravity.telemetryTitle")}
+        description={t("antigravity.telemetryHint")}
+        control={
+          <Switch
+            aria-label={t("antigravity.telemetryTitle")}
+            checked={disableTelemetry}
+            disabled={busy}
+            onCheckedChange={(checked) => {
+              markDirty()
+              setDisableTelemetry(checked)
+            }}
+          />
+        }
+      />
 
       <AgentPanelSaveBar>
         <Button

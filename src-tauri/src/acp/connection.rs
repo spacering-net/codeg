@@ -315,6 +315,35 @@ pub(crate) fn antigravity_skip_permissions_enabled(value: Option<&str>) -> bool 
     cursor_force_enabled(value)
 }
 
+/// Antigravity panel knob for `agy acp --sandbox` (terminal commands run with
+/// the CLI's sandbox restrictions). codeg-side only; `agy` reads no such env.
+pub(crate) const ANTIGRAVITY_SANDBOX_ENV: &str = "AGY_SANDBOX";
+
+/// Antigravity panel knob for `agy acp --disable-telemetry`. codeg-side only.
+pub(crate) const ANTIGRAVITY_DISABLE_TELEMETRY_ENV: &str = "AGY_DISABLE_TELEMETRY";
+
+/// The launch flags the Antigravity panel's knobs ask for, in a fixed order.
+/// Each knob reads like [`cursor_force_enabled`]: only `"1"` / `"true"` turn
+/// it on, so an unset row keeps the CLI's own defaults.
+pub(crate) fn antigravity_knob_args(runtime_env: &BTreeMap<String, String>) -> Vec<String> {
+    let on = |key: &str| cursor_force_enabled(runtime_env.get(key).map(String::as_str));
+    let mut args = Vec::new();
+    if antigravity_skip_permissions_enabled(
+        runtime_env
+            .get(ANTIGRAVITY_SKIP_PERMISSIONS_ENV)
+            .map(String::as_str),
+    ) {
+        args.push("--dangerously-skip-permissions".to_string());
+    }
+    if on(ANTIGRAVITY_SANDBOX_ENV) {
+        args.push("--sandbox".to_string());
+    }
+    if on(ANTIGRAVITY_DISABLE_TELEMETRY_ENV) {
+        args.push("--disable-telemetry".to_string());
+    }
+    args
+}
+
 /// Cursor subscription-mode launch policy. When the user picked the official
 /// subscription (browser login), guarantee the launched CLI sees NONE of the
 /// custom-endpoint credentials — not even a stale `CURSOR_API_KEY` /
@@ -2488,16 +2517,10 @@ async fn build_agent(
             // rides on `--gemini-dir` below.
             if agent_type == AgentType::Antigravity {
                 apply_antigravity_env_policy(&mut merged_env, runtime_env);
-                // Antigravity 权限模式：`--dangerously-skip-permissions` 对应 Turbo 模式，
-                // 自动批准所有工具权限请求（显式 deny 规则与系统黑名单仍生效）。
-                // 由设置面板写入 codeg 侧环境变量 `AGY_DANGEROUSLY_SKIP_PERMISSIONS` 控制。
-                if antigravity_skip_permissions_enabled(
-                    runtime_env
-                        .get(ANTIGRAVITY_SKIP_PERMISSIONS_ENV)
-                        .map(String::as_str),
-                ) {
-                    cmd_args.push("--dangerously-skip-permissions".to_string());
-                }
+                // Panel knobs: Turbo (`--dangerously-skip-permissions`; explicit
+                // deny rules and the system denylist still apply), the terminal
+                // sandbox and telemetry — see `antigravity_knob_args`.
+                cmd_args.extend(antigravity_knob_args(runtime_env));
                 if let Some(dir) = antigravity_gemini_dir_arg(runtime_env) {
                     cmd_args.push("--gemini-dir".to_string());
                     cmd_args.push(dir);
@@ -23700,6 +23723,35 @@ mod kiro_ext_tests {
         for value in [None, Some("0"), Some(""), Some("yes"), Some("turbo")] {
             assert!(!antigravity_skip_permissions_enabled(value), "{value:?}");
         }
+    }
+
+    #[test]
+    fn antigravity_knobs_map_to_their_launch_flags() {
+        let env = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect()
+        };
+        assert!(antigravity_knob_args(&env(&[])).is_empty());
+        assert!(antigravity_knob_args(&env(&[
+            (ANTIGRAVITY_SKIP_PERMISSIONS_ENV, "0"),
+            (ANTIGRAVITY_SANDBOX_ENV, "0"),
+            (ANTIGRAVITY_DISABLE_TELEMETRY_ENV, "no"),
+        ]))
+        .is_empty());
+        assert_eq!(
+            antigravity_knob_args(&env(&[
+                (ANTIGRAVITY_DISABLE_TELEMETRY_ENV, "true"),
+                (ANTIGRAVITY_SANDBOX_ENV, "1"),
+                (ANTIGRAVITY_SKIP_PERMISSIONS_ENV, "1"),
+            ])),
+            vec![
+                "--dangerously-skip-permissions",
+                "--sandbox",
+                "--disable-telemetry"
+            ]
+        );
     }
 
     #[test]

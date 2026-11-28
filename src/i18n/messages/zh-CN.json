@@ -1161,6 +1161,10 @@
       "permissionModeTurbo": "Turbo（--dangerously-skip-permissions）",
       "permissionModeDefaultHint": "以默认参数启动 `agy acp`，由输入框的会话模式（default / accept-edits / auto / plan）与权限规则控制工具审批。",
       "permissionModeTurboHint": "以 `agy acp --dangerously-skip-permissions` 启动会话：自动批准所有工具权限请求、不再弹确认（显式 deny 规则与系统黑名单仍然生效）。对新会话生效。",
+      "sandboxLabel": "终端沙箱",
+      "sandboxHint": "以 `agy acp --sandbox` 启动：智能体执行的终端命令受 CLI 沙箱限制。对新会话生效。",
+      "telemetryTitle": "禁用遥测",
+      "telemetryHint": "以 `agy acp --disable-telemetry` 启动，CLI 不再上报使用遥测。对新会话生效。",
       "headless": {
         "title": "在没有浏览器的机器上登录",
         "description": "Antigravity CLI 会打印一个 Google 登录链接，然后等待授权码。这个过程不需要本机有浏览器：把链接拿到任意设备上打开并授权，再把授权码（或跳转后的完整地址）粘回这里即可。",
@@ -1182,21 +1186,7 @@
         "action": "退出登录",
         "done": "已退出登录。重新登录即可选择其他账号。",
         "failed": "退出登录失败"
-      },
-      "tempReclaimTitle": "残留临时空间",
-      "tempReclaimHint": "查找旧版 codeg 下该代理遗留的临时目录。确认前不会删除任何内容，使用中的项目会被跳过。",
-      "tempReclaimScan": "扫描",
-      "tempReclaimDelete": "删除残留",
-      "tempReclaimNone": "没有可回收的内容。",
-      "tempReclaimFound": "发现 {count} 项残留，可回收 {size}。",
-      "tempReclaimSkipped": "已跳过 {count} 项（仍在使用或过新）。",
-      "tempReclaimed": "已从 {count} 项中回收 {size}。",
-      "tempReclaimSelectAll": "全选",
-      "tempReclaimAgeHours": "{hours} 小时",
-      "tempReclaimConfirmTitle": "删除选中的 {count} 项？",
-      "tempReclaimConfirmBody": "将永久删除 {size}。系统临时目录与其他应用共用，确认前请先核对每条路径；仍在使用中的项会被跳过。",
-      "tempReclaimConfirmAction": "删除",
-      "tempReclaimCancel": "取消"
+      }
     },
     "kiro": {
       "configManagement": "配置管理",

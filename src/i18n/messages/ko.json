@@ -1161,6 +1161,10 @@
       "permissionModeTurbo": "Turbo(--dangerously-skip-permissions)",
       "permissionModeDefaultHint": "기본 옵션으로 `agy acp`를 실행하여 입력창의 세션 모드(default / accept-edits / auto / plan)와 권한 규칙에 따라 도구 승인을 처리합니다.",
       "permissionModeTurboHint": "`agy acp --dangerously-skip-permissions`로 세션을 시작합니다. 확인 없이 모든 도구 권한 요청을 자동 승인합니다(명시적 deny 규칙과 시스템 차단 목록은 유지). 새 세션부터 적용됩니다.",
+      "sandboxLabel": "터미널 샌드박스",
+      "sandboxHint": "`agy acp --sandbox`로 실행합니다. 에이전트가 실행하는 터미널 명령에 CLI 샌드박스 제한이 적용됩니다. 새 세션부터 적용됩니다.",
+      "telemetryTitle": "원격 분석 끄기",
+      "telemetryHint": "`agy acp --disable-telemetry`로 실행하여 CLI가 사용 원격 분석을 보내지 않습니다. 새 세션부터 적용됩니다.",
       "headless": {
         "title": "브라우저가 없는 컴퓨터에서 로그인",
         "description": "Antigravity CLI가 Google 로그인 링크를 출력하고 인증 코드를 기다립니다. 이 컴퓨터에 브라우저가 없어도 사용할 수 있습니다. 아무 기기에서나 링크를 열어 액세스를 승인한 뒤 인증 코드(또는 이동한 전체 주소)를 여기에 붙여넣으세요.",
@@ -1182,21 +1186,7 @@
         "action": "로그아웃",
         "done": "로그아웃했습니다. 다시 로그인하면 다른 계정을 선택할 수 있습니다.",
         "failed": "로그아웃하지 못했습니다"
-      },
-      "tempReclaimTitle": "남은 임시 공간",
-      "tempReclaimHint": "이전 codeg 버전에서 이 에이전트가 남긴 임시 디렉터리를 찾습니다. 확인하기 전에는 아무것도 삭제되지 않으며, 사용 중인 항목은 건너뜁니다.",
-      "tempReclaimScan": "검사",
-      "tempReclaimDelete": "잔여물 삭제",
-      "tempReclaimNone": "회수할 항목이 없습니다.",
-      "tempReclaimFound": "잔여 항목 {count}개, {size} 회수 가능.",
-      "tempReclaimSkipped": "{count}개 건너뜀 (사용 중이거나 너무 최근).",
-      "tempReclaimed": "{count}개 항목에서 {size}를 회수했습니다.",
-      "tempReclaimSelectAll": "전체 선택",
-      "tempReclaimAgeHours": "{hours}시간",
-      "tempReclaimConfirmTitle": "선택한 {count}개 항목을 삭제할까요?",
-      "tempReclaimConfirmBody": "{size}를 영구적으로 삭제합니다. 시스템 임시 폴더는 다른 앱과 공유되므로 확인하기 전에 각 경로를 확인하세요. 사용 중인 항목은 건너뜁니다.",
-      "tempReclaimConfirmAction": "삭제",
-      "tempReclaimCancel": "취소"
+      }
     },
     "kiro": {
       "configManagement": "구성 관리",

@@ -1161,6 +1161,10 @@
       "permissionModeTurbo": "Turbo (--dangerously-skip-permissions)",
       "permissionModeDefaultHint": "Launches `agy acp` normally so the composer mode selector (default, accept-edits, auto, plan) and your permission rules govern tool approvals.",
       "permissionModeTurboHint": "Launches `agy acp --dangerously-skip-permissions`: auto-approves all tool permission requests without prompting (explicit deny rules and system denylist still apply). Takes effect for new sessions.",
+      "sandboxLabel": "Terminal sandbox",
+      "sandboxHint": "Launches `agy acp --sandbox`: the agent's terminal commands run under the CLI's sandbox restrictions. Takes effect for new sessions.",
+      "telemetryTitle": "Disable telemetry",
+      "telemetryHint": "Launches `agy acp --disable-telemetry`, so the CLI sends no usage telemetry. Takes effect for new sessions.",
       "headless": {
         "title": "Sign in without a browser on this machine",
         "description": "Antigravity CLI prints a Google sign-in link and waits for the authorization code. This works without a browser on this machine: open the link on any device, approve access, then paste the authorization code (or the full address you land on) back here.",
@@ -1182,21 +1186,7 @@
         "action": "Sign out",
         "done": "Signed out. Sign in again to pick a different account.",
         "failed": "Could not sign out"
-      },
-      "tempReclaimTitle": "Leftover temp space",
-      "tempReclaimHint": "Finds temp dirs this agent left behind under older codeg versions. Nothing is deleted until you confirm; in-use items are skipped.",
-      "tempReclaimScan": "Scan",
-      "tempReclaimDelete": "Delete leftovers",
-      "tempReclaimNone": "Nothing to reclaim.",
-      "tempReclaimFound": "{count} leftover item(s), {size} reclaimable.",
-      "tempReclaimSkipped": "{count} skipped (still in use or too recent).",
-      "tempReclaimed": "Reclaimed {size} from {count} item(s).",
-      "tempReclaimSelectAll": "Select all",
-      "tempReclaimAgeHours": "{hours}h",
-      "tempReclaimConfirmTitle": "Delete {count} item(s)?",
-      "tempReclaimConfirmBody": "This permanently deletes {size}. The system temp folder is shared with other applications, so check each path before confirming — anything still in use is skipped.",
-      "tempReclaimConfirmAction": "Delete",
-      "tempReclaimCancel": "Cancel"
+      }
     },
     "kiro": {
       "configManagement": "Configuration",

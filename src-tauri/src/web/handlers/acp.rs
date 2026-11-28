@@ -1,4 +1,3 @@
-use crate::acp::temp_reclaim as codeg_temp_reclaim;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -290,29 +289,6 @@ pub async fn acp_clear_binary_cache(
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))
-}
-
-pub async fn acp_scan_leaked_temp(
-) -> Result<Json<codeg_temp_reclaim::LeakedTempScan>, AppCommandError> {
-    let result = acp_commands::acp_scan_leaked_temp()
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(result))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AcpReclaimLeakedTempParams {
-    pub paths: Vec<String>,
-}
-
-pub async fn acp_reclaim_leaked_temp(
-    Json(params): Json<AcpReclaimLeakedTempParams>,
-) -> Result<Json<codeg_temp_reclaim::LeakedTempReclaim>, AppCommandError> {
-    let result = acp_commands::acp_reclaim_leaked_temp(params.paths)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(result))
 }
 
 #[derive(Deserialize)]

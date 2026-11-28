@@ -1161,6 +1161,10 @@
       "permissionModeTurbo": "Turbo（--dangerously-skip-permissions）",
       "permissionModeDefaultHint": "以預設參數啟動 `agy acp`，由輸入框的工作階段模式（default / accept-edits / auto / plan）與權限規則控制工具審核。",
       "permissionModeTurboHint": "以 `agy acp --dangerously-skip-permissions` 啟動工作階段：自動核准所有工具權限請求、不再彈出確認（明確的 deny 規則與系統封鎖清單仍然有效）。對新工作階段生效。",
+      "sandboxLabel": "終端機沙箱",
+      "sandboxHint": "以 `agy acp --sandbox` 啟動：智慧體執行的終端機指令受 CLI 沙箱限制。對新工作階段生效。",
+      "telemetryTitle": "停用遙測",
+      "telemetryHint": "以 `agy acp --disable-telemetry` 啟動，CLI 不再回報使用遙測。對新工作階段生效。",
       "headless": {
         "title": "在沒有瀏覽器的機器上登入",
         "description": "Antigravity CLI 會列印一個 Google 登入連結並等待授權碼。此流程不需本機安裝瀏覽器：將連結拿到任意裝置上開啟並授權，再把授權碼（或跳轉後的完整網址）貼回這裡即可。",
@@ -1182,21 +1186,7 @@
         "action": "登出",
         "done": "已登出。重新登入即可選擇其他帳號。",
         "failed": "登出失敗"
-      },
-      "tempReclaimTitle": "殘留暫存空間",
-      "tempReclaimHint": "尋找舊版 codeg 下此代理遺留的暫存目錄。確認前不會刪除任何內容，使用中的項目會被跳過。",
-      "tempReclaimScan": "掃描",
-      "tempReclaimDelete": "刪除殘留",
-      "tempReclaimNone": "沒有可回收的內容。",
-      "tempReclaimFound": "發現 {count} 項殘留，可回收 {size}。",
-      "tempReclaimSkipped": "已跳過 {count} 項（仍在使用或過新）。",
-      "tempReclaimed": "已從 {count} 項中回收 {size}。",
-      "tempReclaimSelectAll": "全選",
-      "tempReclaimAgeHours": "{hours} 小時",
-      "tempReclaimConfirmTitle": "刪除選取的 {count} 項？",
-      "tempReclaimConfirmBody": "將永久刪除 {size}。系統暫存目錄與其他應用程式共用，確認前請先核對每條路徑；仍在使用中的項目會被略過。",
-      "tempReclaimConfirmAction": "刪除",
-      "tempReclaimCancel": "取消"
+      }
     },
     "kiro": {
       "configManagement": "設定管理",

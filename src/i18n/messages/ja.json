@@ -1161,6 +1161,10 @@
       "permissionModeTurbo": "Turbo（--dangerously-skip-permissions）",
       "permissionModeDefaultHint": "通常の `agy acp` で起動し、入力欄のセッションモード（default / accept-edits / auto / plan）と権限ルールに従ってツール承認を行います。",
       "permissionModeTurboHint": "`agy acp --dangerously-skip-permissions` で起動します。確認なしで全ツールの権限リクエストを自動承認します（明示的な deny ルールとシステム拒否リストは引き続き有効）。新しいセッションから反映されます。",
+      "sandboxLabel": "ターミナルサンドボックス",
+      "sandboxHint": "`agy acp --sandbox` で起動します。エージェントが実行するターミナルコマンドに CLI のサンドボックス制限がかかります。新しいセッションから有効です。",
+      "telemetryTitle": "テレメトリを無効化",
+      "telemetryHint": "`agy acp --disable-telemetry` で起動し、CLI は利用状況のテレメトリを送信しません。新しいセッションから有効です。",
       "headless": {
         "title": "ブラウザのないマシンでサインイン",
         "description": "Antigravity CLI は Google サインイン用リンクを表示し、認可コードの入力を待ちます。このマシンにブラウザがなくても利用できます。任意の端末でリンクを開いてアクセスを承認し、認可コード（または移動先の完全な URL）をここに貼り付けてください。",
@@ -1182,21 +1186,7 @@
         "action": "サインアウト",
         "done": "サインアウトしました。サインインし直すと別のアカウントを選べます。",
         "failed": "サインアウトできませんでした"
-      },
-      "tempReclaimTitle": "残存した一時領域",
-      "tempReclaimHint": "以前の codeg でこのエージェントが残した一時ディレクトリを探します。確認するまで何も削除されず、使用中の項目はスキップされます。",
-      "tempReclaimScan": "スキャン",
-      "tempReclaimDelete": "残存物を削除",
-      "tempReclaimNone": "回収できるものはありません。",
-      "tempReclaimFound": "残存物 {count} 件、{size} を回収できます。",
-      "tempReclaimSkipped": "{count} 件をスキップしました（使用中または新しすぎます）。",
-      "tempReclaimed": "{count} 件から {size} を回収しました。",
-      "tempReclaimSelectAll": "すべて選択",
-      "tempReclaimAgeHours": "{hours} 時間",
-      "tempReclaimConfirmTitle": "選択した {count} 件を削除しますか？",
-      "tempReclaimConfirmBody": "{size} を完全に削除します。システムの一時フォルダーは他のアプリと共有されるため、確認する前に各パスをご確認ください。使用中のものはスキップされます。",
-      "tempReclaimConfirmAction": "削除",
-      "tempReclaimCancel": "キャンセル"
+      }
     },
     "kiro": {
       "configManagement": "設定管理",

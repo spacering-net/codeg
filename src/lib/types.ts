@@ -8116,30 +8116,6 @@ export interface PreflightResult {
 
 // ─── OpenCode Plugins ───
 
-// ─── Leaked temp reclamation ───
-
-/** One reclaimable artifact left by an agent launch from before temp isolation. */
-export interface LeakedTempEntry {
-  path: string
-  bytes: number
-  age_hours: number
-  is_dir: boolean
-}
-
-export interface LeakedTempScan {
-  root: string
-  entries: LeakedTempEntry[]
-  total_bytes: number
-  /** Matched the leak shape but is still in use, or too recent to touch. */
-  skipped: number
-}
-
-export interface LeakedTempReclaim {
-  removed: number
-  freed_bytes: number
-  failed: string[]
-}
-
 /**
  * What an OpenCode plugin entry names: an npm or git package (OpenCode
  * installs it itself when a session starts), a local plugin directory, or a

@@ -1161,6 +1161,10 @@
       "permissionModeTurbo": "Turbo (--dangerously-skip-permissions)",
       "permissionModeDefaultHint": "Startet `agy acp` regulär, sodass der Sitzungsmodus-Auswähler (default, accept-edits, auto, plan) und deine Berechtigungsregeln Werkzeugfreigaben steuern.",
       "permissionModeTurboHint": "Startet `agy acp --dangerously-skip-permissions`: genehmigt alle Werkzeugberechtigungsanfragen automatisch ohne Rückfrage (explizite Deny-Regeln und System-Sperrlisten gelten weiterhin). Wirkt ab neuen Sitzungen.",
+      "sandboxLabel": "Terminal-Sandbox",
+      "sandboxHint": "Startet `agy acp --sandbox`: Die Terminalbefehle des Agenten laufen mit den Sandbox-Einschränkungen der CLI. Gilt für neue Sitzungen.",
+      "telemetryTitle": "Telemetrie deaktivieren",
+      "telemetryHint": "Startet `agy acp --disable-telemetry`, sodass die CLI keine Nutzungstelemetrie sendet. Gilt für neue Sitzungen.",
       "headless": {
         "title": "Ohne Browser auf diesem Rechner anmelden",
         "description": "Die Antigravity-CLI gibt einen Google-Anmeldelink aus und wartet auf den Autorisierungscode. Das funktioniert ohne Browser auf diesem Rechner: Öffne den Link auf einem beliebigen Gerät, bestätige den Zugriff und füge den Autorisierungscode (oder die vollständige Zieladresse) hier ein.",
@@ -1182,21 +1186,7 @@
         "action": "Abmelden",
         "done": "Abgemeldet. Melde dich erneut an, um ein anderes Konto zu wählen.",
         "failed": "Abmelden fehlgeschlagen"
-      },
-      "tempReclaimTitle": "Übrig gebliebener temporärer Speicher",
-      "tempReclaimHint": "Findet temporäre Verzeichnisse, die dieser Agent unter älteren codeg-Versionen hinterlassen hat. Nichts wird vor deiner Bestätigung gelöscht; Verwendetes wird übersprungen.",
-      "tempReclaimScan": "Suchen",
-      "tempReclaimDelete": "Überreste löschen",
-      "tempReclaimNone": "Nichts zurückzugewinnen.",
-      "tempReclaimFound": "{count} Überrest(e), {size} freigebbar.",
-      "tempReclaimSkipped": "{count} übersprungen (noch in Verwendung oder zu neu).",
-      "tempReclaimed": "{size} aus {count} Element(en) zurückgewonnen.",
-      "tempReclaimSelectAll": "Alle auswählen",
-      "tempReclaimAgeHours": "{hours} Std.",
-      "tempReclaimConfirmTitle": "{count} Element(e) löschen?",
-      "tempReclaimConfirmBody": "Damit werden {size} dauerhaft gelöscht. Der temporäre Systemordner wird von anderen Anwendungen mitbenutzt – prüfe daher jeden Pfad vor dem Bestätigen. Noch verwendete Einträge werden übersprungen.",
-      "tempReclaimConfirmAction": "Löschen",
-      "tempReclaimCancel": "Abbrechen"
+      }
     },
     "kiro": {
       "configManagement": "Konfiguration",

@@ -2313,8 +2313,6 @@ mod tauri_app {
                 acp_commands::acp_get_agent_status,
                 acp_commands::acp_env_diagnostics,
                 acp_commands::acp_clear_binary_cache,
-                acp_commands::acp_scan_leaked_temp,
-                acp_commands::acp_reclaim_leaked_temp,
                 acp_commands::acp_download_agent_binary,
                 acp_commands::acp_update_system_agent,
                 acp_commands::acp_install_uv_tool,
