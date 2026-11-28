@@ -33681,14 +33681,19 @@ mod tests {
             Some("/srv/agy")
         );
 
-        // `~` 按子进程的 HOME 展开，与历史解析器一致。
+        // `~` 按子进程的家目录变量展开，与历史解析器一致（Windows 读 USERPROFILE）。
+        #[cfg(windows)]
+        const CHILD_HOME_KEY: &str = "USERPROFILE";
+        #[cfg(not(windows))]
+        const CHILD_HOME_KEY: &str = "HOME";
         let tilde = BTreeMap::from([
-            ("HOME".to_string(), "/srv".to_string()),
+            (CHILD_HOME_KEY.to_string(), "/srv".to_string()),
             ("GEMINI_HOME".to_string(), "~/agy".to_string()),
         ]);
+        let tilde_expected = PathBuf::from("/srv").join("agy");
         assert_eq!(
             antigravity_gemini_dir_arg_with_inherited(&tilde, None).as_deref(),
-            Some("/srv/agy")
+            Some(tilde_expected.to_string_lossy().as_ref())
         );
 
         // 父进程继承的 GEMINI_HOME 也会转换为 `--gemini-dir`，防止目录分裂。
@@ -33734,7 +33739,7 @@ mod tests {
         );
         assert_eq!(
             resolve_antigravity_launch_gemini_home_with_inherited(&tilde, None),
-            Some(PathBuf::from("/srv/agy"))
+            Some(tilde_expected)
         );
         assert_eq!(
             resolve_antigravity_launch_gemini_home_with_inherited(
@@ -33744,7 +33749,7 @@ mod tests {
             Some(PathBuf::from("/inherited/agy"))
         );
         let cleared_with_home = BTreeMap::from([
-            ("HOME".to_string(), "/srv/user".to_string()),
+            (CHILD_HOME_KEY.to_string(), "/srv/user".to_string()),
             ("GEMINI_HOME".to_string(), String::new()),
         ]);
         assert_eq!(
