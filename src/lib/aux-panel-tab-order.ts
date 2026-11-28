@@ -38,14 +38,15 @@ export const AUX_PANEL_TABS = [
   "pull_requests",
 ] as const
 
-export type AuxPanelTab = (typeof AUX_PANEL_TABS)[number]
+export type OrderedAuxPanelTab = (typeof AUX_PANEL_TABS)[number]
+export type AuxPanelTab = OrderedAuxPanelTab | "plugins"
 
 /** Every tab exactly once, top to bottom. */
-export type AuxTabOrder = readonly AuxPanelTab[]
+export type AuxTabOrder = readonly OrderedAuxPanelTab[]
 
 export const DEFAULT_AUX_TAB_ORDER: AuxTabOrder = AUX_PANEL_TABS
 
-export function isAuxPanelTab(value: unknown): value is AuxPanelTab {
+export function isAuxPanelTab(value: unknown): value is OrderedAuxPanelTab {
   return (
     typeof value === "string" &&
     (AUX_PANEL_TABS as readonly string[]).includes(value)
@@ -65,8 +66,8 @@ export function isAuxPanelTab(value: unknown): value is AuxPanelTab {
  */
 export function parseAuxTabOrder(raw: unknown): AuxTabOrder {
   if (!Array.isArray(raw)) return DEFAULT_AUX_TAB_ORDER
-  const seen = new Set<AuxPanelTab>()
-  const order: AuxPanelTab[] = []
+  const seen = new Set<OrderedAuxPanelTab>()
+  const order: OrderedAuxPanelTab[] = []
   for (const entry of raw) {
     if (!isAuxPanelTab(entry) || seen.has(entry)) continue
     seen.add(entry)
@@ -101,7 +102,7 @@ export function sameAuxTabOrder(a: AuxTabOrder, b: AuxTabOrder): boolean {
  */
 export function moveAuxTab(
   order: AuxTabOrder,
-  tab: AuxPanelTab,
+  tab: OrderedAuxPanelTab,
   delta: number
 ): AuxTabOrder {
   const from = order.indexOf(tab)

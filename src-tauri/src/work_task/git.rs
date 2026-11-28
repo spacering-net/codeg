@@ -1749,11 +1749,11 @@ mod tests {
         let base = rev_parse(repo_path, "HEAD").await.expect("base sha");
 
         let wt = dir.path().join("trees").join("nested").join("repo-task-7");
-        crate::commands::folders::git_worktree_add(
-            repo_path.to_string(),
-            "task/7".to_string(),
-            wt.to_string_lossy().into_owned(),
-            Some(base.clone()),
+        crate::commands::folders::git_worktree_add_core(
+            repo_path,
+            "task/7",
+            &wt.to_string_lossy(),
+            Some(&base),
         )
         .await
         .expect("add into a root that does not exist yet");
