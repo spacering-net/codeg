@@ -68,6 +68,7 @@ export function entry(
     definition,
     extra: {},
     enabled: true,
+    paused: false,
     fingerprint: definition ? fingerprintOf(definition) : null,
     read_only: false,
     reserved: key === "codeg-mcp",
@@ -151,6 +152,8 @@ export function agent(
     transports: TRANSPORTS[id] ?? ["stdio", "http", "sse"],
     delivery: SESSION.has(id) ? "codeg_session" : "agent_file",
     can_disable: CAN_DISABLE.has(id),
+    disable_mode:
+      (rest.can_disable ?? CAN_DISABLE.has(id)) ? "native" : "unsupported",
     codeg_mcp: !["cline", "pi", "open_claw"].includes(id),
     session_capabilities: null,
     entries: listed

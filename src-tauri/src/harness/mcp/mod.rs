@@ -110,7 +110,9 @@ fn reads_of(inventory: &McpInventory) -> BTreeMap<McpAppType, AgentRead> {
         .agents
         .iter()
         .map(|agent| {
-            let read = if agent.config.status == McpFileStatus::Unreadable {
+            let read = if agent.config.status == McpFileStatus::Unreadable
+                || agent.config.basis.is_none()
+            {
                 AgentRead::Unreadable
             } else {
                 AgentRead::Entries(agent.entries.clone())
@@ -658,7 +660,7 @@ fn written_fingerprint(
     basis: Option<&str>,
 ) -> Option<String> {
     let paths = engine.paths_of(agent)?;
-    let (config, entries) = inventory::read_agent(agent, paths);
+    let (config, entries) = inventory::read_agent_config(engine, agent, paths);
     if config.basis.is_none() || config.basis.as_deref() != basis {
         return None;
     }

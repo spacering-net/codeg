@@ -312,6 +312,7 @@ impl Sandbox {
         let engine = EngineCtx {
             paths,
             lock_path: dir.path().join("locks").join("mcp.lock"),
+            paused_path: dir.path().join("mcp-paused.json"),
             backup_root: dir.path().join("backups"),
             lock_wait: LOCK_WAIT,
         };

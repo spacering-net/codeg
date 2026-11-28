@@ -4433,6 +4433,16 @@
         "dismiss": "Schließen",
         "moreIncidents": "+{count} weitere"
       },
+      "mcpRecovery": {
+        "title": "MCP-Server „{server}“ konnte nicht initialisiert werden",
+        "pauseAndReconnect": "{server} pausieren & neu verbinden",
+        "pausing": "Wird pausiert…",
+        "openSettings": "MCP-Einstellungen öffnen",
+        "pausedAndReconnecting": "{server} pausiert, Verbindung wird neu hergestellt…",
+        "serverNotFound": "„{server}“ wurde in der MCP-Konfiguration dieses Agenten nicht gefunden.",
+        "cannotPause": "„{server}“ kann für diesen Agenten nicht automatisch pausiert werden.",
+        "pauseFailed": "„{server}“ konnte nicht pausiert werden."
+      },
       "backgroundTasks": {
         "settledFallback": "Hintergrundaufgabe beendet ({status})",
         "notifySettledOne": "{agent}: Eine Hintergrundaufgabe ist fertig",
@@ -8128,7 +8138,9 @@
         "reserved": "Name des eingebauten Servers, nur aufgeführt",
         "readOnly": "schreibgeschützt",
         "skipped": "in seinen Sitzungen übersprungen",
-        "entryUnreadable": "Codeg kann diesen Eintrag nicht lesen"
+        "entryUnreadable": "Codeg kann diesen Eintrag nicht lesen",
+        "paused": "Pausiert",
+        "pausedNote": "Vorübergehend von Codeg pausiert; erneutes Aktivieren stellt die vollständige Konfiguration wieder her."
       },
       "agents": {
         "showAll": "Alle Agenten anzeigen ({count, number} nicht installiert)",
@@ -8173,7 +8185,8 @@
         "skipped": "In Sitzungen übersprungen",
         "builtIn": "<code>codeg-mcp</code> (eingebaut)",
         "builtInNote": "Codegs eigener Server für die Zusammenarbeit. Er steht nicht in dieser Datei; ein- und ausgeschaltet wird er unter Einstellungen › Zusammenarbeit.",
-        "openCollaboration": "Einstellungen öffnen"
+        "openCollaboration": "Einstellungen öffnen",
+        "pauseReversible": "Das Ausschalten eines Servers pausiert ihn reversibel in Codeg, ohne Argumente, Umgebungsvariablen oder Header zu verlieren."
       },
       "blocks": {
         "unknownAgent": "Dieses Codeg kennt diesen Agenten nicht; aktualisiere Codeg, um ihn zu verwalten.",
@@ -8402,7 +8415,76 @@
         "disableTitle": "<code>{key}</code> in {agent} ausschalten?",
         "enableAction": "Einschalten",
         "disableAction": "Ausschalten",
+        "pauseTitle": "<code>{key}</code> in {agent} pausieren?",
+        "pauseBody": "Codeg entfernt diesen Eintrag vorübergehend aus der Konfiguration von {agent} und behält eine Kopie, sodass beim Wiedereinschalten alle Argumente, Umgebungsvariablen und Header wiederhergestellt werden.",
+        "pauseAction": "Pausieren",
         "commentsLost": "Diese Datei enthält Kommentare, und Speichern entfernt sie."
+      },
+      "probe": {
+        "testConnection": "Verbindung testen",
+        "retest": "Erneut testen",
+        "testing": "Wird getestet…",
+        "checkAll": "Alle prüfen",
+        "latency": "{ms} ms",
+        "unsupported": "Dieses Codeg ist zu alt, um MCP-Server zu testen. Bitte aktualisieren.",
+        "rpcFailed": "Codeg konnte für den Verbindungstest nicht erreicht werden.",
+        "authRequiredHint": "Dieser Server erfordert eine interaktive OAuth-Anmeldung. Pausiere ihn, wenn dieser Agent OAuth nicht abschließen kann.",
+        "sessionIdMismatchHint": "Der Server hat die MCP-Sitzungs-ID abgelehnt oder geändert (z. B. hinter einem Proxy).",
+        "showTools": "{count, plural, one {# Tool anzeigen} other {# Tools anzeigen}}",
+        "hideTools": "Tools ausblenden",
+        "showStderr": "stderr anzeigen",
+        "hideStderr": "stderr ausblenden",
+        "status": {
+          "ok": "{count, plural, one {Erreichbar · # Tool} other {Erreichbar · # Tools}}",
+          "auth_required": "OAuth erforderlich",
+          "forbidden": "403 Verboten",
+          "session_id_mismatch": "Sitzungs-ID stimmt nicht überein",
+          "spawn_failed": "Start fehlgeschlagen",
+          "timeout": "Zeitüberschreitung",
+          "protocol_error": "Protokollfehler",
+          "network_error": "Netzwerkfehler",
+          "config_error": "Konfigurationsfehler",
+          "unknown": "Test fehlgeschlagen ({status})"
+        }
+      },
+      "bulk": {
+        "applyCompatible": "Auf kompatible Agenten anwenden",
+        "pauseAll": "Überall pausieren",
+        "enableAllCompatible": "Alle kompatiblen aktivieren",
+        "enableServerTitle": "<code>{key}</code> auf kompatible Agenten anwenden",
+        "enableServerDescription": "Fügt diesen Server auf allen kompatiblen, installierten und beschreibbaren Agenten hinzu oder aktiviert ihn.",
+        "disableServerTitle": "<code>{key}</code> auf allen Agenten pausieren",
+        "disableServerDescription": "Deaktiviert oder pausiert diesen Server überall dort, wo es unterstützt wird, ohne Konfigurationen zu entfernen.",
+        "enableAgentTitle": "Kompatible Server in {agent} aktivieren",
+        "enableAgentDescription": "Fügt alle kompatiblen lokalen MCP-Server für {agent} hinzu oder aktiviert sie.",
+        "unavailable": "Diese Sammelaktion ist für die aktuelle Konfiguration nicht mehr verfügbar.",
+        "nothingToDo": "Keine anwendbaren Änderungen.",
+        "sectionWillApply": "Wird angewendet ({count, number})",
+        "sectionWillDisable": "Wird pausiert / deaktiviert ({count, number})",
+        "sectionAlreadyActive": "Bereits aktiv ({count, number})",
+        "sectionAlreadyOff": "Bereits aus ({count, number})",
+        "sectionSkipped": "Übersprungen ({count, number})",
+        "effect": {
+          "add": "Hinzufügen",
+          "enable": "Aktivieren",
+          "update": "Aktualisieren",
+          "disable": "Deaktivieren",
+          "pause": "Pausieren"
+        },
+        "skip": {
+          "notInstalled": "Nicht installiert",
+          "unknownAgent": "Unbekannter Agent",
+          "readOnly": "Schreibgeschützte Konfiguration",
+          "unreadable": "Konfiguration unlesbar",
+          "unsupportedTransport": "Kann keine {transport}-Server verwenden",
+          "reservedKey": "Reservierter Servername",
+          "keyNotNew": "Name kann hier nicht neu angelegt werden",
+          "entryReadOnly": "Eintrag ist schreibgeschützt",
+          "duplicateKey": "Doppelter Schlüssel in der Konfiguration",
+          "cannotDisable": "Unterstützt kein Deaktivieren (bleibt erhalten)",
+          "noDefinition": "Keine lesbare Definition",
+          "differentDefinition": "Verwendet eine andere Definition"
+        }
       },
       "paste": {
         "title": "Konfiguration einfügen",

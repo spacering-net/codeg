@@ -4433,6 +4433,16 @@
         "dismiss": "Dismiss",
         "moreIncidents": "+{count} more"
       },
+      "mcpRecovery": {
+        "title": "MCP server \"{server}\" failed to initialize",
+        "pauseAndReconnect": "Pause {server} & reconnect",
+        "pausing": "Pausing…",
+        "openSettings": "Open MCP settings",
+        "pausedAndReconnecting": "Paused {server} and reconnecting…",
+        "serverNotFound": "Could not find \"{server}\" in this agent's MCP configuration.",
+        "cannotPause": "\"{server}\" cannot be paused automatically for this agent.",
+        "pauseFailed": "Could not pause \"{server}\"."
+      },
       "backgroundTasks": {
         "settledFallback": "Background task finished ({status})",
         "notifySettledOne": "{agent}: a background task finished",
@@ -8128,7 +8138,9 @@
         "reserved": "the built-in server's name, listed only",
         "readOnly": "read-only",
         "skipped": "skipped in its sessions",
-        "entryUnreadable": "Codeg cannot read this entry"
+        "entryUnreadable": "Codeg cannot read this entry",
+        "paused": "Paused",
+        "pausedNote": "Temporarily paused by Codeg; re-enabling restores its full configuration."
       },
       "agents": {
         "showAll": "Show all agents ({count, number} not installed)",
@@ -8173,7 +8185,8 @@
         "skipped": "Skipped in sessions",
         "builtIn": "<code>codeg-mcp</code> (built in)",
         "builtInNote": "Codeg's own collaboration server. It is not in this file; it is switched on and off in Settings › Collaboration.",
-        "openCollaboration": "Open Settings"
+        "openCollaboration": "Open Settings",
+        "pauseReversible": "Switching a server off here pauses it reversibly in Codeg without losing its arguments, environment or headers."
       },
       "blocks": {
         "unknownAgent": "This Codeg does not know this agent; update Codeg to manage it.",
@@ -8402,7 +8415,76 @@
         "disableTitle": "Switch <code>{key}</code> off in {agent}?",
         "enableAction": "Switch on",
         "disableAction": "Switch off",
+        "pauseTitle": "Pause <code>{key}</code> in {agent}?",
+        "pauseBody": "Codeg will temporarily remove this entry from {agent}'s configuration and keep a copy so switching it back on restores all arguments, environment variables and headers.",
+        "pauseAction": "Pause",
         "commentsLost": "This file has comments, and saving removes them."
+      },
+      "probe": {
+        "testConnection": "Test connection",
+        "retest": "Test again",
+        "testing": "Testing…",
+        "checkAll": "Check all",
+        "latency": "{ms} ms",
+        "unsupported": "This Codeg is too old to probe MCP servers. Update it.",
+        "rpcFailed": "Could not reach Codeg to test this server.",
+        "authRequiredHint": "This server requires interactive OAuth sign-in. Pause it if this agent cannot complete OAuth.",
+        "sessionIdMismatchHint": "The server rejected or changed the MCP session ID (for example behind a proxy).",
+        "showTools": "{count, plural, one {Show # tool} other {Show # tools}}",
+        "hideTools": "Hide tools",
+        "showStderr": "Show stderr",
+        "hideStderr": "Hide stderr",
+        "status": {
+          "ok": "{count, plural, one {Healthy · # tool} other {Healthy · # tools}}",
+          "auth_required": "OAuth required",
+          "forbidden": "403 Forbidden",
+          "session_id_mismatch": "Session ID mismatch",
+          "spawn_failed": "Spawn failed",
+          "timeout": "Timed out",
+          "protocol_error": "Protocol error",
+          "network_error": "Network error",
+          "config_error": "Configuration error",
+          "unknown": "Probe failed ({status})"
+        }
+      },
+      "bulk": {
+        "applyCompatible": "Apply to compatible agents",
+        "pauseAll": "Pause on all",
+        "enableAllCompatible": "Enable all compatible",
+        "enableServerTitle": "Apply <code>{key}</code> to compatible agents",
+        "enableServerDescription": "Adds or enables this server on every compatible installed writable agent.",
+        "disableServerTitle": "Pause <code>{key}</code> on all agents",
+        "disableServerDescription": "Disables or pauses this server wherever supported without removing any configuration.",
+        "enableAgentTitle": "Enable compatible servers in {agent}",
+        "enableAgentDescription": "Adds or enables every compatible local MCP server for {agent}.",
+        "unavailable": "This bulk action is no longer available for the current configuration.",
+        "nothingToDo": "No eligible changes to apply.",
+        "sectionWillApply": "Will apply ({count, number})",
+        "sectionWillDisable": "Will pause / disable ({count, number})",
+        "sectionAlreadyActive": "Already active ({count, number})",
+        "sectionAlreadyOff": "Already off ({count, number})",
+        "sectionSkipped": "Skipped ({count, number})",
+        "effect": {
+          "add": "Add",
+          "enable": "Enable",
+          "update": "Update",
+          "disable": "Disable",
+          "pause": "Pause"
+        },
+        "skip": {
+          "notInstalled": "Not installed",
+          "unknownAgent": "Unknown agent",
+          "readOnly": "Read-only configuration",
+          "unreadable": "Configuration unreadable",
+          "unsupportedTransport": "Cannot use {transport} servers",
+          "reservedKey": "Reserved server name",
+          "keyNotNew": "Name cannot be created here",
+          "entryReadOnly": "Entry is read-only",
+          "duplicateKey": "Duplicate key in configuration",
+          "cannotDisable": "Does not support disabling (kept intact)",
+          "noDefinition": "No readable definition",
+          "differentDefinition": "Uses a different definition"
+        }
       },
       "paste": {
         "title": "Paste configuration",

@@ -33,9 +33,14 @@ import { useTranslations } from "next-intl"
 import { Loader2 } from "lucide-react"
 
 import { ComposerDockStrip } from "@/components/chat/composer-dock-strip"
+import { McpFailureRecoveryStrip } from "@/components/chat/mcp-failure-recovery-strip"
 import { SessionFailureBanner } from "@/components/chat/session-failure-banner"
 import type { ClaudeApiRetryState } from "@/contexts/acp-connections-context"
-import type { ConnectionStatus, SessionFailureRecord } from "@/lib/types"
+import type {
+  AgentType,
+  ConnectionStatus,
+  SessionFailureRecord,
+} from "@/lib/types"
 
 const NO_FAILURES: SessionFailureRecord[] = []
 
@@ -45,6 +50,12 @@ export interface ComposerStatusStripsProps {
   claudeApiRetry: ClaudeApiRetryState | null
   sessionFailures?: SessionFailureRecord[]
   onSessionFailureDismiss?: (ids: string[]) => void
+  /** Active conversation agent, used by MCP init-failure recovery (#1295). */
+  agentType?: AgentType | null
+  /** Optional connection / load error text to inspect for MCP init failures. */
+  mcpFailureErrorText?: string | null
+  /** Reconnect the session after pausing a failing MCP server. */
+  onReconnect?: () => void | Promise<void>
 }
 
 export function ComposerStatusStrips({
@@ -52,10 +63,20 @@ export function ComposerStatusStrips({
   claudeApiRetry,
   sessionFailures = NO_FAILURES,
   onSessionFailureDismiss,
+  agentType,
+  mcpFailureErrorText,
+  onReconnect,
 }: ComposerStatusStripsProps) {
   const retryLineText = useRetryLineText(claudeApiRetry)
   return (
     <>
+      <McpFailureRecoveryStrip
+        agentType={agentType}
+        sessionFailures={sessionFailures}
+        errorText={mcpFailureErrorText}
+        onReconnect={onReconnect}
+      />
+
       {sessionFailures.length > 0 && (
         <SessionFailureBanner
           failures={sessionFailures}

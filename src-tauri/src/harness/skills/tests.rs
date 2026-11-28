@@ -2345,6 +2345,7 @@ async fn the_listing_answers_each_part_on_its_own() {
         engine: EngineCtx {
             paths,
             lock_path: sandbox.path("locks/mcp.lock"),
+            paused_path: sandbox.path("mcp-paused.json"),
             backup_root: sandbox.path("mcp-backups"),
             lock_wait: crate::commands::mcp_engine::lock::LOCK_WAIT,
         },

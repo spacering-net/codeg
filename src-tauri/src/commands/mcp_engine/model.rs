@@ -305,9 +305,8 @@ pub struct McpConfigFile {
     /// Why, for `unreadable` and `read_only`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<McpIssue>,
-    /// SHA-256 of the file's bytes (lowercase hex), `"missing"` for a file
-    /// that is not there, `null` when it could not be read. Hand it back to
-    /// `mcp_apply`.
+    /// Concurrency token for `mcp_apply`. Covers the native bytes and any
+    /// paused entries for this agent. `null` when it cannot be computed.
     pub basis: Option<String>,
     /// The path is a symbolic link; writes go to what it points at.
     pub symlink: bool,
@@ -326,6 +325,15 @@ pub struct McpSessionCapabilities {
     pub recorded_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpDisableMode {
+    Native,
+    CodegPause,
+    #[default]
+    Unsupported,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct McpEntry {
     pub key: String,
@@ -337,6 +345,9 @@ pub struct McpEntry {
     pub extra: Map<String, Value>,
     /// By this agent's own on/off flag; `true` where it has none.
     pub enabled: bool,
+    /// The definition is stored by Codeg while absent from the agent file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
     /// [`McpDefinition::fingerprint`]; `null` without a definition.
     pub fingerprint: Option<String>,
     /// No operation is accepted on it.
@@ -360,8 +371,10 @@ pub struct McpAgentInventory {
     /// The transports this agent's config can hold.
     pub transports: Vec<McpTransport>,
     pub delivery: McpDelivery,
-    /// Whether the agent has an on/off flag of its own (`set_enabled`).
+    /// Whether `set_enabled` is supported for this agent.
     pub can_disable: bool,
+    #[serde(default)]
+    pub disable_mode: McpDisableMode,
     /// The built-in `codeg-mcp` companion reaches this agent's sessions
     /// (when it is switched on in Settings).
     pub codeg_mcp: bool,
@@ -388,7 +401,7 @@ pub enum McpOpAction {
         definition: McpDefinition,
     },
     Remove,
-    /// Turn the entry on or off with the agent's own flag.
+    /// Turn the entry on or off using its agent’s disable mode.
     SetEnabled {
         enabled: bool,
     },
@@ -538,7 +551,7 @@ pub struct McpOpResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct McpFileWrite {
     pub path: String,
-    /// `servers` or `plugin_gate`.
+    /// `servers`, `plugin_gate`, or `paused`.
     pub role: String,
     /// The file does not exist yet.
     pub creates: bool,

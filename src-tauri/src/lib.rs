@@ -2507,6 +2507,7 @@ mod tauri_app {
                 crate::commands::mcp_engine::mcp_inventory,
                 crate::commands::mcp_engine::mcp_apply,
                 crate::commands::mcp_engine::mcp_parse_snippet,
+                crate::commands::mcp_engine::mcp_probe,
                 crate::commands::harness::harness_status,
                 crate::commands::harness::harness_config,
                 crate::commands::harness::harness_list,

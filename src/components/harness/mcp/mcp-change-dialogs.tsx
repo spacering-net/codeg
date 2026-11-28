@@ -46,7 +46,7 @@ const code = (chunks: ReactNode) => <Code>{chunks}</Code>
 
 /** The steps every write dialog shares once its input is in: the review, the
  *  save, the results — and their buttons. */
-function useFlowParts(
+export function useFlowParts(
   id: number,
   flow: McpFlow,
   input: ReactNode,
@@ -487,21 +487,28 @@ export function McpConfirmSwitchDialog({
     ),
   }
 
+  const isCodegPause =
+    dialog.action === "disable" && info?.disableMode === "codeg_pause"
+
   const title =
     dialog.action === "remove"
       ? t.rich("removeTitle", values)
       : dialog.action === "add"
         ? t.rich("addTitle", values)
-        : t.rich(
-            dialog.action === "enable" ? "enableTitle" : "disableTitle",
-            values
-          )
+        : isCodegPause
+          ? t.rich("pauseTitle", values)
+          : t.rich(
+              dialog.action === "enable" ? "enableTitle" : "disableTitle",
+              values
+            )
   const confirmLabel =
     dialog.action === "remove"
       ? t("removeAction", { agent })
       : dialog.action === "add"
         ? t("addAction")
-        : t(dialog.action === "enable" ? "enableAction" : "disableAction")
+        : isCodegPause
+          ? t("pauseAction")
+          : t(dialog.action === "enable" ? "enableAction" : "disableAction")
 
   return (
     <McpDialogFrame
@@ -525,6 +532,7 @@ export function McpConfirmSwitchDialog({
     >
       <div className="min-w-0 space-y-3 text-sm">
         {dialog.action === "remove" && <p>{t("removeBody", { agent })}</p>}
+        {isCodegPause && <p>{t("pauseBody", { agent })}</p>}
         {dialog.action === "add" && dialog.choices.length > 1 && (
           <>
             <p>{t("chooseBody", { agent })}</p>

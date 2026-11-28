@@ -24,7 +24,10 @@ import {
   updateDialog,
   updateEditorDraft,
   type McpEditorDialog as McpEditorDialogState,
+  type McpProbeRecord,
 } from "@/lib/harness/mcp-state"
+import { mcpProbe } from "@/lib/mcp/api"
+import { mcpFailureOf } from "@/lib/mcp/errors"
 import {
   definitionFromDraft,
   definitionToJson,
@@ -71,6 +74,7 @@ import { MachineText } from "../machine-text"
 import { MCP_SECTION_TITLE_CLASS, RevealButton } from "./mcp-bits"
 import { DiscardChangesDialog, McpDialogFrame } from "./mcp-dialog-frame"
 import { McpResults, McpReview } from "./mcp-plan"
+import { McpProbeButton, McpProbePanel } from "./mcp-probe-panel"
 import { McpTargetList, type McpTargetRow } from "./mcp-target-list"
 import { SUGGESTED_SERVERS, type SuggestedServer } from "./suggested-servers"
 import { useMcpLabels } from "./use-mcp-labels"
@@ -1217,6 +1221,8 @@ function EditorInput({
         )}
       </div>
 
+      {definition && <EditorProbe definition={definition} />}
+
       {model && (
         <EditorTargets
           dialog={dialog}
@@ -1225,6 +1231,71 @@ function EditorInput({
           noTargets={noTargets}
         />
       )}
+    </div>
+  )
+}
+
+function EditorProbe({ definition }: { definition: McpDefinition }) {
+  const signature = JSON.stringify(definition)
+  const reqRef = useRef(0)
+  const [state, setState] = useState<{
+    signature: string
+    record: McpProbeRecord
+  } | null>(null)
+  const active = state && state.signature === signature ? state.record : null
+
+  const runTest = async () => {
+    const request = ++reqRef.current
+    setState({
+      signature,
+      record: {
+        phase: "loading",
+        fingerprint: null,
+        result: active?.result ?? null,
+        failure: null,
+        request,
+      },
+    })
+    try {
+      const result = await mcpProbe({ definition })
+      if (reqRef.current !== request) return
+      setState({
+        signature,
+        record: {
+          phase: "ready",
+          fingerprint: null,
+          result,
+          failure: null,
+          request,
+        },
+      })
+    } catch (error) {
+      if (reqRef.current !== request) return
+      setState({
+        signature,
+        record: {
+          phase: "error",
+          fingerprint: null,
+          result: null,
+          failure: mcpFailureOf(error),
+          request,
+        },
+      })
+    }
+  }
+
+  return (
+    <div className="min-w-0 space-y-2">
+      <div>
+        <McpProbeButton
+          size="sm"
+          variant="outline"
+          loading={active?.phase === "loading"}
+          tested={active?.phase === "ready"}
+          onClick={() => void runTest()}
+        />
+      </div>
+      {active && <McpProbePanel record={active} />}
     </div>
   )
 }
