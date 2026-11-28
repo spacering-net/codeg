@@ -15637,10 +15637,11 @@ async fn run_conversation_loop(
     // drained immediately after the select, still inside the idle loop (the
     // OUTER loop only advances on a command, which may never come).
     let mut config_drift_to_reassert: Vec<(String, String)> = Vec::new();
-    // For the `TurnComplete` of a turn Grok starts on its own, which the idle
-    // loop ends while `read_update` holds `session`. A fork restarts this loop
-    // with the new session, so it cannot go stale in here.
+    // The idle loop can end an agent-initiated turn while `read_update`
+    // borrows the session. A fork restarts the loop with the new session ID.
     let agent_turn_session_id = session.session_id().0.to_string();
+    let mut codex_thread_active = false;
+    let mut codex_detached_turn = false;
     let agy_dir = state.read().await.antigravity_sessions_dir.clone();
     let agy_watch = match agy_dir {
         Some(dir) => {
@@ -15704,6 +15705,33 @@ async fn run_conversation_loop(
                     let h = emitter.clone();
                     let st = Arc::clone(state);
                     let cwd_opt = Some(cwd);
+                    if let Some(status) =
+                        codex_thread_activity(&dispatch, agent_type, &agent_turn_session_id)
+                    {
+                        let was_active =
+                            std::mem::replace(&mut codex_thread_active, status.is_active());
+                        match status {
+                            CodexThreadActivity::Active if !was_active => {
+                                if st.write().await.begin_agent_initiated_turn() {
+                                    codex_detached_turn = true;
+                                    cb_state.codex_context_readings.turn_started();
+                                    cb_state.codex_last_message_id = None;
+                                    emit_with_state(
+                                        &st, &h,
+                                        AcpEvent::StatusChanged { status: ConnectionStatus::Prompting },
+                                    ).await;
+                                }
+                            }
+                            CodexThreadActivity::Inactive(stop_reason)
+                                if std::mem::take(&mut codex_detached_turn) =>
+                            {
+                                emit_agent_initiated_turn_end(
+                                    &st, &h, perms, agent_type, &agent_turn_session_id, stop_reason,
+                                ).await;
+                            }
+                            _ => {}
+                        }
+                    }
                     // Background work outlives the turn that started it, so
                     // these frames arrive on the IDLE loop as often as inside
                     // one.
@@ -15912,6 +15940,20 @@ async fn run_conversation_loop(
                     cancel_grok_agent_turn_asks(delegation_injection, conn_id).await;
                 }
 
+                // Let an already-admitted prompt take over the wire without
+                // merging the detached output into its new live message.
+                if std::mem::take(&mut codex_detached_turn) {
+                    emit_agent_initiated_turn_end(
+                        state,
+                        emitter,
+                        perms,
+                        agent_type,
+                        &agent_turn_session_id,
+                        "cancelled",
+                    )
+                    .await;
+                }
+
                 // The personal agent's reply to this prompt starts with this
                 // prompt's own turn — not at the command, which Grok's turn
                 // closed just above can precede — and in the same critical
@@ -16091,16 +16133,8 @@ async fn run_conversation_loop(
                 cb_state.kimi_tool_titles.clear();
                 // A codex web search whose request never reported (canceled
                 // mid-request) must not set aside this turn's first report.
-                // `/goal` continuation turns run on the idle loop and announce
-                // no boundary (codex-acp turns `turn/started`/`turn/completed`
-                // into nothing), so there such a search holds the next report
-                // once — an under-read, where resetting on Cancel instead would
-                // admit a searched report landing after the cancel. From 2.3.0
-                // a `session_info_update` carrying `_meta.codex.threadStatus`
-                // does mark one, but `active` is re-sent mid-turn whenever its
-                // `activeFlags` change (an approval wait), so resetting on it
-                // would need the idle→active edge tracked — not worth it to
-                // save one held ring reading.
+                // Detached Codex work resets this on its own active edge in
+                // the idle loop, not on every approval-flag update.
                 cb_state.codex_context_readings.turn_started();
                 cb_state.codex_last_message_id = None;
                 cb_state.kiro_calls.clear();
@@ -16158,6 +16192,12 @@ async fn run_conversation_loop(
                             let runtime = terminal_runtime.clone();
                             let session_id = sid.clone();
                             let cwd_opt = Some(cwd);
+                            // A client prompt owns the lifecycle here. Still
+                            // remember the status, so a repeated active update
+                            // after its response cannot open a phantom turn.
+                            if let Some(status) = codex_thread_activity(&dispatch, agent_type, &sid.0) {
+                                codex_thread_active = status.is_active();
+                            }
                             // ZCode's billing reports are per busy window,
                             // unlike the standard context-occupancy
                             // usage_update channel, and this prompt's windows
@@ -17279,6 +17319,19 @@ async fn run_conversation_loop(
                     &mut cb_state,
                 )
                 .await;
+                if std::mem::take(&mut codex_detached_turn) {
+                    // Preserve the last thread status: a late update to the
+                    // active flags must not reopen a cancelled turn.
+                    emit_agent_initiated_turn_end(
+                        state,
+                        emitter,
+                        perms,
+                        agent_type,
+                        &agent_turn_session_id,
+                        "cancelled",
+                    )
+                    .await;
+                }
                 // Otherwise, unlike the mid-turn Cancel branch, this one does NOT
                 // emit `TurnComplete` (there is no turn), so nothing else would ever
                 // clear the on-screen permission card — before the compensating
@@ -17315,9 +17368,9 @@ async fn run_conversation_loop(
                     continue;
                 }
                 // The manager's between-turns check reads `turn_in_flight`,
-                // which a turn Grok started on its own never sets. Forking now
-                // would leave that turn open on the session we are leaving.
-                if cb_state.grok_agent_turn.is_some() {
+                // which detached turns never set. Don't leave one open on the
+                // session we are forking away from.
+                if cb_state.grok_agent_turn.is_some() || codex_detached_turn {
                     let _ = reply.send(Err(AcpError::TurnInProgress));
                     continue;
                 }
@@ -26167,6 +26220,50 @@ fn grok_workflow_state(status: &str) -> String {
     .to_string()
 }
 
+/// ACP v1 has no turn lifecycle for work Codex starts without a prompt.
+/// Use codex-acp's explicit thread status instead of guessing from chunks
+/// (which can also be replay, late frames or MCP startup output).
+enum CodexThreadActivity {
+    Active,
+    Inactive(&'static str),
+}
+
+impl CodexThreadActivity {
+    fn is_active(&self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
+
+fn codex_thread_activity(
+    dispatch: &Dispatch,
+    agent_type: AgentType,
+    session_id: &str,
+) -> Option<CodexThreadActivity> {
+    let Dispatch::Notification(msg) = dispatch else {
+        return None;
+    };
+    if agent_type != AgentType::Codex
+        || msg.method() != "session/update"
+        || msg.params.get("sessionId")?.as_str()? != session_id
+        || msg.params.pointer("/update/sessionUpdate")?.as_str()? != "session_info_update"
+    {
+        return None;
+    }
+    match msg
+        .params
+        .pointer("/update/_meta/codex/threadStatus/type")?
+        .as_str()?
+    {
+        "active" => Some(CodexThreadActivity::Active),
+        "idle" => Some(CodexThreadActivity::Inactive("end_turn")),
+        "notLoaded" => Some(CodexThreadActivity::Inactive("cancelled")),
+        // Thread status does not carry a failure message. Do not report a
+        // successful completion; any actual error arrives on its own event.
+        "systemError" => Some(CodexThreadActivity::Inactive("unknown")),
+        _ => None,
+    }
+}
+
 /// A Grok `turn_completed` — the end of a turn as Grok itself reports it, on
 /// its private channel: `{prompt_id, stop_reason, usage?, elapsed_ms}`.
 #[derive(Debug, PartialEq, Eq)]
@@ -26347,6 +26444,18 @@ async fn close_grok_agent_turn(
     if let Some(error) = turn_failure_error_event(stop_reason, agent_type, None) {
         emit_with_state(state, emitter, error).await;
     }
+    emit_agent_initiated_turn_end(state, emitter, perms, agent_type, session_id, stop_reason).await;
+    true
+}
+
+async fn emit_agent_initiated_turn_end(
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    perms: &PendingPermissions,
+    agent_type: AgentType,
+    session_id: &str,
+    stop_reason: &str,
+) {
     drain_permissions_then_emit(
         perms,
         state,
@@ -26366,7 +26475,6 @@ async fn close_grok_agent_turn(
         },
     )
     .await;
-    true
 }
 
 /// Answer, declined, a question or plan approval an agent-initiated turn is
@@ -50144,6 +50252,10 @@ mod tests {
 
     impl GrokLoop {
         async fn start(script: GrokScript) -> Self {
+            Self::start_for(script, AgentType::Grok).await
+        }
+
+        async fn start_for(script: GrokScript, agent_type: AgentType) -> Self {
             use agent_client_protocol::schema::v1::{
                 ForkSessionRequest, ForkSessionResponse, PromptResponse,
             };
@@ -50238,7 +50350,7 @@ mod tests {
 
             let state = Arc::new(RwLock::new(SessionState::new(
                 "conn-grok".to_string(),
-                AgentType::Grok,
+                agent_type,
                 None,
                 "win".to_string(),
                 None,
@@ -50285,7 +50397,7 @@ mod tests {
                             "conn-grok",
                             &EventEmitter::Noop,
                             &loop_state,
-                            AgentType::Grok,
+                            agent_type,
                             &perms,
                             &mut cmd_rx,
                             Arc::new(TerminalRuntime::with_base_env(BTreeMap::new())),
@@ -50419,6 +50531,126 @@ mod tests {
             })
             .map(|(i, _)| i)
             .collect()
+    }
+
+    fn codex_status(status: &str, flags: &[&str]) -> GrokFrame {
+        grok_frame(
+            "session/update",
+            serde_json::json!({
+                "sessionUpdate": "session_info_update",
+                "_meta": {"codex": {"threadStatus": {"type": status, "activeFlags": flags}}},
+            }),
+            serde_json::json!({}),
+        )
+    }
+
+    #[tokio::test]
+    async fn codex_thread_activity_streams_detached_work_without_reopening_the_prompt() {
+        let mut codex = GrokLoop::start_for(
+            GrokScript {
+                in_turn: vec![
+                    codex_status("active", &[]),
+                    grok_chunk("agent_message_chunk", "Goal set.", None),
+                ],
+                prompt_id: "p1",
+                after_response: vec![
+                    // The old prompt's active flags and idle can arrive after
+                    // its response. Neither opens nor completes a second turn.
+                    codex_status("active", &["waitingOnApproval"]),
+                    codex_status("idle", &[]),
+                    grok_barrier(),
+                ],
+                later: vec![
+                    codex_status("active", &[]),
+                    grok_chunk("agent_message_chunk", "Still ", None),
+                    codex_status("active", &["waitingOnApproval"]),
+                    grok_chunk("agent_message_chunk", "working.", None),
+                    codex_status("idle", &[]),
+                    codex_status("idle", &[]),
+                    grok_barrier(),
+                ],
+                on_cancel: Vec::new(),
+                on_fork: Vec::new(),
+                hold_response: true,
+                forks: false,
+            },
+            AgentType::Codex,
+        )
+        .await;
+
+        codex.prompt("/goal finish the report").await;
+        codex
+            .until(
+                "the prompt reply",
+                |e| matches!(e, AcpEvent::ContentDelta { text, .. } if text == "Goal set."),
+            )
+            .await;
+        codex.release_response();
+        let parent_end = codex.after_turn_end().await;
+        codex.until_barrier().await;
+        assert_eq!(prompting_edges(&codex.seen).len(), 1);
+        assert_eq!(turn_completes(&codex.seen).len(), 1);
+
+        codex.release_later();
+        codex.until_barrier().await;
+        let starts = prompting_edges(&codex.seen);
+        let ends = turn_completes(&codex.seen);
+        assert_eq!(starts.len(), 2);
+        assert_eq!(ends.len(), 2);
+        let first_chunk = codex
+            .seen
+            .iter()
+            .position(|e| matches!(e, AcpEvent::ContentDelta { text, .. } if text == "Still "))
+            .expect("the first detached delta arrived");
+        assert!(parent_end < starts[1] && starts[1] < first_chunk && first_chunk < ends[1].0);
+        assert_eq!(ends[1].1, "end_turn");
+
+        let state = codex.state.read().await;
+        assert_eq!(state.status, ConnectionStatus::Connected);
+        assert_eq!(state.last_assistant_text.as_deref(), Some("Still working."));
+        assert!(!state.turn_in_flight);
+        assert!(!state.agent_initiated_turn);
+        drop(state);
+        codex.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn codex_thread_activity_stop_settles_once_even_if_active_flags_arrive_late() {
+        let mut codex = GrokLoop::start_for(
+            GrokScript {
+                in_turn: Vec::new(),
+                prompt_id: "p1",
+                after_response: Vec::new(),
+                later: vec![
+                    codex_status("active", &[]),
+                    grok_chunk("agent_message_chunk", "Working.", None),
+                    grok_barrier(),
+                ],
+                on_cancel: vec![
+                    codex_status("active", &["waitingOnApproval"]),
+                    codex_status("idle", &[]),
+                    grok_barrier(),
+                ],
+                on_fork: Vec::new(),
+                hold_response: false,
+                forks: false,
+            },
+            AgentType::Codex,
+        )
+        .await;
+
+        codex.release_later();
+        codex.until_barrier().await;
+        assert_eq!(codex.state.read().await.status, ConnectionStatus::Prompting);
+        assert!(codex.state.read().await.live_message.is_some());
+        codex.send(ConnectionCommand::Cancel).await;
+        codex.until_barrier().await;
+        assert_eq!(prompting_edges(&codex.seen).len(), 1);
+        let ends = turn_completes(&codex.seen);
+        assert_eq!(ends.len(), 1);
+        assert_eq!(ends[0].1, "cancelled");
+        assert_eq!(codex.state.read().await.status, ConnectionStatus::Connected);
+        codex.shutdown().await;
     }
 
     /// The captured `/workflow codeg-probe` run: the launch turn, the run
