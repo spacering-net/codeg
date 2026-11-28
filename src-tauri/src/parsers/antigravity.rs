@@ -1108,8 +1108,9 @@ impl AntigravityParser {
         conversation_id: &str,
         db_path: &Path,
         summary_cwds: Option<&HashMap<String, String>>,
+        depth: TrajectoryRead,
     ) -> SessionParse {
-        let (steps, watermark) = read_trajectory(db_path);
+        let (steps, watermark) = read_trajectory(db_path, depth);
         let mut parsed = project_steps(&steps);
         parsed.watermark = watermark;
         // 优先读与该 `.db` 同目录的 `.meta` sidecar（旧 standalone server 格式），
@@ -1192,7 +1193,12 @@ impl AgentParser for AntigravityParser {
                 if !seen.insert(conversation_id.clone()) {
                     continue;
                 }
-                let parsed = self.build(&conversation_id, &path, Some(&summary_cwds));
+                let parsed = self.build(
+                    &conversation_id,
+                    &path,
+                    Some(&summary_cwds),
+                    TrajectoryRead::Summary,
+                );
                 // A session whose DB is still the pre-created empty file (or
                 // which was cleared) has no content to show — matching the
                 // other parsers' "metadata-only is not listed" rule.
@@ -1216,7 +1222,7 @@ impl AgentParser for AntigravityParser {
                 conversation_id.to_string(),
             ));
         };
-        let parsed = self.build(conversation_id, &db_path, None);
+        let parsed = self.build(conversation_id, &db_path, None, TrajectoryRead::Full);
 
         let mut turns = parsed.turns.clone();
         relocate_orphaned_tool_results(&mut turns);
@@ -1263,17 +1269,123 @@ impl AgentParser for AntigravityParser {
 // Reading
 // ---------------------------------------------------------------------------
 
+/// How much of `gen_metadata` a read takes in. Its rows carry each model
+/// request whole (tens of KB each, several times the steps), and the listing
+/// wants only the session's model, so it reads just the latest row naming one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrajectoryRead {
+    /// The listing: only the step the session's model is read off is given
+    /// its model — the same one [`TrajectoryRead::Full`] gives it.
+    Summary,
+    /// The conversation itself: every reply its own model (and the token
+    /// statistics' per-model split, read from it).
+    Full,
+}
+
 /// Read every `steps` row in `idx` order. Returns an empty vec — never an
 /// error — for the states that are normal rather than broken: the 0-byte DB a
 /// brand-new session starts as (no `steps` table yet), a file the ACP server
 /// currently holds, or a payload that fails to decode.
-fn read_trajectory(db_path: &Path) -> (Vec<Step>, Option<u64>) {
+fn read_trajectory(db_path: &Path, depth: TrajectoryRead) -> (Vec<Step>, Option<u64>) {
     let Some(conn) = open_trajectory(db_path) else {
         return (Vec::new(), None);
     };
     let (mut steps, watermark) = read_steps(&conn, db_path);
-    backfill_step_models(&mut steps, &read_gen_models(&conn));
+    match depth {
+        TrajectoryRead::Full => backfill_step_models(&mut steps, &read_gen_models(&conn)),
+        TrajectoryRead::Summary => {
+            // Its model not found from that step, the full read may still
+            // find one on an earlier step: take the full read then.
+            if !backfill_last_step_model(&mut steps, &conn) {
+                backfill_step_models(&mut steps, &read_gen_models(&conn));
+            }
+        }
+    }
     (steps, watermark)
+}
+
+/// The listing's half of [`backfill_step_models`]: only the step the
+/// session's model is read off — the last one [`project_steps`] takes a model
+/// from (not a prompt, not a failure line) that names one or was generated —
+/// and, for that step, only the newest `gen_metadata` rows down to the one
+/// [`GenModels`] would answer it with. A last step that names its own model
+/// (the standalone server's `model_info`) reads none. `false` when that step
+/// is left without a model: the session's model is then an earlier step's,
+/// if any, which only the full read finds.
+fn backfill_last_step_model(steps: &mut [Step], conn: &Connection) -> bool {
+    let Some(metadata) = steps
+        .iter_mut()
+        .rev()
+        .filter(|step| step.user_input.is_none() && step.turn_failure().is_none())
+        .filter_map(|step| step.metadata.as_mut())
+        .find(|metadata| {
+            metadata.generator_model != 0
+                || metadata
+                    .model_info
+                    .as_ref()
+                    .and_then(display_model_name)
+                    .is_some()
+        })
+    else {
+        return true;
+    };
+    if metadata
+        .model_info
+        .as_ref()
+        .and_then(display_model_name)
+        .is_some()
+    {
+        return true;
+    }
+    let Some(name) = read_call_model(conn, &metadata.execution_id, metadata.generator_model)
+    else {
+        return false;
+    };
+    metadata.model_info = Some(ModelInfo {
+        model_name: name,
+        display_name: String::new(),
+    });
+    true
+}
+
+/// What [`GenModels`] answers `(execution, model)` with, read newest first:
+/// the latest row of that call — where the read stops, a few rows from the end
+/// — else the latest of that execution, else the latest of that enum (a scan
+/// to the start only when the call has no row).
+fn read_call_model(conn: &Connection, execution: &str, model: i32) -> Option<String> {
+    let mut stmt = conn
+        .prepare("SELECT data FROM gen_metadata ORDER BY idx DESC")
+        .ok()?;
+    let mut rows = stmt.query([]).ok()?;
+    let mut by_execution = None;
+    let mut by_enum = None;
+    while let Ok(Some(row)) = rows.next() {
+        let Ok(data) = row.get::<_, Vec<u8>>(0) else {
+            continue;
+        };
+        let Ok(gen) = GenMetadata::decode(data.as_slice()) else {
+            continue;
+        };
+        let Some(request) = gen.request else {
+            continue;
+        };
+        let name = request.model_name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let same_execution = !gen.execution_id.is_empty() && gen.execution_id == execution;
+        let same_enum = request.model != 0 && request.model == model;
+        if same_execution && same_enum {
+            return Some(name.to_string());
+        }
+        if same_execution && by_execution.is_none() {
+            by_execution = Some(name.to_string());
+        }
+        if same_enum && by_enum.is_none() {
+            by_enum = Some(name.to_string());
+        }
+    }
+    by_execution.or(by_enum)
 }
 
 /// Model names from `gen_metadata`. Several keys because neither half is
@@ -2968,6 +3080,11 @@ mod tests {
             vec![Some("gemini-3.8-flash-low"), Some("gemini-3.1-pro-low")]
         );
         assert_eq!(detail.summary.model.as_deref(), Some("gemini-3.1-pro-low"));
+        // The listing reads only the latest named row, and ends on the same
+        // model as the full read.
+        let listed = parser.list_conversations().unwrap();
+        let listed = listed.iter().find(|c| c.id == "s-agy-model").unwrap();
+        assert_eq!(listed.model, detail.summary.model);
 
         // A store with no `gen_metadata` table (older standalone-server
         // files) still parses, just without a model.
@@ -2982,6 +3099,109 @@ mod tests {
         let detail = parser.get_conversation("s-no-gen").unwrap();
         assert_eq!(detail.turns.len(), 2);
         assert!(detail.turns.iter().all(|turn| turn.model.is_none()));
+        let listed = parser.list_conversations().unwrap();
+        let listed = listed.iter().find(|c| c.id == "s-no-gen").unwrap();
+        assert_eq!(listed.model, None);
+    }
+
+    /// The listing reads `gen_metadata` only for the step the session's model
+    /// is read off, and lands on the full read's model: past a last turn that
+    /// failed on another model (a failure line names no model), and past the
+    /// rows of later calls that are not that step's.
+    #[test]
+    fn the_listing_reads_the_model_the_full_read_ends_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let stamp = |mut step: Step, model: i32, execution: &str| {
+            let metadata = step.metadata.as_mut().unwrap();
+            metadata.generator_model = model;
+            metadata.execution_id = execution.into();
+            step
+        };
+        write_steps(
+            dir.path(),
+            "s-agy-tail",
+            &[
+                prompt_step(1_700_000_000, "hi"),
+                stamp(reply_step(1_700_000_002, "hello"), 1320, "exec-1"),
+                prompt_step(1_700_000_010, "again"),
+                stamp(error_step(1_700_000_012, true), 1321, "exec-2"),
+            ],
+        );
+        let conn = Connection::open(dir.path().join("s-agy-tail.db")).unwrap();
+        conn.execute(
+            "CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER NOT NULL DEFAULT 0)",
+            [],
+        )
+        .unwrap();
+        let row = |model: i32, name: &str, execution: &str| GenMetadata {
+            request: Some(GenRequest {
+                model,
+                model_name: name.into(),
+            }),
+            execution_id: execution.into(),
+        };
+        let rows = [
+            row(1320, "gemini-3.8-flash-low", "exec-1"),
+            // A second call of the same prompt on another model.
+            row(1400, "gemini-3.8-flash-lite", "exec-1"),
+            row(1321, "gemini-3.1-pro-high", "exec-2"),
+            GenMetadata {
+                request: None,
+                execution_id: "exec-2".into(),
+            },
+        ];
+        for (idx, row) in rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO gen_metadata (idx, data) VALUES (?1, ?2)",
+                rusqlite::params![idx as i64, row.encode_to_vec()],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let parser = AntigravityParser::with_base_dir(dir.path().to_path_buf());
+        let detail = parser.get_conversation("s-agy-tail").unwrap();
+        assert_eq!(
+            detail.summary.model.as_deref(),
+            Some("gemini-3.8-flash-low")
+        );
+        let listed = parser.list_conversations().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].model, detail.summary.model);
+
+        // The last reply's call left no row at all (neither its execution nor
+        // its enum): the full read names the session by an earlier reply,
+        // and so does the listing.
+        write_steps(
+            dir.path(),
+            "s-agy-unmatched",
+            &[
+                prompt_step(1_700_000_000, "hi"),
+                stamp(reply_step(1_700_000_002, "hello"), 1320, "exec-1"),
+                prompt_step(1_700_000_010, "again"),
+                stamp(reply_step(1_700_000_012, "hello again"), 1999, "exec-9"),
+            ],
+        );
+        let conn = Connection::open(dir.path().join("s-agy-unmatched.db")).unwrap();
+        conn.execute(
+            "CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER NOT NULL DEFAULT 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO gen_metadata (idx, data) VALUES (0, ?1)",
+            rusqlite::params![row(1320, "gemini-3.8-flash-low", "exec-1").encode_to_vec()],
+        )
+        .unwrap();
+        drop(conn);
+        let detail = parser.get_conversation("s-agy-unmatched").unwrap();
+        assert_eq!(
+            detail.summary.model.as_deref(),
+            Some("gemini-3.8-flash-low")
+        );
+        let listed = parser.list_conversations().unwrap();
+        let listed = listed.iter().find(|c| c.id == "s-agy-unmatched").unwrap();
+        assert_eq!(listed.model, detail.summary.model);
     }
 
     // A turn the executor died in before the model said anything (the 403
@@ -3679,7 +3899,9 @@ mod tests {
             ..Default::default()
         };
         write_steps(dir.path(), "test-session", &[step]);
-        let parsed = project_steps(&read_trajectory(&dir.path().join("test-session.db")).0);
+        let parsed = project_steps(
+            &read_trajectory(&dir.path().join("test-session.db"), TrajectoryRead::Full).0,
+        );
         let blocks: Vec<&ContentBlock> = parsed.turns.iter().flat_map(|t| &t.blocks).collect();
         let name = blocks
             .iter()
@@ -3934,7 +4156,7 @@ mod tests {
             .join(CLI_SUBDIR)
             .join(SESSIONS_DIR_NAME)
             .join("wal-session.db");
-        let (steps, _) = read_trajectory(&cli_db);
+        let (steps, _) = read_trajectory(&cli_db, TrajectoryRead::Full);
         assert_eq!(steps.len(), 1);
         assert_eq!(
             steps[0].user_input.as_ref().map(|u| u.query.as_str()),
@@ -3961,7 +4183,12 @@ mod tests {
         write_steps(&legacy_conv, "placeholder-1", &[step]);
         std::fs::write(cli_conv.join("placeholder-1.db"), b"").unwrap();
         assert!(migrate_legacy_session_to_cli(root.path(), "placeholder-1").unwrap());
-        assert_eq!(read_trajectory(&cli_conv.join("placeholder-1.db")).0.len(), 1);
+        assert_eq!(
+            read_trajectory(&cli_conv.join("placeholder-1.db"), TrajectoryRead::Full)
+                .0
+                .len(),
+            1
+        );
 
         // 旧会话不存在或为 0 字节时跳过。
         std::fs::write(legacy_conv.join("empty-old.db"), b"").unwrap();
