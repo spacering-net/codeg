@@ -1930,6 +1930,12 @@ pub struct ConnectionInfo {
     pub id: String,
     pub agent_type: crate::models::agent::AgentType,
     pub status: ConnectionStatus,
+    /// 连接绑定的会话 id（草稿或游离连接为 None）。客户端据此把存活连接
+    /// 映射回侧栏会话行，不必为每一行单独查询。
+    pub conversation_id: Option<i32>,
+    /// 是否还有未结束的后台工作（后台 shell / 异步子智能体）。回合以
+    /// `end_turn` 收尾后会话进入待复查，这个标志才说明它其实还在跑。
+    pub background_running: bool,
 }
 
 /// The live connection currently bound to a conversation, returned by
