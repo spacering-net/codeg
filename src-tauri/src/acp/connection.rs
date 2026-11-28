@@ -1979,9 +1979,9 @@ fn agent_debug_callback(
 /// codeg's own question and result tools ([`codeg_tool_auto_allow_option`]),
 /// and the history parser. So codeg turns lazy loading off, as it was through
 /// 1.1.83 (which takes the flag too). An option `qoder --acp` does not know
-/// makes it exit, but each release tried from 1.1.0 to 1.1.91 (1.1.0, 1.1.30,
+/// makes it exit, but each release tried from 1.1.0 to 1.1.100 (1.1.0, 1.1.30,
 /// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84, 1.1.86, 1.1.87, 1.1.88,
-/// 1.1.89, 1.1.91) takes `--settings`, and 1.1.30 and 1.1.64 open sessions with this
+/// 1.1.89, 1.1.91, 1.1.98, 1.1.100) takes `--settings`, and 1.1.30 and 1.1.64 open sessions with this
 /// one as without it.
 pub(crate) const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
 
@@ -7827,7 +7827,7 @@ async fn send_new_session_capturing_models(
 /// state and never reads them back: the config it starts each session with
 /// carries no MCP servers, and the SDK connects only the servers in cline's own
 /// `cline_mcp_settings.json` and its plugins. Checked in the source of every
-/// release from 3.0.55 through 3.0.75, and live on 3.0.71 through 3.0.75: a
+/// release from 3.0.55 through 3.0.76, and live on 3.0.71 through 3.0.76: a
 /// stdio server sent on `session/new` is never started, while one in the settings
 /// file is, and its tools reach the model. User servers still reach Cline,
 /// through that file (see [`agent_reads_own_mcp_config`]); the codeg-mcp
@@ -14307,6 +14307,204 @@ fn codebuddy_stop_reason(
     }
 }
 
+/// The notices `zcode-acp-server` sends as the turn's last reply chunk when it
+/// ends a failed turn `end_turn` instead of failing the prompt, as (start, end,
+/// failed only when it is the turn's sole reply) in each language its messages
+/// come in (`src/i18n.ts`: `turnFailed`, `contentBlocked`, `requestFailed`).
+/// The failure detail sits between start and end. The content-safety notice
+/// also ends a prompt whose reply was done when the background follow-up the
+/// bridge held it open for is refused (`heldFollowUpFailed`'s place), which the
+/// bridge counts as completed; only a turn that streamed no reply before it
+/// failed.
+const ZCODE_FAILED_TURN_NOTICES: &[(&str, &str, bool)] = &[
+    (
+        "[Turn failed: ",
+        "This reply was not completed — resolve the cause above, then resend.]",
+        false,
+    ),
+    (
+        "[回合失败：",
+        "本次回复未完成——请先处理上述问题，再重新发送。]",
+        false,
+    ),
+    (
+        "[Request blocked by the provider's content-safety check: ",
+        "or continue in a new conversation.]",
+        true,
+    ),
+    (
+        "[请求被模型服务商的内容安全检查拦截：",
+        "或新开会话继续。]",
+        true,
+    ),
+    (
+        "[Request failed: ",
+        "The session is still usable — please resend.]",
+        false,
+    ),
+    ("[请求失败：", "会话仍可用，请重新发送消息重试。]", false),
+];
+
+/// The notices `zcode-acp-server` streams as reply chunks of its own besides
+/// the failure ones above (`src/i18n.ts` at 0.96.4, every message there that
+/// is one bracketed line, in each language): retries, recoveries, queued
+/// prompts, sandbox and filesystem-permission hints, sub-agent status lines.
+/// As (start, end), the text around the message's placeholders (the sub-agent
+/// lines end on their counts, so only their start is matched). They can come
+/// before the attempt whose reply follows, so they are not the model's reply.
+const ZCODE_BRIDGE_NOTICES: &[(&str, &str)] = &[
+    // backendRecovered (en)
+    ("[Backend process was interrupted; it has been restarted and the session restored — continuing the task (", ")…]"),
+    // backendRecovered (zh)
+    ("[后端进程异常中断，已重启并恢复会话，自动继续刚才的任务 (", ")…]"),
+    // fsPermDeniedHint (en)
+    ("[A command was denied by filesystem permissions (Permission denied): ", ". This is not a sandbox block and cannot be granted via popup — check the directory's permissions (chmod/chown) or macOS privacy settings, or steer the agent to a path it may access. (One-time notice per path.)]"),
+    // fsPermDeniedHint (zh)
+    ("[命令被文件系统权限拒绝(Permission denied):", "。这不是沙箱拦截,弹窗无法放行——请检查该目录的权限(chmod/chown)或 macOS 隐私设置,或让 Agent 改用有权限的路径。(同一路径仅提示一次。)]"),
+    // goalBackendRecovered (en)
+    ("[Backend process was interrupted; the auto task recovered automatically and is continuing…]", "]"),
+    // goalBackendRecovered (zh)
+    ("[后端进程异常中断，auto 任务已自动恢复并继续…]", "]"),
+    // heldFollowUpFailed (en)
+    ("[A background follow-up turn failed; its partial result stays in the conversation — send a message to continue.]", "]"),
+    // heldFollowUpFailed (zh)
+    ("[后台跟进回合失败；已完成的结果仍保留在对话中——发送一条消息即可继续。]", "]"),
+    // messageSwallowedByTurn (en)
+    ("[The message was merged into a still-generating turn and will be dropped; please resend it.]", "]"),
+    // messageSwallowedByTurn (zh)
+    ("[消息被并入仍在生成的回合，将被丢弃，请重新发送]", "]"),
+    // networkRetry (en)
+    ("[Network error, retrying (", ")…]"),
+    // networkRetry (zh)
+    ("[网络异常，正在重试 (", ")…]"),
+    // promptQueuedBehindTurn (en)
+    ("[The previous reply is still generating; sending once it finishes…]", "]"),
+    // promptQueuedBehindTurn (zh)
+    ("[上一个回复仍在生成，等待结束后发送…]", "]"),
+    // sandboxAskUndeliveredContinuation (en)
+    ("[The sandbox grant request for ", " could not be delivered (client error or connection drop) — no user decision was obtained; the write stays denied. Write inside already-granted directories, or adjust the plan and continue the task.]"),
+    // sandboxAskUndeliveredContinuation (zh)
+    ("[沙箱授权请求未能送达(客户端错误或连接中断),未获得用户决定:", " 的写入仍被沙箱拒绝。请改在已授权的目录内完成写入,或调整方案后继续任务。]"),
+    // sandboxAskUndeliveredHint (en)
+    ("[The sandbox grant request for ", " could not be delivered (client error or connection drop); it is treated as ungranted for now — no decision was saved, and the same write will ask again after the cooldown.]"),
+    // sandboxAskUndeliveredHint (zh)
+    ("[沙箱授权请求未能送达客户端(客户端错误或连接中断):", " 暂按未授权处理;未保存任何决定,冷却后同类写入会再次询问。]"),
+    // sandboxContinuationFailed (en)
+    ("[Sandbox granted, but the automatic continuation failed: ", ". Resend a message (e.g. \"continue the previous task\") to resume the work.]"),
+    // sandboxContinuationFailed (zh)
+    ("[沙箱已放行,但自动续接失败:", "。请重新发送一条消息(例如\"继续刚才的任务\")以恢复工作。]"),
+    // sandboxContinuationPrompt (en)
+    ("[Sandbox granted ", "; please continue the previous task.]"),
+    // sandboxContinuationPrompt (zh)
+    ("[沙箱已放行 ", ",请继续刚才的任务。]"),
+    // sandboxDenyListedHint (en)
+    ("[", " (you chose \"Always reject\" earlier). Edit that file's deny array to undo.]"),
+    // sandboxDenyListedHint (zh)
+    ("[", " 的 deny 列表中(你之前选择过始终拒绝)。要撤销,编辑该文件的 deny 数组即可。]"),
+    // sandboxGenericDenialHint (en)
+    ("[The sandbox denied a write outside the whitelist. To grant a directory: choose Allow in the popup, or edit ~/.config/zcode-acp/sandbox.json and restart the session.]", "]"),
+    // sandboxGenericDenialHint (zh)
+    ("[沙箱拒绝了白名单外的写入。可放行目录:在弹窗中选择允许,或编辑 ~/.config/zcode-acp/sandbox.json 后重启会话。]", "]"),
+    // sandboxOverBroadHint (en)
+    ("[", " is too broad ($HOME or an ancestor) for a popup grant; to allow it, edit the allow list in ~/.config/zcode-acp/sandbox.json by hand.]"),
+    // sandboxOverBroadHint (zh)
+    ("[", " 范围过宽($HOME 或其上级),沙箱不会弹窗放行;确需放行请手动编辑 ~/.config/zcode-acp/sandbox.json 的 allow 列表。]"),
+    // sandboxProtectedHint (en)
+    ("[This path is sandbox-protected (the global config dir ~/.config/zcode-acp/, a workspace's own .zcode/acp/ config dir, or .git under strictGit) and cannot be granted via popup. strictGit can be disabled in ~/.config/zcode-acp/sandbox.json.]", "]"),
+    // sandboxProtectedHint (zh)
+    ("[该路径受沙箱保护(全局配置目录 ~/.config/zcode-acp/、工作区自身的配置目录 .zcode/acp/ 或 strictGit 的 .git),不能通过弹窗放行。strictGit 可在 ~/.config/zcode-acp/sandbox.json 中关闭。]", "]"),
+    // sandboxRejectAlwaysPersisted (en)
+    ("[Recorded as always-rejected: ", ", editable to undo).]"),
+    // sandboxRejectAlwaysPersisted (zh)
+    ("[已记入始终拒绝 ", " 的 deny 列表,可编辑撤销)。]"),
+    // sandboxRejectAlwaysUnpersisted (en)
+    ("[Rejected ", " (config not writable, nothing persisted; the same write will ask again.)]"),
+    // sandboxRejectAlwaysUnpersisted (zh)
+    ("[已拒绝 ", "(配置不可写,未持久化,同类写入下次仍会询问。)]"),
+    // sandboxRejectContinuation (en)
+    ("[The user rejected the sandbox write grant for ", "; the sandbox is unchanged. Write inside already-granted directories, or adjust the plan and continue the task.]"),
+    // sandboxRejectContinuation (zh)
+    ("[用户拒绝了对 ", " 的沙箱写入授权,沙箱保持原样。请改在已授权的目录内完成写入,或调整方案后继续任务。]"),
+    // sandboxRejectOnceHint (en)
+    ("[Sandbox grant rejected for ", "; no decision was saved and the same write will ask again. To grant, edit the allow list in ~/.config/zcode-acp/sandbox.json (bridge-written, not agent-writable).]"),
+    // sandboxRejectOnceHint (zh)
+    ("[已拒绝沙箱放行 ", ",未保存任何决定,同类写入会再次询问;如需放行,可编辑 ~/.config/zcode-acp/sandbox.json 的 allow 列表(由桥写入,Agent 不可改)。]"),
+    // sandboxRestartHint (en)
+    ("[Sandbox granted ", "; the backend restarts in a few seconds to apply it (approvals meanwhile join the same restart). If the task does not auto-continue after the restart, resend a message (e.g. \"continue the previous task\").]"),
+    // sandboxRestartHint (zh)
+    ("[沙箱已放行 ", ",数秒内将合并重启后端以应用新权限;若重启后任务未自动继续,请重新发送一条消息(例如\"继续刚才的任务\")。]"),
+    // sandboxResumedStatus (en)
+    ("[Sandbox backend restarted, session restored; continuing the task…]", "]"),
+    // sandboxResumedStatus (zh)
+    ("[沙箱后端已重启,会话已恢复,自动继续刚才的任务…]", "]"),
+    // sandboxUnattendedTimeoutContinuation (en)
+    ("[The sandbox grant request for ", " timed out unanswered; for the rest of this automated run it counts as denied (no further asks). Write inside already-granted directories, or adjust the plan and continue the task.]"),
+    // sandboxUnattendedTimeoutContinuation (zh)
+    ("[沙箱授权请求未获答复已超时:", " 在本次自动运行期间视同拒绝,不会再弹窗询问。请改在已授权的目录内完成写入,或调整方案后继续任务。]"),
+    // sandboxUnattendedTimeoutHint (en)
+    ("[Sandbox ask for ", " timed out while unattended (auto run / workflow): it counts as denied for the rest of this run; the task continues, writing only inside granted directories.]"),
+    // sandboxUnattendedTimeoutHint (zh)
+    ("[无人值守(auto/工作流)中沙箱授权请求超时:", " 在本次自动运行期间视同拒绝;任务将继续,相关写入仅限已授权目录。]"),
+    // subagentEndedLine (en)
+    ("[subagents finished] ", ""),
+    // subagentEndedLine (zh)
+    ("[子代理完成] ", ""),
+    // subagentStatusLine (en)
+    ("[subagents] ", ""),
+    // subagentStatusLine (zh)
+    ("[子代理] ", ""),
+];
+
+/// Whether a ZCode reply chunk (trimmed) is one of [`ZCODE_BRIDGE_NOTICES`].
+fn is_zcode_bridge_notice(chunk: &str) -> bool {
+    ZCODE_BRIDGE_NOTICES
+        .iter()
+        .any(|(start, end)| chunk.starts_with(start) && chunk.ends_with(end))
+}
+
+/// A ZCode turn that failed, told as `refusal`, the stop reason codeg reads as
+/// a turn that ended badly.
+///
+/// From bridge 0.96.3 a backend turn failure the bridge does not retry (an
+/// exceeded context window, a missing model, the provider's content-safety
+/// refusal) no longer rejects the prompt with -32603 "ZCode turn failed: …":
+/// the bridge streams a notice saying so and answers a bare `end_turn` (its
+/// own "degraded after failure" mark is a non-enumerable property that never
+/// reaches the wire), as it already did for a transient failure that ran out
+/// of retries. Read as it comes, such a turn completed, with the notice as
+/// its reply, so an automation run, a delegation or an assistant's job would
+/// count it as done. Such a turn is recognised by both of what the bridge does
+/// then: its last reply chunk is one of [`ZCODE_FAILED_TURN_NOTICES`] whole
+/// (`earlier_reply`: the turn streamed reply text before it other than
+/// [`ZCODE_BRIDGE_NOTICES`]), and the
+/// response carries no `_meta.zcode.usage`, which every turn that ran to its
+/// end reports. The notice stays in the conversation as it was shown.
+fn zcode_stop_reason(
+    agent_type: AgentType,
+    reason: StopReason,
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+    last_reply_chunk: Option<&str>,
+    earlier_reply: bool,
+) -> StopReason {
+    if agent_type != AgentType::ZCode || reason != StopReason::EndTurn {
+        return reason;
+    }
+    let reported_usage = meta
+        .and_then(|meta| meta.get("zcode"))
+        .and_then(|zcode| zcode.get("usage"))
+        .is_some_and(|usage| !usage.is_null());
+    let failure_notice = last_reply_chunk.is_some_and(|chunk| {
+        ZCODE_FAILED_TURN_NOTICES.iter().any(|(start, end, alone)| {
+            chunk.starts_with(start) && chunk.ends_with(end) && !(*alone && earlier_reply)
+        })
+    });
+    if failure_notice && !reported_usage {
+        StopReason::Refusal
+    } else {
+        reason
+    }
+}
+
 /// Classify a `session/load` failure into a stable frontend `code` when the
 /// historical session cannot be restored — either the agent has no record of
 /// it (`ResourceNotFound`, -32002) or the agent process/session died mid-load.
@@ -15020,6 +15218,11 @@ struct TurnOutputProbe {
     /// Only the tail matters: the account is the turn's last words but for a
     /// citation notice.
     antigravity_chunks: std::collections::VecDeque<String>,
+    /// ZCode only: the turn's last reply chunk, trimmed, which tells a failed
+    /// turn the bridge ended `end_turn` (see [`zcode_stop_reason`]), and
+    /// whether reply text came before it.
+    zcode_last_chunk: Option<String>,
+    zcode_earlier_reply: bool,
 }
 
 impl TurnOutputProbe {
@@ -15047,6 +15250,29 @@ impl TurnOutputProbe {
                 }
                 self.antigravity_chunks
                     .push_back(text.text.trim().to_string());
+            }
+        }
+        if agent_type == AgentType::ZCode {
+            if let SessionUpdate::AgentMessageChunk(ContentChunk {
+                content: ContentBlock::Text(text),
+                ..
+            }) = update
+            {
+                let text = text.text.trim().to_string();
+                if text.is_empty() {
+                    return;
+                }
+                // The bridge's own notices (a retry, a queued prompt, a sandbox
+                // hint, …) come as reply chunks too; they are not the model's
+                // reply.
+                if self
+                    .zcode_last_chunk
+                    .as_deref()
+                    .is_some_and(|last| !is_zcode_bridge_notice(last))
+                {
+                    self.zcode_earlier_reply = true;
+                }
+                self.zcode_last_chunk = Some(text);
             }
         }
     }
@@ -16328,6 +16554,13 @@ async fn run_conversation_loop(
                                 agent_type,
                                 response.stop_reason,
                                 response.meta.as_ref(),
+                            );
+                            let reason = zcode_stop_reason(
+                                agent_type,
+                                reason,
+                                response.meta.as_ref(),
+                                probe.zcode_last_chunk.as_deref(),
+                                probe.zcode_earlier_reply,
                             );
                             if !tracked_terminal_tool_calls.is_empty() {
                                 poll_tracked_terminal_tool_calls(
@@ -53229,6 +53462,137 @@ mod tests {
             tokio::time::Instant::now(),
             cancelled_at + CODEBUDDY_CANCEL_ANSWER_WAIT
         );
+    }
+
+    /// Bridge 0.96.3 ends a turn it could not complete `end_turn`, after a
+    /// notice saying so; the texts are 0.96.4's, captured against a stand-in
+    /// backend (a context window exceeded) and read from its `i18n.ts`.
+    #[test]
+    fn a_zcode_turn_the_bridge_failed_ends_as_a_refusal() {
+        use agent_client_protocol::schema::v1::ContentChunk;
+        let chunk = |text: &str| SessionUpdate::AgentMessageChunk(ContentChunk::new(text.into()));
+        let usage = serde_json::json!({
+            "zcode": { "usage": { "inputTokens": 10, "outputTokens": 2 } }
+        })
+        .as_object()
+        .cloned();
+        // (notice, also a failure after a reply: false for the content-safety
+        // notice, which also ends a completed prompt whose held background
+        // follow-up was refused)
+        let notices = [
+            ("[Turn failed: context_window_exceeded 400 invalid_request_error (context_window_exceeded). This reply was not completed — resolve the cause above, then resend.]", true),
+            ("[回合失败：context_window_exceeded 400。本次回复未完成——请先处理上述问题，再重新发送。]", true),
+            ("[Request blocked by the provider's content-safety check: 1301 [1301] 系统检测到输入或生成内容可能包含不安全或敏感内容. Resending the same content will be blocked again — if this keeps happening in this conversation, the conversation context itself trips the check: switch to a model from another provider, or continue in a new conversation.]", false),
+            ("[请求被模型服务商的内容安全检查拦截：1301。同类内容原样重发仍会被拦截；若本会话连续出现，说明会话上下文本身触发了拦截——请改用其他服务商的模型，或新开会话继续。]", false),
+            ("[Request failed: fetch failed. The session is still usable — please resend.]", true),
+            ("[请求失败：fetch failed。会话仍可用，请重新发送消息重试。]", true),
+        ];
+        let reason_after =
+            |updates: &[&str], meta: Option<&serde_json::Map<String, serde_json::Value>>| {
+                let mut probe = TurnOutputProbe::new(0);
+                for text in updates {
+                    probe.note_update(AgentType::ZCode, &chunk(text));
+                }
+                zcode_stop_reason(
+                    AgentType::ZCode,
+                    StopReason::EndTurn,
+                    meta,
+                    probe.zcode_last_chunk.as_deref(),
+                    probe.zcode_earlier_reply,
+                )
+            };
+        for (notice, after_a_reply) in notices {
+            let wrapped = format!("\n\n{notice}\n");
+            // The turn's only reply; an empty chunk, or the bridge's own
+            // notices before the attempt that was refused (a retry, a queued
+            // prompt, a filesystem-permission hint), do not count as one.
+            assert_eq!(
+                reason_after(&["  ", &wrapped], None),
+                StopReason::Refusal,
+                "{notice}"
+            );
+            assert_eq!(
+                reason_after(
+                    &[
+                        "[Network error, retrying (1/6)…]",
+                        "[网络异常，正在重试 (2/6)…]",
+                        "[The previous reply is still generating; sending once it finishes…]",
+                        "[命令被文件系统权限拒绝(Permission denied):/etc/x。这不是沙箱拦截,弹窗无法放行——请检查该目录的权限(chmod/chown)或 macOS 隐私设置,或让 Agent 改用有权限的路径。(同一路径仅提示一次。)]",
+                        "[The sandbox denied a write outside the whitelist. To grant a directory: choose Allow in the popup, or edit ~/.config/zcode-acp/sandbox.json and restart the session.]",
+                        "[subagents] 1 running · 1 waiting",
+                        "[子代理完成] 2 个结束 · 1 失败",
+                        &wrapped
+                    ],
+                    None
+                ),
+                StopReason::Refusal,
+                "{notice}"
+            );
+            // A reply, even one in brackets, came first: the prompt is done
+            // when a held follow-up is refused.
+            assert_eq!(
+                reason_after(&["[]", &wrapped], None),
+                if after_a_reply {
+                    StopReason::Refusal
+                } else {
+                    StopReason::EndTurn
+                },
+                "{notice}"
+            );
+            assert_eq!(
+                reason_after(&["Partial reply. ", &wrapped], None),
+                if after_a_reply {
+                    StopReason::Refusal
+                } else {
+                    StopReason::EndTurn
+                },
+                "{notice}"
+            );
+            // A turn that ran to its end reports usage; another agent, or
+            // another stop reason, is left alone.
+            assert_eq!(
+                reason_after(&[&wrapped], usage.as_ref()),
+                StopReason::EndTurn
+            );
+            assert_eq!(
+                zcode_stop_reason(
+                    AgentType::Codex,
+                    StopReason::EndTurn,
+                    None,
+                    Some(notice),
+                    false
+                ),
+                StopReason::EndTurn
+            );
+            assert_eq!(
+                zcode_stop_reason(
+                    AgentType::ZCode,
+                    StopReason::Cancelled,
+                    None,
+                    Some(notice),
+                    false
+                ),
+                StopReason::Cancelled
+            );
+        }
+        // A reply that only starts like a notice, a notice quoted in a reply,
+        // or a notice the model went on after, is a reply.
+        assert_eq!(
+            reason_after(&["[Turn failed: is how the bridge words it."], None),
+            StopReason::EndTurn
+        );
+        assert_eq!(
+            reason_after(
+                &["Here it is: [Turn failed: x. This reply was not completed — resolve the cause above, then resend.]"],
+                None
+            ),
+            StopReason::EndTurn
+        );
+        assert_eq!(
+            reason_after(&[notices[0].0, "Then the model went on."], None),
+            StopReason::EndTurn
+        );
+        assert_eq!(reason_after(&[], None), StopReason::EndTurn);
     }
 
     #[test]

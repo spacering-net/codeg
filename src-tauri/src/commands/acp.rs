@@ -23611,7 +23611,7 @@ wire_api = "chat"
         // Every other agent keeps the user's own script policy, and so does a
         // package whose name only starts like one of those.
         for spec in [
-            "cline@3.0.75",
+            "cline@3.0.76",
             "@xai-official/grok-darwin-arm64@1.0.77",
             "hermes-agent-npm@1.0.0",
         ] {

@@ -204,9 +204,17 @@ fn bundled_candidates(platform: &str, home: Option<&Path>, local: Option<&str>) 
             }
             paths
         }
+        // Linux, in the bridge's own order (`bundledZcodeCandidates`, and the
+        // version gates' `desktopBundleEntryPaths` since 0.96.1): the official
+        // deb/pacman/rpm packages, then Arch's `zcode-bin`, which moves the same
+        // tree to /usr/lib without the `resources/` level. On Linux the `zcode`
+        // on PATH is the desktop launcher (a link to the Electron binary, or
+        // zcode-bin's shell wrapper around it), which `app-server --stdio`
+        // would only open the app with, so a bundle must be found here.
         _ => vec![
             PathBuf::from("/opt/ZCode/resources/glm/zcode.cjs"),
             PathBuf::from("/usr/share/zcode/resources/glm/zcode.cjs"),
+            PathBuf::from("/usr/lib/zcode/glm/zcode.cjs"),
         ],
     }
 }
@@ -398,6 +406,18 @@ mod tests {
         let runtime = resolve_paths(&env, dir.path(), Some(dir.path()), "windows").unwrap();
         assert_eq!(runtime.cli, cli);
         assert_eq!(runtime.node, node);
+    }
+
+    #[test]
+    fn linux_bundles_include_arch_zcode_bin() {
+        assert_eq!(
+            bundled_candidates("linux", None, None),
+            vec![
+                PathBuf::from("/opt/ZCode/resources/glm/zcode.cjs"),
+                PathBuf::from("/usr/share/zcode/resources/glm/zcode.cjs"),
+                PathBuf::from("/usr/lib/zcode/glm/zcode.cjs"),
+            ]
+        );
     }
 
     #[test]

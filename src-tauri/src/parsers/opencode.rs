@@ -3012,6 +3012,103 @@ fn background_job_of_call(tool_name: &str, state: Option<&serde_json::Value>) ->
     }
 }
 
+/// The image and video jobs a Code Mode script started, keyed as
+/// [`background_job_of_call`] keys them. 2.4.2 offers `generate_image` and
+/// `generate_video` only inside Code Mode (`options.codemode: true` in
+/// `image-generate.ts` / `video-generate.ts`), so the model starts a job from
+/// an `execute` call: its `metadata.toolCalls` names the tool and holds no
+/// `jobID`, and the tool's result, now a plain string, carries the id only in
+/// its text, `Image job <id> started in the background…` / `Video job <id>
+/// started in the background…`. That text is the script's result only when the
+/// script returns it, so a script that drops it leaves its jobs unlinked.
+fn code_mode_background_jobs(state: Option<&serde_json::Value>) -> Vec<String> {
+    let Some(calls) = state
+        .and_then(|s| s.get("metadata"))
+        .and_then(|m| m.get("toolCalls"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let called = |tool: &str| {
+        calls
+            .iter()
+            .any(|call| call.get("tool").and_then(|t| t.as_str()) == Some(tool))
+    };
+    let Some(text) = state
+        .and_then(|s| s.get("output"))
+        .and_then(|v| value_to_preview(Some(v)))
+        .or_else(|| tool_content_text(state))
+    else {
+        return Vec::new();
+    };
+    // (where its start text is, key), so the jobs keep the order they started in.
+    let mut jobs: Vec<(usize, String)> = Vec::new();
+    for (tool, lead, kind) in [
+        ("generate_image", "Image job ", "image"),
+        ("generate_video", "Video job ", "video"),
+    ] {
+        if !called(tool) {
+            continue;
+        }
+        for (at, _) in text.match_indices(lead) {
+            let rest = &text[at + lead.len()..];
+            let Some((id, after)) = rest.split_once(' ') else {
+                continue;
+            };
+            let key = format!("{kind}:{id}");
+            if !id.is_empty()
+                && after.starts_with("started in the background")
+                && !jobs.iter().any(|(_, seen)| *seen == key)
+            {
+                jobs.push((at, key));
+            }
+        }
+    }
+    jobs.sort_by_key(|(at, _)| *at);
+    jobs.into_iter().map(|(_, key)| key).collect()
+}
+
+/// Settle the background work a call started with the notices that report its
+/// end: a command, image or video call's one job (see
+/// [`settle_background_job`]), or the image and video jobs a Code Mode script
+/// started ([`code_mode_background_jobs`]). A script's notices come before its
+/// own result (which holds the "started in the background" texts the notices
+/// answer), the way a tool's own call shows its notice in place of that text,
+/// so a preview cut to its first characters still says how the jobs ended; a
+/// failed job marks the call failed as it would the tool's own call.
+fn settle_background_jobs(
+    normalized: &mut NormalizedToolCall,
+    tool_name: &str,
+    state: Option<&serde_json::Value>,
+    job_notices: &HashMap<String, serde_json::Value>,
+) {
+    if let Some(job) = background_job_of_call(tool_name, state) {
+        if let Some(notice) = job_notices.get(&job) {
+            settle_background_job(normalized, tool_name, notice);
+        }
+        return;
+    }
+    if tool_name != "execute" {
+        return;
+    }
+    let mut endings = Vec::new();
+    for notice in code_mode_background_jobs(state)
+        .iter()
+        .filter_map(|job| job_notices.get(job))
+    {
+        endings.extend(background_job_notice_text(notice));
+        let state = pick_str(notice.get("metadata"), &["state"]).unwrap_or("");
+        normalized.is_error |= is_error_status(state);
+    }
+    if endings.is_empty() {
+        return;
+    }
+    if let Some(output) = normalized.output_preview.take().filter(|o| !o.is_empty()) {
+        endings.push(output);
+    }
+    normalized.output_preview = Some(endings.join("\n\n"));
+}
+
 /// The background job a `synthetic` row reports the end of, when it is the
 /// notice that job's result arrives in. A command's is tagged
 /// `metadata: { source: "shell", shellID, jobID, state, exit? }`, its text the
@@ -3155,11 +3252,7 @@ fn v2_assistant_blocks(
                     .and_then(|n| n.as_str())
                     .unwrap_or("unknown");
                 let mut normalized = normalize_tool_call(tool_name, part.get("state"));
-                if let Some(notice) = background_job_of_call(tool_name, part.get("state"))
-                    .and_then(|job| job_notices.get(&job))
-                {
-                    settle_background_job(&mut normalized, tool_name, notice);
-                }
+                settle_background_jobs(&mut normalized, tool_name, part.get("state"), job_notices);
                 blocks.push(ContentBlock::ToolUse {
                     tool_use_id: call_id.clone(),
                     tool_name: normalized.tool_name,
@@ -3504,11 +3597,7 @@ async fn batch_load_v2_subagent_tool_calls(
                 .unwrap_or("unknown");
             let state = part.get("state");
             let mut normalized = normalize_tool_call(tool_name, state);
-            if let Some(notice) =
-                background_job_of_call(tool_name, state).and_then(|job| job_notices.get(&job))
-            {
-                settle_background_job(&mut normalized, tool_name, notice);
-            }
+            settle_background_jobs(&mut normalized, tool_name, state, &job_notices);
             let status = pick_str(state, &["status"]).unwrap_or("");
 
             result.entry(sid.clone()).or_default().push(AgentToolCall {
@@ -5603,6 +5692,216 @@ mod tests {
                 "Saved video: /tmp/videos/video_1.mp4".to_string(),
                 false,
                 None
+            )
+        );
+        assert_eq!(detail.turns.len(), 2);
+    }
+
+    /// 2.4.2 offers `generate_image` and `generate_video` only inside Code
+    /// Mode, so a job starts from an `execute` call that names the tool in
+    /// `metadata.toolCalls` and carries the job's id only in the result text
+    /// the script returns. The image call and its notice are the ones 2.4.2
+    /// stored live (ids and paths shortened); the video's text is its
+    /// source's (`core/src/tool/plugin/video-generate.ts`).
+    #[test]
+    fn jobs_a_code_mode_script_started_report_their_end_on_the_script() {
+        use crate::parsers::AgentParser;
+
+        let t0: i64 = 1_795_853_851_000;
+        let model = serde_json::json!({ "id": "test-model", "providerID": "fake" });
+        let image_started = "Image job image_1 started in the background with fake/img-model. It will be saved as /tmp/images/image_s1 with the extension of its real format (.png, .jpg, .webp or .gif); the notice gives the exact path.\nYou will be notified automatically when it finishes or fails.";
+        let video_started = "Video job video_1 started in the background with fake/vid-model. It will be saved to /tmp/videos/video_1.mp4; if the model returns more than one video, the others are saved next to it with -1, -2, … added to the name.";
+        let execute = |id: &str, code: &str, tools: &[&str], text: &str| {
+            serde_json::json!({
+                "type": "tool",
+                "id": id,
+                "name": "execute",
+                "executed": false,
+                "state": {
+                    "status": "completed",
+                    "input": { "code": code },
+                    "content": [{ "type": "text", "text": text }],
+                    "metadata": {
+                        "toolCalls": tools
+                            .iter()
+                            .map(|tool| serde_json::json!({ "tool": tool, "status": "completed", "input": { "prompt": "a red square" } }))
+                            .collect::<Vec<_>>(),
+                        "truncated": false
+                    }
+                }
+            })
+        };
+        let notice = |source: &str, job: &str, state: &str, kind: &str, body: &str| {
+            serde_json::json!({
+                "metadata": { "source": source, "jobID": job, "state": state, "path": "/tmp/x" },
+                "time": { "created": t0 + 50 },
+                "text": format!("<background-result kind=\"{kind}\" id=\"{job}\" state=\"{state}\">\n{body}\n</background-result>"),
+                "description": "Image generation"
+            })
+        };
+        let mut fx = DbFixture::new(&V2_TABLES);
+        fx.v2_session("ses_main", None, Some("Jobs"), t0, t0 + 900);
+        fx.v2_message(
+            "ses_main",
+            "msg_u1",
+            0,
+            "user",
+            t0,
+            serde_json::json!({ "time": { "created": t0 }, "text": "make an image and a video" }),
+        );
+        fx.v2_message("ses_main", "msg_a1", 1, "assistant", t0 + 10, serde_json::json!({
+            "time": { "created": t0 + 10, "completed": t0 + 20 },
+            "agent": "build",
+            "model": model,
+            "content": [
+                execute(
+                    "call_both",
+                    "const a = await tools.generate_image({ prompt: 'a red square' });\nconst b = await tools.generate_video({ prompt: 'a red square' });\nreturn a + '\\n' + b",
+                    &["generate_image", "generate_video"],
+                    &format!("{image_started}\n{video_started}"),
+                ),
+                // The script dropped the tool's text: nothing links its job.
+                execute(
+                    "call_quiet",
+                    "await tools.generate_image({ prompt: 'a red square' });\nreturn 'ok'",
+                    &["generate_image"],
+                    "ok",
+                ),
+                // Text that reads like a start, from a script that started none.
+                execute(
+                    "call_echo",
+                    "return 'Image job image_1 started in the background'",
+                    &[],
+                    "Image job image_1 started in the background",
+                ),
+                {
+                    "type": "tool",
+                    "id": "call_kid",
+                    "name": "subagent",
+                    "state": {
+                        "status": "completed",
+                        "input": { "agent": "general", "description": "Kid", "prompt": "make one too" },
+                        "content": [{ "type": "text", "text": "<background-result kind=\"subagent\" sessionID=\"ses_kid\" state=\"completed\">\nkid done\n</background-result>" }],
+                        "metadata": { "sessionID": "ses_kid", "status": "completed" }
+                    }
+                },
+            ]
+        }));
+        // The sub-agent runs the same script in its own session, where its
+        // jobs' notices land too; its card's calls are cut to 500 characters.
+        fx.v2_session("ses_kid", Some("ses_main"), Some("Kid"), t0 + 300, t0 + 400);
+        fx.v2_message("ses_kid", "msg_k1", 0, "assistant", t0 + 310, serde_json::json!({
+            "time": { "created": t0 + 310, "completed": t0 + 320 },
+            "agent": "general",
+            "model": model,
+            "content": [execute(
+                "call_kid_both",
+                "const a = await tools.generate_image({ prompt: 'a red square' });\nconst b = await tools.generate_video({ prompt: 'a red square' });\nreturn a + '\\n' + b",
+                &["generate_image", "generate_video"],
+                &format!("{}\n{video_started}", image_started.replace("image_1", "image_k")),
+            )]
+        }));
+        fx.v2_message(
+            "ses_kid",
+            "msg_k2",
+            1,
+            "synthetic",
+            t0 + 330,
+            notice(
+                "generate_image",
+                "image_k",
+                "completed",
+                "image",
+                "Image request finished. Saved image: /tmp/images/image_k.png (fake/img-model).",
+            ),
+        );
+        fx.v2_message(
+            "ses_main",
+            "msg_n1",
+            2,
+            "synthetic",
+            t0 + 50,
+            notice(
+                "generate_image",
+                "image_1",
+                "error",
+                "image",
+                "Image request failed for /tmp/images/image_s1: fake/img-model has no image API opencode can call",
+            ),
+        );
+        fx.v2_message(
+            "ses_main",
+            "msg_n2",
+            3,
+            "synthetic",
+            t0 + 51,
+            notice(
+                "generate_video",
+                "video_1",
+                "completed",
+                "video",
+                "Saved video: /tmp/videos/video_1.mp4",
+            ),
+        );
+        let (_dir, parser) = fx.build();
+
+        let detail = parser.get_conversation("ses_main").expect("detail");
+        let blocks: Vec<&ContentBlock> = detail.turns.iter().flat_map(|t| &t.blocks).collect();
+        let result = |id: &str| {
+            blocks
+                .iter()
+                .find_map(|block| match block {
+                    ContentBlock::ToolResult {
+                        tool_use_id: Some(use_id),
+                        output_preview,
+                        is_error,
+                        ..
+                    } if use_id == id => {
+                        Some((output_preview.clone().unwrap_or_default(), *is_error))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no result for {id}"))
+        };
+        // How the jobs ended comes first, in the order they started, then the
+        // script's own result.
+        assert_eq!(
+            result("call_both"),
+            (
+                format!(
+                    "Image request failed for /tmp/images/image_s1: fake/img-model has no image API opencode can call\n\nSaved video: /tmp/videos/video_1.mp4\n\n{image_started}\n{video_started}"
+                ),
+                true
+            )
+        );
+        // The sub-agent's script, as its card lists it: the image job ended
+        // (the video's notice never came), and the cut keeps that.
+        let kid_calls = blocks
+            .iter()
+            .find_map(|block| match block {
+                ContentBlock::ToolResult {
+                    tool_use_id: Some(use_id),
+                    agent_stats: Some(stats),
+                    ..
+                } if use_id == "call_kid" => Some(stats.tool_calls.clone()),
+                _ => None,
+            })
+            .expect("the sub-agent's calls");
+        assert_eq!(kid_calls.len(), 1);
+        let kid = kid_calls[0].output_preview.clone().unwrap_or_default();
+        assert!(
+            kid.starts_with(
+                "Image request finished. Saved image: /tmp/images/image_k.png (fake/img-model).\n\nImage job image_k started"
+            ),
+            "{kid}"
+        );
+        assert!(!kid_calls[0].is_error);
+        assert_eq!(result("call_quiet"), ("ok".to_string(), false));
+        assert_eq!(
+            result("call_echo"),
+            (
+                "Image job image_1 started in the background".to_string(),
+                false
             )
         );
         assert_eq!(detail.turns.len(), 2);
