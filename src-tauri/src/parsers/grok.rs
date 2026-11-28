@@ -14,10 +14,11 @@ use crate::acp::connection::grok_failed_compaction_meta;
 use crate::acp::types::PromptInputBlock;
 use crate::parsers::claude::BACKGROUND_TASK_MARKER;
 use crate::parsers::{
-    backfill_turn_durations, compute_session_stats, folder_name_from_path,
-    infer_context_window_max_tokens, is_safe_subagent_id, merge_context_window_stats,
-    relocate_orphaned_tool_results, structurize_read_tool_output, title_from_user_text,
-    truncate_str, AgentEnv, AgentParser, ParseError,
+    add_unplaced_usage_to_total, add_usage_to_turn_current_at, backfill_turn_durations,
+    compute_session_stats, folder_name_from_path, infer_context_window_max_tokens,
+    is_safe_subagent_id, merge_context_window_stats, relocate_orphaned_tool_results,
+    structurize_read_tool_output, title_from_user_text, truncate_str, AgentEnv, AgentParser,
+    ParseError,
 };
 
 /// Cap for a single tool result / tool input preview stored on a turn. Grok's
@@ -370,8 +371,23 @@ impl GrokParser {
             grok_catalog_context_window(&self.grok_home(), model)
                 .or_else(|| infer_context_window_max_tokens(Some(model)))
         });
+        let mut unplaced = TurnUsage::default();
+        for (at, usage) in &parsed.unplaced_spend {
+            if !add_usage_to_turn_current_at(&mut parsed.turns, Some(*at), usage) {
+                unplaced = TurnUsage {
+                    input_tokens: unplaced.input_tokens.saturating_add(usage.input_tokens),
+                    output_tokens: unplaced.output_tokens.saturating_add(usage.output_tokens),
+                    cache_creation_input_tokens: unplaced
+                        .cache_creation_input_tokens
+                        .saturating_add(usage.cache_creation_input_tokens),
+                    cache_read_input_tokens: unplaced
+                        .cache_read_input_tokens
+                        .saturating_add(usage.cache_read_input_tokens),
+                };
+            }
+        }
         let session_stats = merge_context_window_stats(
-            compute_session_stats(&parsed.turns),
+            add_unplaced_usage_to_total(compute_session_stats(&parsed.turns), &unplaced),
             parsed.context_tokens,
             context_window,
         );
@@ -667,6 +683,9 @@ struct ParsedUpdates {
     /// because the two measure different things — occupancy is what currently
     /// sits in the window, `usage` is what the turn spent getting there.
     context_tokens: Option<u64>,
+    /// A prompt's spend that closed with no reply open to carry it: `(when,
+    /// usage)`.
+    unplaced_spend: Vec<(DateTime<Utc>, TurnUsage)>,
 }
 
 /// One subagent's lifecycle, folded from the parent-stream extension
@@ -914,6 +933,10 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
                     turn_meta.apply(&mut turn, &mut out.context_tokens);
                     turn.completed_at = Some(now);
                     out.turns.push(turn);
+                } else if let Some(usage) = update.get("usage").and_then(prompt_usage) {
+                    // A prompt that got no reply, or one a mid-turn user chunk
+                    // already closed, was billed all the same.
+                    out.unplaced_spend.push((now, usage));
                 }
                 turn_meta = GrokTurnMeta::default();
                 tool_result_idx.clear();
@@ -2392,6 +2415,35 @@ mod tests {
         r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"second"}},"_meta":{"totalTokens":31628,"agentTimestampMs":9000}},"timestamp":1783584035}"#, "\n",
         r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","prompt_id":"56468252","stop_reason":"end_turn","usage":{"inputTokens":198457,"outputTokens":6224,"totalTokens":204681,"cachedReadTokens":167680,"reasoningTokens":931,"modelCalls":7,"numTurns":7}}},"timestamp":1783584036}"#, "\n",
     );
+
+    /// A prompt that got no reply still closes with what it spent; with no
+    /// reply open to carry it, it lands on the nearest one.
+    #[test]
+    fn a_prompt_with_no_reply_still_counts_its_spend() {
+        let updates = concat!(
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"one"},"_meta":{"promptIndex":0}},"_meta":{"turnStartMs":1000,"totalTokens":9000}},"timestamp":1783584019}"#,
+            "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"first"}},"_meta":{"totalTokens":18000,"agentTimestampMs":3000}},"timestamp":1783584024}"#,
+            "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","prompt_id":"p0","stop_reason":"end_turn","usage":{"inputTokens":100,"outputTokens":10,"totalTokens":110,"cachedReadTokens":0}}},"timestamp":1783584025}"#,
+            "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"two"},"_meta":{"promptIndex":1}},"_meta":{"turnStartMs":6000,"totalTokens":22000}},"timestamp":1783584030}"#,
+            "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","prompt_id":"p1","stop_reason":"refusal","usage":{"inputTokens":40,"outputTokens":4,"totalTokens":44,"cachedReadTokens":0}}},"timestamp":1783584036}"#,
+            "\n",
+        );
+        let (_tmp, sessions) = fixture(SUMMARY, updates);
+        let detail = GrokParser::with_base_dir(sessions)
+            .get_conversation("019f45e3-e1ef-7690-a29f-fe2554382b49")
+            .unwrap();
+        let spent: u64 = detail
+            .turns
+            .iter()
+            .filter_map(|t| t.usage.as_ref())
+            .map(total_of)
+            .sum();
+        assert_eq!(spent, 110 + 44);
+    }
 
     #[test]
     fn turn_completed_usage_fills_the_token_breakdown() {

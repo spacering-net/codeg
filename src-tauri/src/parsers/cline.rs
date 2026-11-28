@@ -10,8 +10,9 @@ use crate::models::{
 };
 
 use super::{
-    backfill_turn_durations, compute_session_stats, folder_name_from_path, title_from_user_text,
-    truncate_str, AgentEnv, AgentParser, ParseError,
+    add_unplaced_usage_to_total, add_usage_to_turn_current_at, backfill_turn_durations,
+    compute_session_stats, folder_name_from_path, title_from_user_text, truncate_str, AgentEnv,
+    AgentParser, ParseError,
 };
 
 // ---------------------------------------------------------------------------
@@ -371,14 +372,22 @@ impl ClineParser {
         Some(manifest)
     }
 
-    fn read_messages(&self, manifest: &SessionManifest) -> SessionMessagesFile {
-        self.read_messages_as(manifest)
+    /// The transcript, and the file it was read from (`None` when none read).
+    fn read_messages(&self, manifest: &SessionManifest) -> (SessionMessagesFile, Option<PathBuf>) {
+        self.read_messages_from(manifest)
     }
 
     fn read_messages_as<T: Default + serde::de::DeserializeOwned>(
         &self,
         manifest: &SessionManifest,
     ) -> T {
+        self.read_messages_from(manifest).0
+    }
+
+    fn read_messages_from<T: Default + serde::de::DeserializeOwned>(
+        &self,
+        manifest: &SessionManifest,
+    ) -> (T, Option<PathBuf>) {
         let id = &manifest.session_id;
         // The conventional path wins over the manifest's own `messages_path`:
         // that field records the ABSOLUTE path the writing process saw, which
@@ -403,10 +412,10 @@ impl ClineParser {
                 continue;
             };
             if let Ok(parsed) = serde_json::from_str::<T>(&raw) {
-                return parsed;
+                return (parsed, Some(path));
             }
         }
-        T::default()
+        (T::default(), None)
     }
 
     /// Every root session in the 3.x store, newest-first ordering left to the
@@ -442,9 +451,70 @@ impl ClineParser {
         summaries
     }
 
+    /// What this session's sub-agents and agent-team teammates spent:
+    /// `(when, usage)` per billed reply.
+    ///
+    /// Each writes its own `sessions/<id>/<agent>.messages.json` beside the
+    /// session's transcript (a spawned sub-agent gets a `sessions.db` row and
+    /// such a file, never a manifest of its own, so it is never a conversation),
+    /// and nothing read their `metrics`. Every sibling transcript counts, read
+    /// or referenced or not.
+    fn teammate_spend(
+        &self,
+        manifest: &SessionManifest,
+        main_transcript: Option<&std::path::Path>,
+    ) -> Vec<(DateTime<Utc>, TurnUsage)> {
+        let session_id = &manifest.session_id;
+        let dir = self.sessions_dir().join(session_id);
+        // The session's own transcript is not a teammate's: the file it was
+        // actually read from, and the conventional name either way.
+        let own = dir.join(format!("{session_id}.messages.json"));
+        let same_file = |a: &std::path::Path, b: &std::path::Path| {
+            a == b
+                || matches!(
+                    (fs::canonicalize(a), fs::canonicalize(b)),
+                    (Ok(a), Ok(b)) if a == b
+                )
+        };
+        let Ok(entries) = fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(".messages.json"))
+                    && !same_file(path, &own)
+                    && !main_transcript.is_some_and(|main| same_file(path, main))
+            })
+            .collect();
+        files.sort();
+        let mut spend = Vec::new();
+        for file in files {
+            let Some(transcript) = fs::read_to_string(&file)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<SessionMessagesFile>(&raw).ok())
+            else {
+                continue;
+            };
+            for msg in &transcript.messages {
+                let (Some(metrics), Some(at)) = (
+                    &msg.metrics,
+                    msg.ts.filter(|ts| *ts > 0).map(ts_to_datetime),
+                ) else {
+                    continue;
+                };
+                spend.push((at, session_usage(metrics)));
+            }
+        }
+        spend
+    }
+
     fn session_detail(&self, manifest: &SessionManifest) -> ConversationDetail {
         let conversation_id = manifest.session_id.clone();
-        let messages = self.read_messages(manifest);
+        let (messages, main_transcript) = self.read_messages(manifest);
         let manifest_model = non_empty(manifest.model.clone());
 
         // A message without a usable `ts` inherits the previous one's instead
@@ -462,6 +532,8 @@ impl ClineParser {
             *counter += 1;
             format!("{conversation_id}-{counter}")
         };
+        // Billed calls no rendered reply carries: `(when, usage)`.
+        let mut spend_elsewhere: Vec<(DateTime<Utc>, TurnUsage)> = Vec::new();
 
         for msg in &messages.messages {
             let timestamp = match msg.ts.filter(|ts| *ts > 0).map(ts_to_datetime) {
@@ -507,6 +579,10 @@ impl ClineParser {
                 "assistant" => {
                     let blocks = parse_content_blocks(&msg.content, clean_session_text);
                     if blocks.is_empty() {
+                        // Nothing to render, but the call was billed.
+                        if let Some(metrics) = &msg.metrics {
+                            spend_elsewhere.push((timestamp, session_usage(metrics)));
+                        }
                         continue;
                     }
                     let model = msg
@@ -560,7 +636,14 @@ impl ClineParser {
         }
 
         backfill_turn_durations(&mut turns, &[]);
-        let session_stats = compute_session_stats(&turns);
+        spend_elsewhere.extend(self.teammate_spend(manifest, main_transcript.as_deref()));
+        let mut unplaced = TurnUsage::default();
+        for (at, usage) in &spend_elsewhere {
+            if !add_usage_to_turn_current_at(&mut turns, Some(*at), usage) {
+                unplaced = sum_usage(&unplaced, usage);
+            }
+        }
+        let session_stats = add_unplaced_usage_to_total(compute_session_stats(&turns), &unplaced);
         let summary = session_summary(
             manifest,
             messages.updated_at.as_deref(),
@@ -573,6 +656,122 @@ impl ClineParser {
             session_stats,
             transcript_watermark: None,
         }
+    }
+}
+
+/// Every request a pre-3.x task made, from cline's own `ui_messages.json`:
+/// `(when, usage)` per `api_req_started` record carrying token counts, or
+/// `None` when the file has none (the transcript's `metrics` then stand).
+///
+/// The transcript only holds `metrics` on assistant messages that were kept,
+/// so a request that produced no stored reply — a retry after "You did not use
+/// a tool", a failed stream — vanished from the totals (a real task: three
+/// requests, 49,800 tokens in, 0 counted). And its `cached` is cache READS
+/// PLUS WRITES, all of which landed in the cache-read column. `api_req_started`
+/// is what cline itself sums for a task's totals, one per request, with the
+/// four counts apart. See [`reconcile_requests`] for how the two meet.
+fn ui_request_spend(path: &std::path::Path) -> Option<Vec<(DateTime<Utc>, Option<TurnUsage>)>> {
+    let raw = fs::read_to_string(path).ok()?;
+    let messages: Vec<serde_json::Value> = serde_json::from_str(&raw).ok()?;
+    let requests: Vec<(DateTime<Utc>, Option<TurnUsage>)> = messages
+        .iter()
+        .filter(|m| m.get("say").and_then(|s| s.as_str()) == Some("api_req_started"))
+        .filter_map(|m| {
+            let at = m.get("ts").and_then(|t| t.as_i64()).filter(|t| *t > 0)?;
+            // A missing or empty payload is an empty one (cline's own reader
+            // treats it so): no counts, but still a request.
+            let info: serde_json::Value = m
+                .get("text")
+                .and_then(|t| t.as_str())
+                .filter(|t| !t.trim().is_empty())
+                .and_then(|t| serde_json::from_str(t).ok())
+                .unwrap_or(serde_json::Value::Null);
+            let field = |key: &str| info.get(key).and_then(|v| v.as_u64());
+            // A request still in flight (or one cline never metered) has no
+            // counts yet — or zeros — and says nothing about what it spent,
+            // though it still marks where the previous request's reply ends.
+            let counted = ["tokensIn", "tokensOut", "cacheWrites", "cacheReads"]
+                .iter()
+                .any(|key| field(key).is_some_and(|n| n > 0));
+            Some((
+                ts_to_datetime(at),
+                counted.then(|| TurnUsage {
+                    input_tokens: field("tokensIn").unwrap_or(0),
+                    output_tokens: field("tokensOut").unwrap_or(0),
+                    cache_creation_input_tokens: field("cacheWrites").unwrap_or(0),
+                    cache_read_input_tokens: field("cacheReads").unwrap_or(0),
+                }),
+            ))
+        })
+        .collect();
+    requests
+        .iter()
+        .any(|(_, usage)| usage.is_some())
+        .then_some(requests)
+}
+
+/// Reconcile a pre-3.x task's recorded requests with the replies the
+/// transcript kept, returning the requests no reply answers: `(when, usage)`.
+///
+/// A request is answered by the first reply after it and before the next
+/// request; that reply's usage becomes the request's counts merged with what
+/// the reply's own `metrics` say, field by field, the larger winning — cline
+/// can save a request's counters before a deferred usage lookup gives the
+/// stored reply more, and the reply's `cached` is reads and writes together,
+/// so only a surplus over the request's own split is added (as reads). A
+/// reply no request answers keeps its metrics. What answers no reply — a
+/// retry, a failed stream — is left for the caller to place.
+fn reconcile_requests(
+    turns: &mut [MessageTurn],
+    requests: &[(DateTime<Utc>, Option<TurnUsage>)],
+) -> Vec<(DateTime<Utc>, TurnUsage)> {
+    let mut unanswered = Vec::new();
+    let mut taken = vec![false; turns.len()];
+    for (i, (at, request)) in requests.iter().enumerate() {
+        let next = requests.get(i + 1).map(|(next, _)| *next);
+        let reply = turns.iter().enumerate().position(|(idx, turn)| {
+            !taken[idx]
+                && matches!(turn.role, TurnRole::Assistant)
+                && turn.timestamp >= *at
+                && next.is_none_or(|next| turn.timestamp < next)
+        });
+        let Some(idx) = reply else {
+            unanswered.extend(request.clone().map(|usage| (*at, usage)));
+            continue;
+        };
+        taken[idx] = true;
+        // An unmetered request answered by a reply leaves its metrics be.
+        let Some(request) = request else {
+            continue;
+        };
+        let recorded = turns[idx].usage.take().unwrap_or_default();
+        let request_cache = request
+            .cache_read_input_tokens
+            .saturating_add(request.cache_creation_input_tokens);
+        turns[idx].usage = Some(TurnUsage {
+            input_tokens: request.input_tokens.max(recorded.input_tokens),
+            output_tokens: request.output_tokens.max(recorded.output_tokens),
+            cache_creation_input_tokens: request.cache_creation_input_tokens,
+            cache_read_input_tokens: request.cache_read_input_tokens.saturating_add(
+                recorded
+                    .cache_read_input_tokens
+                    .saturating_sub(request_cache),
+            ),
+        });
+    }
+    unanswered
+}
+
+fn sum_usage(a: &TurnUsage, b: &TurnUsage) -> TurnUsage {
+    TurnUsage {
+        input_tokens: a.input_tokens.saturating_add(b.input_tokens),
+        output_tokens: a.output_tokens.saturating_add(b.output_tokens),
+        cache_creation_input_tokens: a
+            .cache_creation_input_tokens
+            .saturating_add(b.cache_creation_input_tokens),
+        cache_read_input_tokens: a
+            .cache_read_input_tokens
+            .saturating_add(b.cache_read_input_tokens),
     }
 }
 
@@ -891,7 +1090,17 @@ impl ClineParser {
         let ended_at = turns.last().map(|t| t.timestamp);
 
         backfill_turn_durations(&mut turns, &[]);
-        let session_stats = compute_session_stats(&turns);
+        // Cline's own record of every request it made, reconciled with the
+        // transcript's `metrics` (see `ui_request_spend`).
+        let mut unplaced = TurnUsage::default();
+        if let Some(requests) = ui_request_spend(&tasks_dir.join("ui_messages.json")) {
+            for (at, usage) in reconcile_requests(&mut turns, &requests) {
+                if !add_usage_to_turn_current_at(&mut turns, Some(at), &usage) {
+                    unplaced = sum_usage(&unplaced, &usage);
+                }
+            }
+        }
+        let session_stats = add_unplaced_usage_to_total(compute_session_stats(&turns), &unplaced);
 
         let summary = ConversationSummary {
             id: conversation_id.to_string(),
@@ -1527,6 +1736,210 @@ mod tests {
                 }
             ]
         })
+    }
+
+    fn input_total(detail: &ConversationDetail) -> u64 {
+        detail
+            .turns
+            .iter()
+            .filter_map(|t| t.usage.as_ref())
+            .map(|u| u.input_tokens)
+            .sum()
+    }
+
+    /// A sub-agent or teammate writes its own transcript beside the session's;
+    /// its replies' `metrics` are the session's spend too, as is a reply that
+    /// rendered nothing.
+    #[test]
+    fn teammates_and_empty_replies_count_toward_the_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut exchange = one_exchange();
+        exchange["messages"].as_array_mut().unwrap().push(json!({
+            "id": "msg_3", "role": "assistant", "content": [],
+            "ts": 1_789_527_687_000_i64,
+            "metrics": {"inputTokens": 7, "outputTokens": 1, "cacheReadTokens": 0, "cacheWriteTokens": 0}
+        }));
+        write_session(tmp.path(), "s1", manifest("s1"), exchange);
+        fs::write(
+            tmp.path().join("sessions").join("s1").join("teammate-a.messages.json"),
+            serde_json::to_string(&json!({
+                "version": 1, "agent": "teammate-a",
+                "messages": [{
+                    "id": "t1", "role": "assistant",
+                    "content": [{"type": "text", "text": "done"}],
+                    "ts": 1_789_527_686_900_i64,
+                    "metrics": {"inputTokens": 300, "outputTokens": 30, "cacheReadTokens": 0, "cacheWriteTokens": 5}
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let detail = ClineParser::with_base_dir(tmp.path().to_path_buf())
+            .get_conversation("s1")
+            .expect("detail");
+        assert_eq!(input_total(&detail), 24806 + 7 + 300);
+    }
+
+    /// A pre-3.x task's spend is the requests cline itself recorded: one that
+    /// left no stored reply still counts, and cache writes stay writes.
+    #[test]
+    fn a_legacy_task_counts_every_request_cline_recorded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let task = tmp.path().join("tasks").join("1774626816453");
+        fs::create_dir_all(&task).unwrap();
+        fs::write(
+            task.join("api_conversation_history.json"),
+            serde_json::to_string(&json!([
+                {"role": "user", "content": [{"type": "text", "text": "<task>\nhi\n</task>"}], "ts": 1_774_626_816_500_i64},
+                {"role": "assistant", "content": [{"type": "text", "text": "Hello"}], "ts": 1_774_626_835_000_i64,
+                 "metrics": {"tokens": {"prompt": 74, "completion": 650, "cached": 7717}}}
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        let request = |ts: i64, info: serde_json::Value| json!({"ts": ts, "type": "say", "say": "api_req_started", "text": info.to_string()});
+        fs::write(
+            task.join("ui_messages.json"),
+            serde_json::to_string(&json!([
+                request(1_774_626_816_787, json!({"request": "a", "tokensIn": 74, "tokensOut": 650, "cacheWrites": 7717, "cacheReads": 0})),
+                // Retried: no stored reply ever carried it.
+                request(1_774_626_844_655, json!({"request": "b", "tokensIn": 16957, "tokensOut": 423, "cacheWrites": 0, "cacheReads": 0})),
+                // Still in flight: no counts yet.
+                request(1_774_626_850_000, json!({"request": "c"})),
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let detail = ClineParser::with_base_dir(tmp.path().to_path_buf())
+            .get_conversation("1774626816453")
+            .expect("detail");
+        let total = detail
+            .turns
+            .iter()
+            .filter_map(|t| t.usage.as_ref())
+            .fold(TurnUsage::default(), |acc, u| sum_usage(&acc, u));
+        assert_eq!(
+            total,
+            TurnUsage {
+                input_tokens: 74 + 16957,
+                output_tokens: 650 + 423,
+                cache_creation_input_tokens: 7717,
+                cache_read_input_tokens: 0,
+            }
+        );
+    }
+
+    /// Each request is answered by the reply after it — even one starting
+    /// milliseconds after the previous reply — and a request whose counters
+    /// were saved short of what its reply recorded keeps the larger reading.
+    #[test]
+    fn legacy_requests_pair_with_their_own_replies_and_keep_the_larger_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let task = tmp.path().join("tasks").join("t2");
+        fs::create_dir_all(&task).unwrap();
+        let reply = |ts: i64, prompt: u64, completion: u64| {
+            json!({"role": "assistant", "content": [{"type": "text", "text": format!("r{ts}")}], "ts": ts,
+                   "metrics": {"tokens": {"prompt": prompt, "completion": completion, "cached": 0}}})
+        };
+        fs::write(
+            task.join("api_conversation_history.json"),
+            serde_json::to_string(&json!([
+                {"role": "user", "content": [{"type": "text", "text": "<task>\nhi\n</task>"}], "ts": 1_000_i64},
+                reply(10_000, 100, 10),
+                reply(20_000, 300, 30)
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        let request = |ts: i64, input: u64, output: u64| {
+            json!({"ts": ts, "type": "say", "say": "api_req_started",
+                   "text": json!({"tokensIn": input, "tokensOut": output, "cacheWrites": 0, "cacheReads": 0}).to_string()})
+        };
+        fs::write(
+            task.join("ui_messages.json"),
+            serde_json::to_string(&json!([request(9_000, 50, 5), request(10_006, 200, 40)]))
+                .unwrap(),
+        )
+        .unwrap();
+
+        let detail = ClineParser::with_base_dir(tmp.path().to_path_buf())
+            .get_conversation("t2")
+            .expect("detail");
+        let per_reply: Vec<(u64, u64)> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::Assistant))
+            .map(|t| {
+                let u = t.usage.as_ref().expect("usage");
+                (u.input_tokens, u.output_tokens)
+            })
+            .collect();
+        assert_eq!(per_reply, vec![(100, 10), (300, 40)]);
+    }
+
+    /// A request cline never metered still ends the one before it: that
+    /// earlier request's reply is not the unmetered request's.
+    #[test]
+    fn an_unmetered_request_still_bounds_the_one_before_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let task = tmp.path().join("tasks").join("t3");
+        fs::create_dir_all(&task).unwrap();
+        fs::write(
+            task.join("api_conversation_history.json"),
+            serde_json::to_string(&json!([
+                {"role": "user", "content": [{"type": "text", "text": "<task>\nhi\n</task>"}], "ts": 1_000_i64},
+                {"role": "assistant", "content": [{"type": "text", "text": "late"}], "ts": 20_000_i64,
+                 "metrics": {"tokens": {"prompt": 200, "completion": 0, "cached": 0}}}
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        let request = |ts: i64, input: u64| {
+            json!({"ts": ts, "type": "say", "say": "api_req_started",
+                   "text": json!({"tokensIn": input, "tokensOut": 0, "cacheWrites": 0, "cacheReads": 0}).to_string()})
+        };
+        fs::write(
+            task.join("ui_messages.json"),
+            serde_json::to_string(&json!([
+                request(9_000, 100),
+                // No payload at all: still a request.
+                {"ts": 15_000_i64, "type": "say", "say": "api_req_started"}
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let detail = ClineParser::with_base_dir(tmp.path().to_path_buf())
+            .get_conversation("t3")
+            .expect("detail");
+        // The reply keeps its own 200; the first request, answered by nothing,
+        // adds its 100 rather than being merged away.
+        assert_eq!(input_total(&detail), 300);
+    }
+
+    /// The transcript read from the manifest's own path, the conventional one
+    /// being absent, is the session's — not a teammate's to add again.
+    #[test]
+    fn a_main_transcript_read_from_the_recorded_path_is_not_a_teammate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("sessions").join("s1");
+        fs::create_dir_all(&dir).unwrap();
+        let mut manifest = manifest("s1");
+        let main = dir.join("lead.messages.json");
+        manifest["messages_path"] = json!(main.to_string_lossy());
+        fs::write(
+            dir.join("s1.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+        fs::write(&main, serde_json::to_string(&one_exchange()).unwrap()).unwrap();
+
+        let detail = ClineParser::with_base_dir(tmp.path().to_path_buf())
+            .get_conversation("s1")
+            .expect("detail");
+        assert_eq!(input_total(&detail), 24806);
     }
 
     /// The whole point: cline 3.x moved its transcripts from

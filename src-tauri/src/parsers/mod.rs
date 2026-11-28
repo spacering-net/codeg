@@ -710,46 +710,100 @@ pub(crate) fn subagent_transcripts_in(subagents_dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// Add `extra` to the assistant turn that was speaking at `at` — the last one
-/// starting no later than it. Falling back to the last assistant turn keeps the
-/// tokens in the session when `at` is unknown or precedes every turn; a session
-/// with no assistant turn at all has nowhere to put them.
+/// Add `extra` to the assistant turn that was speaking at `at` — the latest one
+/// starting no later than it — or, when none had started yet, to the earliest
+/// one after it. Without `at`, the last assistant turn; a session with no
+/// assistant turn at all has nowhere to put it.
 ///
-/// For a sub-agent's spend: it is this session's spend, but placed by its own
-/// time so a session running across midnight attributes delegated work to the
-/// day it actually happened.
+/// For spend no turn of its own carries — a sub-agent's, a summary request's,
+/// a reply the transcript no longer shows. It is this session's spend, placed
+/// by its own time so a session running across midnight attributes it to the
+/// day it actually happened. A fact takes the date (and model) of the turn it
+/// rides on, so spend from a day with no turn of its own still takes its
+/// turn's day — facts are per turn. Turns are compared by timestamp, not by
+/// their order in the transcript, which some agents keep by sequence.
+///
+/// Returns whether a turn took it; see [`add_unplaced_usage_to_total`] for
+/// what to do with spend that found none.
 pub(crate) fn add_usage_to_turn_current_at(
     turns: &mut [MessageTurn],
     at: Option<DateTime<Utc>>,
     extra: &TurnUsage,
-) {
-    let target = at
-        .and_then(|at| {
-            turns
-                .iter()
-                .rposition(|t| matches!(t.role, TurnRole::Assistant) && t.timestamp <= at)
-        })
-        .or_else(|| {
-            turns
-                .iter()
-                .rposition(|t| matches!(t.role, TurnRole::Assistant))
-        });
+) -> bool {
+    let replies = || {
+        turns
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| matches!(t.role, TurnRole::Assistant))
+    };
+    let target = match at {
+        Some(at) => replies()
+            .filter(|(_, t)| t.timestamp <= at)
+            // Latest start; on a tie, the later turn.
+            .max_by_key(|(i, t)| (t.timestamp, *i))
+            .or_else(|| {
+                replies()
+                    .filter(|(_, t)| t.timestamp > at)
+                    .min_by_key(|(i, t)| (t.timestamp, *i))
+            })
+            .map(|(i, _)| i),
+        None => replies().last().map(|(i, _)| i),
+    };
     let Some(turn) = target.and_then(|i| turns.get_mut(i)) else {
-        return;
+        return false;
     };
     turn.usage = Some(match turn.usage.take() {
-        Some(own) => TurnUsage {
-            input_tokens: own.input_tokens.saturating_add(extra.input_tokens),
-            output_tokens: own.output_tokens.saturating_add(extra.output_tokens),
-            cache_creation_input_tokens: own
-                .cache_creation_input_tokens
-                .saturating_add(extra.cache_creation_input_tokens),
-            cache_read_input_tokens: own
-                .cache_read_input_tokens
-                .saturating_add(extra.cache_read_input_tokens),
-        },
+        Some(own) => sum_usage(&own, extra),
         None => extra.clone(),
     });
+    true
+}
+
+fn sum_usage(a: &TurnUsage, b: &TurnUsage) -> TurnUsage {
+    TurnUsage {
+        input_tokens: a.input_tokens.saturating_add(b.input_tokens),
+        output_tokens: a.output_tokens.saturating_add(b.output_tokens),
+        cache_creation_input_tokens: a
+            .cache_creation_input_tokens
+            .saturating_add(b.cache_creation_input_tokens),
+        cache_read_input_tokens: a
+            .cache_read_input_tokens
+            .saturating_add(b.cache_read_input_tokens),
+    }
+}
+
+/// Fold spend that no turn could take into the session total.
+///
+/// A session with no assistant turn — one whose rendered branch is only a
+/// summary, say — leaves [`add_usage_to_turn_current_at`] nowhere to put it,
+/// and with no turn carrying usage, the session total is exactly what
+/// `commands::token_usage::facts_from_detail` records instead.
+pub(crate) fn add_unplaced_usage_to_total(
+    stats: Option<SessionStats>,
+    unplaced: &TurnUsage,
+) -> Option<SessionStats> {
+    let tokens = unplaced
+        .input_tokens
+        .saturating_add(unplaced.output_tokens)
+        .saturating_add(unplaced.cache_creation_input_tokens)
+        .saturating_add(unplaced.cache_read_input_tokens);
+    if tokens == 0 {
+        return stats;
+    }
+    let mut stats = stats.unwrap_or(SessionStats {
+        total_usage: None,
+        total_tokens: None,
+        total_duration_ms: 0,
+        context_window_used_tokens: None,
+        context_window_max_tokens: None,
+        context_window_usage_percent: None,
+    });
+    stats.total_usage = Some(match stats.total_usage.take() {
+        Some(total) => sum_usage(&total, unplaced),
+        None => unplaced.clone(),
+    });
+    stats.total_tokens = Some(stats.total_tokens.unwrap_or(0).saturating_add(tokens));
+    Some(stats)
 }
 
 /// True when `id` is safe to embed as a single filename component beneath a
@@ -2484,6 +2538,48 @@ mod tests {
         path_eq_for_matching, subagent_transcript_paths, title_from_user_text,
     };
     use crate::models::{MessageTurn, SessionStats, TurnRole, TurnUsage};
+
+    #[test]
+    fn folded_spend_rides_the_turn_speaking_then_matched_by_time_not_order() {
+        let at = |s: &str| s.parse::<chrono::DateTime<Utc>>().unwrap();
+        let reply = |ts: &str| MessageTurn {
+            id: ts.to_string(),
+            role: TurnRole::Assistant,
+            blocks: Vec::new(),
+            timestamp: at(ts),
+            usage: None,
+            duration_ms: None,
+            model: None,
+            completed_at: None,
+            agent_message_id: None,
+        };
+        let spend = TurnUsage {
+            input_tokens: 5,
+            ..Default::default()
+        };
+        // Kept in sequence order, not time order.
+        let mut turns = vec![
+            reply("2026-03-01T23:50:00Z"),
+            reply("2026-03-02T00:01:00Z"),
+            reply("2026-03-01T23:55:00Z"),
+        ];
+        // Speaking at 23:59 was the 23:55 reply — not the nearer 00:01 one,
+        // which would move the spend to the next day.
+        assert!(super::add_usage_to_turn_current_at(
+            &mut turns,
+            Some(at("2026-03-01T23:59:00Z")),
+            &spend
+        ));
+        assert!(turns[2].usage.is_some() && turns[0].usage.is_none() && turns[1].usage.is_none());
+        // Older than every reply: the first one, not the last.
+        super::add_usage_to_turn_current_at(&mut turns, Some(at("2026-03-01T08:00:00Z")), &spend);
+        assert!(turns[0].usage.is_some());
+        // Nowhere to go: reported, not dropped silently.
+        let mut none: Vec<MessageTurn> = Vec::new();
+        assert!(!super::add_usage_to_turn_current_at(
+            &mut none, None, &spend
+        ));
+    }
 
     #[test]
     fn subagent_transcripts_are_found_at_any_depth_but_only_as_agent_files_below_the_top() {

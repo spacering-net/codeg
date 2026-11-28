@@ -105,6 +105,146 @@ impl GeminiParser {
             .then(|| parent_name.to_string())
     }
 
+    /// What this session's subagents spent: `(when, usage)` per billed call.
+    ///
+    /// gemini-cli records a subagent as a session of its own at
+    /// `chats/<parentSessionId>/<sessionId>.jsonl` (`kind: "subagent"`), which
+    /// `parent_id` keeps out of the conversation list — and nothing counted its
+    /// tokens. Each subagent's own subagents sit under ITS session id in turn,
+    /// so the walk follows every generation, each session once. Every billed
+    /// reply each file records counts ([`Self::billed_replies`]), compacted
+    /// away or not.
+    fn subagent_spend(path: &Path, session_id: &str) -> Vec<(Option<DateTime<Utc>>, TurnUsage)> {
+        // The `chats/` directory the session file lives in, a level up for a
+        // subagent's own file.
+        let Some(parent) = path.parent() else {
+            return Vec::new();
+        };
+        let chats = if parent.file_name().and_then(|n| n.to_str()) == Some("chats") {
+            parent
+        } else {
+            match parent.parent() {
+                Some(chats) => chats,
+                None => return Vec::new(),
+            }
+        };
+
+        let mut spend = Vec::new();
+        let mut walked: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut pending = vec![session_id.to_string()];
+        while let Some(id) = pending.pop() {
+            if !super::is_safe_subagent_id(&id) || !walked.insert(id.clone()) {
+                continue;
+            }
+            let Ok(entries) = fs::read_dir(chats.join(&id)) else {
+                continue;
+            };
+            let mut files: Vec<PathBuf> = entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|file| Self::is_chat_file(file))
+                .collect();
+            files.sort();
+            for file in files {
+                let Ok(raw) = fs::read_to_string(&file) else {
+                    continue;
+                };
+                let mut billed: Vec<_> = Self::billed_replies(&raw).into_values().collect();
+                billed.sort_by_key(|(at, _)| *at);
+                spend.extend(billed);
+                if let Some(child) = Self::parse_chat_value(&file, &raw)
+                    .as_ref()
+                    .and_then(|value| value.get("sessionId"))
+                    .and_then(Value::as_str)
+                {
+                    pending.push(child.to_string());
+                }
+            }
+        }
+        spend
+    }
+
+    /// Every billed reply a chat file records, by message id: `(when, usage)`.
+    ///
+    /// The transcript is what REPLAYING the file leaves, and replay drops
+    /// replies that were billed all the same: a `$rewindTo` cuts the ones after
+    /// its target, and a compaction rewrites the history as a `$set.messages`
+    /// snapshot whose summary turns get fresh ids — the replies it summarized
+    /// are simply gone from it, though their records, tokens included, are
+    /// still in the file (gemini-cli 0.60.0 `GeminiChat::setHistory` →
+    /// `updateMessagesFromHistory`). So the spend is read off every record
+    /// instead: each reply line, and each reply inside a `$set.messages`
+    /// array, keyed by its id so a reply restated as it updates — or kept, id
+    /// and tokens intact, in a snapshot — counts once (its largest reading).
+    /// A record with no id cannot be matched and is left to the transcript.
+    /// Replies are found wherever replay finds them: their own lines, a
+    /// metadata record's `messages`, a whole-file chat (`.json`, or JSON under a
+    /// `.jsonl` name), and `$set.messages` snapshots.
+    fn billed_replies(raw: &str) -> HashMap<String, (Option<DateTime<Utc>>, TurnUsage)> {
+        // Every top-level record: the file itself when it is one JSON document
+        // (a `.json` chat, or one stored under a `.jsonl` name — replay accepts
+        // both; a line of it may parse alone, which says nothing), else each
+        // JSONL line.
+        let roots: Vec<Value> = match serde_json::from_str::<Value>(raw) {
+            Ok(whole) => vec![whole],
+            Err(_) => raw
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+                .collect(),
+        };
+        // A reply can be a record of its own, or sit in a `messages` array —
+        // a metadata record's, a whole-file chat's, or a `$set` snapshot's.
+        let records: Vec<Value> = roots
+            .into_iter()
+            .flat_map(|root| {
+                let nested = [
+                    root.get("messages"),
+                    root.get("$set").and_then(|set| set.get("messages")),
+                ]
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_array)
+                .flatten()
+                .cloned()
+                .collect::<Vec<_>>();
+                std::iter::once(root).chain(nested)
+            })
+            .collect();
+
+        let mut billed: HashMap<String, (Option<DateTime<Utc>>, TurnUsage)> = HashMap::new();
+        for record in records {
+            let is_reply = matches!(
+                record
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .map(str::to_ascii_lowercase)
+                    .as_deref(),
+                Some("gemini" | "assistant" | "model")
+            );
+            let Some(id) = record.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(usage) = is_reply.then(|| Self::parse_usage(&record)).flatten() else {
+                continue;
+            };
+            let total = |u: &TurnUsage| {
+                u.input_tokens
+                    .saturating_add(u.output_tokens)
+                    .saturating_add(u.cache_read_input_tokens)
+            };
+            match billed.get(id) {
+                Some((_, kept)) if total(kept) >= total(&usage) => {}
+                _ => {
+                    billed.insert(
+                        id.to_string(),
+                        (Self::parse_timestamp(record.get("timestamp")), usage),
+                    );
+                }
+            }
+        }
+        billed
+    }
+
     fn parse_chat_value(path: &Path, raw: &str) -> Option<Value> {
         let extension = path
             .extension()
@@ -815,6 +955,11 @@ impl GeminiParser {
             .unwrap_or_default();
 
         let mut messages: Vec<UnifiedMessage> = Vec::new();
+        // Ids of the rendered replies that carry their own usage; every other
+        // billed reply the file records is spend no turn shows (see
+        // `billed_replies`).
+        let mut rendered_billed: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for raw in messages_raw {
             let msg_id = raw
                 .get("id")
@@ -851,6 +996,9 @@ impl GeminiParser {
                     let blocks = Self::parse_assistant_blocks(&raw);
                     if blocks.is_empty() {
                         continue;
+                    }
+                    if Self::parse_usage(&raw).is_some() {
+                        rendered_billed.insert(msg_id.clone());
                     }
                     messages.push(UnifiedMessage {
                         id: msg_id,
@@ -905,10 +1053,36 @@ impl GeminiParser {
         // sums `input + cache_creation + cache_read`, which for the mapping in
         // `parse_usage` reconstitutes exactly `promptTokenCount`.
         let context_window_used_tokens = super::latest_turn_prompt_usage_tokens(&turns);
+        // After the context reading: none of this occupied this prompt.
+        let mut spend_elsewhere: Vec<(Option<DateTime<Utc>>, TurnUsage)> = fs::read_to_string(path)
+            .ok()
+            .map(|raw| Self::billed_replies(&raw))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(id, _)| !rendered_billed.contains(id))
+            .map(|(_, spend)| spend)
+            .collect();
+        spend_elsewhere.sort_by_key(|(at, _)| *at);
+        spend_elsewhere.extend(Self::subagent_spend(path, conversation_id));
+        let mut unplaced = TurnUsage::default();
+        for (at, usage) in &spend_elsewhere {
+            if !super::add_usage_to_turn_current_at(&mut turns, *at, usage) {
+                unplaced = TurnUsage {
+                    input_tokens: unplaced.input_tokens.saturating_add(usage.input_tokens),
+                    output_tokens: unplaced.output_tokens.saturating_add(usage.output_tokens),
+                    cache_creation_input_tokens: unplaced
+                        .cache_creation_input_tokens
+                        .saturating_add(usage.cache_creation_input_tokens),
+                    cache_read_input_tokens: unplaced
+                        .cache_read_input_tokens
+                        .saturating_add(usage.cache_read_input_tokens),
+                };
+            }
+        }
         let context_window_max_tokens =
             super::infer_context_window_max_tokens(summary.model.as_deref());
         let session_stats = super::merge_context_window_stats(
-            super::compute_session_stats(&turns),
+            super::add_unplaced_usage_to_total(super::compute_session_stats(&turns), &unplaced),
             context_window_used_tokens,
             context_window_max_tokens,
         );
@@ -1702,6 +1876,76 @@ mod tests {
             Some("/Users/test/workspace/demo")
         );
         assert_eq!(message_texts(&detail), vec!["investigate the auth flow"]);
+    }
+
+    /// A session's subagents — every generation, each in its own file under
+    /// its parent's session id — spend toward the session that ran them.
+    #[test]
+    fn subagent_spend_counts_toward_the_session_that_ran_it() {
+        let base = chat_fixture("subagent-spend", "codeg");
+        let chats = base.join("tmp").join("codeg").join("chats");
+        fs::create_dir_all(chats.join("main-1")).expect("create child dir");
+        fs::create_dir_all(chats.join("sub-1")).expect("create grandchild dir");
+        fs::write(
+            chats.join("session-2026-09-09T06-00-main1.jsonl"),
+            r#"{"sessionId":"main-1","projectHash":"abc","startTime":"2026-09-09T06:00:00.000Z","lastUpdated":"2026-09-09T06:00:00.000Z","kind":"main"}
+{"id":"u1","timestamp":"2026-09-09T06:00:01.000Z","type":"user","content":[{"text":"look into it"}]}
+{"id":"a1","timestamp":"2026-09-09T06:00:02.000Z","type":"gemini","content":"delegating","tokens":{"input":100,"output":10,"cached":0}}
+{"id":"a2","timestamp":"2026-09-09T06:00:03.000Z","type":"gemini","content":"","tokens":{"input":40,"output":4,"cached":0}}
+{"id":"r1","timestamp":"2026-09-09T06:00:04.000Z","type":"gemini","content":"rewound away","tokens":{"input":9,"output":0,"cached":0}}
+{"$rewindTo":"r1"}
+"#,
+        )
+        .expect("write main chat");
+        fs::write(
+            chats.join("main-1").join("aaaa.jsonl"),
+            r#"{"sessionId":"sub-1","projectHash":"abc","startTime":"2026-09-09T06:00:02.000Z","lastUpdated":"2026-09-09T06:00:02.000Z","kind":"subagent"}
+{"id":"s0","timestamp":"2026-09-09T06:00:02.400Z","type":"gemini","content":"compacted away","tokens":{"input":5,"output":0,"cached":0}}
+{"id":"s1","timestamp":"2026-09-09T06:00:02.500Z","type":"gemini","content":"child work","tokens":{"input":20,"output":2,"cached":0}}
+{"$set":{"messages":[{"id":"fresh-1","timestamp":"2026-09-09T06:00:02.550Z","type":"user","content":[{"text":"summary"}]},{"id":"s1","timestamp":"2026-09-09T06:00:02.500Z","type":"gemini","content":"child work","tokens":{"input":20,"output":2,"cached":0}}]}}
+"#,
+        )
+        .expect("write child chat");
+        fs::write(
+            chats.join("sub-1").join("bbbb.jsonl"),
+            r#"{"sessionId":"sub-2","projectHash":"abc","startTime":"2026-09-09T06:00:02.600Z","lastUpdated":"2026-09-09T06:00:02.600Z","kind":"subagent"}
+{"id":"g1","timestamp":"2026-09-09T06:00:02.700Z","type":"gemini","content":"grandchild work","tokens":{"input":3,"output":1,"cached":0}}
+"#,
+        )
+        .expect("write grandchild chat");
+        // Two more children, in the other layouts replay accepts: a metadata
+        // record carrying the messages, and one JSON document under `.jsonl`.
+        fs::write(
+            chats.join("main-1").join("cccc.jsonl"),
+            r#"{"sessionId":"sub-3","projectHash":"abc","startTime":"2026-09-09T06:00:02.000Z","lastUpdated":"2026-09-09T06:00:02.000Z","kind":"subagent","messages":[{"id":"m3","timestamp":"2026-09-09T06:00:02.800Z","type":"gemini","content":"inline","tokens":{"input":11,"output":0,"cached":0}}]}
+"#,
+        )
+        .expect("write inline child chat");
+        fs::write(
+            chats.join("main-1").join("dddd.jsonl"),
+            "{\n  \"sessionId\": \"sub-4\",\n  \"kind\": \"subagent\",\n  \"messages\": [\n    {\n      \"id\": \"m5\",\n      \"timestamp\": \"2026-09-09T06:00:02.850Z\",\n      \"type\": \"gemini\",\n      \"content\": \"multi-line\",\n      \"tokens\": {\"input\": 17, \"output\": 0, \"cached\": 0}\n    },\n    {\"id\": \"m4\", \"timestamp\": \"2026-09-09T06:00:02.900Z\", \"type\": \"gemini\", \"content\": \"whole\", \"tokens\": {\"input\": 13, \"output\": 0, \"cached\": 0}}\n  ]\n}\n",
+        )
+        .expect("write whole-file child chat");
+
+        let detail = GeminiParser::with_base_dir(base.clone())
+            .get_conversation("main-1")
+            .expect("conversation");
+        let _ = fs::remove_dir_all(&base);
+
+        let total = detail
+            .turns
+            .iter()
+            .filter_map(|t| t.usage.as_ref())
+            .fold((0, 0), |(i, o), u| {
+                (i + u.input_tokens, o + u.output_tokens)
+            });
+        // Own reply, an own call that rendered nothing, one rewound away, the
+        // child's reply compacted away and the one its snapshot kept (once),
+        // grandchild.
+        assert_eq!(
+            total,
+            (100 + 40 + 9 + 5 + 20 + 3 + 11 + 17 + 13, 10 + 4 + 2 + 1)
+        );
     }
 
     /// `$set.directories` backs up folder resolution when the alias is unknown

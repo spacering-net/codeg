@@ -893,9 +893,24 @@ impl AgentParser for AntigravityParser {
         // whole prefix, so summing would re-count the cached prompt once per
         // step. Capacity is inferred from the model name — the trajectory
         // records no window size of its own.
+        let mut unplaced = TurnUsage::default();
+        for (at, usage) in &parsed.spend_elsewhere {
+            if !crate::parsers::add_usage_to_turn_current_at(&mut turns, *at, usage) {
+                unplaced = TurnUsage {
+                    input_tokens: unplaced.input_tokens.saturating_add(usage.input_tokens),
+                    output_tokens: unplaced.output_tokens.saturating_add(usage.output_tokens),
+                    cache_creation_input_tokens: unplaced
+                        .cache_creation_input_tokens
+                        .saturating_add(usage.cache_creation_input_tokens),
+                    cache_read_input_tokens: unplaced
+                        .cache_read_input_tokens
+                        .saturating_add(usage.cache_read_input_tokens),
+                };
+            }
+        }
         let max_tokens = infer_context_window_max_tokens(parsed.model.as_deref());
         let session_stats = merge_context_window_stats(
-            compute_session_stats(&turns),
+            crate::parsers::add_unplaced_usage_to_total(compute_session_stats(&turns), &unplaced),
             parsed.last_step_input_side,
             max_tokens,
         );
@@ -1030,6 +1045,9 @@ struct SessionParse {
     last_ts: Option<DateTime<Utc>>,
     /// User prompts + assistant text messages: the list view's activity count.
     message_count: u32,
+    /// Spend no turn carries: `(when, usage)` — steps of a turn that rendered
+    /// nothing, and a failing step's own call.
+    spend_elsewhere: Vec<(Option<DateTime<Utc>>, TurnUsage)>,
 }
 
 /// Accumulator for the assistant turn currently being built.
@@ -1048,6 +1066,13 @@ impl PendingAssistant {
         self.blocks.is_empty()
     }
 
+    /// The usage of a turn being dropped for having nothing to show: its steps
+    /// were billed all the same.
+    fn unshown_spend(&self) -> Option<(Option<DateTime<Utc>>, TurnUsage)> {
+        (self.is_empty() && self.has_usage)
+            .then(|| (self.last_ts.or(self.first_ts), self.usage.clone()))
+    }
+
     fn finish(&mut self, id: String, fallback_ts: DateTime<Utc>) -> MessageTurn {
         let timestamp = self.first_ts.unwrap_or(fallback_ts);
         MessageTurn {
@@ -1055,11 +1080,11 @@ impl PendingAssistant {
             role: TurnRole::Assistant,
             blocks: std::mem::take(&mut self.blocks),
             timestamp,
-            usage: self.has_usage.then(|| std::mem::take(&mut self.usage)),
+            usage: std::mem::take(&mut self.has_usage).then(|| std::mem::take(&mut self.usage)),
             duration_ms: None,
             model: self.model.take(),
             completed_at: self.last_ts,
-        agent_message_id: None,
+            agent_message_id: None,
         }
     }
 }
@@ -1154,6 +1179,7 @@ fn project_steps(steps: &[Step]) -> SessionParse {
                 parsed.turns.push(pending.finish(id, fallback));
                 turn_index += 1;
             }
+            parsed.spend_elsewhere.extend(pending.unshown_spend());
             pending = PendingAssistant::default();
             background_id = wake.map(|msg| format!("agy-bg-{}", msg.id));
             yielded = false;
@@ -1187,6 +1213,22 @@ fn project_steps(steps: &[Step]) -> SessionParse {
         // server's account, not the model's words, and nothing was called.
         // The work before it stays its own assistant turn.
         if let Some(failure) = step.turn_failure() {
+            // What the failing call itself cost, should the step report it.
+            if let Some(usage) = step.metadata.as_ref().and_then(|m| m.model_usage.as_ref()) {
+                parsed.spend_elsewhere.push((
+                    ts,
+                    TurnUsage {
+                        input_tokens: usage.input_tokens,
+                        output_tokens: usage.output_tokens,
+                        cache_creation_input_tokens: usage.cache_write_tokens,
+                        cache_read_input_tokens: usage.cache_read_tokens,
+                    },
+                ));
+            }
+            if let Some(unshown) = pending.unshown_spend() {
+                parsed.spend_elsewhere.push(unshown);
+                pending = PendingAssistant::default();
+            }
             if !pending.is_empty() {
                 let fallback = pending.last_ts.or(ts).unwrap_or_else(Utc::now);
                 let id = background_id
@@ -1346,6 +1388,7 @@ fn project_steps(steps: &[Step]) -> SessionParse {
         });
     }
 
+    parsed.spend_elsewhere.extend(pending.unshown_spend());
     if !pending.is_empty() {
         let fallback = parsed.last_ts.unwrap_or_else(Utc::now);
         let turn = pending.finish(
@@ -1848,6 +1891,57 @@ mod tests {
             parser.get_conversation("nope"),
             Err(ParseError::ConversationNotFound(_))
         ));
+    }
+
+    /// A step billed for a turn that rendered nothing still counts.
+    #[test]
+    fn a_billed_turn_with_nothing_to_show_keeps_its_spend() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = |at: i64, query: &str| Step {
+            metadata: Some(StepMetadata {
+                created_at: ts(at),
+                ..Default::default()
+            }),
+            user_input: Some(UserInput {
+                query: query.into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let billed = |at: i64, input: u64, response: &str| Step {
+            metadata: Some(StepMetadata {
+                created_at: ts(at),
+                model_usage: Some(ModelUsageStats {
+                    input_tokens: input,
+                    output_tokens: 0,
+                    cache_read_tokens: 0,
+                    cache_write_tokens: 0,
+                }),
+                ..Default::default()
+            }),
+            planner_response: Some(PlannerResponse {
+                response: response.into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let steps = vec![
+            user(1_700_000_000, "first"),
+            billed(1_700_000_010, 300, ""),
+            user(1_700_000_020, "second"),
+            billed(1_700_000_030, 40, "answer"),
+        ];
+        write_steps(dir.path(), "s1", &steps);
+        let detail = AntigravityParser::with_base_dir(dir.path().to_path_buf())
+            .get_conversation("s1")
+            .unwrap();
+        let input: u64 = detail
+            .turns
+            .iter()
+            .filter_map(|t| t.usage.as_ref())
+            .map(|u| u.input_tokens)
+            .sum();
+        assert_eq!(input, 300 + 40);
     }
 
     #[test]

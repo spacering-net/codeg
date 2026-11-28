@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -280,6 +280,31 @@ impl CodexParser {
     /// because the parser latches `parent_id` from the FIRST header it sees and
     /// the child's is the one that declares the lineage.
     fn rollout_lines(&self, path: &Path) -> Result<Vec<String>, ParseError> {
+        Ok(self
+            .rollout_lines_tagged(path)?
+            .into_iter()
+            .map(|(line, _)| line)
+            .collect())
+    }
+
+    /// [`Self::rollout_lines`], each line tagged with whether it was inherited
+    /// from ANOTHER thread's rollout — a fork's copy of the history it forked
+    /// from.
+    ///
+    /// That history's spend belongs to the thread that made it, whose own
+    /// conversation counts it; the fork's counter even continues from it (a
+    /// fork whose base read 14,939 reports 29,896 after its first call of
+    /// ~15k). So its `token_count`s still set the baseline but are no spend of
+    /// the fork's — counted as such they billed the fork for its base again.
+    /// A revert's inherited rollout is the SAME thread's earlier file, its own
+    /// history, and is not tagged. Neither is anything when a thread id cannot
+    /// be read from the file name.
+    fn rollout_lines_tagged(&self, path: &Path) -> Result<Vec<(String, bool)>, ParseError> {
+        let own_thread = RolloutFileName::parse(path).map(|name| name.thread_id.to_string());
+        let foreign = |file: &Path| match (&own_thread, RolloutFileName::parse(file)) {
+            (Some(own), Some(name)) => name.thread_id != own,
+            _ => false,
+        };
         let read = |path: &Path| -> Result<Vec<String>, ParseError> {
             let own = BufReader::new(fs::File::open(path)?)
                 .lines()
@@ -289,8 +314,10 @@ impl CodexParser {
         };
 
         let mut lines = read(path)?;
-        // Newest first: every rollout that continues another, with its header's
-        // index and the cut into the one it continues.
+        let mut lines_foreign = false;
+        // Newest first: every rollout that continues another, with whether it
+        // is another thread's, its header's index and the cut into the one it
+        // continues.
         let mut continuations = Vec::new();
         let mut visited: HashSet<String> = RolloutFileName::parse(path)
             .map(|name| name.rollout_id.to_string())
@@ -312,38 +339,48 @@ impl CodexParser {
                 break;
             };
             let base = read(&base_path)?;
-            continuations.push((std::mem::replace(&mut lines, base), header_idx, cut));
+            let base_foreign = foreign(&base_path);
+            continuations.push((
+                std::mem::replace(&mut lines, base),
+                std::mem::replace(&mut lines_foreign, base_foreign),
+                header_idx,
+                cut,
+            ));
         }
         if continuations.is_empty() {
-            return Ok(lines);
+            return Ok(lines.into_iter().map(|line| (line, false)).collect());
         }
 
         // Oldest first from here, each record's ordinal read once however many
         // splices it passes through.
-        let with_ordinals = |lines: Vec<String>| -> Vec<(Option<u64>, String)> {
-            lines
-                .into_iter()
-                .map(|line| (codex_line_ordinal(&line), line))
-                .collect()
-        };
-        let mut assembled = with_ordinals(lines);
-        for (own, header_idx, cut) in continuations.into_iter().rev() {
-            let mut own = with_ordinals(own);
+        let with_ordinals =
+            |lines: Vec<String>, foreign: bool| -> Vec<(Option<u64>, String, bool)> {
+                lines
+                    .into_iter()
+                    .map(|line| (codex_line_ordinal(&line), line, foreign))
+                    .collect()
+            };
+        let mut assembled = with_ordinals(lines, lines_foreign);
+        for (own, own_foreign, header_idx, cut) in continuations.into_iter().rev() {
+            let mut own = with_ordinals(own, own_foreign);
             let header = own.remove(header_idx);
             let mut spliced = Vec::with_capacity(assembled.len() + own.len() + 1);
             spliced.push(header);
             spliced.extend(
                 assembled
                     .into_iter()
-                    .filter(|(ord, _)| ord.is_none_or(|ord| ord < cut)),
+                    .filter(|(ord, _, _)| ord.is_none_or(|ord| ord < cut)),
             );
             spliced.extend(
                 own.into_iter()
-                    .filter(|(ord, _)| ord.is_none_or(|ord| ord >= cut)),
+                    .filter(|(ord, _, _)| ord.is_none_or(|ord| ord >= cut)),
             );
             assembled = spliced;
         }
-        Ok(assembled.into_iter().map(|(_, line)| line).collect())
+        Ok(assembled
+            .into_iter()
+            .map(|(_, line, foreign)| (line, foreign))
+            .collect())
     }
 
     /// Every rollout file under the sessions root, in traversal order.
@@ -392,6 +429,202 @@ impl CodexParser {
             })
             .max_by(|(a, _), (b, _)| a.cmp(b))
             .map(|(_, path)| path)
+    }
+
+    /// Fold what this thread's sub-agents spent into its turns.
+    ///
+    /// A codex sub-agent (`spawn_agent`) runs as a thread of its own with a
+    /// rollout of its own, which declares this thread as its parent and is
+    /// never a conversation — import refuses anything with a parent — so its
+    /// spend was counted nowhere: a real session that delegated to three
+    /// workers recorded 111.5M tokens while the workers spent another 79M.
+    ///
+    /// `spawned` is every thread id this thread's own records name as one it
+    /// spawned. Each is read from its current rollout, but only if that
+    /// rollout's header names THIS thread as its parent — an id from a copied
+    /// history, or one that resolves elsewhere, contributes nothing. A child's
+    /// counter is its own: the parent history codex seeds it with carries no
+    /// `token_count` (none of 66 on-disk sub-agent rollouts has one before its
+    /// `subagent_history_start_ordinal`, and every child's counter starts
+    /// fresh), and [`Self::rollout_lines_tagged`] drops that seed regardless.
+    /// The workers a child spawned are followed the same way, each thread
+    /// read at most once.
+    ///
+    /// Every round lands on the assistant turn current at its own timestamp,
+    /// so a worker that keeps going while the parent moves on is billed
+    /// beside the parent's work at the time, and on the right day.
+    fn attribute_subagent_usage(
+        &self,
+        turns: &mut [MessageTurn],
+        thread_id: &str,
+        spawned: BTreeSet<String>,
+    ) {
+        if spawned.is_empty() {
+            return;
+        }
+        // One walk names every thread's current rollout, however many
+        // generations the lookups below go.
+        let mut current: HashMap<String, ((String, String), PathBuf)> = HashMap::new();
+        for path in self.rollout_paths() {
+            let Some(name) = RolloutFileName::parse(&path) else {
+                continue;
+            };
+            let recency = (name.timestamp.to_string(), name.rollout_id.to_string());
+            let thread = name.thread_id.to_string();
+            match current.get(&thread) {
+                Some((best, _)) if *best >= recency => {}
+                _ => {
+                    current.insert(thread, (recency, path));
+                }
+            }
+        }
+
+        let mut seen: HashSet<String> = HashSet::from([thread_id.to_string()]);
+        let mut pending: Vec<(String, String)> = spawned
+            .into_iter()
+            .map(|child| (thread_id.to_string(), child))
+            .collect();
+        while let Some((parent, child)) = pending.pop() {
+            if seen.contains(&child) {
+                continue;
+            }
+            let Some((_, path)) = current.get(&child) else {
+                continue;
+            };
+            let Some(rollout) = self.child_rollout(path) else {
+                continue;
+            };
+            // Seen only once accepted: a legacy child that replays its parent
+            // inline names its siblings too, and that copied edge — rejected
+            // here — must not shadow the real one still waiting in the list.
+            if rollout.parent.as_deref() != Some(parent.as_str()) {
+                continue;
+            }
+            seen.insert(child.clone());
+            for (at, usage) in &rollout.rounds {
+                super::add_usage_to_turn_current_at(turns, *at, usage);
+            }
+            pending.extend(
+                rollout
+                    .spawned
+                    .iter()
+                    .map(|grandchild| (child.clone(), grandchild.clone())),
+            );
+        }
+    }
+
+    /// [`read_child_rollout`] for `path`, from a cache that holds while the
+    /// file's length and modification time do: the session viewer re-reads a
+    /// running parent every couple of seconds, and a busy worker's rollout runs
+    /// to tens of megabytes.
+    fn child_rollout(&self, path: &Path) -> Option<std::sync::Arc<CodexChildRollout>> {
+        type Cache = HashMap<
+            PathBuf,
+            (
+                u64,
+                Option<std::time::SystemTime>,
+                std::sync::Arc<CodexChildRollout>,
+            ),
+        >;
+        static CACHE: OnceLock<std::sync::Mutex<Cache>> = OnceLock::new();
+        /// Plenty for every sub-agent a machine keeps; past it the cache just
+        /// starts over rather than track recency.
+        const MAX_ENTRIES: usize = 4096;
+
+        let meta = fs::metadata(path).ok()?;
+        let token = (meta.len(), meta.modified().ok());
+        let cache = CACHE.get_or_init(Default::default);
+        if let Ok(guard) = cache.lock() {
+            if let Some((len, modified, hit)) = guard.get(path) {
+                if (*len, *modified) == token {
+                    return Some(hit.clone());
+                }
+            }
+        }
+        let read = std::sync::Arc::new(self.read_child_rollout(path).ok()?);
+        if let Ok(mut guard) = cache.lock() {
+            if guard.len() >= MAX_ENTRIES {
+                guard.clear();
+            }
+            guard.insert(path.to_path_buf(), (token.0, token.1, read.clone()));
+        }
+        Some(read)
+    }
+
+    /// What a sub-agent's rollout contributes to its parent's accounting: the
+    /// parent its header declares, what each of its own round-trips spent
+    /// (metered exactly as a thread's own, see [`CodexRoundMeter`]), and the
+    /// threads it spawned in turn.
+    fn read_child_rollout(&self, path: &Path) -> Result<CodexChildRollout, ParseError> {
+        let mut read = CodexChildRollout::default();
+        let mut meter = CodexRoundMeter::default();
+        let mut header_seen = false;
+        let mut spawn_calls: HashSet<String> = HashSet::new();
+        for (line, inherited) in self.rollout_lines_tagged(path)? {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            let Some(payload) = value.get("payload") else {
+                continue;
+            };
+            match value.get("type").and_then(serde_json::Value::as_str) {
+                Some("session_meta") if !header_seen => {
+                    header_seen = true;
+                    read.parent = codex_parent_thread_id(payload);
+                }
+                Some("event_msg") => {
+                    let payload_type = payload
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    if let Some(activity) = codex_subagent_activity_record(payload_type, payload) {
+                        if !inherited {
+                            read.spawned.insert(activity.thread_id.to_string());
+                        }
+                    }
+                    if payload_type != "token_count" {
+                        continue;
+                    }
+                    let Some(info) = payload.get("info").filter(|info| !info.is_null()) else {
+                        continue;
+                    };
+                    let round = meter.round(info);
+                    if !inherited && !codex_usage_is_zero(&round) {
+                        read.rounds.push((parse_codex_timestamp(&value), round));
+                    }
+                }
+                Some("response_item") if !inherited => {
+                    let call_id = || {
+                        payload
+                            .get("call_id")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    };
+                    match payload.get("type").and_then(serde_json::Value::as_str) {
+                        Some("function_call")
+                            if payload.get("name").and_then(serde_json::Value::as_str)
+                                == Some("spawn_agent") =>
+                        {
+                            spawn_calls.extend(call_id());
+                        }
+                        Some("function_call_output")
+                            if call_id().is_some_and(|id| spawn_calls.contains(&id)) =>
+                        {
+                            if let Some(agent_id) = parse_codex_json_output(payload)
+                                .as_ref()
+                                .and_then(|output| output.get("agent_id"))
+                                .and_then(serde_json::Value::as_str)
+                            {
+                                read.spawned.insert(agent_id.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(read)
     }
 
     /// Load Codex's append-only session title index. The transcript remains the
@@ -3275,7 +3508,7 @@ impl CodexParser {
         path: &Path,
         conversation_id: &str,
     ) -> Result<ConversationDetail, ParseError> {
-        let lines = self.rollout_lines(path)?;
+        let lines = self.rollout_lines_tagged(path)?;
 
         let mut messages = Vec::new();
         let mut cwd: Option<String> = None;
@@ -3346,12 +3579,14 @@ impl CodexParser {
         let mut context_window_max_tokens: Option<u64> = None;
         let mut latest_total_usage: Option<TurnUsage> = None;
         let mut latest_total_tokens: Option<u64> = None;
-        // Cumulative `total_token_usage` as of the previous `token_count`, so
-        // each event can be reduced to what its own round-trip added.
-        let mut previous_total_usage: Option<TurnUsage> = None;
-        // Previous `last_token_usage`, used only by the no-total fallback to
-        // recognize a restated event.
-        let mut previous_last_usage: Option<TurnUsage> = None;
+        // Reduces each `token_count` to what its own round-trip added.
+        let mut round_meter = CodexRoundMeter::default();
+        // Whether another thread's counter was spliced in (a fork's base), so
+        // the session total cannot be the counter's last reading.
+        let mut inherited_counter = false;
+        // Thread ids of the sub-agents this thread spawned, whose own rollouts
+        // hold their spend (see `attribute_subagent_usage`).
+        let mut spawned_threads: BTreeSet<String> = BTreeSet::new();
         // Round-trip spend recorded before any assistant message existed to
         // carry it; flushed onto the first one that appears.
         let mut pending_round_usage: Option<TurnUsage> = None;
@@ -3521,7 +3756,7 @@ impl CodexParser {
         // By-reference forks replay ancestor headers before the child's own records.
         let mut source_threads = HashSet::from([conversation_id.to_owned()]);
 
-        for line in lines {
+        for (line, inherited_from_another_thread) in lines {
             if line.trim().is_empty() {
                 continue;
             }
@@ -3658,6 +3893,9 @@ impl CodexParser {
                         if let Some(activity) =
                             codex_subagent_activity_record(payload_type, payload)
                         {
+                            if !inherited_from_another_thread {
+                                spawned_threads.insert(activity.thread_id.to_string());
+                            }
                             if let Some(path) = activity.agent_path {
                                 agent_path_to_thread_id
                                     .insert(path.to_string(), activity.thread_id.to_string());
@@ -4196,55 +4434,15 @@ impl CodexParser {
                                     }
 
                                     if !info.is_null() {
-                                        // What this round-trip spent. Preferred
-                                        // as the rise in the session's own
-                                        // cumulative counter; `last_token_usage`
-                                        // is the fallback for transcripts that
-                                        // report no total, and there a repeat of
-                                        // the previous event is dropped since it
-                                        // restates one call rather than adding
-                                        // another.
-                                        let round = match info.get("total_token_usage") {
-                                            Some(total_payload) => {
-                                                let total = codex_usage_counters(total_payload);
-                                                let round = codex_round_usage(
-                                                    previous_total_usage.as_ref(),
-                                                    &total,
-                                                );
-                                                previous_total_usage = Some(total);
-                                                round
-                                            }
-                                            None => match info.get("last_token_usage") {
-                                                Some(last_payload) => {
-                                                    let last = codex_usage_counters(last_payload);
-                                                    let repeated = previous_last_usage
-                                                        .as_ref()
-                                                        .is_some_and(|prev| prev == &last);
-                                                    previous_last_usage = Some(last.clone());
-                                                    if repeated {
-                                                        TurnUsage::default()
-                                                    } else {
-                                                        // Carry this round into the
-                                                        // cumulative baseline too.
-                                                        // A transcript that mixes
-                                                        // both shapes would
-                                                        // otherwise count it twice:
-                                                        // once here, and again
-                                                        // inside the next
-                                                        // total-bearing event's
-                                                        // delta, which is measured
-                                                        // from a baseline that
-                                                        // never learned about it.
-                                                        let base = previous_total_usage
-                                                            .clone()
-                                                            .unwrap_or_default();
-                                                        previous_total_usage =
-                                                            Some(codex_usage_add(&base, &last));
-                                                        last
-                                                    }
-                                                }
-                                                None => TurnUsage::default(),
-                                            },
+                                        let round = round_meter.round(info);
+                                        // Another thread's history (a fork's
+                                        // base): it moved the baseline above,
+                                        // but its spend is that thread's.
+                                        let round = if inherited_from_another_thread {
+                                            inherited_counter = true;
+                                            TurnUsage::default()
+                                        } else {
+                                            round
                                         };
 
                                         if !codex_usage_is_zero(&round) {
@@ -4862,6 +5060,9 @@ impl CodexParser {
                                             output_obj.get("agent_id").and_then(|v| v.as_str()),
                                             tool_use_id.as_ref(),
                                         ) {
+                                            if !inherited_from_another_thread {
+                                                spawned_threads.insert(agent_id.to_string());
+                                            }
                                             agent_id_to_spawn_call_id
                                                 .insert(agent_id.to_string(), call_id.clone());
                                         }
@@ -5672,6 +5873,8 @@ impl CodexParser {
         }
         let mut turns = group_into_turns(messages);
         reconcile_turn_usage(&mut turns, &recorded_round_usage);
+        // After the reconcile, whose invariant is the thread's OWN counter.
+        self.attribute_subagent_usage(&mut turns, conversation_id, spawned_threads);
         super::relocate_orphaned_tool_results(&mut turns);
         super::structurize_read_tool_output(&mut turns);
         super::resolve_patch_line_numbers(&mut turns, cwd.as_deref());
@@ -5679,6 +5882,25 @@ impl CodexParser {
         // timeline into per-reply durations before stats aggregate them.
         super::backfill_turn_durations(&mut turns, turn_starts);
         let mut session_stats = super::compute_session_stats(&turns);
+        // A fork's counter continues from its base's, so its last reading
+        // includes spend that is the base's. Its total is instead what its
+        // turns carry (its own rounds plus its workers'), or — when no turn
+        // carries any — its own rounds, which is also what `facts_from_detail`
+        // records then: an idle fork would otherwise bill its base again.
+        if inherited_counter {
+            let turns_carry_usage = session_stats
+                .as_ref()
+                .is_some_and(|stats| stats.total_usage.is_some());
+            latest_total_usage = (!turns_carry_usage
+                && !codex_usage_is_zero(&recorded_round_usage))
+            .then(|| recorded_round_usage.clone());
+            latest_total_tokens = latest_total_usage.as_ref().map(|u| {
+                u.input_tokens
+                    .saturating_add(u.output_tokens)
+                    .saturating_add(u.cache_creation_input_tokens)
+                    .saturating_add(u.cache_read_input_tokens)
+            });
+        }
         session_stats =
             merge_codex_total_usage_stats(session_stats, latest_total_usage, latest_total_tokens);
         session_stats = merge_codex_context_window_stats(
@@ -5785,6 +6007,71 @@ fn codex_usage_counters(usage: &serde_json::Value) -> TurnUsage {
         output_tokens: field("output_tokens"),
         cache_creation_input_tokens: cache_write,
         cache_read_input_tokens: cache_read,
+    }
+}
+
+/// What a sub-agent's rollout contributes to its parent's accounting (see
+/// `CodexParser::read_child_rollout`).
+#[derive(Default)]
+struct CodexChildRollout {
+    /// The parent thread its header declares.
+    parent: Option<String>,
+    /// Each of its own round-trips: when, and what it spent.
+    rounds: Vec<(Option<DateTime<Utc>>, TurnUsage)>,
+    /// The threads it spawned.
+    spawned: BTreeSet<String>,
+}
+
+/// Reduces a thread's `token_count` events to what each round-trip spent.
+///
+/// Preferred as the rise in the thread's own cumulative counter
+/// (`total_token_usage`, see [`codex_round_usage`]); `last_token_usage` is the
+/// fallback for transcripts that report no total, and there a repeat of the
+/// previous event is dropped since it restates one call rather than adding
+/// another.
+#[derive(Default)]
+struct CodexRoundMeter {
+    /// Cumulative `total_token_usage` as of the previous `token_count`.
+    previous_total: Option<TurnUsage>,
+    /// Previous `last_token_usage`, used only by the no-total fallback to
+    /// recognize a restated event.
+    previous_last: Option<TurnUsage>,
+}
+
+impl CodexRoundMeter {
+    /// What the round-trip a `token_count`'s non-null `info` reports added.
+    fn round(&mut self, info: &serde_json::Value) -> TurnUsage {
+        match info.get("total_token_usage") {
+            Some(total_payload) => {
+                let total = codex_usage_counters(total_payload);
+                let round = codex_round_usage(self.previous_total.as_ref(), &total);
+                self.previous_total = Some(total);
+                round
+            }
+            None => match info.get("last_token_usage") {
+                Some(last_payload) => {
+                    let last = codex_usage_counters(last_payload);
+                    let repeated = self
+                        .previous_last
+                        .as_ref()
+                        .is_some_and(|prev| prev == &last);
+                    self.previous_last = Some(last.clone());
+                    if repeated {
+                        TurnUsage::default()
+                    } else {
+                        // Carry this round into the cumulative baseline too. A
+                        // transcript that mixes both shapes would otherwise
+                        // count it twice: once here, and again inside the next
+                        // total-bearing event's delta, which is measured from a
+                        // baseline that never learned about it.
+                        let base = self.previous_total.clone().unwrap_or_default();
+                        self.previous_total = Some(codex_usage_add(&base, &last));
+                        last
+                    }
+                }
+                None => TurnUsage::default(),
+            },
+        }
     }
 }
 
@@ -8343,6 +8630,239 @@ mod tests {
             .get_conversation(child)
             .expect("fork parses");
         assert_eq!(rendered_texts(&detail), vec!["p1", "c3"]);
+    }
+
+    /// A `token_count` at `ord` whose session counter reads `input` / `output`.
+    fn token_count_line(ord: u64, input: u64, output: u64) -> String {
+        event_line(
+            &format!("2026-09-21T02:00:{ord:02}.500Z"),
+            ord,
+            serde_json::json!({"type": "token_count", "info": {"total_token_usage": {
+                "input_tokens": input, "cached_input_tokens": 0, "output_tokens": output
+            }}}),
+        )
+    }
+
+    fn agent_line(ord: u64, text: &str) -> String {
+        event_line(
+            &format!("2026-09-21T02:00:{ord:02}.000Z"),
+            ord,
+            serde_json::json!({"type": "agent_message", "message": text}),
+        )
+    }
+
+    /// A sub-agent's rollout never becomes a conversation, so its spend only
+    /// counts if the thread that spawned it folds it in — down every
+    /// generation, and only for rollouts whose header names that thread.
+    #[test]
+    fn a_sub_agents_own_spend_is_counted_against_the_thread_that_spawned_it() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let parent = "01a0e500-0000-7000-8000-000000000001";
+        let child = "01a0e501-0000-7000-8000-000000000002";
+        let grandchild = "01a0e502-0000-7000-8000-000000000003";
+        let stranger = "01a0e503-0000-7000-8000-000000000004";
+        // Read before `child` (the list pops the highest id first), and its
+        // replayed copy of the parent's history names `child` too.
+        let sibling = "01a0e504-0000-7000-8000-000000000005";
+
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-00-{parent}.jsonl"),
+            &[
+                header_line(0, parent, serde_json::json!({})),
+                prompt_line(1, "split the work"),
+                agent_line(2, "spawning"),
+                token_count_line(3, 1000, 10),
+                // 0.147+ names the child only through `SubAgentActivity`.
+                event_line(
+                    "2026-09-21T02:00:04.000Z",
+                    4,
+                    serde_json::json!({"type": "item_completed", "item": {
+                        "type": "SubAgentActivity", "id": "call-1",
+                        "agent_thread_id": child, "kind": "started"
+                    }}),
+                ),
+                // An id whose rollout belongs to another parent counts nothing.
+                event_line(
+                    "2026-09-21T02:00:05.000Z",
+                    5,
+                    serde_json::json!({"type": "sub_agent_activity", "event_id": "call-2",
+                        "agent_thread_id": stranger, "kind": "started"}),
+                ),
+                event_line(
+                    "2026-09-21T02:00:06.000Z",
+                    6,
+                    serde_json::json!({"type": "sub_agent_activity", "event_id": "call-3",
+                        "agent_thread_id": sibling, "kind": "started"}),
+                ),
+            ],
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-08-{sibling}.jsonl"),
+            &[
+                header_line(1, sibling, serde_json::json!({"parent_thread_id": parent})),
+                event_line(
+                    "2026-09-21T02:00:04.000Z",
+                    4,
+                    serde_json::json!({"type": "sub_agent_activity", "event_id": "call-1",
+                        "agent_thread_id": child, "kind": "started"}),
+                ),
+                token_count_line(7, 6_000, 600),
+            ],
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-04-{child}.jsonl"),
+            &[
+                header_line(0, child, serde_json::json!({"parent_thread_id": parent})),
+                token_count_line(1, 300, 3),
+                token_count_line(2, 500, 5),
+                // A pre-0.147 spawn names its child in the call's output.
+                paginated_line(
+                    "2026-09-21T02:00:03.000Z",
+                    3,
+                    "response_item",
+                    serde_json::json!({"type": "function_call", "call_id": "s1",
+                        "name": "spawn_agent", "arguments": "{}"}),
+                ),
+                paginated_line(
+                    "2026-09-21T02:00:04.000Z",
+                    4,
+                    "response_item",
+                    serde_json::json!({"type": "function_call_output", "call_id": "s1",
+                        "output": serde_json::json!({"agent_id": grandchild}).to_string()}),
+                ),
+            ],
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-06-{grandchild}.jsonl"),
+            &[
+                header_line(
+                    0,
+                    grandchild,
+                    serde_json::json!({"source": {"subagent": {"thread_spawn": {
+                        "parent_thread_id": child
+                    }}}}),
+                ),
+                token_count_line(1, 70, 7),
+            ],
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-07-{stranger}.jsonl"),
+            &[
+                header_line(
+                    0,
+                    stranger,
+                    serde_json::json!({"parent_thread_id": "someone-else"}),
+                ),
+                token_count_line(1, 9_000, 999),
+            ],
+        );
+
+        let detail = CodexParser::with_base_dir(sessions_dir)
+            .get_conversation(parent)
+            .expect("parent parses");
+        assert_eq!(turn_usage_total(&detail), 1_010 + 505 + 77 + 6_600);
+    }
+
+    /// A fork's copy of the history it forked from carries that thread's
+    /// counter, and the fork's own counter continues from it: only what the
+    /// fork added is its spend.
+    #[test]
+    fn a_fork_is_not_billed_for_the_history_it_inherited() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let base = "01a0e600-0000-7000-8000-000000000001";
+        let fork = "01a0e601-0000-7000-8000-000000000002";
+
+        let base_lines = vec![
+            header_line(0, base, serde_json::json!({})),
+            prompt_line(1, "p1"),
+            agent_line(2, "a1"),
+            token_count_line(3, 14_000, 939),
+            prompt_line(4, "p2, after the fork point"),
+            agent_line(5, "a2"),
+            token_count_line(6, 29_000, 1_000),
+        ];
+        let fork_lines = vec![
+            header_line(
+                4,
+                fork,
+                serde_json::json!({
+                    "forked_from_id": base,
+                    "history_base": history_base(base, &base_lines, 4)
+                }),
+            ),
+            prompt_line(5, "f1"),
+            agent_line(6, "fa1"),
+            token_count_line(7, 28_900, 996),
+        ];
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-00-{base}.jsonl"),
+            &base_lines,
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-01-00-{fork}.jsonl"),
+            &fork_lines,
+        );
+
+        let parser = CodexParser::with_base_dir(sessions_dir);
+        let forked = parser.get_conversation(fork).expect("fork parses");
+        assert_eq!(rendered_texts(&forked), vec!["p1", "a1", "f1", "fa1"]);
+        assert_eq!(turn_usage_total(&forked), (28_900 + 996) - (14_000 + 939));
+        // The base still counts its own, all of it.
+        let original = parser.get_conversation(base).expect("base parses");
+        assert_eq!(turn_usage_total(&original), 30_000);
+    }
+
+    /// A fork that has done nothing yet spent nothing — not even through the
+    /// session total that stands in when no turn reports usage.
+    #[test]
+    fn an_idle_fork_reports_no_spend_of_its_own() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let base = "01a0e700-0000-7000-8000-000000000001";
+        let fork = "01a0e701-0000-7000-8000-000000000002";
+
+        let base_lines = vec![
+            header_line(0, base, serde_json::json!({})),
+            prompt_line(1, "p1"),
+            agent_line(2, "a1"),
+            token_count_line(3, 14_000, 939),
+        ];
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-00-{base}.jsonl"),
+            &base_lines,
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-01-00-{fork}.jsonl"),
+            &[header_line(
+                4,
+                fork,
+                serde_json::json!({
+                    "forked_from_id": base,
+                    "history_base": history_base(base, &base_lines, 4)
+                }),
+            )],
+        );
+
+        let forked = CodexParser::with_base_dir(sessions_dir)
+            .get_conversation(fork)
+            .expect("fork parses");
+        assert_eq!(turn_usage_total(&forked), 0);
+        assert_eq!(
+            forked.session_stats.and_then(|s| s.total_usage),
+            None,
+            "the base's counter is not the fork's total"
+        );
     }
 
     /// Nothing caps the chain: a thread edited over and over is a long lineage,
