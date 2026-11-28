@@ -1131,7 +1131,7 @@
       "saveRawConfig": "Salvar arquivo"
     },
     "antigravity": {
-      "configDescription": "Sem um método de autenticação (salvo em auth.type), as sessões falham com \"Authentication required\". Modelo e modo são escolhidos no campo de mensagem.",
+      "configDescription": "A CLI do Antigravity gerencia o login por conta própria. O codeg inicia `agy acp` diretamente; esta escolha define apenas como ele se autentica: os métodos do Google reutilizam o login em cache da CLI (use o login sem navegador abaixo quando não houver navegador nesta máquina), e os métodos de chave de API leem a credencial informada aqui. Modelo e modo de sessão não ficam aqui: o Antigravity os informa via ACP, então os seletores do compositor gerenciam ambos por sessão.",
       "methodLabel": "Authentication method",
       "methods": {
         "oauth-personal": "Sign in with Google",
@@ -1140,8 +1140,8 @@
         "agent-platform": "Gemini Enterprise Agent Platform"
       },
       "methodHints": {
-        "oauth-personal": "Sua conta Google, qualquer plano (inclusive o gratuito). A primeira sessão abre um navegador — sem navegador? Use o login sem navegador abaixo.",
-        "oauth-business": "Conta Gemini Enterprise; exige um projeto e uma localização do GCP. A primeira sessão abre um navegador — sem navegador? Use o login sem navegador abaixo.",
+        "oauth-personal": "Sua conta do Google, em qualquer plano do Antigravity, incluindo o gratuito. A CLI do Antigravity armazena o login em cache e o reutiliza no agy acp. Sem navegador nesta máquina? Use o login sem navegador abaixo.",
+        "oauth-business": "Sua conta do Gemini Enterprise. Precisa de um projeto e localização do GCP. A CLI do Antigravity faz login quando uma sessão começa, em um navegador na máquina onde o codeg roda; o login sem navegador só aceita contas pessoais do Google.",
         "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
         "agent-platform": "Use uma chave de API, ou projeto e localização com as credenciais padrão do aplicativo. Execute gcloud auth application-default login se necessário."
       },
@@ -1153,25 +1153,28 @@
       "missingGeminiApiKey": "Enter a Gemini API key, or pick a different authentication method — sessions will fail to start without it.",
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
-      "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
-      "syncSkipped": "Your choice was saved, but codeg could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
+      "settingsFileHint": "Arquivo de configurações próprio da Antigravity CLI (referência somente leitura — o codeg não sobrescreve este arquivo).",
       "save": "Save",
+      "permissionsTitle": "Permissões",
+      "permissionModeLabel": "Modo de permissão",
+      "permissionModeDefault": "Seguir modo da sessão (padrão)",
+      "permissionModeTurbo": "Turbo (--dangerously-skip-permissions)",
+      "permissionModeDefaultHint": "Inicia `agy acp` normalmente para que o seletor de modo de sessão (default, accept-edits, auto, plan) e suas regras de permissão controlem as aprovações.",
+      "permissionModeTurboHint": "Inicia `agy acp --dangerously-skip-permissions`: aprova automaticamente todas as solicitações de permissão de ferramentas sem perguntar (regras deny explícitas e a lista de bloqueio do sistema continuam válidas). Vale para novas sessões.",
       "headless": {
         "title": "Entrar sem navegador nesta máquina",
-        "description": "Sem navegador onde o agente roda (ex.: um servidor)? A primeira sessão esperaria 5 min e falharia. Abra o link em qualquer dispositivo e cole de volta o endereço aonde você chegar.",
+        "description": "A Antigravity CLI imprime um link de login do Google e aguarda o código de autorização. Isso funciona sem navegador nesta máquina: abra o link em qualquer dispositivo, aprove o acesso e cole aqui o código de autorização (ou o endereço completo aonde você chegar).",
         "start": "Obter link de login",
         "saveFirst": "Salve primeiro — o login usa as configurações salvas, não o que foi digitado acima.",
         "step1": "1. Abra este link e entre na sua conta Google.",
-        "step2": "2. O navegador para em {redirectUri} sem conectar — é esperado. Cole aqui esse endereço inteiro.",
+        "step2": "2. Abra o link acima e aprove o acesso. Você chegará em {redirectUri}; cole o código de autorização (ou esse endereço completo) aqui.",
         "copyLink": "Copiar link",
         "openLink": "Abrir em nova aba",
         "complete": "Concluir login",
         "cancel": "Cancelar",
         "signedIn": "Conectado. Novas sessões usarão esta conta.",
-        "alreadySignedIn": "O Antigravity já tinha um token válido, então entrou sem precisar de link.",
         "failed": "O login não foi concluído.",
-        "startFailed": "Não foi possível iniciar o login",
-        "credentialHint": "Token em cache aqui. Copie este arquivo para outra máquina sem desktop para conectá-la."
+        "startFailed": "Não foi possível iniciar o login"
       },
       "signOut": {
         "title": "Entrou com a conta errada?",
@@ -1743,7 +1746,6 @@
       "qoderSaved": "Configuração do Qoder salva",
       "saveQoderConfigFailed": "Falha ao salvar a configuração do Qoder",
       "antigravitySaved": "Antigravity config saved",
-      "antigravitySyncSkipped": "Saved, but Antigravity's settings.json was left alone",
       "saveAntigravityConfigFailed": "Failed to save Antigravity config",
       "kiroSaved": "Configuração do Kiro salva",
       "saveKiroFailed": "Falha ao salvar a configuração do Kiro",

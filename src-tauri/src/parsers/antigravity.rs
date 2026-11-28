@@ -1,5 +1,6 @@
-//! Transcript reader for Google Antigravity's first-party ACP server
-//! (`agy_acp_server`).
+//! Transcript reader for Google Antigravity — both the CLI's own `agy acp`
+//! sessions (the current backend) and the standalone `agy_acp_server` archives
+//! codeg used before.
 //!
 //! LAYOUT. Everything hangs off the *Gemini home* — `$GEMINI_HOME` when set and
 //! non-empty, else `~/.gemini`. Unlike Gemini CLI's `GEMINI_CLI_HOME` (which
@@ -7,25 +8,32 @@
 //! `.gemini` directory itself, so setting it relocates the whole tree:
 //!
 //! ```text
-//! <home>/antigravity-acp/                 this server's private subtree
-//! ├── settings.json                       auth.type + gcp.{project,location}
-//! ├── acp_token.json, acp_business_token.json   OAuth tokens (never archived)
-//! ├── trusted_workspaces.json
+//! <home>/antigravity-cli/                 the CLI's subtree (agy acp writes here)
+//! ├── conversation_summaries.db           title / workspace_uris / step_count
+//! ├── settings.json                       the CLI's own settings
 //! └── conversations/
-//!     ├── <session id>.db                 SQLite trajectory
+//!     └── <session id>.db                 SQLite trajectory (no .meta sidecar)
+//!
+//! <home>/antigravity-acp/                 LEGACY standalone server (read-only)
+//! ├── settings.json, acp_token.json, …
+//! └── conversations/
+//!     ├── <session id>.db
 //!     └── <session id>.meta               sidecar JSON (cwd, mode_id, …)
 //! ```
 //!
 //! FORMAT. The `.db` is a plain SQLite file with a single `steps(idx,
 //! step_payload)` table; each payload is a serialized `gemini_coder.Step`
-//! protobuf. A brand-new session's DB is pre-created EMPTY (0 bytes) before the
-//! Go harness writes the schema, so "no such table: steps" is a normal state,
-//! not a corruption — it reads as an empty conversation.
+//! protobuf. The CLI and the old server use the same schema. A brand-new
+//! session's DB is pre-created EMPTY (0 bytes) before the harness writes the
+//! schema, so "no such table: steps" is a normal state, not a corruption — it
+//! reads as an empty conversation.
 //!
-//! The `.meta` sidecar carries `cwd` (and `mode_id` / `allowed_tool_calls`) but
-//! NO title: the server synthesizes `Session <first 8 chars>` for its own
-//! `session/list`, which is not worth mirroring, so the title comes from the
-//! first user prompt like every other parser.
+//! The CLI keeps no per-session `.meta`; its workspace comes from
+//! `conversation_summaries.workspace_uris` (the same column its own
+//! `session/list` reads). The legacy `.meta` sidecar still supplies `cwd` (and
+//! `mode_id` / `allowed_tool_calls`) for old sessions. Neither carries a title
+//! worth mirroring, so the title comes from the first user prompt like every
+//! other parser.
 //!
 //! WHY A HAND-WRITTEN PROTO SUBSET. The real `Step` has ~130 fields, almost all
 //! of them one arm of a `oneof step` over Google-internal `exa.cortex_pb`
@@ -44,6 +52,7 @@
 pub(crate) mod background;
 mod failure;
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -70,7 +79,10 @@ const TOOL_INPUT_CAP: usize = 8_000;
 const TEXT_CAP: usize = 200_000;
 
 const SESSIONS_DIR_NAME: &str = "conversations";
+const BRAIN_DIR_NAME: &str = "brain";
 const ACP_SUBDIR: &str = "antigravity-acp";
+const CLI_SUBDIR: &str = "antigravity-cli";
+const SUMMARY_DB_NAME: &str = "conversation_summaries.db";
 const METADATA_FILE_SUFFIX: &str = "meta";
 
 // ---------------------------------------------------------------------------
@@ -96,12 +108,11 @@ pub(crate) fn resolve_gemini_home_for_env(env: &AgentEnv) -> PathBuf {
 /// The same resolution for an EXPLICIT `GEMINI_HOME`, so a caller holding a
 /// launch environment does not have to rebuild the rules by hand.
 ///
-/// It exists because rebuilding them by hand is exactly what went wrong:
-/// `acp::connection`'s settings-file writer used a bare `PathBuf::from`, which
-/// dropped the `~` expansion above and sent every `GEMINI_HOME=~/...` user's
-/// `auth.type` into a literal `~` directory beside codeg's working directory
-/// while the server read `$HOME/...` and kept failing `Authentication
-/// required`.
+/// It exists because rebuilding them by hand once went wrong: a bare
+/// `PathBuf::from` drops the `~` expansion above and points a
+/// `GEMINI_HOME=~/...` launch at a literal `~` directory beside codeg's
+/// working directory. `--gemini-dir` and the migration target both go through
+/// here (`acp::connection::antigravity_gemini_dir_arg`).
 /// `home_dir` is the home the value's `~` is expanded against, and that the
 /// `~/.gemini` default hangs off. A caller holding a launch environment must
 /// pass the CHILD's home (`acp::file_system_runtime::child_home_dir`), not
@@ -128,20 +139,28 @@ fn resolve_gemini_home_from(
     }
 }
 
-/// `<home>/antigravity-acp` — the ACP server's private directory. Also holds
-/// `settings.json` (see `acp::connection::sync_antigravity_settings_file`) and
-/// the OAuth token files.
-pub(crate) fn resolve_antigravity_acp_dir() -> PathBuf {
-    resolve_gemini_home().join(ACP_SUBDIR)
-}
-
-/// `<home>/antigravity-acp/conversations` — the session trajectories.
+/// `<home>/antigravity-cli/conversations` — the Antigravity CLI's session
+/// trajectories, which `agy acp` writes too.
 pub(crate) fn resolve_antigravity_sessions_dir() -> PathBuf {
     resolve_antigravity_sessions_dir_for_env(&AgentEnv::inherited())
 }
 
-/// [`resolve_antigravity_sessions_dir`] for the server launched with `env`.
+/// [`resolve_antigravity_sessions_dir`] for the CLI launched with `env`.
 pub(crate) fn resolve_antigravity_sessions_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_gemini_home_for_env(env)
+        .join(CLI_SUBDIR)
+        .join(SESSIONS_DIR_NAME)
+}
+
+/// `<home>/antigravity-acp/conversations` — the sessions the standalone
+/// `agy_acp_server` wrote, read (and backed up) until each is migrated into the
+/// CLI's tree on open.
+pub(crate) fn resolve_antigravity_legacy_sessions_dir() -> PathBuf {
+    resolve_antigravity_legacy_sessions_dir_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_antigravity_legacy_sessions_dir`] for the CLI launched with `env`.
+pub(crate) fn resolve_antigravity_legacy_sessions_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_gemini_home_for_env(env)
         .join(ACP_SUBDIR)
         .join(SESSIONS_DIR_NAME)
@@ -158,6 +177,223 @@ pub(crate) fn resolve_antigravity_shared_config_dir() -> PathBuf {
 /// installed twice.
 pub(crate) fn resolve_antigravity_cli_dir() -> PathBuf {
     resolve_gemini_home().join("antigravity-cli")
+}
+
+/// 按需将旧版独立 `agy_acp_server` 下的会话迁移到原生 `agy acp` 目录。
+///
+/// 旧版服务端将会话保存在 `<gemini_home>/antigravity-acp/conversations/<id>.db`
+/// （以及可选的 `antigravity-acp/brain/<id>/`），而原生 `agy acp` 仅读写
+/// `<gemini_home>/antigravity-cli/`。两者轨迹库表结构完全一致，因此在打开
+/// 旧会话前将其按页备份（完整合并 WAL）到新目录即可恢复续聊，同时保留旧目录
+/// 原始文件与 `.meta` 侧车文件（供历史解析器回退读取原始工作区路径）。
+///
+/// 返回值：
+/// - `Ok(true)`：本次成功执行了迁移；
+/// - `Ok(false)`：无需迁移（目标已存在非空 DB、旧会话不存在/为空、或 id 非法）；
+/// - `Err(_)`：迁移过程中发生 SQLite 或文件系统错误。
+pub(crate) fn migrate_legacy_session_to_cli(
+    gemini_home: &Path,
+    session_id: &str,
+) -> Result<bool, String> {
+    if !is_safe_session_id(session_id) {
+        return Ok(false);
+    }
+
+    let legacy_dir = gemini_home.join(ACP_SUBDIR);
+    let cli_dir = gemini_home.join(CLI_SUBDIR);
+    let legacy_db = legacy_dir
+        .join(SESSIONS_DIR_NAME)
+        .join(format!("{session_id}.db"));
+    let cli_conversations = cli_dir.join(SESSIONS_DIR_NAME);
+    let cli_db = cli_conversations.join(format!("{session_id}.db"));
+
+    // 目标已存在非空轨迹库时不覆盖，避免抹掉新会话中的续聊记录。
+    if is_non_empty_file(&cli_db) {
+        return Ok(false);
+    }
+    // 旧目录不存在有效轨迹库则无需迁移。
+    if !is_non_empty_file(&legacy_db) {
+        return Ok(false);
+    }
+
+    std::fs::create_dir_all(&cli_conversations)
+        .map_err(|e| format!("创建目标会话目录失败 ({}): {e}", cli_conversations.display()))?;
+
+    let nonce = next_migration_nonce();
+    let tmp_db = cli_conversations.join(format!(
+        ".{session_id}.migrate-{}-{nonce}.tmp",
+        std::process::id()
+    ));
+
+    if let Err(err) = copy_legacy_sqlite_db(&legacy_db, &tmp_db) {
+        let _ = std::fs::remove_file(&tmp_db);
+        return Err(err);
+    }
+
+    // 二次确认：若并发启动已写入非空目标文件，放弃覆盖并清理临时文件。
+    if is_non_empty_file(&cli_db) {
+        let _ = std::fs::remove_file(&tmp_db);
+        return Ok(false);
+    }
+
+    #[cfg(windows)]
+    if cli_db.is_file() {
+        let _ = std::fs::remove_file(&cli_db);
+    }
+
+    if let Err(err) = std::fs::rename(&tmp_db, &cli_db) {
+        let _ = std::fs::remove_file(&tmp_db);
+        return Err(format!(
+            "原子写入迁移轨迹库失败 ({} -> {}): {err}",
+            tmp_db.display(),
+            cli_db.display()
+        ));
+    }
+
+    // 顺带迁移旧会话的 brain 产物目录（best-effort，不阻断主会话加载）。
+    migrate_legacy_brain_dir(
+        &legacy_dir.join(BRAIN_DIR_NAME).join(session_id),
+        &cli_dir.join(BRAIN_DIR_NAME).join(session_id),
+        session_id,
+    );
+
+    Ok(true)
+}
+
+/// 仅允许单个普通路径组件作为会话 ID，防止路径穿越。
+fn is_safe_session_id(session_id: &str) -> bool {
+    if session_id.is_empty() || session_id.contains('/') || session_id.contains('\\') {
+        return false;
+    }
+    let mut components = Path::new(session_id).components();
+    matches!(
+        (components.next(), components.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    )
+}
+
+fn is_non_empty_file(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|meta| meta.is_file() && meta.len() > 0)
+        .unwrap_or(false)
+}
+
+fn next_migration_nonce() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// 将旧版 SQLite 轨迹库导出为自包含的单文件副本。
+///
+/// 优先使用 SQLite Online Backup API（自动合并 `-wal` 中的未 checkpoint 页），
+/// 先尝试只读打开，遇 `SQLITE_READONLY_RECOVERY` 时回退读写模式（与解析器一致）。
+/// 若源库不存在非空 `-wal` 且 SQLite 备份异常，则回退普通文件拷贝。
+fn copy_legacy_sqlite_db(src: &Path, dest: &Path) -> Result<(), String> {
+    let try_backup = |flags: OpenFlags| -> Result<(), rusqlite::Error> {
+        let _ = std::fs::remove_file(dest);
+        let conn = Connection::open_with_flags(src, flags)?;
+        let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
+        conn.backup(rusqlite::DatabaseName::Main, dest, None)
+    };
+
+    let backup_err = match try_backup(OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+    {
+        Ok(()) => None,
+        Err(_) => try_backup(OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+            .err(),
+    };
+
+    if let Some(err) = backup_err {
+        let mut wal_os = src.as_os_str().to_os_string();
+        wal_os.push("-wal");
+        let has_pending_wal = is_non_empty_file(Path::new(&wal_os));
+        if has_pending_wal {
+            return Err(format!(
+                "SQLite 备份旧轨迹库失败且存在未合并 WAL ({}): {err}",
+                src.display()
+            ));
+        }
+        let _ = std::fs::remove_file(dest);
+        std::fs::copy(src, dest).map_err(|copy_err| {
+            format!(
+                "复制旧轨迹库失败 ({}): sqlite={err}; copy={copy_err}",
+                src.display()
+            )
+        })?;
+    }
+
+    if !is_non_empty_file(dest) {
+        return Err(format!(
+            "迁移后的轨迹库为空文件 ({})",
+            dest.display()
+        ));
+    }
+    Ok(())
+}
+
+/// 迁移旧会话的 `brain/<session_id>` 目录（若源存在且目标不存在）。
+fn migrate_legacy_brain_dir(src: &Path, dest: &Path, session_id: &str) {
+    if !src.is_dir() || dest.exists() {
+        return;
+    }
+    let Some(parent) = dest.parent() else {
+        return;
+    };
+    if let Err(err) = std::fs::create_dir_all(parent) {
+        tracing::warn!(
+            "[antigravity] 创建目标 brain 父目录失败 ({}): {err}",
+            parent.display()
+        );
+        return;
+    }
+    let nonce = next_migration_nonce();
+    let tmp_dir = parent.join(format!(
+        ".{session_id}.brain-migrate-{}-{nonce}.tmp",
+        std::process::id()
+    ));
+    if let Err(err) = copy_dir_recursive(src, &tmp_dir) {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        tracing::warn!(
+            "[antigravity] 复制旧 brain 目录失败 ({} -> {}): {err}",
+            src.display(),
+            dest.display()
+        );
+        return;
+    }
+    if dest.exists() {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        return;
+    }
+    if let Err(err) = std::fs::rename(&tmp_dir, dest) {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        tracing::warn!(
+            "[antigravity] 提交迁移 brain 目录失败 ({} -> {}): {err}",
+            tmp_dir.display(),
+            dest.display()
+        );
+    }
+}
+
+/// 递归复制普通目录与文件，跳过符号链接以防循环或逃逸目录树。
+fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let meta = std::fs::symlink_metadata(&src_path)?;
+        let file_type = meta.file_type();
+        if file_type.is_symlink() {
+            continue;
+        }
+        let dest_path = dest.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dest_path)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&src_path, &dest_path)?;
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -747,14 +983,15 @@ pub(crate) fn newest_round_failure(
 // Parser
 // ---------------------------------------------------------------------------
 
-/// With the relative `--app-data-dir antigravity-acp`, agy 1.5.13
-/// can write beneath the OS home even with GEMINI_HOME in its environment.
-/// Resolve only the requested session; a different configured profile must
-/// not be merged wholesale with the default profile.
+/// `agy` keeps its tree beneath the OS home unless told otherwise (1.5.13
+/// wrote there even with GEMINI_HOME in its environment; codeg now passes
+/// `--gemini-dir` instead). Resolve only the requested session there; a
+/// different configured profile must not be merged wholesale with the
+/// default profile.
 fn default_trajectory_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|home| {
         home.join(".gemini")
-            .join(ACP_SUBDIR)
+            .join(CLI_SUBDIR)
             .join(SESSIONS_DIR_NAME)
     })
 }
@@ -773,6 +1010,11 @@ fn session_db_path(directory: &Path, fallback: Option<&Path>, id: &str) -> PathB
 
 pub struct AntigravityParser {
     base_dir: PathBuf,
+    /// Sessions the standalone `agy_acp_server` wrote before codeg switched to
+    /// `agy acp`. Still listed so that history does not disappear.
+    legacy_dir: Option<PathBuf>,
+    /// The CLI's default tree under the OS home, consulted only for a session
+    /// the caller already identified (see [`default_trajectory_dir`]).
     fallback: Option<PathBuf>,
 }
 
@@ -781,11 +1023,16 @@ impl AntigravityParser {
         Self::for_env(&AgentEnv::inherited())
     }
 
-    /// The history of the Antigravity server launched with `env`.
+    /// The history of the Antigravity CLI launched with `env`.
     pub fn for_env(env: &AgentEnv) -> Self {
+        let base_dir = resolve_antigravity_sessions_dir_for_env(env);
+        let legacy = resolve_antigravity_legacy_sessions_dir_for_env(env);
+        let legacy_dir = (legacy != base_dir).then_some(legacy);
+        let fallback = default_trajectory_dir().filter(|dir| *dir != base_dir);
         Self {
-            base_dir: resolve_antigravity_sessions_dir_for_env(env),
-            fallback: default_trajectory_dir(),
+            base_dir,
+            legacy_dir,
+            fallback,
         }
     }
 
@@ -795,24 +1042,71 @@ impl AntigravityParser {
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
         Self {
             base_dir,
+            legacy_dir: None,
             fallback: None,
         }
     }
 
-    fn db_path(&self, conversation_id: &str) -> PathBuf {
-        session_db_path(&self.base_dir, self.fallback.as_deref(), conversation_id)
+    fn dirs(&self) -> impl Iterator<Item = &PathBuf> {
+        std::iter::once(&self.base_dir).chain(self.legacy_dir.iter())
     }
 
-    fn meta_path(&self, conversation_id: &str) -> PathBuf {
-        self.db_path(conversation_id)
-            .with_extension(METADATA_FILE_SUFFIX)
+    fn resolve_db(&self, conversation_id: &str) -> Option<PathBuf> {
+        self.dirs()
+            .chain(self.fallback.iter())
+            .map(|dir| dir.join(format!("{conversation_id}.db")))
+            .find(|path| path.is_file())
     }
 
-    fn build(&self, conversation_id: &str) -> SessionParse {
-        let (steps, watermark) = read_trajectory(&self.db_path(conversation_id));
+    fn resolve_meta(&self, conversation_id: &str) -> Option<PathBuf> {
+        self.dirs()
+            .map(|dir| dir.join(format!("{conversation_id}.{METADATA_FILE_SUFFIX}")))
+            .find(|path| path.is_file())
+    }
+
+    /// `<cli>/conversation_summaries.db`, the CLI's own index beside the
+    /// `conversations/` directory. The standalone server kept no such index;
+    /// its cwd came from the `.meta` sidecar.
+    fn summary_db_path(&self) -> PathBuf {
+        self.base_dir
+            .parent()
+            .map(|parent| parent.join(SUMMARY_DB_NAME))
+            .unwrap_or_default()
+    }
+
+    fn build(
+        &self,
+        conversation_id: &str,
+        db_path: &Path,
+        summary_cwds: Option<&HashMap<String, String>>,
+    ) -> SessionParse {
+        let (steps, watermark) = read_trajectory(db_path);
         let mut parsed = project_steps(&steps);
         parsed.watermark = watermark;
-        parsed.cwd = read_sidecar_cwd(&self.meta_path(conversation_id));
+        // 优先读与该 `.db` 同目录的 `.meta` sidecar（旧 standalone server 格式），
+        // 再读轨迹库自身的 `trajectory_metadata_blob`，然后查
+        // `conversation_summaries.db`（新 CLI 格式），最后才回退到旧目录同名
+        // `.meta`，避免其意外覆盖新 CLI 会话的工作区。
+        let sibling_meta = db_path.with_extension(METADATA_FILE_SUFFIX);
+        parsed.cwd = sibling_meta
+            .is_file()
+            .then(|| read_sidecar_cwd(&sibling_meta))
+            .flatten()
+            // The CLI's own trajectory records its workspace, so a session
+            // restored from a backup (or copied between machines) without the
+            // shared `conversation_summaries.db` row still knows its folder.
+            .or_else(|| read_trajectory_cwd(db_path))
+            .or_else(|| {
+                if let Some(map) = summary_cwds {
+                    map.get(conversation_id).cloned()
+                } else {
+                    read_summary_cwd(&self.summary_db_path(), conversation_id)
+                }
+            })
+            .or_else(|| {
+                self.resolve_meta(conversation_id)
+                    .and_then(|path| read_sidecar_cwd(&path))
+            });
         parsed
     }
 
@@ -844,29 +1138,40 @@ impl Default for AntigravityParser {
 impl AgentParser for AntigravityParser {
     fn list_conversations(&self) -> Result<Vec<ConversationSummary>, ParseError> {
         let mut conversations = Vec::new();
-        // Discovery belongs to the configured profile. The fallback is only
-        // used when loading a session that the caller already identified.
-        let Ok(entries) = std::fs::read_dir(&self.base_dir) else {
-            return Ok(conversations);
-        };
+        let mut seen = HashSet::new();
+        // 一次性读取 `conversation_summaries.db` 的工作区索引，避免列表扫描时
+        // 为每个会话反复开关 SQLite 连接（N+1 I/O）。
+        let summary_cwds = load_summary_cwds(&self.summary_db_path());
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("db") {
-                continue;
-            }
-            let Some(conversation_id) = path.file_stem().map(|s| s.to_string_lossy().into_owned())
-            else {
+        for dir in self.dirs() {
+            let Ok(entries) = std::fs::read_dir(dir) else {
                 continue;
             };
-            let parsed = self.build(&conversation_id);
-            // A session whose DB is still the pre-created empty file (or which
-            // was cleared) has no content to show — matching the other parsers'
-            // "metadata-only is not listed" rule.
-            if parsed.turns.is_empty() {
-                continue;
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("db") {
+                    continue;
+                }
+                let Some(conversation_id) =
+                    path.file_stem().map(|s| s.to_string_lossy().into_owned())
+                else {
+                    continue;
+                };
+                // The CLI directory is scanned first; an id present in both
+                // trees is the same conversation, and the CLI copy is current.
+                if !seen.insert(conversation_id.clone()) {
+                    continue;
+                }
+                let parsed = self.build(&conversation_id, &path, Some(&summary_cwds));
+                // A session whose DB is still the pre-created empty file (or
+                // which was cleared) has no content to show — matching the
+                // other parsers' "metadata-only is not listed" rule.
+                if parsed.turns.is_empty() {
+                    continue;
+                }
+                conversations.push(self.summary_from(&conversation_id, &parsed));
             }
-            conversations.push(self.summary_from(&conversation_id, &parsed));
         }
 
         conversations.sort_by_key(|c| std::cmp::Reverse(c.started_at));
@@ -874,14 +1179,15 @@ impl AgentParser for AntigravityParser {
     }
 
     fn get_conversation(&self, conversation_id: &str) -> Result<ConversationDetail, ParseError> {
-        if !crate::parsers::is_safe_subagent_id(conversation_id)
-            || !self.db_path(conversation_id).is_file()
-        {
+        let db_path = crate::parsers::is_safe_subagent_id(conversation_id)
+            .then(|| self.resolve_db(conversation_id))
+            .flatten();
+        let Some(db_path) = db_path else {
             return Err(ParseError::ConversationNotFound(
                 conversation_id.to_string(),
             ));
-        }
-        let parsed = self.build(conversation_id);
+        };
+        let parsed = self.build(conversation_id, &db_path, None);
 
         let mut turns = parsed.turns.clone();
         relocate_orphaned_tool_results(&mut turns);
@@ -1023,6 +1329,136 @@ fn read_sidecar_cwd(meta_path: &Path) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+/// `trajectory_metadata_blob.data` — the per-conversation metadata record, a
+/// protobuf in the trajectory `.db` itself. Only the workspace is read.
+///
+/// Field 7 is REPEATED: `agy acp` (1.5.18) writes the session folder once,
+/// while the standalone server wrote the session folder first and then every
+/// skill directory it scanned (`…/.gemini/skills`, `…/.agents/skills`, …), so
+/// the FIRST entry is the folder — a singular field would keep the last one
+/// and name a skills directory instead. Checked against every legacy session
+/// on a real machine that has the record: the first entry equalled the
+/// `.meta` sidecar's `cwd` in all 27. Field 1 (CLI only) is the workspace set,
+/// whose first URI is the same folder; the CLI's values also match
+/// `conversation_summaries.workspace_uris`.
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct TrajectoryMetadata {
+    #[prost(message, optional, tag = "1")]
+    workspaces: Option<TrajectoryWorkspaces>,
+    #[prost(string, repeated, tag = "7")]
+    workspace_uris: Vec<String>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct TrajectoryWorkspaces {
+    #[prost(string, tag = "1")]
+    primary_uri: String,
+}
+
+/// The workspace folder a CLI session ran in, from its own trajectory `.db`.
+fn read_trajectory_cwd(db_path: &Path) -> Option<String> {
+    let conn = open_trajectory(db_path)?;
+    let data: Vec<u8> = conn
+        .query_row(
+            "SELECT data FROM trajectory_metadata_blob ORDER BY id = 'main' DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .ok()?;
+    let meta = TrajectoryMetadata::decode(data.as_slice()).ok()?;
+    meta.workspace_uris
+        .into_iter()
+        .next()
+        .into_iter()
+        .chain(meta.workspaces.map(|w| w.primary_uri))
+        .find_map(|uri| file_uri_to_path(&uri))
+}
+
+/// 打开 CLI 的 `conversation_summaries.db`（表为 `conversation_summaries`，
+/// 不存在轨迹库的 `steps` 表，不能复用 `try_open_trajectory`）。
+fn open_summary_db(summary_db: &Path) -> Option<Connection> {
+    if !summary_db.is_file() || std::fs::metadata(summary_db).ok()?.len() == 0 {
+        return None;
+    }
+    try_open_summary_db(
+        summary_db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .or_else(|| {
+        try_open_summary_db(
+            summary_db,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+    })
+}
+
+fn try_open_summary_db(db_path: &Path, flags: OpenFlags) -> Option<Connection> {
+    let conn = Connection::open_with_flags(db_path, flags).ok()?;
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(200));
+    conn.prepare("SELECT 1 FROM conversation_summaries LIMIT 1")
+        .ok()?;
+    Some(conn)
+}
+
+/// 批量加载 `conversation_summaries.db` 中所有会话的首个工作区路径，供
+/// `list_conversations` 复用单次连接。
+fn load_summary_cwds(summary_db: &Path) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let Some(conn) = open_summary_db(summary_db) else {
+        return map;
+    };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT conversation_id, workspace_uris FROM conversation_summaries WHERE workspace_uris != ''",
+    ) else {
+        return map;
+    };
+    let Ok(rows) = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) else {
+        return map;
+    };
+    for (id, raw) in rows.flatten() {
+        if let Some(path) = parse_primary_workspace_uri(&raw) {
+            map.insert(id, path);
+        }
+    }
+    map
+}
+
+/// The workspace the CLI session ran in, from `conversation_summaries`.
+/// `workspace_uris` is a JSON array of `file://` URIs (the CLI's own
+/// `session/list` reads the same column); the first entry is the session's
+/// primary folder.
+fn read_summary_cwd(summary_db: &Path, conversation_id: &str) -> Option<String> {
+    let conn = open_summary_db(summary_db)?;
+    let raw: String = conn
+        .query_row(
+            "SELECT workspace_uris FROM conversation_summaries WHERE conversation_id = ?1",
+            [conversation_id],
+            |row| row.get(0),
+        )
+        .ok()?;
+    parse_primary_workspace_uri(&raw)
+}
+
+fn parse_primary_workspace_uri(raw: &str) -> Option<String> {
+    let uris: Vec<String> = serde_json::from_str(raw).ok()?;
+    uris.into_iter().find_map(|uri| file_uri_to_path(&uri))
+}
+
+/// 将 CLI 记录的 `file://` URI（含 `file://localhost/...`、百分号编码、
+/// Windows 盘符 `file:///C:/...`）转为本地文件系统路径。
+fn file_uri_to_path(uri: &str) -> Option<String> {
+    let parsed = url::Url::parse(uri).ok()?;
+    if parsed.scheme() != "file" {
+        return None;
+    }
+    parsed
+        .to_file_path()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 // ---------------------------------------------------------------------------
@@ -2792,15 +3228,199 @@ mod tests {
 
     /// #948: built with an agent's launch env, the parser reads where THAT
     /// env puts the agent's files, not where codeg's own environment does.
+    /// The CLI's tree leads; the old standalone server's tree stays readable.
     #[test]
     fn for_env_reads_the_home_of_the_launch_env() {
         let env = AgentEnv::with_overrides(&[("GEMINI_HOME", "/relocated/agy")]);
+        let parser = AntigravityParser::for_env(&env);
         assert_eq!(
-            AntigravityParser::for_env(&env).base_dir,
+            parser.base_dir,
             PathBuf::from("/relocated/agy")
-                .join("antigravity-acp")
+                .join("antigravity-cli")
                 .join("conversations")
         );
+        assert_eq!(
+            parser.legacy_dir,
+            Some(
+                PathBuf::from("/relocated/agy")
+                    .join("antigravity-acp")
+                    .join("conversations")
+            )
+        );
+    }
+
+    #[test]
+    fn decodes_the_cli_file_uris() {
+        #[cfg(not(windows))]
+        {
+            assert_eq!(
+                file_uri_to_path("file:///Users/me/my%20repo").as_deref(),
+                Some("/Users/me/my repo")
+            );
+            assert_eq!(
+                file_uri_to_path("file://localhost/Users/me/my%20repo").as_deref(),
+                Some("/Users/me/my repo")
+            );
+        }
+        assert_eq!(file_uri_to_path("https://example.com/repo"), None);
+    }
+
+    #[test]
+    fn reads_workspace_cwd_from_cli_conversation_summaries_db() {
+        let root = tempfile::tempdir().unwrap();
+        let cli_dir = root.path().join("antigravity-cli");
+        let conv_dir = cli_dir.join("conversations");
+        std::fs::create_dir_all(&conv_dir).unwrap();
+
+        // 写入不含 `steps` 表的真实 `conversation_summaries.db`
+        let summary_db = cli_dir.join(SUMMARY_DB_NAME);
+        let conn = Connection::open(&summary_db).unwrap();
+        conn.execute(
+            "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, workspace_uris TEXT NOT NULL)",
+            [],
+        )
+        .unwrap();
+        let workspace_path = root.path().join("my repo");
+        std::fs::create_dir_all(&workspace_path).unwrap();
+        let uri = url::Url::from_directory_path(&workspace_path)
+            .unwrap()
+            .to_string();
+        let expected_path = file_uri_to_path(&uri).unwrap();
+        conn.execute(
+            "INSERT INTO conversation_summaries (conversation_id, workspace_uris) VALUES (?1, ?2)",
+            rusqlite::params!["cli-session-1", serde_json::to_string(&vec![uri]).unwrap()],
+        )
+        .unwrap();
+        drop(conn);
+
+        // 写入对应的会话轨迹 DB（无 .meta sidecar）
+        let db_path = conv_dir.join("cli-session-1.db");
+        let step_conn = Connection::open(&db_path).unwrap();
+        step_conn
+            .execute(
+                "CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_payload BLOB)",
+                [],
+            )
+            .unwrap();
+        let user_step = Step {
+            user_input: Some(UserInput {
+                query: "hello from agy acp".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        step_conn
+            .execute(
+                "INSERT INTO steps (idx, step_payload) VALUES (0, ?1)",
+                [user_step.encode_to_vec()],
+            )
+            .unwrap();
+        drop(step_conn);
+
+        let parser = AntigravityParser::with_base_dir(conv_dir);
+        let listed = parser.list_conversations().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "cli-session-1");
+        assert_eq!(listed[0].folder_path.as_deref(), Some(expected_path.as_str()));
+
+        let detail = parser.get_conversation("cli-session-1").unwrap();
+        assert_eq!(
+            detail.summary.folder_path.as_deref(),
+            Some(expected_path.as_str())
+        );
+    }
+
+    /// A CLI session restored without the shared `conversation_summaries.db`
+    /// row (which backups no longer carry) still knows its folder from its own
+    /// `trajectory_metadata_blob` — and a legacy record, whose repeated field 7
+    /// lists the folder FIRST and then the skill directories, names the folder
+    /// rather than the last skills directory.
+    #[test]
+    fn reads_workspace_cwd_from_the_trajectory_metadata_blob() {
+        let root = tempfile::tempdir().unwrap();
+        let conv_dir = root.path().join("antigravity-cli").join("conversations");
+        std::fs::create_dir_all(&conv_dir).unwrap();
+        let workspace = root.path().join("my repo");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let uri = url::Url::from_directory_path(&workspace).unwrap().to_string();
+        let expected = file_uri_to_path(&uri).unwrap();
+        let skills_uri = url::Url::from_directory_path(workspace.join(".agents").join("skills"))
+            .unwrap()
+            .to_string();
+
+        let cases = [
+            (
+                "cli-blob",
+                TrajectoryMetadata {
+                    workspaces: Some(TrajectoryWorkspaces {
+                        primary_uri: uri.clone(),
+                    }),
+                    workspace_uris: vec![uri.clone()],
+                },
+            ),
+            (
+                "legacy-blob",
+                TrajectoryMetadata {
+                    workspaces: None,
+                    workspace_uris: vec![uri.clone(), skills_uri.clone()],
+                },
+            ),
+            (
+                "workspace-set-only",
+                TrajectoryMetadata {
+                    workspaces: Some(TrajectoryWorkspaces {
+                        primary_uri: uri.clone(),
+                    }),
+                    workspace_uris: Vec::new(),
+                },
+            ),
+        ];
+        for (id, meta) in &cases {
+            let conn = Connection::open(conv_dir.join(format!("{id}.db"))).unwrap();
+            conn.execute(
+                "CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_payload BLOB)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "CREATE TABLE trajectory_metadata_blob (id TEXT DEFAULT 'main', data BLOB, PRIMARY KEY (id))",
+                [],
+            )
+            .unwrap();
+            let step = Step {
+                user_input: Some(UserInput {
+                    query: format!("hello from {id}"),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            conn.execute(
+                "INSERT INTO steps (idx, step_payload) VALUES (0, ?1)",
+                [step.encode_to_vec()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO trajectory_metadata_blob (id, data) VALUES ('main', ?1)",
+                [meta.encode_to_vec()],
+            )
+            .unwrap();
+        }
+
+        let parser = AntigravityParser::with_base_dir(conv_dir);
+        let listed = parser.list_conversations().unwrap();
+        assert_eq!(listed.len(), cases.len());
+        for summary in &listed {
+            assert_eq!(
+                summary.folder_path.as_deref(),
+                Some(expected.as_str()),
+                "{}",
+                summary.id
+            );
+        }
+        for (id, _) in &cases {
+            let detail = parser.get_conversation(id).unwrap();
+            assert_eq!(detail.summary.folder_path.as_deref(), Some(expected.as_str()), "{id}");
+        }
     }
 
     /// One question of an `ask_question` step, options numbered from `"1"` the
@@ -2968,6 +3588,182 @@ mod tests {
         assert_eq!(partly["answers"][1]["selected"], serde_json::json!([]));
     }
 
+    #[test]
+    fn migrate_legacy_session_copies_db_and_brain_and_stays_idempotent() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy_conv = root.path().join(ACP_SUBDIR).join(SESSIONS_DIR_NAME);
+        let legacy_brain = root
+            .path()
+            .join(ACP_SUBDIR)
+            .join(BRAIN_DIR_NAME)
+            .join("legacy-1");
+        std::fs::create_dir_all(&legacy_conv).unwrap();
+        std::fs::create_dir_all(legacy_brain.join("nested")).unwrap();
+
+        let step = Step {
+            metadata: Some(StepMetadata {
+                created_at: ts(1_700_000_000),
+                ..Default::default()
+            }),
+            user_input: Some(UserInput {
+                query: "来自旧版 acp server 的会话".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        write_steps(&legacy_conv, "legacy-1", &[step]);
+        std::fs::write(
+            legacy_conv.join("legacy-1.meta"),
+            r#"{"cwd":"/Users/demo/project","mode_id":"yolo"}"#,
+        )
+        .unwrap();
+        std::fs::write(legacy_brain.join("nested").join("note.md"), "artifact").unwrap();
+
+        // 首次迁移：应将 .db 与 brain 迁移至 antigravity-cli，并保留旧目录原件。
+        assert!(migrate_legacy_session_to_cli(root.path(), "legacy-1").unwrap());
+
+        let cli_db = root
+            .path()
+            .join(CLI_SUBDIR)
+            .join(SESSIONS_DIR_NAME)
+            .join("legacy-1.db");
+        let cli_note = root
+            .path()
+            .join(CLI_SUBDIR)
+            .join(BRAIN_DIR_NAME)
+            .join("legacy-1")
+            .join("nested")
+            .join("note.md");
+        assert!(cli_db.is_file());
+        assert_eq!(std::fs::read_to_string(&cli_note).unwrap(), "artifact");
+        assert!(legacy_conv.join("legacy-1.db").is_file());
+        assert!(legacy_conv.join("legacy-1.meta").is_file());
+
+        // 迁移后解析器列表不应去重失败或丢失原始工作区 cwd。
+        let env = AgentEnv::with_overrides(&[(
+            "GEMINI_HOME",
+            root.path().to_string_lossy().as_ref(),
+        )]);
+        let parser = AntigravityParser::for_env(&env);
+        let list = parser.list_conversations().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "legacy-1");
+        assert_eq!(list[0].folder_path.as_deref(), Some("/Users/demo/project"));
+        assert_eq!(
+            list[0].title.as_deref(),
+            Some("来自旧版 acp server 的会话")
+        );
+
+        // 再次调用应保持幂等，不覆盖新目录中后续追加的新步骤。
+        let cli_conn = Connection::open(&cli_db).unwrap();
+        let new_step = Step {
+            metadata: Some(StepMetadata {
+                created_at: ts(1_700_000_010),
+                ..Default::default()
+            }),
+            planner_response: Some(PlannerResponse {
+                response: "新 acp 续聊回复".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        cli_conn
+            .execute(
+                "INSERT INTO steps (idx, step_payload) VALUES (1, ?1)",
+                rusqlite::params![new_step.encode_to_vec()],
+            )
+            .unwrap();
+        drop(cli_conn);
+
+        assert!(!migrate_legacy_session_to_cli(root.path(), "legacy-1").unwrap());
+        let detail = parser.get_conversation("legacy-1").unwrap();
+        assert_eq!(detail.turns.len(), 2);
+    }
+
+    #[test]
+    fn migrate_legacy_session_includes_uncheckpointed_wal_data() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy_conv = root.path().join(ACP_SUBDIR).join(SESSIONS_DIR_NAME);
+        std::fs::create_dir_all(&legacy_conv).unwrap();
+
+        let legacy_db = legacy_conv.join("wal-session.db");
+        let conn = Connection::open(&legacy_db).unwrap();
+        // 启用 WAL 且关闭自动 checkpoint，确保最新提交留在 -wal 中。
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        conn.execute(
+            "CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_payload BLOB)",
+            [],
+        )
+        .unwrap();
+        let step = Step {
+            metadata: Some(StepMetadata {
+                created_at: ts(1_700_000_100),
+                ..Default::default()
+            }),
+            user_input: Some(UserInput {
+                query: "WAL 未刷盘的消息".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        conn.execute(
+            "INSERT INTO steps (idx, step_payload) VALUES (0, ?1)",
+            rusqlite::params![step.encode_to_vec()],
+        )
+        .unwrap();
+
+        // 保持连接打开（WAL 未 checkpoint），执行迁移后目标库应完整包含该消息。
+        assert!(migrate_legacy_session_to_cli(root.path(), "wal-session").unwrap());
+        drop(conn);
+
+        let cli_db = root
+            .path()
+            .join(CLI_SUBDIR)
+            .join(SESSIONS_DIR_NAME)
+            .join("wal-session.db");
+        let (steps, _) = read_trajectory(&cli_db);
+        assert_eq!(steps.len(), 1);
+        assert_eq!(
+            steps[0].user_input.as_ref().map(|u| u.query.as_str()),
+            Some("WAL 未刷盘的消息")
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_session_replaces_empty_placeholder_and_rejects_unsafe_ids() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy_conv = root.path().join(ACP_SUBDIR).join(SESSIONS_DIR_NAME);
+        let cli_conv = root.path().join(CLI_SUBDIR).join(SESSIONS_DIR_NAME);
+        std::fs::create_dir_all(&legacy_conv).unwrap();
+        std::fs::create_dir_all(&cli_conv).unwrap();
+
+        // 合法旧会话 + 目标 0 字节占位文件：应允许覆盖。
+        let step = Step {
+            user_input: Some(UserInput {
+                query: "恢复内容".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        write_steps(&legacy_conv, "placeholder-1", &[step]);
+        std::fs::write(cli_conv.join("placeholder-1.db"), b"").unwrap();
+        assert!(migrate_legacy_session_to_cli(root.path(), "placeholder-1").unwrap());
+        assert_eq!(read_trajectory(&cli_conv.join("placeholder-1.db")).0.len(), 1);
+
+        // 旧会话不存在或为 0 字节时跳过。
+        std::fs::write(legacy_conv.join("empty-old.db"), b"").unwrap();
+        assert!(!migrate_legacy_session_to_cli(root.path(), "empty-old").unwrap());
+        assert!(!migrate_legacy_session_to_cli(root.path(), "missing").unwrap());
+
+        // 非法路径 ID 直接拒绝，不越界访问。
+        for bad in ["", ".", "..", "../escape", "a/b", r"a\b"] {
+            assert!(
+                !migrate_legacy_session_to_cli(root.path(), bad).unwrap(),
+                "非法 session_id 应被忽略: {bad:?}"
+            );
+        }
+    }
     /// 1.5.2 stores a dismissed (or stopped) question as a cancelled step with
     /// nothing chosen and no `skipped`: still a decline, not "no selection". A
     /// cancelled step that kept an earlier answer keeps it.

@@ -323,14 +323,35 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             indexes: &[],
         },
         ExternalSource {
-            // Antigravity keeps one SQLite trajectory + `.meta` sidecar per
-            // session under `<GEMINI_HOME>/antigravity-acp/conversations`
-            // (default `~/.gemini/...`). The root points at `conversations`
-            // and NOT at `antigravity-acp` itself, whose siblings are the
-            // OAuth token files (`acp_token.json`, `acp_business_token.json`)
-            // — those must never end up in a backup archive.
+            // Antigravity CLI (`agy acp`) 把会话轨迹存放在
+            // `<GEMINI_HOME>/antigravity-cli/conversations/<id>.db`。
+            // 根目录仅指向 `conversations` 子目录而非 `antigravity-cli` 本身，
+            // 避免将同级凭据、缓存或设置文件打进备份包。
+            //
+            // The CLI's shared `conversation_summaries.db` is deliberately NOT
+            // archived: it indexes every conversation, so a whole-file restore
+            // either skips the restored sessions' rows or replaces the rows of
+            // sessions created since the backup. Nothing needs it — each
+            // trajectory `.db` records its own workspace in
+            // `trajectory_metadata_blob`, which the parser reads.
             agent: "antigravity",
             root: antigravity::resolve_antigravity_sessions_dir(),
+            is_file: false,
+            sqlite: true,
+            include_top: None,
+            indexes: &[],
+        },
+        ExternalSource {
+            // Sessions the standalone `agy_acp_server` wrote under
+            // `<GEMINI_HOME>/antigravity-acp/conversations` (`.db` + `.meta`).
+            // codeg still lists them and copies each into the CLI's tree only
+            // when it is reopened, so one never reopened lives here alone and
+            // must still reach a backup. As above, the root is `conversations`
+            // and never `antigravity-acp`, whose siblings are the old server's
+            // OAuth token files. Restores back into the legacy tree, which the
+            // parser keeps reading.
+            agent: "antigravity-acp",
+            root: antigravity::resolve_antigravity_legacy_sessions_dir(),
             is_file: false,
             sqlite: true,
             include_top: None,
@@ -608,9 +629,8 @@ fn sanitize_text(text: &mut String) -> bool {
 /// it on unix, and Node's does not. Resolving another account's home here would
 /// mean duplicating that lookup to guess at a directory, so the value is passed
 /// through instead — and because a literal `~user/...` is not an absolute path,
-/// every consumer of this treats it as unresolvable and fails closed (the fs
-/// sandbox refuses the slot; the Antigravity settings sync refuses the write).
-/// The cost is that this rare form is unsupported, not that it resolves wrongly.
+/// the fs sandbox treats it as unresolvable and refuses the slot. The cost is
+/// that this rare form is unsupported, not that it resolves wrongly.
 ///
 /// Deliberately NOT applied everywhere. Antigravity runs `os.path.expanduser`
 /// on `GEMINI_HOME` (`acp_server/paths.py`) and DeepSeek expands `DSH_HOME`

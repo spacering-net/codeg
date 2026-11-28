@@ -1577,10 +1577,6 @@ pub fn build_router_with_srn(
             post(handlers::acp::acp_validate_pi_command),
         )
         .route(
-            "/acp_sync_antigravity_settings",
-            post(handlers::acp::acp_sync_antigravity_settings),
-        )
-        .route(
             "/acp_antigravity_login_start",
             post(handlers::acp::acp_antigravity_login_start),
         )

@@ -211,19 +211,8 @@ impl AcpAgentMeta {
     }
 }
 
-/// Launch args for Google Antigravity's ACP server, resolved at compile time.
-///
-/// The ACP registry publishes `--uid=` for the two Linux targets and for
-/// nothing else, and that asymmetry is deliberate: the flag comes from the
-/// binary's linked-in absl `InitGoogle`, which — when the process runs as root
-/// — drops privileges to `nobody` unless told otherwise. Passing it everywhere
-/// would risk a hard "unknown flag" startup error on the Windows build, which
-/// need not link the same initializer.
-const ANTIGRAVITY_LAUNCH_ARGS: &[&str] = if cfg!(target_os = "linux") {
-    &["--uid="]
-} else {
-    &[]
-};
+/// Where the Settings page sends a user who has no `agy` yet.
+const ANTIGRAVITY_INSTALL_URL: &str = "https://antigravity.google/download";
 
 /// Where the Settings page sends a user who has no `kiro-cli` yet. The CLI's
 /// own `/docs/cli/installation/` redirects here.
@@ -445,6 +434,13 @@ pub fn binary_system_dirs(agent_type: AgentType) -> &'static [&'static str] {
         AgentType::MiniMaxCode => &[".minimax-code/bin"],
         #[cfg(windows)]
         AgentType::MiniMaxCode => &[".minimax-code"],
+        // `install.ps1` / `install.cmd` put `agy.exe` in
+        // `%LOCALAPPDATA%\agy\bin` and add it to the user PATH, which a codeg
+        // already running (or launched before the next sign-in) does not see.
+        // On macOS and Linux `install.sh` uses `~/.local/bin`, which the
+        // system resolver already probes.
+        #[cfg(windows)]
+        AgentType::Antigravity => &["AppData/Local/agy/bin"],
         _ => &[],
     }
 }
@@ -9470,317 +9466,53 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             agent_type,
             supports_mcp: true,
             name: "Google Antigravity",
-            description: "Google's AI coding agent (first-party ACP server)",
-            // `agy_acp_server` is Google's OWN ACP server, not a community
-            // bridge: the verified handshake advertises `loadSession`,
-            // `sessionCapabilities` list+resume, image/audio/embeddedContext
-            // prompts and MCP http+sse, with `agentInfo.name =
-            // "antigravity-acp"`. Model, thinking level (since 1.4.0) and
-            // session mode (default/auto_edit/yolo) arrive as standard
-            // `configOptions`, so the composer selectors need no per-agent
-            // code.
+            description: "Google's AI coding agent (native ACP via agy acp)",
+            // `agy acp` is the Antigravity CLI's OWN ACP server — the entry
+            // point Google documents for Zed/JetBrains/Xcode, and one the CLI
+            // has shipped since 1.5.0 (`agy --help` lists `acp`). codeg
+            // launches the user's installed CLI instead of downloading the
+            // standalone `agy_acp_server` archive it used before:
             //
-            // WHOLE-TREE, NOT SINGLE-FILE. The archive is FLAT but holds TWO
-            // executables:
+            //   * one install, one login. The CLI stores its credential in
+            //     the system keyring and reuses it for `agy acp`; the
+            //     standalone server kept a second credential under
+            //     `<GEMINI_HOME>/antigravity-acp/` that had to be signed in
+            //     again.
+            //   * the CLI updates itself (`agy update`), so codeg pins
+            //     nothing and the terminal and codeg never drift apart.
+            //   * sessions land in `~/.gemini/antigravity-cli/conversations`
+            //     (SQLite, the same schema the standalone server wrote), so
+            //     the parser reads one tree.
             //
-            //   agy_acp_server.par     the server (a compiled binary despite
-            //                          the `.par` name — it embeds a whole
-            //                          CPython runtime)
-            //   localharness_external  the Go harness the server drives
+            // Verified handshake against 1.5.15: `agentInfo = {name:
+            // "Antigravity ACP Server", version: "1.5.15"}`, `loadSession`,
+            // `sessionCapabilities` list/resume/close/additionalDirectories,
+            // image + embeddedContext prompts, MCP http+sse, `auth.logout`,
+            // the same four auth methods as the standalone server, and the
+            // standard `model` / `thought_level` / `mode` configOptions.
+            // `session/new` succeeds without any settings.json when the CLI
+            // is signed in; with no credential it fails `-32000
+            // Authentication required`, and `agy acp --login` (1.5.0+) is
+            // the terminal flow codeg's headless sign-in drives.
             //
-            // `main.py::_configure_localharness_path` looks for
-            // `localharness_external` (then `localharness`) beside
-            // `dirname(argv[0])` / `dirname(sys.executable)` and logs
-            // "Localharness not found." when it is missing. Copying the
-            // single `cmd` file out of the archive (`dir_entry: None`) would
-            // strand that sibling, so this uses the same whole-tree
-            // extraction Cursor does — and `install_extracted_tree` also
-            // marks the harness executable.
-            //
-            // AUTH IS A FILE, NOT AN ENV VAR. `session/new` FAILS with
-            // `-32000 Authentication required` unless
-            // `$GEMINI_HOME/antigravity-acp/settings.json` declares
-            // `auth.type` (env-based selection was removed upstream; the
-            // server's own message says so). codeg does not implement the ACP
-            // `authenticate` request, so the launch path writes that file
-            // instead — see `sync_antigravity_settings_file` in connection.rs
-            // and the Antigravity settings panel that feeds it. With
-            // `auth.type` set, the server runs its own browser OAuth loopback
-            // flow inside `session/new`.
-            //
-            // VERSION vs URL. These used to disagree: `version` was the ACP
-            // registry's `1.0.0` while the archives carried a dated build id
-            // (`agy_acp_server_20260818_01_RC01`), so substituting a requested
-            // version into the URL was a no-op and `supports_custom_version()`
-            // answered false. Google has since renamed the archives after the
-            // release itself, so the version now templates into the URL like
-            // every other binary agent and the custom-version control appears
-            // for Antigravity. The name has moved twice since: 1.0.0–1.1.x are
-            // `agy-acp-server-agy_acp_server_<version>-<target>.zip` (1.0.0 is
-            // the old build, back-published), and from 1.2.0 the infix is gone
-            // (`agy-acp-server-<version>-<target>.zip`). Only the current shape
-            // is templated, so a typed version below 1.2.0 404s at download —
-            // as does one never published (1.0.1) — rather than caching the
-            // wrong bytes, which is the same contract Cursor and OpenCode
-            // already have. `darwin-x86_64` first shipped with 1.2.1 (1.2.0
-            // still covered only the other five targets), so on an Intel Mac
-            // anything older 404s the same way.
-            //
-            // 1.3.0, checked against 1.2.1: every archive is still flat with
-            // the same two executables and modes, and `tools.py`,
-            // `config_options.py`, `paths.py`, `settings.py` and `oauth/` are
-            // byte-identical. So the MCP `rawInput` codeg folds, the mode
-            // values, the token paths and the loopback OAuth flow the login
-            // relay drives are unchanged. `initialize` matches, and
-            // `session/new` still fails `-32000 Authentication required` until
-            // settings.json declares `auth.type`, which gained a `gateway`
-            // value codeg does not offer. New on the wire is `usage_update`,
-            // which reaches the context ring like any agent's, and the Windows
-            // server is still the PyInstaller onefile that codeg's TMP/TEMP
-            // scratch and `_MEI*` reaping are built for. One launch detail
-            // moved: `main.py` now appends `localhost,127.0.0.1,::1` to both
-            // `NO_PROXY` spellings whenever a proxy variable is set. codeg
-            // already exports those hosts, so its value passes through, except
-            // `*`, which codeg sends alone because Python skips a `*` inside a
-            // list. The server turns it into `*,localhost,127.0.0.1,::1`, so
-            // with a proxy configured and a `*` bypass list, its urllib and
-            // requests traffic is proxied again.
-            //
-            // 1.4.0, checked against 1.3.0: every archive is still flat with
-            // the same two executables and modes. `main.py`, `tools.py`,
-            // `paths.py`, `settings.py` and `oauth/` are byte-identical, and
-            // the mode and `auth.type` values are unchanged, so the MCP
-            // `rawInput` codeg folds, the token paths, the login relay's OAuth
-            // flow and the `NO_PROXY` rewrite above all still hold. `initialize`
-            // only adds `agentCapabilities._meta.antigravity` (`tier`,
-            // `systemPrompt.append`), `session/new` still fails `-32000` until
-            // `auth.type` is declared, and the Windows server is still the
-            // PyInstaller onefile. What moved is the model picker. The `model`
-            // option lists one row per model family and a new `thinking_level`
-            // option (category `thought_level`) picks the variant, while the
-            // flat `models` list keeps every variant id, the ids 1.3.0's picker
-            // listed. A model saved under 1.3.0 is such an id, and
-            // `session_model_list_offers` in connection.rs replays it as saved
-            // for the server to map. A model switch now takes effect at the
-            // next prompt, and `start_subagent` became `invoke_subagent` beside
-            // a new `run_workflow` tool; codeg maps neither name.
-            //
-            // 1.4.1, checked against 1.4.0: every archive is still flat with
-            // the same two executables and modes. Of the server's own Python
-            // only `server.py`, `model_selection.py`, `client_info.py`, the
-            // gateway modules and the version string changed; `main.py`,
-            // `tools.py`, `config_options.py`, `paths.py`, `settings.py`,
-            // `oauth/` and the MCP modules are byte-identical, the protobuf
-            // descriptors the history parser reads are unchanged, and the Go
-            // harness differs only in build stamps. `initialize` (apart from
-            // the version), `session/new` with its `model`, `thinking_level`
-            // and `mode` values and flat `models` list, the slash commands, a
-            // model then thinking-level switch, and a gateway turn that calls a
-            // tool on a wire MCP server all answer as 1.4.0 does. What moved:
-            // an Agent Platform session now defaults to `gemini-4-argon-high`
-            // and lists Gemini 4 Argon first, a Google-login model list drops
-            // the models the plan marks disabled, and the Windows server, still
-            // the PyInstaller onefile, embeds Python 3.14 where it embedded
-            // 3.10.
-            //
-            // 1.4.3, checked against 1.4.1 (1.4.2 came out four hours earlier
-            // the same day, was never listed by the ACP registry, and differs
-            // from 1.4.3 in the server's own Python only by the version string):
-            // every archive is still flat with the same two executables and
-            // modes, and the ACP registry now lists a `sha256` per archive.
-            // `main.py`, `config_options.py`, `model_selection.py`, `paths.py`,
-            // `settings.py`, `oauth/`, `hooks.py` and the MCP modules are
-            // byte-identical, `server.py::_ask_user_handler` is unchanged, and so
-            // are the protobuf fields the history parser reads, Step 154
-            // included. `initialize` (`protocolVersion: 1`), `session/new` with
-            // its `model`, `thinking_level` and `mode` values and flat `models`
-            // list, the slash commands, a model then thinking-level switch, a
-            // saved 1.3.0 variant id, a gateway turn that calls a tool on a wire
-            // MCP server, `session/load` replay and the native question frames
-            // (answered and cancelled) all answer as 1.4.1 does. What moved: a
-            // `usage_update` with `used: 0` now follows `session/new` and each
-            // model change, and prompt answers carry a `usage` breakdown that
-            // codeg does not record for this agent (`PromptUsageMode`). An
-            // auto-approved MCP call now gets the same MCP title, `rawInput` and
-            // `_meta` as a permission-gated one. The skill directories are no
-            // longer passed to the harness as workspaces, so the system prompt
-            // names the session folder as the command directory, the server no
-            // longer creates empty `.gemini/skills` and `.agents/skills` folders
-            // in the project, and a read-only folder no longer fails
-            // `session/new`. Instead the harness writes its built-in
-            // `run-workflow` skill to `<cwd>/skills/system/run-workflow/SKILL.md`
-            // at every `session/new` and leaves it there (it is skipped for a
-            // read-only folder, and a run with `run_workflow` disabled through
-            // `_meta.antigravity.disabledTools` did not write it). The Windows
-            // x86_64 server is still the PyInstaller onefile with Python 3.14.
-            //
-            // 1.4.4, checked against 1.4.3: every archive is still flat with the
-            // same two executables and modes, the Windows server is still the
-            // PyInstaller onefile with Python 3.14 on both architectures, and
-            // the macOS arm64 harness's strings differ only in build stamps. Of
-            // the server's own Python only `server.py`, `tools.py`,
-            // `model_selection.py`, `client_info.py` and the version string
-            // changed. `main.py`, `config_options.py`, `paths.py`, `settings.py`,
-            // `oauth/`, `hooks.py`, the MCP and gateway modules and the vendored
-            // ACP SDK are byte-identical, `server.py::_ask_user_handler` is
-            // unchanged, and so are all 264 protobuf descriptors. `initialize`
-            // (`protocolVersion: 1`) adds only `additionalDirectories` to
-            // `sessionCapabilities`, which codeg never sends. `session/new` with
-            // its `model`, `thinking_level` and `mode` values and flat `models`
-            // list (API key, gateway and Agent Platform), the slash commands, a
-            // model then thinking-level switch, a saved 1.3.0 variant id, a
-            // gateway turn that calls a tool on a wire MCP server (asked and
-            // auto-approved), `session/load` replay and the native question
-            // frames with their Step 154 records (answered and cancelled) all
-            // answer as 1.4.3 does. What moved is file access. The harness's
-            // own `view_file` replaces the server's: its live call reports
-            // `file_path` and zero-based `start_line`/`end_line`, and history
-            // stores a `view_file` step rather than an `agency_tool_call`.
-            // `client_view_file` now asks `fs/read_text_file` for the whole file,
-            // with no `line` or `limit`, and slices out the lines itself, so
-            // codeg lets Antigravity's reads return up to the 16 MiB a file may
-            // have rather than 2 MiB (`read_response_limit` in
-            // `acp::file_system_runtime`). Lines read that way from a
-            // 16,480,000-byte file reached the model. And `client_create_file`
-            // and `client_edit_file` refuse content that looks like
-            // `view_file`'s numbered output, without sending
-            // `fs/write_text_file`, though the call still ends `completed`.
-            //
-            // 1.5.0, checked against 1.4.5: every archive is still flat with the
-            // same two executables and modes, and the Windows server is still
-            // the PyInstaller onefile with Python 3.14 on both architectures.
-            // The Linux server is about 110 MB smaller because its native code
-            // shrank, while its Python grew slightly. Of the server's own
-            // Python, `server.py`, `tools.py`, `model_selection.py`,
-            // `settings.py`, `paths.py`, `main.py`, `client_info.py` and the
-            // version string changed, and `token_usage_tracker.py` is new.
-            // `config_options.py`, `hooks.py`, `oauth/` and the MCP and gateway
-            // modules are byte-identical, `server.py::_ask_user_handler` is
-            // unchanged, and so are the protobuf fields the history parser
-            // reads, Step 154 included. The vendored ACP SDK moved to schema
-            // 1.23, and the Go harness is a real rebuild rather than new build
-            // stamps, though its tool names and the frames and history steps
-            // codeg reads did not move. `initialize` (`protocolVersion: 1`),
-            // the API-key and gateway selectors and flat `models` list, the
-            // slash commands, a model then thinking-level switch, a saved 1.3.0
-            // variant id, a gateway turn that calls a tool on a wire MCP server
-            // (asked and auto-approved), a Stop during a pending permission,
-            // `session/load` replay, the native question frames with their
-            // Step 154 records, and the file tools all answer as 1.4.5 does.
-            // What moved: a `usage_update` and the `available_commands_update`
-            // now arrive before the `session/new` answer, which the ACP runtime
-            // parks and replays into the session once codeg attaches it (see
-            // `acp::agent_session`). `usage_update.used` no longer counts
-            // cached tokens twice, so the context ring reads lower on a turn
-            // that hit the cache, and the prompt answer's `usage`, which codeg
-            // does not record for this agent, splits its counts differently. An
-            // Agent Platform session lists Gemini 4 Carbon first and defaults to
-            // `gemini-4-carbon-medium`; every 1.4.5 id is still offered.
-            // `client_view_file` now shows at most 800 lines (45 KiB) per call
-            // and refuses content with NUL bytes as binary, but still asks
-            // `fs/read_text_file` for the whole file, so lines of a
-            // 16,480,000-byte file reached the model only with the 16 MiB
-            // allowance. Google sign-in, Linux and Windows were not run live.
-            //
-            // 1.5.2, checked against 1.5.0 (1.5.1 was never published; its URLs
-            // 404): every archive is still flat with the same two executables
-            // and modes, and the Windows server is still the PyInstaller
-            // onefile with Python 3.14 on both architectures. Of the server's
-            // own Python, `server.py`, `hooks.py`, `model_selection.py`,
-            // `paths.py`, `proxy_agent_config.py`, `usage.py`,
-            // `admin_controls_manager.py`, `browser_subagent.py`, the Gemini
-            // Enterprise license modules and the version string changed.
-            // `tools.py`, `config_options.py`, `settings.py`, `main.py`,
-            // `client_info.py`, `oauth/`, the MCP and gateway modules, the
-            // vendored ACP SDK and every protobuf descriptor are byte-identical,
-            // and `server.py::_ask_user_handler` is unchanged. `initialize`
-            // (`protocolVersion: 1`), the API-key and gateway selectors and
-            // flat `models` list, the slash commands, a model then
-            // thinking-level switch, a saved 1.3.0 variant id, a gateway turn
-            // that calls a tool on a wire MCP server (asked and auto-approved),
-            // `session/load` replay, an answered question with its Step 154
-            // record, and the file tools (16 MiB allowance included) answer as
-            // 1.5.0 does. What moved: the `available_commands_update` now
-            // follows the `session/new` answer (the `usage_update` still comes
-            // first). A skipped question no longer lets the turn go on: after
-            // the usual "Interaction cancelled" close the server waits until
-            // the turn is cancelled, so the question bridge stops the turn the
-            // way the user's Stop does when the adapter reports 1.5.1 or later
-            // (see `try_bridge_antigravity_ask`), and the question is saved as a
-            // cancelled step rather than a skipped one, which
-            // `parsers::antigravity` reads as declined. A Stop no longer
-            // streams "context canceled" as text. The harness now gives the
-            // model `~/.gemini/AGENTS.md` and `GEMINI.md` (from `~/.gemini`
-            // even when `GEMINI_HOME` points elsewhere) and the project's
-            // `AGENTS.md` and `GEMINI.md` as user rules; 1.5.0 sent none. Paths
-            // a project `.aiexclude` names are refused, as is changing an
-            // `.aiexclude`. A model picked in a session is restored when the
-            // session is loaded in a new process. Agent Platform adds Gemini 4
-            // Neon and Gemini 4 Hydrogen after Carbon, with an `extra_high`
-            // thinking level; every 1.5.0 id is still offered. Google sign-in,
-            // Linux and Windows were not run live.
-            distribution: AgentDistribution::Binary {
-                version: "1.5.2",
-                // Never resolvable on PATH (there is no standalone CLI by
-                // this name); it exists because `Binary` requires one, and
-                // for dir-tree agents `installed_binary_path` ignores it in
-                // favour of `dir_entry`.
-                cmd: "agy_acp_server",
-                // `--uid=` is an absl/InitGoogle flag ("If root, switch to
-                // this user id (or empty-string not to switch)"), not an ACP
-                // one: without it a root process (Docker) drops to `nobody`.
-                // The ACP registry passes it on Linux ONLY, and so do we —
-                // the Windows build need not link the same InitGoogle, and an
-                // unknown flag is a hard startup error there.
-                args: ANTIGRAVITY_LAUNCH_ARGS,
+            // AUTH IS THE CLI'S. Unlike the standalone server, `agy acp` does
+            // not read `<GEMINI_HOME>/antigravity-acp/settings.json`;
+            // `apply_antigravity_env_policy` still filters GEMINI_API_KEY /
+            // GOOGLE_* by the method chosen in the panel, and the ACP
+            // `authenticate` / `logout` requests plus `agy acp --login` are
+            // the only supported ways to change the cached Google account.
+            distribution: AgentDistribution::System {
+                cmd: "agy",
+                // `--dangerously-skip-permissions`（Turbo 模式）由设置面板的权限模式开关
+                // `AGY_DANGEROUSLY_SKIP_PERMISSIONS` 控制，在 `build_agent` 中按需附加，
+                // 保持默认启动行为与 CLI 一致，不破坏原生 4 个会话 mode。
+                args: &["acp"],
                 env: &[],
-                platforms: &[
-                    PlatformBinary {
-                        platform: "darwin-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.5.2-darwin-arm64.zip",
-                        sha256: None,
-                    },
-                    PlatformBinary {
-                        platform: "darwin-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.5.2-darwin-x86_64.zip",
-                        sha256: None,
-                    },
-                    PlatformBinary {
-                        platform: "linux-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.2-linux-arm64.zip",
-                        sha256: None,
-                    },
-                    PlatformBinary {
-                        platform: "linux-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.2-linux-x86_64.zip",
-                        sha256: None,
-                    },
-                    PlatformBinary {
-                        platform: "windows-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.5.2-windows-arm64.zip",
-                        sha256: None,
-                    },
-                    PlatformBinary {
-                        platform: "windows-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.5.2-windows-x86_64.zip",
-                        sha256: None,
-                    },
-                ],
-                dir_entry: Some(BinaryDirEntry {
-                    unix: "agy_acp_server.par",
-                    windows: "agy_acp_server.exe",
-                    // The Go harness the server execs. Required, not just
-                    // chmod'd: without it the server starts and then logs
-                    // "Localharness not found." — a working handshake
-                    // attached to a broken agent, which is worse than a
-                    // failed install. It also invalidates any single-file
-                    // cache left behind by a pre-integration CUSTOM entry
-                    // for `antigravity-acp` (see `required_siblings`).
-                    required_siblings: PlatformFiles {
-                        unix: &["localharness_external"],
-                        windows: &["localharness_external.exe"],
-                    },
-                }),
+                install_url: ANTIGRAVITY_INSTALL_URL,
+                // `agy update` is the CLI's own updater (it prints the
+                // installed version and exits 0 when current), so codeg
+                // never pins or downloads a build.
+                update_args: Some(&["update"]),
             },
         },
         AgentType::Kiro => AcpAgentMeta {
@@ -10235,59 +9967,31 @@ mod tests {
         }
     }
 
-    // Google Antigravity's archive is FLAT but holds two executables — the
-    // server and the `localharness_external` binary it spawns — so it must
-    // use whole-tree extraction (the single-file copy-out would strand the
-    // harness and the server would log "Localharness not found."). The Linux
-    // targets, and only those, carry the absl `--uid=` flag.
+    // Antigravity is now the CLI's own `agy acp` entry: codeg installs and
+    // pins nothing, probes `agy` on PATH / `~/.local/bin`, and lets the vendor
+    // updater move it.
     #[test]
-    fn antigravity_pins_dir_tree_binary_and_linux_only_uid_flag() {
+    fn antigravity_launches_the_cli_native_acp_entry() {
         let meta = get_agent_meta(AgentType::Antigravity);
         assert!(meta.supports_mcp);
         assert_eq!(registry_id_for(AgentType::Antigravity), "antigravity-acp");
+        assert_eq!(meta.registry_version(), None);
+        assert!(!meta.supports_custom_version());
         match meta.distribution {
-            AgentDistribution::Binary {
-                version,
+            AgentDistribution::System {
                 cmd,
                 args,
-                platforms,
-                dir_entry,
-                ..
+                env,
+                install_url,
+                update_args,
             } => {
-                assert_eq!(version, "1.5.2");
-                assert_eq!(cmd, "agy_acp_server");
-                let entry = dir_entry.expect("antigravity must use dir-tree extraction");
-                assert_eq!(entry.unix, "agy_acp_server.par");
-                assert_eq!(entry.windows, "agy_acp_server.exe");
-                // Six targets: upstream added the Intel macOS build in 1.2.1.
-                assert_eq!(platforms.len(), 6);
-                assert!(platforms.iter().any(|p| p.platform == "darwin-x86_64"));
-                for platform in platforms {
-                    assert!(
-                        platform.url.contains("/agy-acp-server-1.5.2-"),
-                        "{} URL lost the release name: {}",
-                        platform.platform,
-                        platform.url
-                    );
-                }
-                if cfg!(target_os = "linux") {
-                    assert_eq!(args, &["--uid="]);
-                } else {
-                    assert!(args.is_empty(), "--uid= is a Linux-only absl flag");
-                }
-                // The harness must be REQUIRED, not merely chmod'd. It is what
-                // stops a stale single-file cache — which a pre-integration
-                // CUSTOM `antigravity-acp` entry would have written under the
-                // same key, because the archive is flat — from being adopted
-                // and launched without it.
-                let required = entry.required_siblings.for_current_platform();
-                assert_eq!(required.len(), 1);
-                assert!(
-                    required[0].starts_with("localharness_external"),
-                    "unexpected required sibling: {required:?}"
-                );
+                assert_eq!(cmd, "agy");
+                assert_eq!(args, &["acp"]);
+                assert!(env.is_empty());
+                assert!(install_url.starts_with("https://antigravity.google/"));
+                assert_eq!(update_args, Some(&["update"][..]));
             }
-            other => panic!("expected binary distribution for Antigravity, got {other:?}"),
+            other => panic!("expected system distribution for Antigravity, got {other:?}"),
         }
     }
 
@@ -10365,8 +10069,9 @@ mod tests {
         // Cursor is the control: a binary agent whose release path IS its
         // pinned version, so the substitution genuinely selects a build.
         assert!(get_agent_meta(AgentType::Cursor).supports_custom_version());
-        // Antigravity joined it once Google's archives took the release name.
-        assert!(get_agent_meta(AgentType::Antigravity).supports_custom_version());
+        // Antigravity is a system agent now: the vendor updates it, codeg pins
+        // nothing to substitute.
+        assert!(!get_agent_meta(AgentType::Antigravity).supports_custom_version());
         // npx installs `<package>@<version>` directly — no URL involved.
         assert!(get_agent_meta(AgentType::Codex).supports_custom_version());
     }
@@ -10434,12 +10139,16 @@ mod tests {
             }
             other => panic!("expected system distribution for Kiro, got {other:?}"),
         }
-        // Kiro, TRAE CLI and MiniMax Code use the system distribution; every other
-        // built-in has a pinned version codeg installs itself.
+        // Kiro, TRAE CLI, MiniMax Code and Antigravity use the system
+        // distribution; every other built-in has a pinned version codeg
+        // installs itself.
         for agent_type in builtin_acp_agents() {
             if !matches!(
                 agent_type,
-                AgentType::Kiro | AgentType::Trae | AgentType::MiniMaxCode
+                AgentType::Kiro
+                    | AgentType::Trae
+                    | AgentType::MiniMaxCode
+                    | AgentType::Antigravity
             ) {
                 assert!(
                     get_agent_meta(agent_type).registry_version().is_some(),
