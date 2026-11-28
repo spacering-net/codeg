@@ -15937,11 +15937,14 @@ async fn run_conversation_loop(
                 )
                 .await
                 {
-                    cancel_grok_agent_turn_asks(delegation_injection, conn_id).await;
+                    cancel_agent_initiated_turn_asks(delegation_injection, conn_id).await;
                 }
 
                 // Let an already-admitted prompt take over the wire without
                 // merging the detached output into its new live message.
+                // Codex queues this prompt behind its running turn, so, as for
+                // Grok above, nothing that turn is still asking may keep it
+                // (and this prompt) waiting on a card the turn end closed.
                 if std::mem::take(&mut codex_detached_turn) {
                     emit_agent_initiated_turn_end(
                         state,
@@ -15952,6 +15955,7 @@ async fn run_conversation_loop(
                         "cancelled",
                     )
                     .await;
+                    cancel_agent_initiated_turn_asks(delegation_injection, conn_id).await;
                 }
 
                 // The personal agent's reply to this prompt starts with this
@@ -17319,9 +17323,10 @@ async fn run_conversation_loop(
                     &mut cb_state,
                 )
                 .await;
-                if std::mem::take(&mut codex_detached_turn) {
-                    // Preserve the last thread status: a late update to the
-                    // active flags must not reopen a cancelled turn.
+                // Preserve the last thread status: a late update to the active
+                // flags must not reopen a cancelled turn.
+                let closed_codex_turn = std::mem::take(&mut codex_detached_turn);
+                if closed_codex_turn {
                     emit_agent_initiated_turn_end(
                         state,
                         emitter,
@@ -17356,8 +17361,8 @@ async fn run_conversation_loop(
                         inj.broker.detach_parent_turn(conn_id).await;
                     }
                 }
-                if closed_agent_turn {
-                    cancel_grok_agent_turn_asks(delegation_injection, conn_id).await;
+                if closed_agent_turn || closed_codex_turn {
+                    cancel_agent_initiated_turn_asks(delegation_injection, conn_id).await;
                 }
             }
             Some(ConnectionCommand::Fork { fork_point, reply }) => {
@@ -26480,10 +26485,11 @@ async fn emit_agent_initiated_turn_end(
 /// Answer, declined, a question or plan approval an agent-initiated turn is
 /// parked on, once codeg has ended that turn early (Stop, or a prompt that has
 /// to run next). Both cards close with the turn, so nothing could ever answer
-/// them, and Grok would stay blocked — holding the one-per-connection slot
+/// them, and the agent (Grok, or Codex — both queue a prompt behind their
+/// running turn) would stay blocked — holding the one-per-connection slot
 /// every later ask needs, and, when a prompt is queued behind the turn, that
 /// prompt too. The same reclaim the mid-turn Cancel does.
-async fn cancel_grok_agent_turn_asks(
+async fn cancel_agent_initiated_turn_asks(
     delegation_injection: Option<&DelegationInjection>,
     conn_id: &str,
 ) {
@@ -50649,7 +50655,110 @@ mod tests {
         let ends = turn_completes(&codex.seen);
         assert_eq!(ends.len(), 1);
         assert_eq!(ends[0].1, "cancelled");
+        assert_eq!(
+            codex.reclaimed_asks(),
+            (1, 1),
+            "a question or plan approval the stopped turn was parked on is answered"
+        );
         assert_eq!(codex.state.read().await.status, ConnectionStatus::Connected);
+        codex.shutdown().await;
+    }
+
+    /// A prompt the gate admits while Codex runs a turn of its own (a chat
+    /// channel or an automation does not queue behind it) first ends that turn
+    /// and answers what it asked — Codex queues the prompt behind it — and
+    /// keeps the gate it was admitted with.
+    #[tokio::test]
+    async fn a_prompt_admitted_during_a_codex_detached_turn_ends_it_first() {
+        let mut codex = GrokLoop::start_for(
+            GrokScript {
+                in_turn: vec![grok_chunk("agent_message_chunk", "Hi.", None)],
+                hold_response: true,
+                prompt_id: "p1",
+                after_response: vec![codex_status("idle", &[]), grok_barrier()],
+                later: vec![
+                    codex_status("active", &[]),
+                    grok_chunk("agent_message_chunk", "Working.", None),
+                    grok_barrier(),
+                ],
+                ..GrokScript::default()
+            },
+            AgentType::Codex,
+        )
+        .await;
+        codex.release_later();
+        codex.until_barrier().await;
+        assert_eq!(prompting_edges(&codex.seen).len(), 1, "the detached turn opened");
+
+        codex.prompt("hello").await;
+        let detached_end = codex
+            .until("the detached turn's end", |e| {
+                matches!(e, AcpEvent::TurnComplete { .. })
+            })
+            .await;
+        codex
+            .until("the prompt's reply", |e| {
+                matches!(e, AcpEvent::ContentDelta { text, .. } if text == "Hi.")
+            })
+            .await;
+        assert!(
+            codex.state.read().await.turn_in_flight,
+            "the admitted prompt still owns the gate"
+        );
+        assert_eq!(
+            codex.reclaimed_asks(),
+            (1, 1),
+            "nothing the closed turn asked can keep Codex, and so this prompt, waiting"
+        );
+        codex.release_response();
+        codex.after_turn_end().await;
+        codex.until_barrier().await;
+
+        let completes = turn_completes(&codex.seen);
+        assert_eq!(
+            completes,
+            vec![
+                (detached_end, "cancelled".to_string()),
+                (completes[1].0, "end_turn".to_string())
+            ]
+        );
+        assert_eq!(prompting_edges(&codex.seen).len(), 2, "no phantom turn: {:#?}", codex.seen);
+        let s = codex.state.read().await;
+        assert_eq!(s.status, ConnectionStatus::Connected);
+        assert!(!s.turn_in_flight);
+        assert!(!s.agent_initiated_turn);
+        drop(s);
+        codex.shutdown().await;
+    }
+
+    /// A fork is refused while Codex runs a turn of its own, as for Grok: the
+    /// manager's between-turns check cannot see it.
+    #[tokio::test]
+    async fn a_fork_is_refused_while_a_codex_detached_turn_runs() {
+        let mut codex = GrokLoop::start_for(
+            GrokScript {
+                later: vec![codex_status("active", &[]), grok_barrier()],
+                forks: true,
+                ..GrokScript::default()
+            },
+            AgentType::Codex,
+        )
+        .await;
+        codex.release_later();
+        codex.until_barrier().await;
+
+        let (reply, answer) = oneshot::channel();
+        codex
+            .send(ConnectionCommand::Fork {
+                fork_point: None,
+                reply,
+            })
+            .await;
+        let refused = answer.await.expect("the loop answers");
+        assert!(
+            matches!(refused, Err(AcpError::TurnInProgress)),
+            "refused as busy, not attempted"
+        );
         codex.shutdown().await;
     }
 
