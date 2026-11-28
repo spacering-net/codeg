@@ -248,6 +248,13 @@ interface MessageInputProps {
   isEditingQueueItem?: boolean
   onSaveQueueEdit?: (draft: PromptDraft) => void
   onCancelQueueEdit?: () => void
+  /** Steer the queue's HEAD item into the running turn from an otherwise
+   *  inert Enter on an EMPTY composer. Present only when the host has already
+   *  gated all three conditions: a turn in flight, a working steer channel,
+   *  and a non-empty queue. The host routes this through the same per-item
+   *  path as a queue row's steer button, so a turn-end race falls back the
+   *  same way (prioritize the row for the auto-flush). */
+  onSteerQueueHead?: () => void
   /** Send the draft into the RUNNING turn over the session's live-feedback
    *  channel (see {@link steerChannel}). Present only on sessions with a
    *  working delivery channel — when absent, the prompting branch renders its
@@ -355,6 +362,7 @@ export function MessageInput({
   isEditingQueueItem = false,
   onSaveQueueEdit,
   onCancelQueueEdit,
+  onSteerQueueHead,
   onSteer,
   steerChannel = "pull",
   onAddFeedback,
@@ -1662,7 +1670,15 @@ export function MessageInput({
       return
     }
     const draft = buildDraft()
-    if (!draft) return
+    if (!draft) {
+      // An empty composer has nothing to send or enqueue, so historically the
+      // keypress just died here. With a turn in flight and items waiting, give
+      // it a job instead: steer the queue's head into the running turn — the
+      // same item a queue row's steer button sends, with the same fallbacks
+      // (the host owns the gating; it only wires this while prompting).
+      if (isPrompting) onSteerQueueHead?.()
+      return
+    }
 
     // Edit mode: save back to queue item
     if (isEditingQueueItem && onSaveQueueEdit) {
@@ -1701,6 +1717,7 @@ export function MessageInput({
     buildDraft,
     isEditingQueueItem,
     isPrompting,
+    onSteerQueueHead,
     onSaveQueueEdit,
     onEnqueue,
     onSend,

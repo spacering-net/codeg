@@ -2699,6 +2699,26 @@ const ConversationTabView = memo(function ConversationTabView({
     ]
   )
 
+  // Empty-composer Enter while queued items wait: knock on the head row's
+  // steer button itself rather than calling `handleQueueSteer` directly —
+  // rows render in queue order, so the first node with the marker is the
+  // head. Going through the button means the Enter path inherits everything
+  // the button has: the display's in-flight refusal, the disabled state, and
+  // the row-editing shape — no second gate to forget. A disabled (mid-steer)
+  // button swallows the click, making a fast second Enter a silent no-op.
+  // The search is scoped to this tab's own wrapper (every mounted view has
+  // one, hidden tabs included, and tiling shows several at once): walked up
+  // from the focused composer, which is where this keydown came from. A
+  // document-wide query would steer whichever tab's node came first.
+  const handleSteerQueueHead = useCallback(() => {
+    const composer = document.activeElement
+    const scope =
+      composer instanceof Element
+        ? composer.closest("[data-tile-scroll-item]")
+        : null
+    scope?.querySelector<HTMLElement>("[data-queue-steer]")?.click()
+  }, [])
+
   return (
     <ConversationShell
       resizableWidth
@@ -2794,6 +2814,16 @@ const ConversationTabView = memo(function ConversationTabView({
       isEditingQueueItem={mqEditingItemId != null}
       onSaveQueueEdit={handleSaveQueueEdit}
       onCancelQueueEdit={handleQueueCancelEdit}
+      onSteerQueueHead={
+        // Same gate as the row-level steer, plus a non-empty queue: the head
+        // is what this sends, so without one the keypress should stay inert.
+        feedback.featureEnabled &&
+        feedback.steerAvailable &&
+        connStatus === "prompting" &&
+        msgQueue.length > 0
+          ? handleSteerQueueHead
+          : undefined
+      }
       onSteer={
         // Any working delivery channel, not just the native push: the pull
         // tool records a waiting note the agent reads on its next check, and

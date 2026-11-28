@@ -460,6 +460,15 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     data-conversation-id={conversation.id}
                     onClick={handleClick}
                     onDoubleClick={handleDblClick}
+                    // F2 on the focused row opens the same rename dialog the
+                    // context menu does — the Explorer-style shortcut, with no
+                    // new state: handleRenameOpen seeds the dialog from the
+                    // current title. (Same precedent as the canvas regions.)
+                    onKeyDown={(event) => {
+                      if (event.key !== "F2") return
+                      event.preventDefault()
+                      handleRenameOpen()
+                    }}
                     className={cn(
                       "relative flex h-full min-w-0 flex-1 items-center gap-[0.625rem] text-left outline-none",
                       "rounded-full",

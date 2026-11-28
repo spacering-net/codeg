@@ -1184,3 +1184,55 @@ describe("SidebarConversationCard — assistant sub-sessions", () => {
     expect(probe.agentIconRenders).toBe(before)
   })
 })
+
+// F2 on a focused row is the Explorer-style rename shortcut: it opens the very
+// same dialog the context menu's Rename item does, seeded with the title.
+describe("SidebarConversationCard F2 rename", () => {
+  afterEach(() => {
+    cleanup()
+  })
+
+  function renderF2Card() {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={conv(1)}
+        isSelected={false}
+        timeLabel="5m"
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+  }
+
+  it("opens the rename dialog on F2", () => {
+    const { container } = renderF2Card()
+    const row = container.querySelector(
+      '[data-conversation-id="1"]'
+    ) as HTMLElement
+    expect(row).toBeTruthy()
+
+    fireEvent.keyDown(row, { key: "F2" })
+
+    expect(
+      screen.getByText(enMessages.Folder.conversationCard.renameConversation)
+    ).toBeTruthy()
+    // The dialog is seeded with the current title.
+    expect(screen.getByDisplayValue("conv-1")).toBeTruthy()
+  })
+
+  it("ignores other keys", () => {
+    const { container } = renderF2Card()
+    const row = container.querySelector(
+      '[data-conversation-id="1"]'
+    ) as HTMLElement
+
+    fireEvent.keyDown(row, { key: "Enter" })
+
+    expect(
+      screen.queryByText(enMessages.Folder.conversationCard.renameConversation)
+    ).toBeNull()
+  })
+})
