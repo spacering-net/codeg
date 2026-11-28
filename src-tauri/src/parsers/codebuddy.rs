@@ -16,11 +16,11 @@ use crate::parsers::claude::{
     task_notification_task_id_regex, BACKGROUND_TASK_MARKER,
 };
 use crate::parsers::{
-    backfill_turn_durations, compute_session_stats, folder_name_from_path,
-    infer_context_window_max_tokens, is_safe_subagent_id, latest_turn_total_usage_tokens,
-    merge_context_window_stats, relocate_orphaned_tool_results, resolve_patch_line_numbers,
-    structurize_read_tool_output, title_from_user_text, truncate_str, AgentEnv, AgentParser,
-    ParseError,
+    add_usage_to_turn_current_at, backfill_turn_durations, compute_session_stats,
+    folder_name_from_path, infer_context_window_max_tokens, is_safe_subagent_id,
+    latest_turn_total_usage_tokens, merge_context_window_stats, relocate_orphaned_tool_results,
+    resolve_patch_line_numbers, structurize_read_tool_output, subagent_transcript_paths,
+    subagent_transcripts_in, title_from_user_text, truncate_str, AgentEnv, AgentParser, ParseError,
 };
 
 /// Resolve CodeBuddy's config dir, honoring `CODEBUDDY_CONFIG_DIR`, else
@@ -410,6 +410,9 @@ impl CodeBuddyParser {
         backfill_turn_durations(&mut turns, &[]);
 
         let used_tokens = latest_turn_total_usage_tokens(&turns);
+        // After the window occupancy was read: a sub-agent's context is its
+        // own and never occupied this session's prompt.
+        attribute_subagent_usage(&mut turns, path);
         let max_tokens = infer_context_window_max_tokens(model.as_deref());
         let session_stats =
             merge_context_window_stats(compute_session_stats(&turns), used_tokens, max_tokens);
@@ -465,10 +468,17 @@ impl Default for CodeBuddyParser {
 /// (`<projects>/subagents/<sessionId>.jsonl`, only 2 components) from being
 /// mistaken for one. Computed on the components below `base_dir` so a `subagents`
 /// segment in the base path's own prefix can't over-match either.
+///
+/// Anything deeper under a session's `subagents/` counts too: a workflow run
+/// keeps `subagents/workflows/wf_<id>/journal.jsonl` (its step log), which
+/// is no conversation either and used to be listed as one.
 fn is_subagent_transcript(base_dir: &Path, path: &Path) -> bool {
     let relative = path.strip_prefix(base_dir).unwrap_or(path);
     let components: Vec<_> = relative.components().collect();
-    components.len() >= 4 && components[components.len() - 2].as_os_str() == "subagents"
+    components.len() >= 4
+        && components[2..components.len() - 1]
+            .iter()
+            .any(|c| c.as_os_str() == "subagents")
 }
 
 impl AgentParser for CodeBuddyParser {
@@ -759,6 +769,135 @@ fn reasoning_text(value: &Value) -> String {
         }
     }
     String::new()
+}
+
+/// Fold this session's SUB-AGENT spend into its turns.
+///
+/// Every delegated run writes its own transcript under
+/// `<session>/subagents/` (`agent-<id>.jsonl` for a blocking call, the task id
+/// for a backgrounded worker), which [`is_subagent_transcript`] keeps out of
+/// the conversation list — and nothing read its usage, so a session that
+/// delegated work was short by everything its sub-agents spent: the parent's
+/// `Agent` result carries no usage of its own. Every file is read exactly
+/// once, referenced or not, as for Claude Code (whose layout this is): a run
+/// that was interrupted still spent its tokens.
+///
+/// A run launched BY a sub-agent is filed under that worker's own session, not
+/// the root's: CodeBuddy writes every transcript to
+/// `<project>/<meta.parentSessionId>/subagents/<storeId>.jsonl`, and a worker's
+/// session id (the `sessionId` its records carry) is not its file name. So
+/// each worker's session id is followed to `<project>/<id>/subagents/` in
+/// turn — those files are excluded from the conversation list too, so this is
+/// the only place their spend can count. Every transcript is read once (by its
+/// resolved path), and every session directory walked once, however the
+/// lineage — or a symlink — links back.
+///
+/// Each call lands on the assistant turn current at that call's own
+/// timestamp, so a backgrounded worker's spend follows the parent as it moves
+/// on, and a session across midnight attributes it to the right day.
+fn attribute_subagent_usage(turns: &mut [MessageTurn], session_path: &Path) {
+    let project_dir = session_path.parent();
+    let mut walked_sessions: std::collections::HashSet<String> = session_path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .into_iter()
+        .collect();
+    let mut read: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut pending = subagent_transcript_paths(session_path);
+    while let Some(transcript) = pending.pop() {
+        // Keyed by the resolved file, so a worker directory that links back to
+        // one already walked cannot count the same transcript twice.
+        if !read.insert(fs::canonicalize(&transcript).unwrap_or_else(|_| transcript.clone())) {
+            continue;
+        }
+        let (calls, worker_sessions) = subagent_call_usage(&transcript);
+        for (recorded_at, usage) in calls {
+            add_usage_to_turn_current_at(turns, recorded_at, &usage);
+        }
+        let Some(project_dir) = project_dir else {
+            continue;
+        };
+        for session in worker_sessions {
+            // The id becomes a path component: one plain segment only.
+            if is_safe_subagent_id(&session) && walked_sessions.insert(session.clone()) {
+                pending.extend(subagent_transcripts_in(
+                    &project_dir.join(&session).join("subagents"),
+                ));
+            }
+        }
+    }
+}
+
+/// One sub-agent transcript's model calls — `(recorded at, usage)` per call —
+/// and the session id(s) its records carry, under which any run it launched
+/// is filed.
+///
+/// A call's usage rides the LAST item of its response — the same rule the
+/// main transcript reads it by (see the `function_call` arm of
+/// `parse_detail`) — so each call carries it once. Should a call's
+/// `providerData.messageId` ever repeat it, the largest counters win, as for
+/// Claude Code's one-line-per-block records; a record without an id counts on
+/// its own.
+#[allow(clippy::type_complexity)]
+fn subagent_call_usage(
+    path: &Path,
+) -> (
+    Vec<(Option<DateTime<Utc>>, TurnUsage)>,
+    std::collections::BTreeSet<String>,
+) {
+    let mut calls: Vec<(Option<DateTime<Utc>>, TurnUsage)> = Vec::new();
+    let mut sessions = std::collections::BTreeSet::new();
+    let Ok(file) = fs::File::open(path) else {
+        return (calls, sessions);
+    };
+    let mut by_message: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if let Some(session) = value
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if !sessions.contains(session) {
+                sessions.insert(session.to_string());
+            }
+        }
+        let Some(usage) = usage_from_raw(&value) else {
+            continue;
+        };
+        let at = record_millis(&value);
+        let message_id = value
+            .get("providerData")
+            .and_then(|p| p.get("messageId"))
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
+        match message_id.and_then(|id| by_message.get(id).copied()) {
+            Some(i) => {
+                let kept = &mut calls[i];
+                if total_of(&usage) > total_of(&kept.1) {
+                    *kept = (kept.0.or(at), usage);
+                }
+            }
+            None => {
+                if let Some(id) = message_id {
+                    by_message.insert(id.to_string(), calls.len());
+                }
+                calls.push((at, usage));
+            }
+        }
+    }
+    (calls, sessions)
+}
+
+fn total_of(usage: &TurnUsage) -> u64 {
+    usage
+        .input_tokens
+        .saturating_add(usage.output_tokens)
+        .saturating_add(usage.cache_creation_input_tokens)
+        .saturating_add(usage.cache_read_input_tokens)
 }
 
 /// Map CodeBuddy's `providerData.rawUsage` onto `TurnUsage`.
@@ -3156,6 +3295,193 @@ mod tests {
             .and_then(|(_, o)| o.clone())
             .expect("b1 result");
         assert_eq!(b1_output, "a.ts");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_sub_agents_own_spend_is_counted_against_the_session_that_launched_it() {
+        // The parent's `Agent` result carries no usage of the run it launched;
+        // the run's own transcript does, and nothing read it.
+        let root = std::env::temp_dir().join(format!("codeg-cb-subusage-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-subusage";
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                json!({"type":"message","role":"user","timestamp":1782193811000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"input_text","text":"build it"}]}),
+                json!({"type":"function_call","timestamp":1782193811200i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "name":"Agent","callId":"a1",
+                       "arguments":"{\"description\": \"build\", \"prompt\": \"run the build\", \"subagent_type\": \"general-purpose\"}",
+                       "providerData":{"messageId":"m1","rawUsage":{"prompt_tokens":1000,"completion_tokens":10}}}),
+                json!({"type":"function_call_result","timestamp":1782193815000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "name":"Agent","callId":"a1","status":"completed",
+                       "output":{"type":"text","text":"Build succeeded"},
+                       "providerData":{"toolResult":{"content":"Build succeeded","subAgent":{"sessionId":"agent-u1"}}}}),
+            ],
+        );
+        // One call ending in a tool call (usage on the `function_call`), one
+        // ending in text (usage on the assistant message), and a second record
+        // repeating the first call's id with the same counters.
+        write_subagent(
+            &root,
+            "Users-demo-app",
+            sid,
+            "agent-u1",
+            &[
+                json!({"type":"message","role":"user","timestamp":1782193811250i64,"sessionId":"w-sess-1",
+                       "content":[{"type":"input_text","text":"run the build"}]}),
+                json!({"type":"function_call","timestamp":1782193811260i64,"sessionId":"w-sess-1",
+                       "name":"Bash","callId":"s1","arguments":"{\"command\": \"pnpm build\"}",
+                       "providerData":{"messageId":"sm1","rawUsage":{"prompt_tokens":18654,"completion_tokens":50,
+                         "prompt_tokens_details":{"cached_tokens":8064}}}}),
+                json!({"type":"function_call","timestamp":1782193811261i64,"sessionId":"w-sess-1",
+                       "name":"Bash","callId":"s2","arguments":"{\"command\": \"pnpm lint\"}",
+                       "providerData":{"messageId":"sm1","rawUsage":{"prompt_tokens":18654,"completion_tokens":50,
+                         "prompt_tokens_details":{"cached_tokens":8064}}}}),
+                json!({"type":"message","role":"assistant","timestamp":1782193814000i64,"sessionId":"w-sess-1",
+                       "content":[{"type":"output_text","text":"done"}],
+                       "providerData":{"messageId":"sm2","rawUsage":{"prompt_tokens":19000,"completion_tokens":5,
+                         "prompt_tokens_details":{"cached_tokens":18000}}}}),
+            ],
+        );
+
+        // The worker launched a run of its own, which CodeBuddy files under the
+        // WORKER's session id — outside the root's directory. Its records
+        // name the worker's session again, which must not re-read anything.
+        write_subagent(
+            &root,
+            "Users-demo-app",
+            "w-sess-1",
+            "agent-g1",
+            &[
+                json!({"type":"message","role":"user","timestamp":1782193812000i64,"sessionId":"g-sess-1",
+                       "content":[{"type":"input_text","text":"lint it"}]}),
+                json!({"type":"message","role":"assistant","timestamp":1782193813000i64,"sessionId":"g-sess-1",
+                       "content":[{"type":"output_text","text":"clean"}],
+                       "providerData":{"messageId":"gm1","rawUsage":{"prompt_tokens":700,"completion_tokens":7}}}),
+                json!({"type":"message","role":"assistant","timestamp":1782193813001i64,"sessionId":"w-sess-1",
+                       "content":[{"type":"output_text","text":"noise"}]}),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        assert_eq!(
+            parser
+                .list_conversations()
+                .expect("list")
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![sid],
+            "a nested run's transcript is not a conversation of its own"
+        );
+        let detail = parser.get_conversation(sid).expect("detail");
+        let turn_usage: Vec<_> = detail
+            .turns
+            .iter()
+            .filter_map(|t| t.usage.clone())
+            .collect();
+        let sum = |f: fn(&TurnUsage) -> u64| turn_usage.iter().map(f).sum::<u64>();
+        assert_eq!(sum(|u| u.output_tokens), 10 + 50 + 5 + 7);
+        assert_eq!(sum(|u| u.cache_read_input_tokens), 8064 + 18000);
+        assert_eq!(
+            sum(|u| u.input_tokens),
+            1000 + (18654 - 8064) + (19000 - 18000) + 700
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_worker_directory_linking_back_counts_nothing_twice() {
+        // A worker session directory that is a link to one already walked must
+        // not re-read the transcripts it resolves to.
+        let root = std::env::temp_dir().join(format!("codeg-cb-sublink-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-link";
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                json!({"type":"message","role":"user","timestamp":1782193811000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"input_text","text":"go"}]}),
+                json!({"type":"message","role":"assistant","timestamp":1782193811100i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"output_text","text":"ok"}],
+                       "providerData":{"messageId":"m1","rawUsage":{"prompt_tokens":100,"completion_tokens":1}}}),
+            ],
+        );
+        write_subagent(
+            &root,
+            "Users-demo-app",
+            sid,
+            "agent-l1",
+            &[
+                json!({"type":"message","role":"assistant","timestamp":1782193812000i64,"sessionId":"w-link",
+                     "content":[{"type":"output_text","text":"sub"}],
+                     "providerData":{"messageId":"lm1","rawUsage":{"prompt_tokens":40,"completion_tokens":4}}}),
+            ],
+        );
+        let project = root.join("Users-demo-app");
+        std::os::unix::fs::symlink(project.join(sid), project.join("w-link")).expect("link");
+
+        let detail = CodeBuddyParser::with_base_dir(root.clone())
+            .get_conversation(sid)
+            .expect("detail");
+        let output: u64 = detail
+            .turns
+            .iter()
+            .filter_map(|t| t.usage.as_ref())
+            .map(|u| u.output_tokens)
+            .sum();
+        assert_eq!(output, 1 + 4);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_workflow_runs_journal_is_not_a_conversation() {
+        // A workflow run keeps `subagents/workflows/wf_<id>/journal.jsonl`; the
+        // listing walks the whole tree and used to take it for a session.
+        let root =
+            std::env::temp_dir().join(format!("codeg-cb-wfjournal-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-wf";
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                json!({"type":"message","role":"user","timestamp":1782193811000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                     "content":[{"type":"input_text","text":"run the workflow"}]}),
+            ],
+        );
+        let run_dir = root
+            .join("Users-demo-app")
+            .join(sid)
+            .join("subagents")
+            .join("workflows")
+            .join("wf_1");
+        std::fs::create_dir_all(&run_dir).expect("create workflow dir");
+        std::fs::write(
+            run_dir.join("journal.jsonl"),
+            format!(
+                "{}\n",
+                json!({"type":"message","role":"user","timestamp":1782193812000i64,"sessionId":"journal",
+                       "content":[{"type":"input_text","text":"step"}]})
+            ),
+        )
+        .expect("write journal");
+
+        let list = CodeBuddyParser::with_base_dir(root.clone())
+            .list_conversations()
+            .expect("list");
+        assert_eq!(
+            list.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec![sid]
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }

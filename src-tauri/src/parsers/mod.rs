@@ -647,6 +647,111 @@ pub fn truncate_str(s: &str, max_len: usize) -> String {
     }
 }
 
+/// How deep [`subagent_transcript_paths`] descends below `subagents/`. The
+/// layouts written today are one level (`agent-<id>.jsonl`) or three
+/// (`workflows/<runId>/agent-<id>.jsonl`); the bound only stops a pathological
+/// tree from turning one parse into an unbounded walk.
+const SUBAGENT_DIR_MAX_DEPTH: usize = 8;
+
+/// Every `.jsonl` under `<session>/subagents/` (the session transcript path
+/// minus its extension), at any depth, sorted so attribution is identical on
+/// every parse of the same session.
+///
+/// Claude Code files a sub-agent's transcript under a per-agent SUBDIRECTORY
+/// when it has one (`setAgentTranscriptSubdir`): a Workflow run's agents land
+/// in `subagents/workflows/<runId>/agent-<id>.jsonl`, beside the flat
+/// `subagents/agent-<id>.jsonl` a `Task` call writes, and the CLI's own listing
+/// reads the directory recursively. Reading only its top level skipped every
+/// workflow agent's spend — a reported session had 60 such files holding 3,148
+/// model calls that no total included. Its forks (Qoder, CodeBuddy) share the
+/// layout, so they share the walk.
+///
+/// Below the top level only `agent-*.jsonl` is a transcript: a workflow run's
+/// directory also holds its `journal.jsonl` (the run's step log, in both
+/// Claude Code and CodeBuddy), and the CLI itself only recognises an
+/// `agent-<id>.jsonl` there. The top level keeps taking any `.jsonl`, as it
+/// always did — CodeBuddy names a backgrounded worker's file by its task id.
+///
+/// Only real directories are descended into (`DirEntry::file_type` does not
+/// resolve links). Besides stopping a link cycle, that is what keeps a resumed
+/// workflow from counting twice: Claude Code links the resuming session's
+/// `subagents/workflows/<runId>` to the directory the run started in, whose
+/// own session already counts it.
+pub(crate) fn subagent_transcript_paths(session_path: &Path) -> Vec<PathBuf> {
+    subagent_transcripts_in(&session_path.with_extension("").join("subagents"))
+}
+
+/// [`subagent_transcript_paths`] for a `subagents/` directory named directly.
+pub(crate) fn subagent_transcripts_in(subagents_dir: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                if depth < SUBAGENT_DIR_MAX_DEPTH {
+                    walk(&path, depth + 1, out);
+                }
+            } else if path.extension().is_some_and(|x| x == "jsonl")
+                && (depth == 0
+                    || path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("agent-")))
+            {
+                out.push(path);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(subagents_dir, 0, &mut out);
+    out.sort();
+    out
+}
+
+/// Add `extra` to the assistant turn that was speaking at `at` — the last one
+/// starting no later than it. Falling back to the last assistant turn keeps the
+/// tokens in the session when `at` is unknown or precedes every turn; a session
+/// with no assistant turn at all has nowhere to put them.
+///
+/// For a sub-agent's spend: it is this session's spend, but placed by its own
+/// time so a session running across midnight attributes delegated work to the
+/// day it actually happened.
+pub(crate) fn add_usage_to_turn_current_at(
+    turns: &mut [MessageTurn],
+    at: Option<DateTime<Utc>>,
+    extra: &TurnUsage,
+) {
+    let target = at
+        .and_then(|at| {
+            turns
+                .iter()
+                .rposition(|t| matches!(t.role, TurnRole::Assistant) && t.timestamp <= at)
+        })
+        .or_else(|| {
+            turns
+                .iter()
+                .rposition(|t| matches!(t.role, TurnRole::Assistant))
+        });
+    let Some(turn) = target.and_then(|i| turns.get_mut(i)) else {
+        return;
+    };
+    turn.usage = Some(match turn.usage.take() {
+        Some(own) => TurnUsage {
+            input_tokens: own.input_tokens.saturating_add(extra.input_tokens),
+            output_tokens: own.output_tokens.saturating_add(extra.output_tokens),
+            cache_creation_input_tokens: own
+                .cache_creation_input_tokens
+                .saturating_add(extra.cache_creation_input_tokens),
+            cache_read_input_tokens: own
+                .cache_read_input_tokens
+                .saturating_add(extra.cache_read_input_tokens),
+        },
+        None => extra.clone(),
+    });
+}
+
 /// True when `id` is safe to embed as a single filename component beneath a
 /// session's `subagents/` directory (Claude Code's and CodeBuddy's sub-agent
 /// transcript layout). The id is read straight from transcript JSON
@@ -2376,9 +2481,49 @@ mod tests {
     use super::{
         backfill_turn_durations, fold_reference_links, infer_context_window_max_tokens,
         is_safe_subagent_id, latest_turn_total_usage_tokens, merge_context_window_stats,
-        path_eq_for_matching, title_from_user_text,
+        path_eq_for_matching, subagent_transcript_paths, title_from_user_text,
     };
     use crate::models::{MessageTurn, SessionStats, TurnRole, TurnUsage};
+
+    #[test]
+    fn subagent_transcripts_are_found_at_any_depth_but_only_as_agent_files_below_the_top() {
+        let root = std::env::temp_dir().join(format!("codeg-subwalk-{}", uuid::Uuid::new_v4()));
+        let session = root.join("sess.jsonl");
+        let sub = root.join("sess").join("subagents");
+        let run = sub.join("workflows").join("wf_1");
+        std::fs::create_dir_all(&run).unwrap();
+        for file in [
+            sub.join("agent-a.jsonl"),
+            sub.join("task-7.jsonl"),
+            sub.join("agent-a.meta.json"),
+            run.join("agent-w.jsonl"),
+            run.join("journal.jsonl"),
+        ] {
+            std::fs::write(&file, "{}\n").unwrap();
+        }
+        // A resumed run's directory is a link to where the run started, whose
+        // own session counts it: never followed.
+        #[cfg(unix)]
+        {
+            let elsewhere = root.join("other").join("wf_2");
+            std::fs::create_dir_all(&elsewhere).unwrap();
+            std::fs::write(elsewhere.join("agent-x.jsonl"), "{}\n").unwrap();
+            std::os::unix::fs::symlink(&elsewhere, sub.join("workflows").join("wf_2")).unwrap();
+        }
+
+        let found = subagent_transcript_paths(&session);
+        assert_eq!(
+            found,
+            vec![
+                sub.join("agent-a.jsonl"),
+                sub.join("task-7.jsonl"),
+                run.join("agent-w.jsonl"),
+            ]
+        );
+        assert!(subagent_transcript_paths(&root.join("missing.jsonl")).is_empty());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     /// A turn that starts and ends at `start_s`/`end_s` seconds past a fixed
     /// epoch, so a test reads as a small timeline.

@@ -151,6 +151,14 @@ const TOP_CONVERSATIONS: usize = 8;
 ///   the official Claude adapter's prompt response. See
 ///   `parsers::acp_native::project_turns`. (`8` is skipped: preview builds of
 ///   an earlier proposal wrote it.)
+/// * `10` — sub-agent transcripts found at any depth under `subagents/`, and
+///   CodeBuddy's counted at all. Claude Code files a Workflow run's agents in
+///   `subagents/workflows/<runId>/agent-<id>.jsonl`; only the top level was
+///   read, so every workflow agent's spend was missing (a reported session:
+///   60 files, 3,148 calls). Qoder shares the walk. CodeBuddy's sub-agent
+///   transcripts carry real usage that its parser never read, though the
+///   parent's `Agent` result carries none. Totals grow for unchanged
+///   transcripts. See `parsers::subagent_transcript_paths`.
 ///
 /// Only the accounting stored in `token_usage_turn` counts: the four token
 /// counters, the duration and the timestamp. A conversation's context WINDOW is
@@ -165,7 +173,7 @@ const TOP_CONVERSATIONS: usize = 8;
 /// counters predate it, since a custom/BYO model has always exposed them and
 /// the parser reads every session under `~/.qoder/projects`, not just the ones
 /// codeg launched.
-pub(crate) const FACT_SCHEMA_VERSION: &str = "9";
+pub(crate) const FACT_SCHEMA_VERSION: &str = "10";
 
 pub(crate) const FACT_SCHEMA_VERSION_KEY: &str = "token_usage_fact_schema_version";
 
