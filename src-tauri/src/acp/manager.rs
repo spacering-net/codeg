@@ -4034,11 +4034,16 @@ impl ConnectionManager {
         };
 
         let mut result = Vec::with_capacity(entries.len());
+        let now = chrono::Utc::now();
         for (id, agent_type, state) in entries {
+            let state = state.read().await;
             result.push(ConnectionInfo {
                 id,
                 agent_type,
-                status: state.read().await.status.clone(),
+                status: state.status.clone(),
+                conversation_id: state.conversation_id,
+                // 同一把读锁顺带算出后台存活，客户端靠它给没有标签页的连接画运行中。
+                background_running: state.has_active_background_work(now),
             });
         }
         result
@@ -6496,12 +6501,21 @@ mod tests {
             let connections = mgr.connections.lock().await;
             connections.get("c1").unwrap().state.clone()
         };
-        state.write().await.status = ConnectionStatus::Prompting;
+        {
+            let mut state = state.write().await;
+            state.status = ConnectionStatus::Prompting;
+            // 回合结束但后台工作未结束：清单要同时暴露会话归属和运行标志。
+            state.conversation_id = Some(7);
+            state.background_outstanding = 1;
+            state.background_activity_at = Some(chrono::Utc::now());
+        }
 
         let rows = mgr.list_connections().await;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "c1");
         assert_eq!(rows[0].status, ConnectionStatus::Prompting);
+        assert_eq!(rows[0].conversation_id, Some(7));
+        assert!(rows[0].background_running);
     }
 
     /// The restore gate reads the same session status. A connection still in
