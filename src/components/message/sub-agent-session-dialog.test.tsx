@@ -236,6 +236,7 @@ function makeConnState(overrides: Partial<ConnectionState>): ConnectionState {
     steeredMessageIds: [],
     configStale: false,
     configStaleKind: null,
+    mcpState: null,
     configStaleDismissed: false,
     backgroundOutstanding: 0,
     backgroundTasks: [],

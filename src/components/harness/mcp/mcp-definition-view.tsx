@@ -7,6 +7,7 @@ import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { useCopiedFlag } from "@/hooks/use-copied-flag"
 
+import { isCodegBridgeDefinition } from "@/lib/mcp/oauth"
 import {
   isSecretArg,
   isSecretEntry,
@@ -128,10 +129,12 @@ function Pairs({
   record,
   label,
   isSecret,
+  isRevealable,
 }: {
   record: Record<string, string>
   label: string
   isSecret: (name: string, value: string) => boolean
+  isRevealable?: (name: string, value: string) => boolean
 }) {
   const entries = Object.entries(record)
   return (
@@ -148,6 +151,7 @@ function Pairs({
             <SecretText
               value={value}
               secret={isSecret(name, value)}
+              revealable={isRevealable ? isRevealable(name, value) : true}
               label={name}
             />
           </span>
@@ -263,10 +267,15 @@ export function McpDefinitionView({
   maskAllValues?: boolean
 }) {
   const t = useTranslations("Harness.mcp.definition")
+  const isBridge = isCodegBridgeDefinition(definition)
   const isSecret = (name: string, value: string) =>
     maskAllValues ||
     secretNames?.has(name) === true ||
     isSecretEntry(name, value)
+  const isHeaderRevealable = (name: string, value: string) => {
+    if (isBridge && isSecret(name, value)) return false
+    return true
+  }
   const lines = (
     <>
       {definition.type === "stdio" ? (
@@ -305,6 +314,7 @@ export function McpDefinitionView({
                 record={definition.headers}
                 label={t("headers")}
                 isSecret={isSecret}
+                isRevealable={isHeaderRevealable}
               />
             </Row>
           )}

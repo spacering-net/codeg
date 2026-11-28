@@ -6,6 +6,7 @@ import {
   useId,
   useLayoutEffect,
   useRef,
+  useState,
   type ReactNode,
 } from "react"
 import {
@@ -15,20 +16,27 @@ import {
   ChevronUp,
   CircleCheck,
   ExternalLink,
+  KeyRound,
   Layers,
   Loader2,
   Lock,
   Package,
   PackageMinus,
+  PauseCircle,
   PencilLine,
+  RefreshCw,
   RotateCw,
   SearchX,
+  ShieldCheck,
+  ShieldOff,
   Trash2,
   TriangleAlert,
+  Unlink,
   Users,
   X,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -41,6 +49,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { useHarnessSlot, useHarnessView } from "@/contexts/harness-view-context"
+import { openSettingsWindow } from "@/lib/api"
+import { useMcpOAuth, setMcpOAuthSnapshot } from "@/hooks/use-mcp-oauth"
 import { useOpenHarness } from "@/hooks/use-open-harness"
 import { harnessLang, pickLocalized } from "@/lib/harness/display"
 import type { McpHarnessMark, McpHarnessSeam } from "@/lib/harness/mcp-marks"
@@ -50,16 +60,30 @@ import {
   isAgentBusy,
   MCP_BUSY,
   MCP_DETAIL_SCROLL,
+  MCP_PROBES,
   MCP_ROW_WRITES,
   MCP_SHOW_ALL_AGENTS,
   openEditEditor,
+  openOAuthDialog,
   openRemoveDialog,
   openRenameDialog,
+  openServerBulkDisableDialog,
+  openServerBulkEnableDialog,
+  probeEntryKey,
+  probeGroupKey,
   requestSwitch,
   rowId,
+  runMcpProbe,
   writeRow,
   type McpRowWrite,
 } from "@/lib/harness/mcp-state"
+import { planServerBulkDisable, planServerBulkEnable } from "@/lib/mcp/bulk"
+import {
+  matchOAuthRouteForDefinition,
+  mcpOAuthRevoke,
+  type McpOAuthBridgeSnapshot,
+  type McpOAuthRouteMatch,
+} from "@/lib/mcp/oauth"
 import {
   agentServerState,
   holderAgentIds,
@@ -92,6 +116,7 @@ import {
   McpDefinitionRowsHead,
   McpDefinitionView,
 } from "./mcp-definition-view"
+import { McpProbeButton, McpProbePanel } from "./mcp-probe-panel"
 import { ServerGlyph } from "./mcp-server-list"
 import { useMcpLabels, type McpLabels } from "./use-mcp-labels"
 
@@ -362,7 +387,18 @@ function stateParts(
     return { chips, reasons }
   }
   const { holder, readOnly } = state
-  if (!holder.entry.enabled) chips.push({ label: t("agentState.off") })
+  if (!holder.entry.enabled) {
+    if (holder.entry.paused) {
+      chips.push({
+        label: t("agentState.paused"),
+        tone: "warning",
+        icon: <PauseCircle aria-hidden="true" />,
+      })
+      reasons.push(t("agentState.pausedNote"))
+    } else {
+      chips.push({ label: t("agentState.off") })
+    }
+  }
   if (server.groups.length > 1 && holder.group !== null) {
     chips.push({
       label: t("detail.definitionLetter", {
@@ -412,11 +448,20 @@ interface AgentRowProps {
   /** The server came from Harness: how this agent's entry stands against
    *  what was installed, said where it is not "as installed". */
   harness?: McpHarnessMark
+  oauthAvailable?: boolean
+  oauthSnapshot?: McpOAuthBridgeSnapshot | null
 }
 
 /** One agent, for one server: what it has, why it cannot be changed if it
  *  cannot, and the switch. */
-function AgentRow({ server, info, model, harness }: AgentRowProps) {
+function AgentRow({
+  server,
+  info,
+  model,
+  harness,
+  oauthAvailable = false,
+  oauthSnapshot = null,
+}: AgentRowProps) {
   const t = useTranslations("Harness.mcp")
   const tHarness = useTranslations("Harness.mcp.harness")
   const installed = harness?.agents.find((agent) => agent.agent === info.id)
@@ -428,6 +473,7 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
   const { slots } = useHarnessView()
   const [writes] = useHarnessSlot(MCP_ROW_WRITES)
   const [busy] = useHarnessSlot(MCP_BUSY)
+  const [probes] = useHarnessSlot(MCP_PROBES)
   const stateId = useId()
   const chipsId = useId()
   const state = agentServerState(server, info, model.rules)
@@ -449,9 +495,18 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
   const extra = holder ? Object.keys(holder.entry.extra) : []
   const skipped =
     holder && holder.entry.enabled && isSkippedInSessions(info, holder.entry)
-  const name = labels.agent(info.id)
+  const name = info.displayName?.trim() || labels.agent(info.id)
+  const mcpDisabledInSettings =
+    info.editBlock?.kind === "file" &&
+    info.editBlock.reason?.code === "mcp_disabled_in_agent_settings"
   const { chips, reasons } = stateParts(state, server, labels, t)
   if (skipped) reasons.push(t("agentState.skipped"))
+  const canProbe = Boolean(
+    holder && info.agent && holder.entry.definition && !holder.entry.reserved
+  )
+  const probeKey =
+    canProbe && info.agent ? probeEntryKey(info.agent, server.key) : null
+  const probeRecord = probeKey ? probes[probeKey] : undefined
 
   return (
     <li className="flex min-w-0 items-start gap-3 px-4 py-2.5">
@@ -501,6 +556,25 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
                 {reason}
               </span>
             ))}
+            {mcpDisabledInSettings && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    openSettingsWindow("agents").catch((error) => {
+                      console.error(
+                        "[McpServerDetail] failed to open agent settings:",
+                        error
+                      )
+                    })
+                  }}
+                  className="font-medium text-primary underline-offset-4 hover:underline"
+                >
+                  {t("agent.openAgentSettings")}
+                </button>
+              </>
+            )}
           </p>
         )}
         {info.inventory.config.path && (
@@ -547,6 +621,37 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
             </bdi>
           </p>
         )}
+        {probeRecord && (
+          <div className="mt-1.5">
+            <McpProbePanel
+              record={probeRecord}
+              compact
+              onAuthorizeOAuth={
+                !server.reserved &&
+                oauthAvailable &&
+                holder?.entry.definition &&
+                (holder.entry.definition.type === "http" ||
+                  holder.entry.definition.type === "sse")
+                  ? (resourceMetadataUrl) => {
+                      const def = holder.entry.definition!
+                      if (def.type !== "http" && def.type !== "sse") return
+                      const match = matchOAuthRouteForDefinition(
+                        def,
+                        oauthSnapshot
+                      )
+                      openOAuthDialog(slots, {
+                        serverKey: server.key,
+                        upstreamUrl: match?.route.upstream_url ?? def.url,
+                        transport: match?.route.transport ?? def.type,
+                        resourceMetadataUrl,
+                        initialMode: "authorize",
+                      })
+                    }
+                  : undefined
+              }
+            />
+          </div>
+        )}
         {write && (
           <RowWriteNotice
             write={write}
@@ -568,6 +673,22 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
         )}
       </div>
       <div className="flex shrink-0 items-center gap-2 pt-0.5">
+        {canProbe && info.agent && probeKey && (
+          <McpProbeButton
+            size="xs"
+            variant="ghost"
+            loading={probeRecord?.phase === "loading"}
+            tested={probeRecord?.phase === "ready"}
+            onClick={() =>
+              void runMcpProbe(
+                slots,
+                probeKey,
+                { agent: info.agent!, key: server.key },
+                holder?.entry.fingerprint ?? null
+              )
+            }
+          />
+        )}
         {pending && (
           <Loader2
             aria-label={t("detail.saving")}
@@ -637,6 +758,193 @@ function EditDefinitionButton({
   )
 }
 
+function OAuthBridgeCard({
+  serverKey,
+  match,
+}: {
+  serverKey: string
+  match: McpOAuthRouteMatch
+}) {
+  const t = useTranslations("Harness.mcp.oauth")
+  const labels = useMcpLabels()
+  const { slots } = useHarnessView()
+  const [revoking, setRevoking] = useState(false)
+  const { route } = match
+  const isBridged = match.kind === "bridged"
+  const portDrifted = isBridged && match.portDrifted
+  const isAuthorized = route.status === "authorized"
+  const isAttention = route.status === "expired" || route.status === "revoked"
+
+  const handleRevoke = async () => {
+    if (revoking) return
+    setRevoking(true)
+    try {
+      const nextSnapshot = await mcpOAuthRevoke(route.route_id)
+      setMcpOAuthSnapshot(nextSnapshot)
+      toast.success(t("revokedToast"))
+    } catch {
+      toast.error(t("revokeFailed"))
+    } finally {
+      setRevoking(false)
+    }
+  }
+
+  return (
+    <section
+      aria-label={t("bridgeCardTitle")}
+      className={cn(
+        HARNESS_CARD_CLASS,
+        "space-y-2.5 px-4 py-3 text-xs",
+        portDrifted && "border-tone-warning/40"
+      )}
+    >
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-foreground">
+          {isAuthorized ? (
+            <ShieldCheck
+              aria-hidden="true"
+              className="size-4 shrink-0 text-tone-success"
+            />
+          ) : (
+            <KeyRound
+              aria-hidden="true"
+              className="size-4 shrink-0 text-tone-warning"
+            />
+          )}
+          {t("bridgeCardTitle")}
+        </span>
+        <DiscoverMark
+          size="sm"
+          tone={isAuthorized ? "info" : isAttention ? "warning" : "neutral"}
+        >
+          {t(`status.${route.status}`)}
+        </DiscoverMark>
+        {isAuthorized && (
+          <DiscoverMark size="sm" tone="neutral">
+            {route.has_refresh_token
+              ? t("autoRefreshSupported")
+              : t("autoRefreshUnsupported")}
+          </DiscoverMark>
+        )}
+      </div>
+
+      <dl className="grid grid-cols-1 gap-x-3 gap-y-1 sm:grid-cols-[max-content_minmax(0,1fr)]">
+        <dt className="text-muted-foreground">{t("upstreamUrl")}</dt>
+        <dd className="min-w-0">
+          <bdi dir="ltr" className="block truncate font-mono text-foreground">
+            <MachineText>{route.upstream_url}</MachineText>
+          </bdi>
+        </dd>
+        {route.expires_at && isAuthorized && (
+          <>
+            <dt className="text-muted-foreground">{t("expiresAt")}</dt>
+            <dd className="text-foreground">{labels.date(route.expires_at)}</dd>
+          </>
+        )}
+      </dl>
+
+      {portDrifted && (
+        <p className="flex items-start gap-1.5 rounded-md bg-tone-warning/10 px-2.5 py-1.5 text-xs text-foreground">
+          <TriangleAlert
+            aria-hidden="true"
+            className="mt-0.5 size-3.5 shrink-0 text-tone-warning"
+          />
+          <span>{t("portDriftedWarning")}</span>
+        </p>
+      )}
+
+      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+        {portDrifted && isAuthorized && (
+          <Button
+            type="button"
+            size="xs"
+            variant="default"
+            onClick={() =>
+              openOAuthDialog(slots, {
+                serverKey,
+                upstreamUrl: route.upstream_url,
+                transport: route.transport,
+                initialMode: "apply",
+              })
+            }
+          >
+            <RefreshCw aria-hidden="true" className="size-3" />
+            {t("actions.syncBridgeUrl")}
+          </Button>
+        )}
+        {isAuthorized && (
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={() =>
+              openOAuthDialog(slots, {
+                serverKey,
+                upstreamUrl: route.upstream_url,
+                transport: route.transport,
+                initialMode: "apply",
+              })
+            }
+          >
+            <Users aria-hidden="true" className="size-3" />
+            {t("actions.applyToOtherAgents")}
+          </Button>
+        )}
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          onClick={() =>
+            openOAuthDialog(slots, {
+              serverKey,
+              upstreamUrl: route.upstream_url,
+              transport: route.transport,
+              initialMode: "authorize",
+            })
+          }
+        >
+          <KeyRound aria-hidden="true" className="size-3" />
+          {t("actions.reauthorize")}
+        </Button>
+        {route.status !== "revoked" && (
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            disabled={revoking}
+            onClick={() => void handleRevoke()}
+          >
+            {revoking ? (
+              <Loader2 aria-hidden="true" className="size-3 animate-spin" />
+            ) : (
+              <ShieldOff aria-hidden="true" className="size-3" />
+            )}
+            {revoking ? t("actions.revoking") : t("actions.revoke")}
+          </Button>
+        )}
+        {isBridged && (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            onClick={() =>
+              openOAuthDialog(slots, {
+                serverKey,
+                upstreamUrl: route.upstream_url,
+                transport: route.transport,
+                initialMode: "restore",
+              })
+            }
+          >
+            <Unlink aria-hidden="true" className="size-3" />
+            {t("actions.restoreDirect")}
+          </Button>
+        )}
+      </div>
+    </section>
+  )
+}
+
 /**
  * What the server is. One definition is one card — its lines, then who uses
  * it — with Edit beside the part's title; several are a card each, headed
@@ -646,18 +954,41 @@ function DefinitionPart({
   server,
   changeable,
   explain,
+  oauthAvailable,
+  oauthSnapshot,
 }: {
   server: McpServer
   /** The agents Codeg can change the server in. */
   changeable: readonly string[]
   /** Say why a definition cannot be edited, when that is not said above. */
   explain: boolean
+  oauthAvailable: boolean
+  oauthSnapshot: McpOAuthBridgeSnapshot | null
 }) {
   const t = useTranslations("Harness.mcp.detail")
+  const tOAuth = useTranslations("Harness.mcp.oauth")
+  const { slots } = useHarnessView()
+  const [probes] = useHarnessSlot(MCP_PROBES)
   const noteId = useId()
   const several = server.groups.length > 1
   const editableGroup = (group: McpDefinitionGroup) =>
     groupEditable(group, changeable)
+  const openGroupOAuth = (
+    group: McpDefinitionGroup,
+    resourceMetadataUrl?: string | null
+  ) => {
+    if (group.definition.type !== "http" && group.definition.type !== "sse") {
+      return
+    }
+    const match = matchOAuthRouteForDefinition(group.definition, oauthSnapshot)
+    openOAuthDialog(slots, {
+      serverKey: server.key,
+      upstreamUrl: match?.route.upstream_url ?? group.definition.url,
+      transport: match?.route.transport ?? group.definition.type,
+      resourceMetadataUrl,
+      initialMode: "authorize",
+    })
+  }
   const note = (group: McpDefinitionGroup, id: string) =>
     !editableGroup(group) && explain ? (
       <p id={id} className="border-b px-4 py-3 text-xs text-muted-foreground">
@@ -678,21 +1009,71 @@ function DefinitionPart({
   if (!several) {
     const group = server.groups[0]
     const editable = editableGroup(group)
+    const pKey = probeGroupKey(server.key, group.fingerprint)
+    const probeRecord = probes[pKey]
+    const isRemote =
+      group.definition.type === "http" || group.definition.type === "sse"
+    const groupMatch = isRemote
+      ? matchOAuthRouteForDefinition(group.definition, oauthSnapshot)
+      : null
     return (
       <McpDetailPart
         title={t("definition")}
         aside={
-          <EditDefinitionButton
-            server={server}
-            group={group}
-            editable={editable}
-            describedBy={!editable && explain ? noteId : undefined}
-          />
+          <div className="flex flex-wrap items-center gap-1.5">
+            {!server.reserved && oauthAvailable && isRemote && !groupMatch && (
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                onClick={() => openGroupOAuth(group)}
+                className="gap-1.5"
+              >
+                <KeyRound aria-hidden="true" className="size-3.5" />
+                {tOAuth("actions.authorize")}
+              </Button>
+            )}
+            {!server.reserved && (
+              <McpProbeButton
+                size="xs"
+                variant="outline"
+                loading={probeRecord?.phase === "loading"}
+                tested={probeRecord?.phase === "ready"}
+                onClick={() =>
+                  void runMcpProbe(
+                    slots,
+                    pKey,
+                    { definition: group.definition },
+                    group.fingerprint
+                  )
+                }
+              />
+            )}
+            <EditDefinitionButton
+              server={server}
+              group={group}
+              editable={editable}
+              describedBy={!editable && explain ? noteId : undefined}
+            />
+          </div>
         }
       >
         <div className={HARNESS_CARD_CLASS}>
           {note(group, noteId)}
           <McpDefinitionView definition={group.definition} layout="rows" />
+          {probeRecord && (
+            <div className="border-t px-4 py-2.5">
+              <McpProbePanel
+                record={probeRecord}
+                onAuthorizeOAuth={
+                  !server.reserved && oauthAvailable && isRemote
+                    ? (resourceMetadataUrl) =>
+                        openGroupOAuth(group, resourceMetadataUrl)
+                    : undefined
+                }
+              />
+            </div>
+          )}
         </div>
       </McpDetailPart>
     )
@@ -704,6 +1085,13 @@ function DefinitionPart({
         {server.groups.map((group) => {
           const editable = editableGroup(group)
           const id = `${noteId}-${group.letter}`
+          const pKey = probeGroupKey(server.key, group.fingerprint)
+          const probeRecord = probes[pKey]
+          const isRemote =
+            group.definition.type === "http" || group.definition.type === "sse"
+          const groupMatch = isRemote
+            ? matchOAuthRouteForDefinition(group.definition, oauthSnapshot)
+            : null
           return (
             <div key={group.fingerprint} className={HARNESS_CARD_CLASS}>
               <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 py-1.5 ps-4 pe-2">
@@ -711,6 +1099,37 @@ function DefinitionPart({
                 <span className="min-w-0 flex-1 text-sm font-semibold text-foreground">
                   {t("definitionLetter", { letter: group.letter })}
                 </span>
+                {!server.reserved &&
+                  oauthAvailable &&
+                  isRemote &&
+                  !groupMatch && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => openGroupOAuth(group)}
+                      className="gap-1.5"
+                    >
+                      <KeyRound aria-hidden="true" className="size-3.5" />
+                      {tOAuth("actions.authorize")}
+                    </Button>
+                  )}
+                {!server.reserved && (
+                  <McpProbeButton
+                    size="xs"
+                    variant="ghost"
+                    loading={probeRecord?.phase === "loading"}
+                    tested={probeRecord?.phase === "ready"}
+                    onClick={() =>
+                      void runMcpProbe(
+                        slots,
+                        pKey,
+                        { definition: group.definition },
+                        group.fingerprint
+                      )
+                    }
+                  />
+                )}
                 <EditDefinitionButton
                   server={server}
                   group={group}
@@ -720,6 +1139,19 @@ function DefinitionPart({
               </div>
               {note(group, id)}
               <McpDefinitionView definition={group.definition} layout="rows" />
+              {probeRecord && (
+                <div className="border-t px-4 py-2.5">
+                  <McpProbePanel
+                    record={probeRecord}
+                    onAuthorizeOAuth={
+                      !server.reserved && oauthAvailable && isRemote
+                        ? (resourceMetadataUrl) =>
+                            openGroupOAuth(group, resourceMetadataUrl)
+                        : undefined
+                    }
+                  />
+                </div>
+              )}
             </div>
           )
         })}
@@ -947,6 +1379,8 @@ function HarnessPart({
   changeable,
   explain,
   onView,
+  oauthAvailable,
+  oauthSnapshot,
 }: {
   server: McpServer
   mark: McpHarnessMark
@@ -954,12 +1388,23 @@ function HarnessPart({
   changeable: readonly string[]
   explain: boolean
   onView: () => void
+  oauthAvailable: boolean
+  oauthSnapshot: McpOAuthBridgeSnapshot | null
 }) {
   const t = useTranslations("Harness.mcp.harness")
   const tDetail = useTranslations("Harness.mcp.detail")
   const tItem = useTranslations("Harness.install.item")
   const labels = useMcpLabels()
+  const { slots } = useHarnessView()
+  const [probes] = useHarnessSlot(MCP_PROBES)
   const noteId = useId()
+  const primaryGroup = server.groups[0] ?? null
+  const primaryProbeKey = primaryGroup
+    ? probeGroupKey(server.key, primaryGroup.fingerprint)
+    : null
+  const primaryProbeRecord = primaryProbeKey
+    ? probes[primaryProbeKey]
+    : undefined
   // The catalog's title as the record keeps it, in the reader's language;
   // the address stays under it.
   const title = pickLocalized(mark.title, harnessLang(labels.locale))
@@ -1052,6 +1497,36 @@ function HarnessPart({
             noteId={noteId}
           />
         </McpDefinitionRows>
+        {primaryProbeRecord && (
+          <div className="px-4 py-2.5">
+            <McpProbePanel
+              record={primaryProbeRecord}
+              onAuthorizeOAuth={
+                !server.reserved &&
+                oauthAvailable &&
+                primaryGroup &&
+                (primaryGroup.definition.type === "http" ||
+                  primaryGroup.definition.type === "sse")
+                  ? (resourceMetadataUrl) => {
+                      const def = primaryGroup.definition
+                      if (def.type !== "http" && def.type !== "sse") return
+                      const match = matchOAuthRouteForDefinition(
+                        def,
+                        oauthSnapshot
+                      )
+                      openOAuthDialog(slots, {
+                        serverKey: server.key,
+                        upstreamUrl: match?.route.upstream_url ?? def.url,
+                        transport: match?.route.transport ?? def.type,
+                        resourceMetadataUrl,
+                        initialMode: "authorize",
+                      })
+                    }
+                  : undefined
+              }
+            />
+          </div>
+        )}
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 bg-muted/40 px-4 py-2">
           {harness.catalog && (
             <HarnessUpdateStatus
@@ -1061,6 +1536,22 @@ function HarnessPart({
             />
           )}
           <div className="ms-auto flex flex-wrap items-center gap-1.5">
+            {primaryGroup && primaryProbeKey && !server.reserved && (
+              <McpProbeButton
+                size="xs"
+                variant="outline"
+                loading={primaryProbeRecord?.phase === "loading"}
+                tested={primaryProbeRecord?.phase === "ready"}
+                onClick={() =>
+                  void runMcpProbe(
+                    slots,
+                    primaryProbeKey,
+                    { definition: primaryGroup.definition },
+                    primaryGroup.fingerprint
+                  )
+                }
+              />
+            )}
             {harness.catalog && (
               <Button
                 type="button"
@@ -1123,6 +1614,7 @@ export function McpServerDetail({
   const labels = useMcpLabels()
   const { slots } = useHarnessView()
   const { openHarness } = useOpenHarness()
+  const { snapshot: oauthSnapshot, available: oauthAvailable } = useMcpOAuth()
   const [showAll] = useHarnessSlot(MCP_SHOW_ALL_AGENTS)
   const headingId = useId()
   const headingRef = useRef<HTMLHeadingElement>(null)
@@ -1173,6 +1665,20 @@ export function McpServerDetail({
     const uninstall = mark ? harness?.uninstall : undefined
     const changeable = server.reserved ? [] : editableHolders(model, server.key)
     const editable = changeable.length > 0
+    const oauthMatch: McpOAuthRouteMatch | null = (() => {
+      if (server.reserved || !oauthSnapshot) return null
+      let direct: McpOAuthRouteMatch | null = null
+      for (const group of server.groups) {
+        const match = matchOAuthRouteForDefinition(
+          group.definition,
+          oauthSnapshot
+        )
+        if (!match) continue
+        if (match.kind === "bridged") return match
+        if (!direct) direct = match
+      }
+      return direct
+    })()
     const visible = model.agents.filter(
       (info) =>
         showAll ||
@@ -1299,6 +1805,10 @@ export function McpServerDetail({
           )}
         </header>
 
+        {oauthMatch && (
+          <OAuthBridgeCard serverKey={server.key} match={oauthMatch} />
+        )}
+
         {mark && harness ? (
           <HarnessPart
             server={server}
@@ -1307,6 +1817,8 @@ export function McpServerDetail({
             changeable={changeable}
             // The header already says so when no agent can change at all.
             explain={editable}
+            oauthAvailable={oauthAvailable}
+            oauthSnapshot={oauthSnapshot}
             onView={() =>
               openHarness({ section: "discover", itemRef: mark.itemRef })
             }
@@ -1318,10 +1830,59 @@ export function McpServerDetail({
             // The header already says so when no agent can change at all; one
             // definition among others says it for itself.
             explain={editable}
+            oauthAvailable={oauthAvailable}
+            oauthSnapshot={oauthSnapshot}
           />
         )}
 
-        <McpDetailPart title={t("detail.agents")}>
+        <McpDetailPart
+          title={t("detail.agents")}
+          aside={(() => {
+            if (server.reserved) return undefined
+            const primaryGroup = server.groups[0]
+            const enablePlan = primaryGroup
+              ? planServerBulkEnable(server, primaryGroup, model)
+              : null
+            const disablePlan = planServerBulkDisable(server, model)
+            const showEnable = Boolean(
+              primaryGroup && enablePlan && enablePlan.ops.length > 0
+            )
+            const showDisable = disablePlan.ops.length > 0
+            if (!showEnable && !showDisable) return undefined
+            return (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {showEnable && primaryGroup && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={() =>
+                      openServerBulkEnableDialog(
+                        slots,
+                        server.key,
+                        primaryGroup.fingerprint
+                      )
+                    }
+                  >
+                    {t("bulk.applyCompatible")}
+                  </Button>
+                )}
+                {showDisable && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={() =>
+                      openServerBulkDisableDialog(slots, server.key)
+                    }
+                  >
+                    {t("bulk.pauseAll")}
+                  </Button>
+                )}
+              </div>
+            )
+          })()}
+        >
           <ul className={cn("divide-y", HARNESS_CARD_CLASS)}>
             {visible.map((info) => (
               <AgentRow
@@ -1330,6 +1891,8 @@ export function McpServerDetail({
                 info={info}
                 model={model}
                 harness={mark}
+                oauthAvailable={oauthAvailable}
+                oauthSnapshot={oauthSnapshot}
               />
             ))}
           </ul>

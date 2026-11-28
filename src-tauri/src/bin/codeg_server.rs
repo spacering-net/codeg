@@ -1,3 +1,4 @@
+use std::future::IntoFuture;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -376,7 +377,12 @@ async fn async_main(
             data_dir.clone(),
         )
     };
+    let mcp_oauth_bridge = codeg_lib::commands::mcp_engine::oauth::McpOAuthBridge::new(
+        &data_dir,
+        emitter.clone(),
+    );
     let state = Arc::new(AppState {
+        mcp_oauth_bridge,
         db,
         connection_manager,
         terminal_manager: codeg_lib::app_state::default_terminal_manager(),
@@ -856,8 +862,15 @@ async fn async_main(
         tracing::info!("  {}", addr);
     }
 
+    state.mcp_oauth_bridge.start_if_persisted().await;
     // Start serving
-    if let Err(e) = axum::serve(listener, router).await {
+    let result = tokio::select! {
+        result = axum::serve(listener, router).into_future() => result,
+        () = wait_for_server_shutdown() => Ok(()),
+    };
+    state.web_server_state.shutdown_signal().trigger();
+    state.mcp_oauth_bridge.shutdown().await;
+    if let Err(e) = result {
         tracing::error!("[SERVER] Server error: {}", e);
         state.cli_access.stop().await;
         return ExitCode::from(1);
@@ -868,6 +881,27 @@ async fn async_main(
     // (kill_on_drop is the backstop, but this frees their ports promptly).
     codeg_lib::office_watch::stop_all_office_watches();
     ExitCode::SUCCESS
+}
+
+async fn wait_for_server_shutdown() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        if let Ok(mut terminate) = signal(SignalKind::terminate()) {
+            tokio::select! {
+                result = tokio::signal::ctrl_c() => {
+                    if result.is_err() {
+                        let _ = terminate.recv().await;
+                    }
+                },
+                _ = terminate.recv() => {},
+            }
+            return;
+        }
+    }
+    if tokio::signal::ctrl_c().await.is_err() {
+        std::future::pending::<()>().await;
+    }
 }
 
 /// Whether whoever runs this server lets it share the screen it runs on with

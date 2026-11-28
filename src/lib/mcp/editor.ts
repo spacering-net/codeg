@@ -14,7 +14,7 @@ import {
 import { newKeyProblem, type McpKeyProblem } from "./keys"
 import type { McpDefinitionGroup, McpModel, McpServer } from "./model"
 import { setTargetBlock, type McpTargetBlock } from "./targets"
-import type { McpAppType, McpDefinition, McpTransport } from "./types"
+import type { McpAgentId, McpDefinition, McpTransport } from "./types"
 
 export type McpEditorMode = "create" | "edit"
 
@@ -24,7 +24,7 @@ export interface McpEditorOrigin {
   letter: string | null
   /** The agents that held this definition, with its fingerprint — what
    *  "changed elsewhere" is measured against. */
-  snapshot: Partial<Record<McpAppType, string>>
+  snapshot: Partial<Record<McpAgentId, string>>
 }
 
 export interface McpEditorInput {
@@ -39,7 +39,7 @@ export interface McpEditorInput {
   /** The agents ticked under "Apply to". An agent the current transport rules
    *  out stays here, unticked on screen, so that switching back ticks it
    *  again; it is never written to while ruled out. */
-  targets: McpAppType[]
+  targets: McpAgentId[]
 }
 
 /** The name that would be written: an existing key as it is, a new one
@@ -63,7 +63,7 @@ export function editorTransport(input: McpEditorInput): McpTransport {
 export function editorTargetBlock(
   input: McpEditorInput,
   model: McpModel,
-  agent: McpAppType
+  agent: McpAgentId
 ): McpTargetBlock | null {
   const info = model.agent(agent)
   if (!info) return { kind: "agent", block: { kind: "unknownAgent" } }
@@ -81,7 +81,7 @@ export function editorTargetBlock(
 export function effectiveTargets(
   input: McpEditorInput,
   model: McpModel
-): McpAppType[] {
+): McpAgentId[] {
   return input.targets.filter(
     (agent) => editorTargetBlock(input, model, agent) === null
   )
@@ -134,8 +134,8 @@ export function editorSignature(input: McpEditorInput): string {
 /** The holders of a definition, as an origin's snapshot. */
 export function snapshotOf(
   group: McpDefinitionGroup
-): Partial<Record<McpAppType, string>> {
-  const snapshot: Partial<Record<McpAppType, string>> = {}
+): Partial<Record<McpAgentId, string>> {
+  const snapshot: Partial<Record<McpAgentId, string>> = {}
   for (const holder of group.holders) {
     if (holder.info.agent && holder.entry.fingerprint) {
       snapshot[holder.info.agent] = holder.entry.fingerprint

@@ -28,11 +28,13 @@ import {
 } from "@/contexts/harness-view-context"
 import { useElementWidth } from "@/hooks/use-element-width"
 import { useHistoryBackDismiss } from "@/hooks/use-history-back-dismiss"
+import { useMcpOAuth } from "@/hooks/use-mcp-oauth"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { useMcpHarness, type McpHarnessSeam } from "@/lib/harness/mcp-marks"
 import { useHarnessInstalledSync } from "@/lib/harness/use-harness-installed"
 import { useHarnessUpdatesCheckOnOpen } from "@/lib/harness/use-harness-updates"
 import {
+  closeDialog,
   closeMcpDetail,
   DEFAULT_MCP_FILTERS,
   MCP_ANNOUNCEMENT,
@@ -47,7 +49,9 @@ import {
   MCP_VIEW,
   modelOf,
   openCreateEditor,
+  openMcpAgent,
   openMcpServer,
+  openOAuthDialog,
   reloadMcpInventory,
   selectAgent,
   selectServer,
@@ -64,6 +68,11 @@ import {
   type McpModel,
   type McpServer,
 } from "@/lib/mcp/model"
+import {
+  canonicalizeRemoteMcpUrl,
+  matchOAuthRouteForDefinition,
+} from "@/lib/mcp/oauth"
+import { setTargetBlock } from "@/lib/mcp/targets"
 import type { McpEntry } from "@/lib/mcp/types"
 import {
   HARNESS_GROUP_LABEL_CLASS,
@@ -80,12 +89,14 @@ import { useHarnessHost } from "../harness-host-label"
 import { HarnessRecordProblem } from "../install/install-parts"
 import { MachineText } from "../machine-text"
 import { McpAgentDetail, McpAgentRow, RowListSkeleton } from "./mcp-agent-view"
+import { McpBulkDialog } from "./mcp-bulk-dialog"
 import {
   McpConfirmSwitchDialog,
   McpRemoveDialog,
   McpRenameDialog,
 } from "./mcp-change-dialogs"
 import { McpEditorDialog } from "./mcp-editor-dialog"
+import { McpOAuthDialog } from "./mcp-oauth-dialog"
 import { McpPasteDialog } from "./mcp-paste-dialog"
 import { McpServerDetail, ShowAllAgentsToggle } from "./mcp-server-detail"
 import { McpServerRow, moveRowFocus } from "./mcp-server-list"
@@ -328,7 +339,22 @@ function Announcer() {
 }
 
 function McpDialogs({ model }: { model: McpModel | null }) {
+  const { slots } = useHarnessView()
   const [dialog] = useHarnessSlot(MCP_DIALOG)
+  const { snapshot: oauthSnapshot, refresh: refreshOAuth } = useMcpOAuth({
+    active: dialog?.kind === "oauth",
+  })
+  const oauthDialogId = dialog?.kind === "oauth" ? dialog.id : null
+  const handleOAuthClose = useCallback(() => {
+    if (oauthDialogId !== null) closeDialog(slots, oauthDialogId)
+  }, [slots, oauthDialogId])
+  const handleOAuthApplied = useCallback(
+    () => reloadMcpInventory(slots).done,
+    [slots]
+  )
+  const handleOAuthChanged = useCallback(() => {
+    void refreshOAuth()
+  }, [refreshOAuth])
   if (!dialog) return null
   switch (dialog.kind) {
     case "editor":
@@ -343,6 +369,46 @@ function McpDialogs({ model }: { model: McpModel | null }) {
       return (
         <McpConfirmSwitchDialog key={dialog.id} dialog={dialog} model={model} />
       )
+    case "bulk":
+      return <McpBulkDialog key={dialog.id} dialog={dialog} model={model} />
+    case "oauth": {
+      const availableTargets = model
+        ? model.agents.filter(
+            (info) =>
+              info.agent !== null &&
+              setTargetBlock(
+                info,
+                dialog.transport,
+                dialog.serverKey,
+                model.rules,
+                { newKey: true }
+              ) === null
+          )
+        : []
+      const canonicalUpstream = canonicalizeRemoteMcpUrl(dialog.upstreamUrl)
+      const existingRoute =
+        oauthSnapshot?.routes.find(
+          (item) =>
+            canonicalizeRemoteMcpUrl(item.upstream_url) === canonicalUpstream
+        ) ?? null
+      return (
+        <McpOAuthDialog
+          key={dialog.id}
+          serverKey={dialog.serverKey}
+          upstreamUrl={dialog.upstreamUrl}
+          transport={dialog.transport}
+          resourceMetadataUrl={dialog.resourceMetadataUrl}
+          existingRoute={existingRoute}
+          availableTargets={availableTargets}
+          model={model}
+          oauthSnapshot={oauthSnapshot}
+          initialMode={dialog.initialMode}
+          onClose={handleOAuthClose}
+          onApplied={handleOAuthApplied}
+          onOAuthChanged={handleOAuthChanged}
+        />
+      )
+    }
   }
 }
 
@@ -454,21 +520,82 @@ export function McpSection() {
   const [rootRef, width] = useElementWidth<HTMLDivElement>()
   const zoom = useContext(AppearanceContext)?.zoomLevel ?? 100
   const listRef = useRef<HTMLDivElement>(null)
+  const pendingOAuthServerRef = useRef<string | null>(null)
+  const { snapshot: oauthSnapshot } = useMcpOAuth()
+  const oauthSnapshotRef = useRef(oauthSnapshot)
+  useEffect(() => {
+    oauthSnapshotRef.current = oauthSnapshot
+  }, [oauthSnapshot])
 
-  // `openHarness({ section: "mcp", serverKey })`: drawn on the server asked
-  // for from the first frame, then applied to the slots.
-  const target = useConsumeHarnessTarget("mcp", (requested) =>
-    openMcpServer(slots, requested.serverKey)
+  const model = useMemo(
+    () => (state.inventory ? modelOf(state.inventory) : null),
+    [state.inventory]
   )
-  const view = target ? "servers" : viewSlot
-  const shownServer = target ? target.serverKey : selectedServer
+  const modelRef = useRef(model)
+  useEffect(() => {
+    modelRef.current = model
+  }, [model])
+
+  const tryOpenServerOAuth = useCallback(
+    (serverKey: string, current: McpModel | null): boolean => {
+      if (!current) return false
+      const server = current.server(serverKey)
+      if (!server || server.reserved) return true
+      const remoteGroup = server.groups.find(
+        (group) =>
+          group.definition.type === "http" || group.definition.type === "sse"
+      )
+      if (
+        !remoteGroup ||
+        (remoteGroup.definition.type !== "http" &&
+          remoteGroup.definition.type !== "sse")
+      ) {
+        return true
+      }
+      const match = matchOAuthRouteForDefinition(
+        remoteGroup.definition,
+        oauthSnapshotRef.current
+      )
+      openOAuthDialog(slots, {
+        serverKey: server.key,
+        upstreamUrl: match?.route.upstream_url ?? remoteGroup.definition.url,
+        transport: match?.route.transport ?? remoteGroup.definition.type,
+        initialMode: "authorize",
+      })
+      return true
+    },
+    [slots]
+  )
+
+  // `openHarness({ section: "mcp", serverKey | agentId, openOAuth })`: drawn
+  // on the requested server or agent from the first frame, then applied to the
+  // slots.
+  const target = useConsumeHarnessTarget("mcp", (requested) => {
+    if (requested.serverKey) {
+      openMcpServer(slots, requested.serverKey)
+      if (requested.openOAuth) {
+        if (!tryOpenServerOAuth(requested.serverKey, modelRef.current)) {
+          pendingOAuthServerRef.current = requested.serverKey
+        }
+      }
+    } else if (requested.agentId) {
+      openMcpAgent(slots, requested.agentId)
+    }
+  })
+  const view = target?.serverKey
+    ? "servers"
+    : target?.agentId
+      ? "agents"
+      : viewSlot
+  const shownServer = target?.serverKey ?? selectedServer
+  const shownAgent = target?.agentId ?? selectedAgent
   const shownFilters = target ? DEFAULT_MCP_FILTERS : filters
 
   // Unmeasured (the first render, and jsdom) counts as wide, as the page's
   // own switch does.
   const split =
     !isMobile && (width === 0 || width >= (SPLIT_MIN_REM * 16 * zoom) / 100)
-  const selected = view === "servers" ? shownServer : selectedAgent
+  const selected = view === "servers" ? shownServer : shownAgent
   const detailOpen = selected !== null
 
   // One read per visit, then one per `mcp://changed` — from this window or
@@ -498,10 +625,13 @@ export function McpSection() {
     }
   }, [slots])
 
-  const model = useMemo(
-    () => (state.inventory ? modelOf(state.inventory) : null),
-    [state.inventory]
-  )
+  useEffect(() => {
+    const key = pendingOAuthServerRef.current
+    if (!key || !model) return
+    if (tryOpenServerOAuth(key, model)) {
+      pendingOAuthServerRef.current = null
+    }
+  }, [model, tryOpenServerOAuth])
 
   const close = useCallback(() => closeMcpDetail(slots), [slots])
   // The detail is a screen, not a route: on a phone the back gesture should
@@ -601,11 +731,11 @@ export function McpSection() {
   } else {
     const { rows, folded } = agentRows(model, shownFilters, showAll, harness)
     const filtering = isFiltering(shownFilters)
-    if (selectedAgent !== null && filtering) {
+    if (shownAgent !== null && filtering) {
       agentEntries =
-        rows.find((row) => row.info.id === selectedAgent)?.entries ??
-        model.agent(selectedAgent)?.inventory.entries.filter((entry) => {
-          const info = model.agent(selectedAgent)
+        rows.find((row) => row.info.id === shownAgent)?.entries ??
+        model.agent(shownAgent)?.inventory.entries.filter((entry) => {
+          const info = model.agent(shownAgent)
           return info ? entryShown(info, entry, shownFilters, harness) : false
         }) ??
         []
@@ -640,7 +770,7 @@ export function McpSection() {
                 info={info}
                 count={entries.length}
                 total={info.inventory.entries.length}
-                selected={info.id === selectedAgent}
+                selected={info.id === shownAgent}
                 filtered={filtering}
                 onOpen={openAgent}
               />
@@ -690,10 +820,10 @@ export function McpSection() {
           harness={harness}
         />
       ) : null
-    ) : selectedAgent !== null ? (
+    ) : shownAgent !== null ? (
       <McpAgentDetail
         model={model}
-        agentId={selectedAgent}
+        agentId={shownAgent}
         entries={agentEntries}
         filtered={isFiltering(shownFilters)}
         onBack={split ? undefined : close}

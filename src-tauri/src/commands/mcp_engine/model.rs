@@ -8,10 +8,64 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 use crate::commands::mcp::McpAppType;
+use crate::models::agent::{is_valid_custom_agent_id, AgentType};
+
+/// Agent identity used by the MCP engine. Built-in slugs share the legacy wire format.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum McpAgentId {
+    Builtin(McpAppType),
+    Custom(String),
+}
+
+impl McpAgentId {
+    pub(crate) fn builtin(&self) -> Option<McpAppType> {
+        match self {
+            Self::Builtin(app) => Some(*app),
+            Self::Custom(_) => None,
+        }
+    }
+
+    pub(crate) fn agent_type(&self) -> Option<AgentType> {
+        match self {
+            Self::Builtin(app) => Some(super::agents::agent_type_of(*app)),
+            Self::Custom(id) => AgentType::custom(id),
+        }
+    }
+}
+
+impl From<McpAppType> for McpAgentId {
+    fn from(app: McpAppType) -> Self {
+        Self::Builtin(app)
+    }
+}
+
+impl Serialize for McpAgentId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Builtin(app) => app.serialize(serializer),
+            Self::Custom(id) => serializer.serialize_str(&format!("custom:{id}")),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for McpAgentId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let slug = String::deserialize(deserializer)?;
+        if let Some(id) = slug.strip_prefix("custom:") {
+            return if is_valid_custom_agent_id(id) {
+                Ok(Self::Custom(id.to_owned()))
+            } else {
+                Err(serde::de::Error::custom("invalid custom agent id"))
+            };
+        }
+        McpAppType::deserialize(serde::de::value::StrDeserializer::<D::Error>::new(&slug))
+            .map(Self::Builtin)
+    }
+}
 
 /// The built-in companion's name. Sessions get it from codeg itself, so no
 /// agent's config may define a server under it.
@@ -95,6 +149,8 @@ pub mod codes {
 
     // ── An operation that cannot be carried out ──────────────────────────
     pub const AGENT_READ_ONLY: &str = "agent_read_only";
+    pub const AGENT_NOT_WRITABLE: &str = "agent_not_writable";
+    pub const MCP_DISABLED_IN_AGENT_SETTINGS: &str = "mcp_disabled_in_agent_settings";
     pub const FILE_READ_ONLY: &str = "file_read_only";
     pub const BASIS_REQUIRED: &str = "basis_required";
     pub const BASIS_MISMATCH: &str = "basis_mismatch";
@@ -273,7 +329,7 @@ pub enum McpFileStatus {
 }
 
 /// How an agent's sessions come by the servers in its config file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum McpDelivery {
     /// The agent loads the file itself.
@@ -305,9 +361,8 @@ pub struct McpConfigFile {
     /// Why, for `unreadable` and `read_only`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<McpIssue>,
-    /// SHA-256 of the file's bytes (lowercase hex), `"missing"` for a file
-    /// that is not there, `null` when it could not be read. Hand it back to
-    /// `mcp_apply`.
+    /// Concurrency token for `mcp_apply`. Covers the native bytes and any
+    /// paused entries for this agent. `null` when it cannot be computed.
     pub basis: Option<String>,
     /// The path is a symbolic link; writes go to what it points at.
     pub symlink: bool,
@@ -326,6 +381,15 @@ pub struct McpSessionCapabilities {
     pub recorded_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpDisableMode {
+    Native,
+    CodegPause,
+    #[default]
+    Unsupported,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct McpEntry {
     pub key: String,
@@ -337,6 +401,9 @@ pub struct McpEntry {
     pub extra: Map<String, Value>,
     /// By this agent's own on/off flag; `true` where it has none.
     pub enabled: bool,
+    /// The definition is stored by Codeg while absent from the agent file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
     /// [`McpDefinition::fingerprint`]; `null` without a definition.
     pub fingerprint: Option<String>,
     /// No operation is accepted on it.
@@ -351,7 +418,11 @@ pub struct McpEntry {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct McpAgentInventory {
-    pub agent: McpAppType,
+    pub agent: McpAgentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub custom: bool,
     /// `null` when codeg could not tell.
     pub installed: Option<bool>,
     pub config: McpConfigFile,
@@ -360,8 +431,10 @@ pub struct McpAgentInventory {
     /// The transports this agent's config can hold.
     pub transports: Vec<McpTransport>,
     pub delivery: McpDelivery,
-    /// Whether the agent has an on/off flag of its own (`set_enabled`).
+    /// Whether `set_enabled` is supported for this agent.
     pub can_disable: bool,
+    #[serde(default)]
+    pub disable_mode: McpDisableMode,
     /// The built-in `codeg-mcp` companion reaches this agent's sessions
     /// (when it is switched on in Settings).
     pub codeg_mcp: bool,
@@ -388,7 +461,7 @@ pub enum McpOpAction {
         definition: McpDefinition,
     },
     Remove,
-    /// Turn the entry on or off with the agent's own flag.
+    /// Turn the entry on or off using its agent’s disable mode.
     SetEnabled {
         enabled: bool,
     },
@@ -400,7 +473,7 @@ pub enum McpOpAction {
 /// One thing to do to one agent's entry.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct McpOp {
-    pub agent: McpAppType,
+    pub agent: McpAgentId,
     pub key: String,
     #[serde(flatten)]
     pub action: McpOpAction,
@@ -411,7 +484,7 @@ pub struct McpApplyRequest {
     /// Per agent, the `config.basis` the caller last saw. Required for every
     /// agent an operation names, except in a preflight.
     #[serde(default)]
-    pub basis: BTreeMap<McpAppType, String>,
+    pub basis: BTreeMap<McpAgentId, String>,
     pub ops: Vec<McpOp>,
     /// Check everything and write nothing.
     #[serde(default)]
@@ -538,7 +611,7 @@ pub struct McpOpResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct McpFileWrite {
     pub path: String,
-    /// `servers` or `plugin_gate`.
+    /// `servers`, `plugin_gate`, or `paused`.
     pub role: String,
     /// The file does not exist yet.
     pub creates: bool,
@@ -546,7 +619,7 @@ pub struct McpFileWrite {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct McpAgentResult {
-    pub agent: McpAppType,
+    pub agent: McpAgentId,
     pub path: String,
     pub status: McpAgentStatus,
     /// The basis of the agent's config file as this call left it (or, in a
@@ -576,7 +649,7 @@ pub struct McpApplyResult {
 /// receives this.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct McpChanged {
-    pub agents: Vec<McpAppType>,
+    pub agents: Vec<McpAgentId>,
 }
 
 // ─── mcp_parse_snippet ──────────────────────────────────────────────────

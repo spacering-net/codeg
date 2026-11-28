@@ -53,7 +53,9 @@ import {
   HarnessViewProvider,
   useHarnessView,
 } from "@/contexts/harness-view-context"
+import { resetMcpOAuthStoreForTests } from "@/hooks/use-mcp-oauth"
 import { DISCOVER_DETAIL, DISCOVER_FILTERS } from "@/lib/harness/discover-state"
+import type { McpOAuthBridgeSnapshot } from "@/lib/mcp/oauth"
 import {
   agent,
   agentResult,
@@ -179,10 +181,42 @@ function engine(command: string, args: unknown) {
     return appliedOf(request.ops)
   }
   if (command === "mcp_parse_snippet") return pasteAnswer
+  if (command === "mcp_probe") {
+    return probeAnswer
+      ? probeAnswer(args)
+      : {
+          status: "ok",
+          latency_ms: 15,
+          server_info: { name: "mock-mcp", version: "1.0.0" },
+          protocol_version: "2025-03-26",
+          tools: [],
+          tools_count: 0,
+          checked_at: "2026-11-26T00:00:00Z",
+        }
+  }
+  if (command === "mcp_oauth_list") {
+    return oauthSnapshotAnswer
+  }
+  if (command === "mcp_oauth_revoke") {
+    const routeId = (args as { route_id: string }).route_id
+    oauthSnapshotAnswer = {
+      ...oauthSnapshotAnswer,
+      routes: oauthSnapshotAnswer.routes.map((route) =>
+        route.route_id === routeId ? { ...route, status: "revoked" } : route
+      ),
+    }
+    return oauthSnapshotAnswer
+  }
   throw new Error(`unexpected command ${command}`)
 }
 
 let pasteAnswer: unknown = null
+let probeAnswer: ((args: unknown) => unknown) | null = null
+let oauthSnapshotAnswer: McpOAuthBridgeSnapshot = {
+  bridge_running: true,
+  bridge_base_url: "http://127.0.0.1:43210",
+  routes: [],
+}
 
 const callsOf = (command: string) =>
   mocks.call.mock.calls.filter(([name]) => name === command)
@@ -263,10 +297,17 @@ function usualFiles(): McpInventory {
 beforeEach(() => {
   localStorage.clear()
   resetFingerprints()
+  resetMcpOAuthStoreForTests()
   files = usualFiles()
   applyAnswer = null
   applied.length = 0
   pasteAnswer = null
+  probeAnswer = null
+  oauthSnapshotAnswer = {
+    bridge_running: true,
+    bridge_base_url: "http://127.0.0.1:43210",
+    routes: [],
+  }
   mocks.mobile = false
   mocks.desktop = true
   mocks.remote = null
@@ -1811,5 +1852,311 @@ describe("MCP — Find on Harness", () => {
       text: "",
     })
     expect(view.slots.get(DISCOVER_DETAIL)).toBeNull()
+  })
+})
+
+describe("MCP — probes, soft pause, and cross-agent bulk allocation (#1296 / #1295 / #884)", () => {
+  afterEach(() => {
+    probeAnswer = null
+  })
+
+  it("tests connection on a server definition and displays ok tools, auth_required, and session_id_mismatch", async () => {
+    const user = userEvent.setup()
+    probeAnswer = () => ({
+      status: "ok",
+      latency_ms: 32,
+      server_info: { name: "github-mcp", version: "2.0.0" },
+      protocol_version: "2025-03-26",
+      tools: [
+        { name: "list_issues", description: "List repository issues" },
+        { name: "create_pr", description: "Create a pull request" },
+      ],
+      tools_count: 2,
+      checked_at: "2026-11-26T00:00:00Z",
+    })
+
+    render(<Harness />)
+    const detail = await openServer(user, "github")
+
+    // Trigger definition-level test connection
+    const testButtons = within(detail).getAllByRole("button", {
+      name: "Test connection",
+    })
+    await user.click(testButtons[0])
+
+    expect(
+      await within(detail).findByText("Healthy · 2 tools")
+    ).toBeInTheDocument()
+    await user.click(
+      within(detail).getByRole("button", { name: "Show 2 tools" })
+    )
+    expect(within(detail).getByText("list_issues")).toBeInTheDocument()
+    expect(within(detail).getByText("create_pr")).toBeInTheDocument()
+
+    // Re-test returning auth_required
+    probeAnswer = () => ({
+      status: "auth_required",
+      latency_ms: 88,
+      http_status: 401,
+      auth_hint: {
+        scheme: "Bearer",
+        resource_metadata:
+          "https://api.github.test/.well-known/oauth-protected-resource",
+      },
+      checked_at: "2026-11-26T00:00:01Z",
+    })
+    await user.click(within(detail).getByRole("button", { name: "Test again" }))
+    expect(
+      await within(detail).findByText("OAuth required")
+    ).toBeInTheDocument()
+    expect(
+      within(detail).getByText(
+        "https://api.github.test/.well-known/oauth-protected-resource"
+      )
+    ).toBeInTheDocument()
+
+    // Re-test returning session_id_mismatch
+    probeAnswer = () => ({
+      status: "session_id_mismatch",
+      latency_ms: 55,
+      detail: "server rotated mcp-session-id",
+      checked_at: "2026-11-26T00:00:02Z",
+    })
+    await user.click(within(detail).getByRole("button", { name: "Test again" }))
+    expect(
+      await within(detail).findByText("Session ID mismatch")
+    ).toBeInTheDocument()
+    expect(
+      within(detail).getByText(/rejected or changed the MCP session ID/i)
+    ).toBeInTheDocument()
+  })
+
+  it("displays Paused badge and explanation for codeg_pause paused entries", async () => {
+    const user = userEvent.setup()
+    files = inventory([
+      agent(
+        "claude_code",
+        [
+          entry("paused_srv", remote("http", "https://mcp.example.test"), {
+            enabled: false,
+            paused: true,
+          }),
+        ],
+        { can_disable: true, disable_mode: "codeg_pause" }
+      ),
+    ])
+
+    render(<Harness />)
+    const detail = await openServer(user, "paused_srv")
+    const row = agentRow(detail, "Claude Code")
+    expect(within(row).getByText("Paused")).toBeInTheDocument()
+    expect(
+      within(row).getByText(/Temporarily paused by Codeg/i)
+    ).toBeInTheDocument()
+  })
+
+  it("runs cross-agent bulk apply through preflight review and atomic commit", async () => {
+    const user = userEvent.setup()
+    files = inventory([
+      agent("claude_code", [
+        entry("github", remote("http", "https://api.github.test/mcp")),
+      ]),
+      agent("codex", [], { transports: ["stdio", "http", "sse"] }),
+      agent("gemini", [], { transports: ["stdio"] }),
+    ])
+
+    render(<Harness />)
+    const detail = await openServer(user, "github")
+
+    await user.click(
+      within(detail).getByRole("button", {
+        name: "Apply to compatible agents",
+      })
+    )
+    const modal = await screen.findByRole("dialog")
+    expect(within(modal).getByText("Will apply (1)")).toBeInTheDocument()
+    expect(within(modal).getByText("Already active (1)")).toBeInTheDocument()
+    expect(within(modal).getByText("Skipped (1)")).toBeInTheDocument()
+    expect(
+      within(modal).getByText("Cannot use HTTP servers")
+    ).toBeInTheDocument()
+
+    await user.click(
+      within(modal).getByRole("button", { name: "Review changes" })
+    )
+    await waitFor(() => expect(preflights().length).toBeGreaterThanOrEqual(1))
+
+    await user.click(await within(modal).findByRole("button", { name: "Save" }))
+    await waitFor(() => expect(saves().length).toBe(1))
+    expect(saves()[0].ops).toEqual([
+      {
+        agent: "codex",
+        key: "github",
+        action: "set",
+        definition: { type: "http", url: "https://api.github.test/mcp" },
+      },
+    ])
+  })
+
+  it("displays custom ACP agents with display_name, allows writing when enabled, and links to Agent Settings when MCP is disabled", async () => {
+    const user = userEvent.setup()
+    files = inventory([
+      agent("claude_code", [entry("github", stdio("npx", ["-y", "github"]))]),
+      agent("custom:goose", [], {
+        custom: true,
+        display_name: "Goose ACP",
+        writable: true,
+        can_disable: true,
+        disable_mode: "codeg_pause",
+        delivery: "codeg_session",
+        transports: ["stdio", "http"],
+      }),
+      agent("custom:locked", [], {
+        custom: true,
+        display_name: "Locked ACP",
+        writable: false,
+        config: {
+          status: "read_only",
+          reason: { code: "mcp_disabled_in_agent_settings" },
+        },
+      }),
+    ])
+
+    render(<Harness />)
+    const detail = await openServer(user, "github")
+
+    expect(within(detail).getByText("Goose ACP")).toBeInTheDocument()
+    expect(within(detail).getByText("Locked ACP")).toBeInTheDocument()
+    expect(
+      within(detail).getByText(/MCP support is turned off/i)
+    ).toBeInTheDocument()
+
+    await user.click(
+      within(detail).getByRole("button", { name: "Open Agent Settings" })
+    )
+    expect(mocks.openSettingsWindow).toHaveBeenCalledWith("agents")
+
+    // Toggle server on for the writable custom agent
+    const gooseSwitch = within(detail).getByRole("switch", {
+      name: "Goose ACP",
+    })
+    await user.click(gooseSwitch)
+    await waitFor(() => expect(saves().length).toBe(1))
+    expect(saves()[0].ops).toEqual([
+      {
+        agent: "custom:goose",
+        key: "github",
+        action: "set",
+        definition: { type: "stdio", command: "npx", args: ["-y", "github"] },
+      },
+    ])
+  })
+
+  it("shows Codeg OAuth proxy bridge card with port-drift sync, revoke, non-revealable bridge token, and probe auth_required CTA", async () => {
+    const user = userEvent.setup()
+    const secretBridgeToken = "bridge-token-never-reveal-123"
+    files = inventory([
+      agent("claude_code", [
+        entry(
+          "notion",
+          remote("http", "http://127.0.0.1:59999/mcp/route-notion", {
+            Authorization: `Bearer ${secretBridgeToken}`,
+          })
+        ),
+        entry("figma", remote("http", "https://mcp.figma.com/mcp")),
+      ]),
+      agent("codex", []),
+    ])
+    oauthSnapshotAnswer = {
+      bridge_running: true,
+      bridge_base_url: "http://127.0.0.1:43210",
+      routes: [
+        {
+          route_id: "route-notion",
+          upstream_url: "https://mcp.notion.com/mcp",
+          transport: "http",
+          bridge_url: "http://127.0.0.1:43210/mcp/route-notion",
+          status: "authorized",
+          issuer: "https://auth.notion.com",
+          scopes: ["read"],
+          has_refresh_token: true,
+          updated_at: "2026-11-27T00:00:00Z",
+        },
+      ],
+    }
+    probeAnswer = () => ({
+      status: "auth_required",
+      latency_ms: 88,
+      http_status: 401,
+      auth_hint: {
+        scheme: "Bearer",
+        resource_metadata:
+          "https://mcp.figma.com/.well-known/oauth-protected-resource",
+      },
+      tools: [],
+      tools_count: 0,
+      checked_at: "2026-11-27T00:00:00Z",
+    })
+
+    const { container } = render(<Harness />)
+
+    // 1. Bridged server with port drift
+    const notionDetail = await openServer(user, "notion")
+    await waitFor(() => {
+      expect(
+        within(notionDetail).getByText("Codeg OAuth proxy bridge")
+      ).toBeInTheDocument()
+      expect(
+        within(notionDetail).getByText(/Local bridge port changed/i)
+      ).toBeInTheDocument()
+      expect(
+        within(notionDetail).getByRole("button", { name: "Sync bridge URL" })
+      ).toBeInTheDocument()
+    })
+
+    // Security check: bridge Authorization header stays masked with NO reveal button
+    expect(container.textContent).not.toContain(secretBridgeToken)
+    expect(
+      within(notionDetail).queryByRole("button", {
+        name: /Show Authorization/i,
+      })
+    ).toBeNull()
+
+    // Revoke authorization calls mcp_oauth_revoke and updates card status
+    await user.click(
+      within(notionDetail).getByRole("button", {
+        name: "Revoke authorization",
+      })
+    )
+    await waitFor(() => {
+      expect(callsOf("mcp_oauth_revoke")).toEqual([
+        ["mcp_oauth_revoke", { route_id: "route-notion" }],
+      ])
+      expect(within(notionDetail).getByText("Revoked")).toBeInTheDocument()
+    })
+
+    // 2. Unbridged remote server -> probe returns auth_required -> OAuth CTA opens dialog
+    const figmaDetail = await openServer(user, "figma")
+    await user.click(
+      within(figmaDetail).getAllByRole("button", { name: "Test connection" })[0]
+    )
+    const oauthBtn = await within(figmaDetail).findByRole("button", {
+      name: "Authorize with Codeg (OAuth)",
+    })
+    await user.click(oauthBtn)
+    const modal = await screen.findByRole("dialog")
+    expect(
+      within(modal).getByText("https://mcp.figma.com/mcp")
+    ).toBeInTheDocument()
+    await user.click(within(modal).getByRole("button", { name: "Cancel" }))
+
+    // 3. openHarness({ section: "mcp", serverKey: "figma", openOAuth: true }) opens OAuth dialog directly
+    await act(async () => {
+      view.open({ section: "mcp", serverKey: "figma", openOAuth: true })
+    })
+    const directModal = await screen.findByRole("dialog")
+    expect(
+      within(directModal).getByRole("button", { name: "Authorize in browser" })
+    ).toBeInTheDocument()
   })
 })

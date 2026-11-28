@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use agent_client_protocol::schema::v1::{
     AuthMethod, AuthenticateRequest, BlobResourceContents, CancelNotification,
@@ -61,11 +61,18 @@ use crate::acp::terminal_runtime::{
 use crate::acp::types::{
     AcpEvent, AsyncTaskDelta, AsyncTaskUsage, AvailableCommandInfo, ConnectionStatus,
     GrokModelCatalog, GrokModelSpec, KiroReasoning, ModelReasoningEffortsInfo,
-    PermissionAnswerOrigin, PermissionOptionInfo, PlanEntryInfo, PluginLoadFailure, PromptCapabilitiesInfo,
-    PromptInputBlock, RemoteControlInfo, SessionConfigBooleanInfo, SessionConfigKindInfo,
-    SessionConfigOptionInfo, SessionConfigSelectGroupInfo, SessionConfigSelectInfo,
-    SessionConfigSelectOptionInfo, SessionFailureRecord, SessionModeInfo, SessionModeStateInfo,
-    SessionNotice, ToolApprovalInfo, ToolCallImageInfo, UserMessageBlock,
+    PermissionAnswerOrigin, PermissionOptionInfo, PlanEntryInfo, PluginLoadFailure,
+    PromptCapabilitiesInfo, PromptInputBlock, RemoteControlInfo, SessionConfigBooleanInfo,
+    SessionConfigKindInfo, SessionConfigOptionInfo, SessionConfigSelectGroupInfo,
+    SessionConfigSelectInfo, SessionConfigSelectOptionInfo, SessionFailureRecord,
+    SessionMcpCapabilitiesSnapshot, SessionMcpServerEntry, SessionMcpServerStatus, SessionMcpState,
+    SessionModeInfo, SessionModeStateInfo, SessionNotice, ToolApprovalInfo, ToolCallImageInfo,
+    UserMessageBlock,
+};
+use crate::commands::mcp_engine::{
+    agents,
+    model::{McpDelivery, McpTransport},
+    session as mcp_session,
 };
 use crate::logging::throttle::LeadingEdgeThrottle;
 use crate::models::agent::AgentType;
@@ -2937,6 +2944,12 @@ pub struct SpawnSeed {
     pub personal_agent: bool,
 }
 
+pub(crate) struct ConnectionHandshake {
+    pub session_started: oneshot::Receiver<()>,
+    /// Kept by the spawning caller so a failure can outlive the map entry.
+    pub failure: Arc<OnceLock<AcpError>>,
+}
+
 /// Spawn an ACP agent process and run the connection loop in a background task.
 ///
 /// On success, the newly created `AgentConnection` is inserted into
@@ -2945,7 +2958,7 @@ pub struct SpawnSeed {
 /// exits (timeout, error, or clean disconnect), so the manager never
 /// leaks stale entries after a connection tears down.
 #[allow(clippy::too_many_arguments)]
-pub async fn spawn_agent_connection(
+pub(crate) async fn spawn_agent_connection(
     connection_id: String,
     agent_type: AgentType,
     working_dir: Option<String>,
@@ -2960,7 +2973,7 @@ pub async fn spawn_agent_connection(
     terminal_shell_config: TerminalShellRuntimeConfig,
     seed: SpawnSeed,
     selection: Option<Arc<crate::acp::selection::SelectionPersister>>,
-) -> Result<tokio::sync::oneshot::Receiver<()>, AcpError> {
+) -> Result<ConnectionHandshake, AcpError> {
     // Use the same cwd for launch settings, the subprocess and session/new.
     let launch_cwd = resolve_working_dir(working_dir.as_deref());
     // Create the authoritative session state up front. Subsequent emit_with_state
@@ -2978,7 +2991,9 @@ pub async fn spawn_agent_connection(
     // first event (StatusChanged{Connecting} below) doesn't race with the
     // installer. The receiver is returned to `spawn_agent`, which holds the
     // per-session dedup lock until this rx fires (or times out / aborts).
-    let session_started_rx = initial_state.install_session_started_signal();
+    let session_started = initial_state.install_session_started_signal();
+    let failure = Arc::new(OnceLock::new());
+    let startup_failure = Arc::clone(&failure);
     // Record what this launch's environment freezes before the state is shared:
     // the emit path and the preference replay both read it, and both run after
     // this point.
@@ -3232,6 +3247,12 @@ pub async fn spawn_agent_connection(
         )
         .await;
 
+                if let Err(error) = &result {
+                    if state_clone.read().await.session_started_tx.is_some() {
+                        let _ = startup_failure.set(error.clone());
+                    }
+                }
+
         // The loop has ended and every command queued before the disconnect
         // was applied: close the selection admission barrier and flush the
         // conversation's final selection with the state this driver owns —
@@ -3320,7 +3341,10 @@ pub async fn spawn_agent_connection(
         )));
     }
 
-    Ok(session_started_rx)
+    Ok(ConnectionHandshake {
+        session_started,
+        failure,
+    })
 }
 
 /// The agent request a permission card answers. `Acp` is a real ACP
@@ -8134,28 +8158,9 @@ pub(crate) fn agent_takes_codeg_mcp(agent_type: AgentType) -> bool {
     registry::get_agent_meta(agent_type).supports_mcp && agent_delivers_wire_mcp(agent_type)
 }
 
-/// Agents that load the MCP servers codeg's MCP page manages from their OWN
-/// config file, so [`load_mcp_servers_for_agent`] forwards none of them over
-/// the wire; see the notes there for each one.
-///
-/// The MCP engine tells the page the same thing per agent
-/// (`commands::mcp_engine::agents::spec`'s `delivery`); a test there keeps the
-/// two lists in step.
+/// Agents that load the MCP servers from the file managed by the engine.
 pub(crate) fn agent_reads_own_mcp_config(agent_type: AgentType) -> bool {
-    matches!(
-        agent_type,
-        AgentType::Hermes
-            | AgentType::KimiCode
-            | AgentType::Grok
-            | AgentType::Cursor
-            | AgentType::Qoder
-            | AgentType::Antigravity
-            | AgentType::Kiro
-            | AgentType::Cline
-            | AgentType::Trae
-            | AgentType::CommandCode
-            | AgentType::OpenCode
-    )
+    mcp_session::delivery_for_agent(agent_type) == McpDelivery::AgentFile
 }
 
 /// How long the handshake waits for TRAE CLI to exchange a PAT. The exchange is
@@ -8229,112 +8234,95 @@ async fn sign_in_trae_with_pat(
     Ok(())
 }
 
-/// [`load_mcp_servers_for_agent_with_env`] with codeg's own environment.
 #[cfg(test)]
 fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
-    load_mcp_servers_for_agent_with_env(agent_type, &crate::parsers::AgentEnv::inherited())
+    load_mcp_servers_for_agent_with_env(
+        agent_type,
+        &crate::parsers::AgentEnv::inherited(),
+        &agents::codeg_dir(),
+        true,
+        true,
+        SessionMcpCapabilitiesSnapshot {
+            http: true,
+            sse: true,
+        },
+    )
+    .0
 }
 
-/// Load MCP servers configured for `agent_type` and convert them into the
-/// ACP wire format. Errors and unsupported entries are logged and skipped so
-/// a single malformed entry never blocks a session from starting.
-///
-/// `env` is the environment the agent is launched with: a `CODEX_HOME` or
-/// `CLAUDE_CONFIG_DIR` set in the agent's own settings moves the file its
-/// servers are read from, the same way it moves the file the MCP page shows
-/// and edits. An entry the agent's own flag turns off (Codex's
-/// `enabled = false`) is not sent.
+/// Use the same read for the ACP request and its runtime snapshot. Native
+/// readers connect their own entries, so only the snapshot gets those.
 fn load_mcp_servers_for_agent_with_env(
     agent_type: AgentType,
     env: &crate::parsers::AgentEnv,
-) -> Vec<McpServer> {
-    // Hermes, Kimi Code, Grok, and Cursor each read their own native MCP
-    // config at launch — Hermes from `~/.hermes/config.yaml` (`mcp_servers`,
-    // registered as `mcp-<name>` toolsets), Kimi Code from
-    // `~/.kimi-code/mcp.json` (`mcpServers`), Grok from `~/.grok/config.toml`
-    // (`[mcp_servers.<name>]`), Cursor from `~/.cursor/mcp.json`
-    // (`mcpServers`, shared with the IDE). codeg manages those files directly
-    // via the MCP settings UI, so forwarding the same servers over the ACP
-    // wire here would double-register them — skip it. (The built-in
-    // `codeg-mcp` companion is injected separately by `inject_codeg_mcp`, so
-    // it still reaches them.)
-    //
-    // DeepSeek is deliberately NOT in this set: deepseek-acp reads no MCP file
-    // at all, so `$DSH_HOME/mcp.json` (codeg's own store) reaches it ONLY
-    // through the wire — skipping it would silently drop every user server.
-    //
-    // Qoder joins the skip set: the CLI reads `mcpServers` out of its own
-    // `~/.qoder/settings.json` (gemini-schema settings file) at startup, which
-    // codeg's MCP settings UI manages directly — forwarding the same servers
-    // over the wire would double-mount them.
-    //
-    // Antigravity joins it too, for the same reason with one nuance: its ACP
-    // server reads `<GEMINI_HOME>/config/mcp_config.json` (which codeg's MCP
-    // settings UI manages) and MERGES it with the wire list BY NAME, wire
-    // winning — so forwarding would not actually double-mount. It is skipped
-    // anyway because defining one server through two channels is noise, and
-    // because the `codeg-mcp` companion is injected separately regardless.
-    //
-    // Kiro joins it: `kiro-cli acp` loads `<KIRO_HOME>/settings/mcp.json`
-    // (default `~/.kiro/settings/mcp.json`) for its default agent — verified
-    // against 2.24.1, a stdio server declared only there is initialized and
-    // listed (`_kiro.dev/mcp/server_initialized`) on a `session/new` that
-    // carries `mcpServers: []`. codeg's MCP settings UI manages that file.
-    //
-    // Cline joins it as well: it connects the servers in
-    // `~/.cline/data/settings/cline_mcp_settings.json`, which codeg's MCP
-    // settings UI manages, and ignores the wire list altogether (see
-    // `agent_delivers_wire_mcp`), so forwarding that file's servers again only
-    // sends entries nobody reads.
-    //
-    // TRAE CLI joins it: `traecli acp serve` loads `[mcp_servers]` from
-    // `<TRAE_HOME>/traecli.toml` and ALSO starts what `session/new` carries —
-    // verified against 0.209.1, where a server from each source reached the
-    // model side by side — so forwarding the file's servers would mount every
-    // one of them twice. codeg's MCP settings UI manages that file.
-    //
-    // Command Code joins it for the same reason: `command-code acp` loads
-    // `~/.commandcode/mcp.json` and starts what `session/new` carries as well
-    // (verified against 1.84.0, 1.86.3, 1.88.0, 1.88.1, 1.88.2 and 1.88.4, a
-    // server from each source in one session's tool list), and a name on both
-    // sides keeps the file's copy, as its docs say and 1.88.0, 1.88.1, 1.88.2
-    // and 1.88.4 showed live. codeg's MCP settings UI manages that file.
-    //
-    // OpenCode joins it: 2.x loads `mcp.servers` from its own config, which
-    // codeg's MCP settings UI manages, and turns each server `session/new`
-    // carries into an override that REPLACES the config entry of the same name
-    // (`cli/src/acp/sessions.ts` `mcpConfig`, `core/src/mcp/index.ts` `add`,
-    // 2.2.0). The override is rebuilt from the wire fields alone, so forwarding
-    // the file's servers would only drop their `codemode`, timeouts, `cwd` and
-    // OAuth settings.
-    if agent_reads_own_mcp_config(agent_type) {
-        return Vec::new();
+    codeg_dir: &Path,
+    supports_mcp: bool,
+    offer_mcp: bool,
+    caps: SessionMcpCapabilitiesSnapshot,
+) -> (Vec<McpServer>, SessionMcpState) {
+    use SessionMcpServerStatus::{Attached, Configured, Failed, SkippedTransport};
+
+    let native = agent_reads_own_mcp_config(agent_type);
+    let mut state = SessionMcpState {
+        delivery: mcp_session::delivery_for_agent(agent_type),
+        supports_mcp,
+        codeg_mcp_attached: false,
+        capabilities: Some(caps),
+        config_basis: None,
+        servers: Vec::new(),
+    };
+    let mut wire = Vec::new();
+    if !native && !offer_mcp {
+        return (wire, state);
     }
-    let entries = match crate::commands::mcp_engine::session::servers_for_session(agent_type, env)
-    {
-        Ok(map) => map,
+    let config = match mcp_session::config_for_session(agent_type, env, codeg_dir) {
+        Ok(config) => config,
         Err(err) => {
-            tracing::error!(
-                "[ACP][{}] failed to read MCP servers from local config: {err}",
-                agent_type
-            );
-            return Vec::new();
+            tracing::warn!(agent = %agent_type, "[ACP] could not read MCP configuration: {err}");
+            return (wire, state);
         }
     };
-
-    let mut out = Vec::with_capacity(entries.len());
-    for (name, spec) in entries {
-        match canonical_spec_to_mcp_server(&name, &spec) {
-            Ok(server) => out.push(server),
-            Err(err) => {
-                tracing::warn!(
-                    "[ACP][{}] skip MCP server '{name}' (cannot map to ACP schema): {err}",
-                    agent_type
-                );
+    state.config_basis = config.basis;
+    for (key, definition) in config.servers {
+        let transport = definition.transport();
+        let (status, detail) = if native {
+            (Configured, None)
+        } else if (transport == McpTransport::Http && !caps.http)
+            || (transport == McpTransport::Sse && !caps.sse)
+        {
+            (
+                SkippedTransport,
+                Some(format!(
+                    "Agent does not advertise {} support",
+                    transport.as_str()
+                )),
+            )
+        } else {
+            match canonical_spec_to_mcp_server(&key, &definition.to_canonical_json()) {
+                Ok(server) => {
+                    wire.push(server);
+                    (Attached, None)
+                }
+                Err(err) => {
+                    tracing::warn!(agent = %agent_type, server = %key, "[ACP] invalid MCP definition: {err}");
+                    (
+                        Failed,
+                        Some("Could not convert MCP configuration to ACP".into()),
+                    )
+                }
             }
-        }
+        };
+        state.servers.push(SessionMcpServerEntry {
+            key,
+            transport,
+            origin: state.delivery,
+            fingerprint: Some(definition.fingerprint()),
+            status,
+            detail,
+            confirmed_tools: Vec::new(),
+        });
     }
-    out
+    (wire, state)
 }
 
 /// Context the connection layer needs to inject the built-in `codeg-mcp`
@@ -9530,6 +9518,26 @@ async fn run_connection(
             },
             on_receive_notification!(),
         )
+        .on_receive_notification(
+            {
+                let state_inner = Arc::clone(&state);
+                let emitter_inner = emitter_clone.clone();
+                async move |notif: KiroMcpServerInitializedNotification, _cx: ConnectionTo<Agent>| {
+                    if agent_type == AgentType::Kiro {
+                        emit_with_state_built(&state_inner, &emitter_inner, |state| {
+                            if let (Some(current), Some(reported)) = (&state.external_id, &notif.session_id) {
+                                if current != reported {
+                                    return None;
+                                }
+                            }
+                            state.confirm_mcp_server(notif.server_name.as_deref()?, None)
+                        }).await;
+                    }
+                    Ok(())
+                }
+            },
+            on_receive_notification!(),
+        )
         .connect_with(agent, async move |cx| -> Result<(), agent_client_protocol::Error> {
             let state = state_outer;
             let agent_name_for_log = registry::get_agent_meta(agent_type).name;
@@ -9716,56 +9724,16 @@ async fn run_connection(
                 crate::acp::one_shot::is_one_shot_owner(&state.read().await.owner_window_label);
             let offer_mcp = agent_supports_mcp && !one_shot;
 
-            // Load MCP servers configured for this agent and filter by the
-            // capabilities the agent just declared. Stdio is mandatory per
-            // ACP spec; HTTP/SSE are gated on `mcp_capabilities.{http,sse}`.
-            let mut mcp_servers: Vec<McpServer> = if offer_mcp {
-                let mcp_caps = &init_resp.agent_capabilities.mcp_capabilities;
-                // What this agent just declared, kept for the MCP page: it
-                // marks the HTTP and SSE servers a session would leave out.
-                crate::commands::mcp_engine::session::record_declared_capabilities(
-                    agent_type,
-                    mcp_caps.http,
-                    mcp_caps.sse,
-                );
-                load_mcp_servers_for_agent_with_env(agent_type, &mcp_env)
-                    .into_iter()
-                    .filter(|s| match s {
-                        McpServer::Stdio(_) => true,
-                        McpServer::Http(server) => {
-                            if mcp_caps.http {
-                                true
-                            } else {
-                                tracing::warn!(
-                                    "[ACP][{}] skip HTTP MCP server '{}': agent does not advertise mcpCapabilities.http",
-                                    agent_type, server.name
-                                );
-                                false
-                            }
-                        }
-                        McpServer::Sse(server) => {
-                            if mcp_caps.sse {
-                                true
-                            } else {
-                                tracing::warn!(
-                                    "[ACP][{}] skip SSE MCP server '{}': agent does not advertise mcpCapabilities.sse",
-                                    agent_type, server.name
-                                );
-                                false
-                            }
-                        }
-                        _ => false,
-                    })
-                    .collect()
-            } else {
-                if !one_shot {
-                    tracing::info!(
-                        "[ACP][{}] supports_mcp=false: skipping all MCP wire forwarding (user servers + codeg-mcp companion)",
-                        agent_type
-                    );
-                }
-                Vec::new()
-            };
+            let mcp_caps = &init_resp.agent_capabilities.mcp_capabilities;
+            mcp_session::record_declared_capabilities(agent_type, mcp_caps.http, mcp_caps.sse);
+            let (mut mcp_servers, mut mcp_state) = load_mcp_servers_for_agent_with_env(
+                agent_type,
+                &mcp_env,
+                &agents::codeg_dir(),
+                agent_supports_mcp,
+                offer_mcp,
+                SessionMcpCapabilitiesSnapshot { http: mcp_caps.http, sse: mcp_caps.sse },
+            );
 
             // Inject the built-in `codeg-mcp` MCP server. Stdio is
             // unconditionally supported by the ACP wire — no `mcp_caps`
@@ -9846,6 +9814,9 @@ async fn run_connection(
                     s.result_tool_available = false;
                 }
             }
+
+            mcp_state.codeg_mcp_attached = delegate_injection.is_some();
+            emit_with_state(&state, &emitter_clone, AcpEvent::SessionMcpState { state: mcp_state }).await;
 
             // Emit fork support capability
             emit_with_state(
@@ -23418,6 +23389,17 @@ struct KiroCommandsAvailableNotification {
     /// name), each `{name, description, arguments[], serverName}`.
     #[serde(default)]
     prompts: Vec<serde_json::Value>,
+}
+
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcNotification,
+)]
+#[notification(method = "_kiro.dev/mcp/server_initialized")]
+#[serde(rename_all = "camelCase")]
+struct KiroMcpServerInitializedNotification {
+    session_id: Option<String>,
+    #[serde(alias = "name", alias = "mcpServerName")]
+    server_name: Option<String>,
 }
 
 /// `_kiro.dev/metadata {sessionId, contextUsagePercentage, reasoning}` — sent
@@ -55898,5 +55880,154 @@ mod trae_handshake_tests {
                 "{agent_type}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod session_mcp_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn custom_mcp_snapshot_matches_new_load_and_resume_requests() {
+        let data = tempfile::tempdir().unwrap();
+        let path = agents::custom_paths(data.path(), "session-mcp-custom")
+            .unwrap()
+            .servers;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            json!({"mcpServers": {
+                "local": {"command": "/bin/echo", "args": ["stdio"]},
+                "http": {"type": "http", "url": "https://example.test/mcp"},
+                "sse": {"type": "sse", "url": "https://example.test/events"},
+                "disabled": {"command": "disabled", "disabled": true}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let agent = AgentType::custom("session-mcp-custom").unwrap();
+        let caps = SessionMcpCapabilitiesSnapshot {
+            http: true,
+            sse: false,
+        };
+        let env = crate::parsers::AgentEnv::inherited();
+        let (wire, snapshot) =
+            load_mcp_servers_for_agent_with_env(agent, &env, data.path(), true, true, caps);
+        assert_eq!(snapshot.delivery, McpDelivery::CodegSession);
+        assert_eq!(snapshot.capabilities, Some(caps));
+        assert!(snapshot.config_basis.is_some());
+        assert!(!snapshot.codeg_mcp_attached);
+        let [http, local, sse] = snapshot.servers.as_slice() else {
+            panic!("expected three enabled entries");
+        };
+        assert_eq!(
+            (&*http.key, http.status),
+            ("http", SessionMcpServerStatus::Attached)
+        );
+        assert_eq!(
+            (&*local.key, local.status),
+            ("local", SessionMcpServerStatus::Attached)
+        );
+        assert_eq!(
+            (&*sse.key, sse.status),
+            ("sse", SessionMcpServerStatus::SkippedTransport)
+        );
+        assert!(sse.detail.as_deref().unwrap().contains("sse"));
+        assert!(snapshot
+            .servers
+            .iter()
+            .all(|entry| entry.fingerprint.is_some()));
+
+        let claude = ClaudeSessionOptions::default();
+        let requests = [
+            serde_json::to_value(build_new_session_request(
+                agent,
+                data.path(),
+                wire.clone(),
+                &claude,
+            ))
+            .unwrap(),
+            serde_json::to_value(build_load_session_request(
+                agent,
+                SessionId::new("existing"),
+                data.path(),
+                wire.clone(),
+                &claude,
+            ))
+            .unwrap(),
+            serde_json::to_value(build_resume_session_request(
+                agent,
+                SessionId::new("existing"),
+                data.path(),
+                wire,
+                &claude,
+            ))
+            .unwrap(),
+        ];
+        for request in &requests {
+            let servers = request["mcpServers"].as_array().unwrap();
+            assert_eq!(servers.len(), 2);
+            assert_eq!(servers[0]["name"], "http");
+            assert_eq!(servers[1]["name"], "local");
+        }
+        let (wire, snapshot) =
+            load_mcp_servers_for_agent_with_env(agent, &env, data.path(), false, false, caps);
+        assert!(wire.is_empty());
+        assert!(snapshot.servers.is_empty());
+        assert!(!snapshot.supports_mcp);
+    }
+
+    #[test]
+    fn native_mcp_snapshot_tracks_configured_entries_and_kiro_ready() {
+        let data = tempfile::tempdir().unwrap();
+        let home = data.path().join("kiro");
+        std::fs::create_dir_all(home.join("settings")).unwrap();
+        std::fs::write(
+            home.join("settings/mcp.json"),
+            r#"{"mcpServers": {"native":{"command":"example"}}}"#,
+        )
+        .unwrap();
+        let env =
+            crate::parsers::AgentEnv::with_overrides(&[("KIRO_HOME", home.to_str().unwrap())]);
+        let (wire, snapshot) = load_mcp_servers_for_agent_with_env(
+            AgentType::Kiro,
+            &env,
+            data.path(),
+            true,
+            true,
+            SessionMcpCapabilitiesSnapshot {
+                http: true,
+                sse: false,
+            },
+        );
+        assert!(wire.is_empty());
+        assert_eq!(snapshot.delivery, McpDelivery::AgentFile);
+        assert_eq!(
+            snapshot.servers[0].status,
+            SessionMcpServerStatus::Configured
+        );
+        assert!(snapshot.config_basis.is_some());
+        let mut state = SessionState::new(
+            "kiro-test".into(),
+            AgentType::Kiro,
+            None,
+            "test".into(),
+            None,
+        );
+        state.apply_event(&AcpEvent::SessionMcpState { state: snapshot });
+        let notification: KiroMcpServerInitializedNotification =
+            serde_json::from_value(json!({"sessionId": "s1", "serverName": "native"})).unwrap();
+        let event = state
+            .confirm_mcp_server(notification.server_name.as_deref().unwrap(), None)
+            .unwrap();
+        state.apply_event(&event);
+        let snapshot = state.to_snapshot().mcp_state.unwrap();
+        assert_eq!(
+            snapshot.servers[0].status,
+            SessionMcpServerStatus::Confirmed
+        );
+        assert_eq!(snapshot.servers[0].origin, McpDelivery::AgentFile);
+        assert!(snapshot.servers[0].confirmed_tools.is_empty());
     }
 }

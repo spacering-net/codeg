@@ -24,7 +24,7 @@
  */
 import { defineHarnessSlot, type HarnessSlotStore } from "@/lib/harness-slots"
 import { basisFromResult } from "@/lib/mcp/ops"
-import { isMcpAppType, type McpAppType } from "@/lib/mcp/types"
+import { isMcpAgentId, type McpAgentId } from "@/lib/mcp/types"
 import { DISCOVER_DETAIL, openDiscoverItem } from "./discover-state"
 import { knownKind } from "./display"
 import { harnessFailureOf, type HarnessFailure } from "./errors"
@@ -162,8 +162,8 @@ export interface McpInstallDialog {
 }
 
 export interface McpUninstallSelection {
-  agents: McpAppType[]
-  removeChanged: McpAppType[]
+  agents: McpAgentId[]
+  removeChanged: McpAgentId[]
 }
 
 export interface McpUninstallDialog {
@@ -173,9 +173,9 @@ export interface McpUninstallDialog {
   itemRef: string
   key: string
   /** The agents ticked to remove it from. */
-  agents: McpAppType[]
+  agents: McpAgentId[]
   /** Agents whose entry was changed here, ticked to be removed anyway. */
-  removeChanged: McpAppType[]
+  removeChanged: McpAgentId[]
   phase: "checking" | "ready" | "uninstalling" | "result"
   /** The backend's report of what the selection would do. */
   preflight: HarnessMcpUninstallResult | null
@@ -586,8 +586,8 @@ export async function openDiscoverItemToInstall(
 
 // ─── Uninstall ────────────────────────────────────────────────────────
 
-const knownAgents = (agents: readonly string[]): McpAppType[] =>
-  agents.filter(isMcpAppType)
+const knownAgents = (agents: readonly string[]): McpAgentId[] =>
+  agents.filter(isMcpAgentId)
 
 /** Open the uninstall dialog for an installed item: every agent it is
  *  recorded in is ticked, and the backend is asked at once what that would
@@ -676,7 +676,7 @@ export async function preflightMcpUninstall(
 export function changeUninstallSelection(
   slots: HarnessSlotStore,
   id: number,
-  change: { agent: McpAppType; list: "agents" | "removeChanged"; on: boolean }
+  change: { agent: McpAgentId; list: "agents" | "removeChanged"; on: boolean }
 ): void {
   const dialog = dialogOf(slots, id, "uninstall")
   if (!dialog || dialog.phase === "uninstalling") return

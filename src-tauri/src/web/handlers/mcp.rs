@@ -13,8 +13,14 @@ use crate::commands::mcp::{
     McpMarketplaceServerDetail,
 };
 use crate::commands::mcp_engine;
+use crate::commands::mcp_engine::oauth::{
+    McpOAuthBridgeDefinitionRequest, McpOAuthBridgeSnapshot, McpOAuthCancelRequest,
+    McpOAuthCancelResult, McpOAuthCompleteCallbackRequest, McpOAuthRevokeRequest,
+    McpOAuthRouteInfo, McpOAuthStartRequest, McpOAuthStartResult,
+};
 use crate::commands::mcp_engine::{
-    McpApplyRequest, McpApplyResult, McpInventory, McpOp, McpSnippet,
+    McpAgentId, McpApplyRequest, McpApplyResult, McpInventory, McpOp, McpProbeRequest,
+    McpProbeResult, McpSnippet,
 };
 
 // ---------------------------------------------------------------------------
@@ -163,14 +169,16 @@ pub async fn mcp_remove_server(
 pub async fn mcp_inventory(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<McpInventory>, AppCommandError> {
-    Ok(Json(mcp_engine::mcp_inventory_core(&state.db).await?))
+    Ok(Json(
+        mcp_engine::mcp_inventory_at(&state.db, &state.data_dir).await?,
+    ))
 }
 
 /// `mcp_apply`'s arguments, named as the desktop command names them.
 #[derive(Deserialize)]
 pub struct ApplyParams {
     #[serde(default)]
-    pub basis: Option<BTreeMap<McpAppType, String>>,
+    pub basis: Option<BTreeMap<McpAgentId, String>>,
     pub ops: Vec<McpOp>,
     #[serde(default)]
     pub preflight: Option<bool>,
@@ -186,7 +194,14 @@ pub async fn mcp_apply(
         preflight: params.preflight.unwrap_or(false),
     };
     Ok(Json(
-        mcp_engine::mcp_apply_core(&state.db, &state.emitter, request).await?,
+        mcp_engine::mcp_apply_core(
+            &state.db,
+            &state.emitter,
+            &state.connection_manager,
+            &state.data_dir,
+            request,
+        )
+        .await?,
     ))
 }
 
@@ -199,4 +214,72 @@ pub async fn mcp_parse_snippet(
     Json(params): Json<ParseSnippetParams>,
 ) -> Result<Json<McpSnippet>, AppCommandError> {
     Ok(Json(mcp_engine::mcp_parse_snippet_core(&params.text)))
+}
+
+pub async fn mcp_probe(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(request): Json<McpProbeRequest>,
+) -> Json<McpProbeResult> {
+    Json(mcp_engine::mcp_probe_at(&state.db, request, &state.data_dir).await)
+}
+
+pub async fn mcp_oauth_list(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<McpOAuthBridgeSnapshot>, AppCommandError> {
+    state.mcp_oauth_bridge.mcp_oauth_list_core().await.map(Json)
+}
+
+pub async fn mcp_oauth_start(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(request): Json<McpOAuthStartRequest>,
+) -> Result<Json<McpOAuthStartResult>, AppCommandError> {
+    state
+        .mcp_oauth_bridge
+        .mcp_oauth_start_core(request)
+        .await
+        .map(Json)
+}
+
+pub async fn mcp_oauth_complete_callback(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(request): Json<McpOAuthCompleteCallbackRequest>,
+) -> Result<Json<McpOAuthRouteInfo>, AppCommandError> {
+    state
+        .mcp_oauth_bridge
+        .mcp_oauth_complete_callback_core(request)
+        .await
+        .map(Json)
+}
+
+pub async fn mcp_oauth_cancel(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(request): Json<McpOAuthCancelRequest>,
+) -> Result<Json<McpOAuthCancelResult>, AppCommandError> {
+    state
+        .mcp_oauth_bridge
+        .mcp_oauth_cancel_core(request)
+        .await
+        .map(Json)
+}
+
+pub async fn mcp_oauth_revoke(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(request): Json<McpOAuthRevokeRequest>,
+) -> Result<Json<McpOAuthBridgeSnapshot>, AppCommandError> {
+    state
+        .mcp_oauth_bridge
+        .mcp_oauth_revoke_core(request)
+        .await
+        .map(Json)
+}
+
+pub async fn mcp_oauth_bridge_definition(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(request): Json<McpOAuthBridgeDefinitionRequest>,
+) -> Result<Json<mcp_engine::model::McpDefinition>, AppCommandError> {
+    state
+        .mcp_oauth_bridge
+        .mcp_oauth_bridge_definition_core(request)
+        .await
+        .map(Json)
 }

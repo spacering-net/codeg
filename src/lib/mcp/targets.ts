@@ -16,7 +16,7 @@ import {
   type McpModel,
   type McpReadOnlyReason,
 } from "./model"
-import type { McpAppType, McpTransport } from "./types"
+import type { McpAgentId, McpTransport } from "./types"
 
 export type McpTargetBlock =
   | { kind: "agent"; block: McpAgentBlock }
@@ -65,7 +65,7 @@ export function setTargetBlock(
 export function defaultCreateTargets(
   model: McpModel,
   transport: McpTransport
-): McpAppType[] {
+): McpAgentId[] {
   return model.agents.flatMap((info) =>
     info.agent &&
     info.installed === true &&

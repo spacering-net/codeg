@@ -34,6 +34,7 @@ import {
   type SelectionAskLiveSelectors,
 } from "@/components/message/selection-ask-composer"
 import { formatConversationTitle } from "@/lib/conversation-title"
+import { combineMcpFailureErrorTexts } from "@/lib/mcp/failure-recovery"
 import { useAskConversationDrawerStore } from "@/stores/ask-conversation-drawer-store"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
 import { useActiveFolder } from "@/contexts/active-folder-context"
@@ -2484,6 +2485,61 @@ const ConversationTabView = memo(function ConversationTabView({
     [acpActions, tabId]
   )
 
+  const activeConnectError =
+    conn.connectError?.agentType === selectedAgent ? conn.connectError : null
+  const mcpFailureErrorText = useMemo(
+    () =>
+      combineMcpFailureErrorTexts([
+        acpLoadError,
+        autoConnectError,
+        connIsForOtherAgent ? null : conn.error,
+        activeConnectError?.detail,
+        activeConnectError?.title,
+      ]),
+    [
+      acpLoadError,
+      activeConnectError?.detail,
+      activeConnectError?.title,
+      autoConnectError,
+      conn.error,
+      connIsForOtherAgent,
+    ]
+  )
+
+  const handleMcpFailureReconnect = useCallback(async () => {
+    if (acpLoadError) {
+      handleReloadDetail()
+      return
+    }
+    try {
+      const reconnected =
+        !connIsForOtherAgent && (await acpActions.reconnect(tabId))
+      if (!reconnected && workingDirForConnection) {
+        await conn.connect(
+          selectedAgent,
+          workingDirForConnection,
+          dbConversationId != null && selectedAgent !== "cline"
+            ? externalId
+            : undefined,
+          dbConversationId ?? undefined
+        )
+      }
+    } catch (e: unknown) {
+      console.error("[ConversationDetailPanel] MCP recovery reconnect:", e)
+    }
+  }, [
+    acpActions,
+    acpLoadError,
+    conn,
+    connIsForOtherAgent,
+    dbConversationId,
+    externalId,
+    handleReloadDetail,
+    selectedAgent,
+    tabId,
+    workingDirForConnection,
+  ])
+
   // The docked composer is the only place a quote can land, so the selection
   // bubble offers "quote" exactly when that composer is on screen (see
   // `hideInput` below). Without a composer the inject would never be consumed
@@ -2720,6 +2776,8 @@ const ConversationTabView = memo(function ConversationTabView({
       claudeApiRetry={conn.claudeApiRetry}
       sessionFailures={conn.sessionFailures}
       onSessionFailureDismiss={handleSessionFailureDismiss}
+      mcpFailureErrorText={mcpFailureErrorText}
+      onReconnect={handleMcpFailureReconnect}
       remoteControl={connIsForOtherAgent ? null : conn.remoteControl}
       onRemoteControlOff={
         // Owners of a live connection only, like the stop above.

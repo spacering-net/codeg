@@ -11,6 +11,7 @@
  * have done to it, what state each agent is in for a server, and what
  * flipping its switch would do.
  */
+import { isCustomAgentType } from "@/lib/types"
 import {
   keyRulesOf,
   newKeyProblem,
@@ -18,16 +19,18 @@ import {
   type McpKeyRules,
 } from "./keys"
 import {
-  isMcpAppType,
+  isMcpAgentId,
   isMcpTransport,
   MCP_TRANSPORTS,
+  type McpAgentId,
   type McpAgentInventory,
-  type McpAppType,
   type McpDefinition,
+  type McpDisableMode,
   type McpEntry,
   type McpInventory,
   type McpIssue,
   type McpTransport,
+  type Open,
 } from "./types"
 
 // ─── Agents ───────────────────────────────────────────────────────────
@@ -49,7 +52,11 @@ export interface McpAgentInfo {
   /** As the backend spells it. */
   id: string
   /** `null` for an agent this build does not know. */
-  agent: McpAppType | null
+  agent: McpAgentId | null
+  /** Human-readable display name for custom ACP agents when supplied. */
+  displayName: string | null
+  /** True for user-registered custom ACP agents (`custom:<registry_id>`). */
+  custom: boolean
   installed: boolean | null
   transports: ReadonlySet<McpTransport>
   /** Why `set`, `remove` and `rename` are refused for it, or `null`. */
@@ -59,6 +66,16 @@ export interface McpAgentInfo {
   toggleBlock: McpAgentBlock | null
   /** The file could not be read: its entries are not known at all. */
   unreadable: boolean
+  /** How disabling works for this agent (`native`, `codeg_pause`, or `unsupported`). */
+  disableMode: Open<McpDisableMode>
+}
+
+export function disableModeOf(
+  inventory: McpAgentInventory
+): Open<McpDisableMode> {
+  return (
+    inventory.disable_mode ?? (inventory.can_disable ? "native" : "unsupported")
+  )
 }
 
 function fileBlock(inventory: McpAgentInventory): McpAgentBlock | null {
@@ -71,7 +88,7 @@ function fileBlock(inventory: McpAgentInventory): McpAgentBlock | null {
 }
 
 export function agentInfoOf(inventory: McpAgentInventory): McpAgentInfo {
-  const agent = isMcpAppType(inventory.agent) ? inventory.agent : null
+  const agent = isMcpAgentId(inventory.agent) ? inventory.agent : null
   const transports = new Set<McpTransport>(
     inventory.transports.filter(isMcpTransport)
   )
@@ -86,11 +103,14 @@ export function agentInfoOf(inventory: McpAgentInventory): McpAgentInfo {
     inventory,
     id: inventory.agent,
     agent,
+    displayName: inventory.display_name ?? null,
+    custom: Boolean(inventory.custom || isCustomAgentType(inventory.agent)),
     installed: inventory.installed,
     transports,
     editBlock: unknown ?? file ?? related,
     toggleBlock: unknown ?? file,
     unreadable: inventory.config.status === "unreadable",
+    disableMode: disableModeOf(inventory),
   }
 }
 

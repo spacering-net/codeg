@@ -50,6 +50,26 @@ vi.mock("./session-details-insights", () => ({
     return <div data-testid="session-insights" />
   },
 }))
+const mcpSectionProps = vi.hoisted(
+  () =>
+    [] as Array<{
+      contextKey: string | null
+      agentType: string | null
+      active: boolean
+      draft?: boolean
+    }>
+)
+vi.mock("./session-mcp-section", () => ({
+  SessionMcpSection: (props: {
+    contextKey: string | null
+    agentType: string | null
+    active: boolean
+    draft?: boolean
+  }) => {
+    mcpSectionProps.push(props)
+    return <div data-testid="session-mcp-section" />
+  },
+}))
 
 vi.mock("@/contexts/aux-panel-context", () => ({ useAuxPanelContext: vi.fn() }))
 vi.mock("@/contexts/tab-context", () => ({ useTabStore: vi.fn() }))
@@ -205,6 +225,7 @@ describe("SessionDetailsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     insightsProps.length = 0
+    mcpSectionProps.length = 0
   })
 
   it("renders the active session's details with no folder-actions bar", () => {

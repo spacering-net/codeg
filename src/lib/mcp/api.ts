@@ -15,6 +15,7 @@ import {
   normalizeApplyResult,
   normalizeChanged,
   normalizeInventory,
+  normalizeProbeResult,
   normalizeSnippet,
 } from "./normalize"
 import {
@@ -23,6 +24,8 @@ import {
   type McpApplyResult,
   type McpChanged,
   type McpInventory,
+  type McpProbeArgs,
+  type McpProbeResult,
   type McpSnippet,
 } from "./types"
 
@@ -51,6 +54,20 @@ export async function mcpParseSnippet(text: string): Promise<McpSnippet> {
   return normalizeSnippet(
     await getTransport().call("mcp_parse_snippet", { text })
   )
+}
+
+/**
+ * Probe an MCP server (either an existing `agent` + `key` entry or an inline
+ * `definition` before saving) to verify connectivity and discover tools.
+ * Writes nothing.
+ */
+export async function mcpProbe(args: McpProbeArgs): Promise<McpProbeResult> {
+  const payload: Record<string, unknown> = {}
+  if (args.agent !== undefined) payload.agent = args.agent
+  if (args.key !== undefined) payload.key = args.key
+  if (args.definition !== undefined) payload.definition = args.definition
+  if (args.timeout_ms !== undefined) payload.timeout_ms = args.timeout_ms
+  return normalizeProbeResult(await getTransport().call("mcp_probe", payload))
 }
 
 /**

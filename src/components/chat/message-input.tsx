@@ -84,6 +84,7 @@ import {
 } from "@/components/chat/conversation-context-bar"
 import { ComposerContextUsage } from "@/components/chat/composer-context-usage"
 import { ComposerConnectionStatus } from "@/components/chat/composer-connection-status"
+import { SessionMcpPopover } from "@/components/chat/session-mcp-popover"
 import { SessionSettingsPicker } from "@/components/chat/session-settings-picker"
 import {
   buildSessionSettings,
@@ -2382,6 +2383,10 @@ export function MessageInput({
                 than the `size-4` send icon. Logical side, so it mirrors in
                 RTL. */}
             <div className="flex shrink-0 items-center gap-3 pe-[calc(var(--spacing)*2+1px)]">
+              <SessionMcpPopover
+                tabId={attachmentTabId ?? null}
+                agentType={agentType ?? null}
+              />
               <ComposerContextUsage tabId={attachmentTabId ?? null} />
               <ComposerConnectionStatus tabId={attachmentTabId ?? null} />
             </div>

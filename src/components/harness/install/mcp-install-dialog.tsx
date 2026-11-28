@@ -59,8 +59,8 @@ import type {
 } from "@/lib/harness/mcp-install-types"
 import { agentInfoOf, type McpAgentInfo } from "@/lib/mcp/model"
 import {
-  isMcpAppType,
-  type McpAppType,
+  isMcpAgentId,
+  type McpAgentId,
   type McpTransport,
 } from "@/lib/mcp/types"
 import { cn } from "@/lib/utils"
@@ -980,7 +980,7 @@ function TargetsPart({
       info,
       // A newer Codeg's agent cannot be named in a call; its row is
       // listed, greyed, under its own spelling.
-      agent: (row.agent ?? row.id) as McpAppType,
+      agent: (row.agent ?? row.id) as McpAgentId,
       checked: row.agent !== null && input.agents.includes(row.agent),
       block:
         block === null
@@ -1025,7 +1025,7 @@ function TargetsPart({
         legend={t("title")}
         hint={t(mode === "install" ? "hint" : "hintInstalled")}
         onToggle={(agent, on) =>
-          isMcpAppType(agent) &&
+          isMcpAgentId(agent) &&
           updateInstallInput(slots, dialogId, (prev, current) =>
             toggleTarget(current, prev, agent, on)
           )
@@ -1069,7 +1069,7 @@ function ReplacePart({
       <p className="text-xs">{t.rich("intro", { key, code: machine })}</p>
       <ul className="divide-y rounded-lg border">
         {rows.map((row) => {
-          const agent = row.agent as McpAppType
+          const agent = row.agent as McpAgentId
           const id = `${baseId}-${agent}`
           const conflict = row.conflict
           // For the name the plan proposed, its account of the entry (what

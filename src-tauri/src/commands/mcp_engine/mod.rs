@@ -1,7 +1,7 @@
 //! The MCP engine: what every agent's MCP configuration says, and the only
 //! way codeg changes it.
 //!
-//! Three commands, each a `_core` function shared by the desktop command and
+//! Four commands, each a `_core` function shared by the desktop command and
 //! the web handler:
 //!
 //! - [`mcp_inventory`]: every agent's servers, read agent by agent and never
@@ -13,6 +13,7 @@
 //!   and the basis of every file the caller saw. All of it is done or none
 //!   of it; a preflight does none of it and says what would happen.
 //! - [`mcp_parse_snippet`]: servers out of pasted configuration.
+//! - [`mcp_probe`]: initialize a server and list its tools.
 //!
 //! How a write stays safe is spread over the modules: [`lock`] (one writer
 //! at a time, across processes), [`apply`] (the basis check, the validation,
@@ -34,7 +35,10 @@ pub(crate) mod inventory;
 pub(crate) mod json_doc;
 pub mod lock;
 pub mod model;
+pub mod oauth;
+mod paused;
 pub(crate) mod plugin_gate;
+mod probe;
 pub mod session;
 pub(crate) mod snippet;
 pub(crate) mod store;
@@ -45,20 +49,27 @@ pub(crate) mod yaml_doc;
 mod tests;
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use crate::acp::codex_catalog_commit;
+use crate::acp::manager::ConnectionManager;
+use crate::acp::types::ConfigStaleKind;
 use crate::app_error::AppCommandError;
 use crate::commands::mcp::McpAppType;
-use crate::db::service::agent_setting_service;
+use crate::db::service::{agent_setting_service, custom_agent_service};
 use crate::db::AppDatabase;
+use crate::models::agent::AgentType;
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 use agents::EngineCtx;
 use apply::CodexAccess;
 use model::{codes, McpOpIssue};
 pub use model::{
-    McpApplyRequest, McpApplyResult, McpChanged, McpInventory, McpOp, McpSnippet, MCP_CHANGED_EVENT,
+    McpAgentId, McpApplyRequest, McpApplyResult, McpChanged, McpInventory, McpOp, McpSnippet,
+    MCP_CHANGED_EVENT,
 };
+pub(crate) use probe::mcp_probe_at;
+pub use probe::{mcp_probe_core, McpProbeRequest, McpProbeResult};
 
 /// `lock_busy` → `errors.lockBusy`: the key the page finds the message
 /// under, the way the older MCP errors name theirs.
@@ -95,13 +106,16 @@ pub(crate) fn coded_error(
 
 /// Which agents are on this machine, as the Agents page sees it. `None` for
 /// every agent when that cannot be told.
-pub(crate) async fn installed_agents(db: &AppDatabase) -> BTreeMap<McpAppType, bool> {
+pub(crate) async fn installed_agents(db: &AppDatabase) -> BTreeMap<McpAgentId, bool> {
     match crate::commands::acp::acp_list_agents_core(db).await {
         Ok(listed) => listed
             .into_iter()
             .filter_map(|agent| {
                 Some((
-                    agents::app_of(agent.agent_type)?,
+                    match agent.agent_type {
+                        AgentType::Custom(id) => McpAgentId::Custom(id.to_owned()),
+                        builtin => agents::app_of(builtin)?.into(),
+                    },
                     agent.installed_version.is_some(),
                 ))
             })
@@ -117,8 +131,33 @@ pub(crate) async fn engine_ctx(db: &AppDatabase) -> EngineCtx {
     EngineCtx::from_envs(&agent_setting_service::load_agent_envs(&db.conn).await)
 }
 
+async fn load_custom_agents(ctx: &mut EngineCtx, db: &AppDatabase) -> Result<(), AppCommandError> {
+    ctx.custom_agents = custom_agent_service::list_defs(&db.conn)
+        .await?
+        .into_iter()
+        .map(|def| {
+            (
+                def.registry_id,
+                agents::CustomAgent {
+                    display_name: def.name,
+                    supports_mcp: def.supports_mcp,
+                },
+            )
+        })
+        .collect();
+    Ok(())
+}
+
 pub async fn mcp_inventory_core(db: &AppDatabase) -> Result<McpInventory, AppCommandError> {
-    let ctx = engine_ctx(db).await;
+    mcp_inventory_at(db, &agents::codeg_dir()).await
+}
+
+pub(crate) async fn mcp_inventory_at(
+    db: &AppDatabase,
+    data_dir: &Path,
+) -> Result<McpInventory, AppCommandError> {
+    let mut ctx = engine_ctx(db).await.with_codeg_dir(data_dir);
+    load_custom_agents(&mut ctx, db).await?;
     let installed = installed_agents(db).await;
     // Twenty-odd files, some of them megabytes (`~/.claude.json`): off the
     // async workers.
@@ -196,7 +235,7 @@ pub(crate) async fn apply_in_guarded<G, R>(
     let codex_home = request
         .ops
         .iter()
-        .any(|op| op.agent == McpAppType::Codex)
+        .any(|op| op.agent.builtin() == Some(McpAppType::Codex))
         .then(|| ctx.paths_of(McpAppType::Codex))
         .flatten()
         .and_then(|paths| paths.servers.parent().map(std::path::Path::to_path_buf));
@@ -218,7 +257,7 @@ pub(crate) async fn apply_in_guarded<G, R>(
     Ok((result, Some(after)))
 }
 
-fn announce(emitter: &EventEmitter, agents: Vec<McpAppType>) {
+fn announce(emitter: &EventEmitter, agents: Vec<McpAgentId>) {
     if !agents.is_empty() {
         emit_event(emitter, MCP_CHANGED_EVENT, McpChanged { agents });
     }
@@ -226,7 +265,18 @@ fn announce(emitter: &EventEmitter, agents: Vec<McpAppType>) {
 
 /// Tell every window and web client that these agents' MCP configuration
 /// changed — which agents, and nothing of what is in their files.
-pub(crate) fn announce_changed(emitter: &EventEmitter, agents: &[McpAppType]) {
+pub(crate) fn announce_builtin_changed(emitter: &EventEmitter, agents: &[McpAppType]) {
+    announce_changed(
+        emitter,
+        &agents
+            .iter()
+            .copied()
+            .map(McpAgentId::from)
+            .collect::<Vec<_>>(),
+    );
+}
+
+pub(crate) fn announce_changed(emitter: &EventEmitter, agents: &[McpAgentId]) {
     let mut agents = agents.to_vec();
     agents.sort();
     agents.dedup();
@@ -236,11 +286,32 @@ pub(crate) fn announce_changed(emitter: &EventEmitter, agents: &[McpAppType]) {
 pub async fn mcp_apply_core(
     db: &AppDatabase,
     emitter: &EventEmitter,
+    manager: &ConnectionManager,
+    data_dir: &Path,
     request: McpApplyRequest,
 ) -> Result<McpApplyResult, AppCommandError> {
-    let ctx = engine_ctx(db).await;
+    let mut ctx = engine_ctx(db).await.with_codeg_dir(data_dir);
+    if request
+        .ops
+        .iter()
+        .any(|op| matches!(op.agent, McpAgentId::Custom(_)))
+    {
+        load_custom_agents(&mut ctx, db).await?;
+    }
     let result = apply_in(&ctx, &request).await;
-    announce(emitter, apply::changed_agents(&result));
+    let changed = apply::changed_agents(&result);
+    let affected: Vec<_> = changed.iter().filter_map(McpAgentId::agent_type).collect();
+    announce(emitter, changed);
+    if !affected.is_empty() {
+        crate::commands::acp::refresh_config_staleness(
+            manager,
+            db,
+            data_dir,
+            &affected,
+            ConfigStaleKind::McpConfig,
+        )
+        .await;
+    }
     Ok(result)
 }
 
@@ -253,7 +324,14 @@ pub async fn mcp_apply_core_then<R>(
     request: McpApplyRequest,
     then: impl FnOnce(&McpApplyResult) -> R,
 ) -> Result<(McpApplyResult, Option<R>), AppCommandError> {
-    let ctx = engine_ctx(db).await;
+    let mut ctx = engine_ctx(db).await;
+    if request
+        .ops
+        .iter()
+        .any(|op| matches!(op.agent, McpAgentId::Custom(_)))
+    {
+        load_custom_agents(&mut ctx, db).await?;
+    }
     let (result, after) = apply_in_then(&ctx, &request, then).await;
     announce(emitter, apply::changed_agents(&result));
     Ok((result, after))
@@ -274,10 +352,11 @@ pub async fn mcp_inventory(
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
 pub async fn mcp_apply(
-    basis: Option<BTreeMap<McpAppType, String>>,
+    basis: Option<BTreeMap<McpAgentId, String>>,
     ops: Vec<McpOp>,
     preflight: Option<bool>,
     db: tauri::State<'_, AppDatabase>,
+    manager: tauri::State<'_, ConnectionManager>,
     app: tauri::AppHandle,
 ) -> Result<McpApplyResult, AppCommandError> {
     let request = McpApplyRequest {
@@ -285,7 +364,35 @@ pub async fn mcp_apply(
         ops,
         preflight: preflight.unwrap_or(false),
     };
-    mcp_apply_core(&db, &EventEmitter::from_app(&app), request).await
+    mcp_apply_core(
+        &db,
+        &EventEmitter::from_app(&app),
+        &manager,
+        &agents::codeg_dir(),
+        request,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command(rename_all = "snake_case")]
+pub async fn mcp_probe(
+    agent: Option<McpAgentId>,
+    key: Option<String>,
+    definition: Option<model::McpDefinition>,
+    timeout_ms: Option<u64>,
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<McpProbeResult, AppCommandError> {
+    Ok(mcp_probe_core(
+        &db,
+        McpProbeRequest {
+            agent,
+            key,
+            definition,
+            timeout_ms,
+        },
+    )
+    .await)
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]

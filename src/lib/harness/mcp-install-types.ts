@@ -19,7 +19,7 @@ import type { HarnessInstalledSkill } from "./skill-install-types"
 import type { HarnessPermissions } from "./types"
 import type {
   McpApplyResult,
-  McpAppType,
+  McpAgentId,
   McpBasis,
   McpDefinition,
   McpIssue,
@@ -297,8 +297,8 @@ export interface HarnessMcpInstallArgs {
   optionId: string
   values: Record<string, string>
   key: string
-  agents: McpAppType[]
-  replace: McpAppType[]
+  agents: McpAgentId[]
+  replace: McpAgentId[]
   stateSha256: string
   basis: McpBasis
   acceptYanked: boolean
@@ -335,8 +335,8 @@ export interface HarnessMcpInstallResult {
 
 export interface HarnessMcpUninstallArgs {
   itemId: string
-  agents?: McpAppType[]
-  removeChanged?: McpAppType[]
+  agents?: McpAgentId[]
+  removeChanged?: McpAgentId[]
   basis?: McpBasis
   preflight?: boolean
 }

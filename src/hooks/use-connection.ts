@@ -27,6 +27,7 @@ import type {
   AsyncTaskRecord,
   BackgroundOutstandingTask,
   SessionFailureRecord,
+  SessionMcpState,
   SessionModeStateInfo,
   PromptInputBlock,
 } from "@/lib/types"
@@ -129,6 +130,8 @@ export interface UseConnectionReturn {
   configStale: boolean
   /** Which settings surface drifted, for the banner's wording. */
   configStaleKind: ConfigStaleKind | null
+  /** Running session MCP delivery and per-server runtime state snapshot. */
+  mcpState: SessionMcpState | null
   /** Client-local: the user dismissed the stale banner for the current drift. */
   configStaleDismissed: boolean
   /** True for a delegation-spawned child connection (broker-owned). The stale
@@ -344,6 +347,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
   const loadErrorCommand = connection?.loadErrorCommand ?? null
   const configStale = connection?.configStale ?? false
   const configStaleKind = connection?.configStaleKind ?? null
+  const mcpState = connection?.mcpState ?? null
   const configStaleDismissed = connection?.configStaleDismissed ?? false
   const isDelegationChild = connection?.isDelegationChild ?? false
   const backgroundOutstanding = connection?.backgroundOutstanding ?? 0
@@ -482,6 +486,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       loadErrorCommand,
       configStale,
       configStaleKind,
+      mcpState,
       configStaleDismissed,
       isDelegationChild,
       backgroundOutstanding,
@@ -536,6 +541,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       loadErrorCommand,
       configStale,
       configStaleKind,
+      mcpState,
       configStaleDismissed,
       isDelegationChild,
       backgroundOutstanding,
