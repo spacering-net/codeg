@@ -33681,16 +33681,19 @@ mod tests {
             Some("/srv/agy")
         );
 
-        // `~` 按子进程的家目录变量展开，与历史解析器一致（Windows 读 USERPROFILE）。
+        // `~` 按子进程的家目录变量展开，与历史解析器一致。`child_home_dir` 在
+        // Windows 读 USERPROFILE，且拒绝非绝对路径——`/srv` 在 Windows 上没有
+        // 盘符，不算绝对路径，所以 Windows 夹具要带盘符（同 file_system_runtime
+        // 测试里的 CHILD_HOME_FIXTURE）。
         #[cfg(windows)]
-        const CHILD_HOME_KEY: &str = "USERPROFILE";
+        const CHILD_HOME: (&str, &str) = ("USERPROFILE", r"C:\srv");
         #[cfg(not(windows))]
-        const CHILD_HOME_KEY: &str = "HOME";
+        const CHILD_HOME: (&str, &str) = ("HOME", "/srv");
         let tilde = BTreeMap::from([
-            (CHILD_HOME_KEY.to_string(), "/srv".to_string()),
+            (CHILD_HOME.0.to_string(), CHILD_HOME.1.to_string()),
             ("GEMINI_HOME".to_string(), "~/agy".to_string()),
         ]);
-        let tilde_expected = PathBuf::from("/srv").join("agy");
+        let tilde_expected = PathBuf::from(CHILD_HOME.1).join("agy");
         assert_eq!(
             antigravity_gemini_dir_arg_with_inherited(&tilde, None).as_deref(),
             Some(tilde_expected.to_string_lossy().as_ref())
@@ -33748,8 +33751,12 @@ mod tests {
             ),
             Some(PathBuf::from("/inherited/agy"))
         );
+        let cleared_home = PathBuf::from(CHILD_HOME.1).join("user");
         let cleared_with_home = BTreeMap::from([
-            (CHILD_HOME_KEY.to_string(), "/srv/user".to_string()),
+            (
+                CHILD_HOME.0.to_string(),
+                cleared_home.to_string_lossy().into_owned(),
+            ),
             ("GEMINI_HOME".to_string(), String::new()),
         ]);
         assert_eq!(
@@ -33757,7 +33764,7 @@ mod tests {
                 &cleared_with_home,
                 Some(std::ffi::OsString::from("/inherited/agy")),
             ),
-            Some(PathBuf::from("/srv/user/.gemini"))
+            Some(cleared_home.join(".gemini"))
         );
     }
 
