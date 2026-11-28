@@ -413,6 +413,27 @@ mod tests {
         assert_eq!(found[0].params["field"], "stateSha256");
     }
 
+    /// Nothing installs a plugin yet: neither the MCP nor the skill install
+    /// takes one as its own kind.
+    #[test]
+    fn a_plugin_is_of_another_kind_to_every_install() {
+        use crate::harness::skills::model::codes as skill_codes;
+        let plugin: Resolved = serde_json::from_value(json!({
+            "id": "i", "status": "public", "ref": "obra/superpowers", "kind": "plugin",
+            "latest": { "revision": 3, "version": "7.0.2", "publishedAt": "p" },
+            "advisories": [], "installed": base()
+        }))
+        .unwrap();
+        for (kind, wrong) in [
+            (Kind::Mcp, codes::NOT_AN_MCP_SERVER),
+            (Kind::Skill, skill_codes::NOT_A_SKILL),
+        ] {
+            let found = item_blocking_as(&plugin, 3, kind, wrong);
+            assert_eq!(codes_of(&found), [wrong]);
+            assert_eq!(found[0].params["kind"], "plugin");
+        }
+    }
+
     #[test]
     fn a_shown_snapshot_is_found_by_its_fingerprint() {
         let mut shown = base();

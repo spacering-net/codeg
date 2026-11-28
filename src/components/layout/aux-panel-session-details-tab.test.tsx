@@ -2,7 +2,7 @@ import { fireEvent, render, waitFor, within } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest"
 
-import type { DbConversationSummary } from "@/lib/types"
+import type { DbConversationSummary, FolderDetail } from "@/lib/types"
 import enMessages from "@/i18n/messages/en.json"
 
 // Regression guard: the branch selector + command launcher were REMOVED from
@@ -33,11 +33,17 @@ vi.mock("@/lib/utils", async (importOriginal) => ({
 
 // The insights sections have their own tests; here, only what they're handed.
 const insightsProps = vi.hoisted(
-  () => [] as Array<{ conversationId: number | null; active: boolean }>
+  () =>
+    [] as Array<{
+      conversationId: number | null
+      dbConversationId?: number | null
+      active: boolean
+    }>
 )
 vi.mock("./session-details-insights", () => ({
   SessionDetailsInsights: (props: {
     conversationId: number | null
+    dbConversationId: number | null
     active: boolean
   }) => {
     insightsProps.push(props)
@@ -70,11 +76,19 @@ type TabSlice = {
     id: number
     conversationId: number | null
     runtimeConversationId?: number
+    folderId?: number
+    agentType?: string
+    title?: string
+    isChat?: boolean
   }>
   activeTabId: number | null
 }
 type RuntimeSlice = { byConversationId: Map<number, unknown> }
-type WorkspaceSlice = { conversations: DbConversationSummary[] }
+type WorkspaceSlice = {
+  conversations: DbConversationSummary[]
+  allFolders: Array<Partial<FolderDetail>>
+  branches: Map<number, string>
+}
 
 function summary(
   over: Partial<DbConversationSummary> = {}
@@ -106,6 +120,11 @@ function setupScene(opts: {
   conversation?: Partial<DbConversationSummary>
   /** The summary of the transcript the runtime session loaded. */
   loadedSummary?: DbConversationSummary
+  /** A new conversation's tab, before its first message: folderless when
+   *  `"chat"`. */
+  draft?: "folder" | "chat"
+  /** The active conversation's summary hasn't come through anywhere yet. */
+  unresolved?: boolean
 }) {
   mockAux.mockReturnValue({
     isOpen: true,
@@ -113,16 +132,29 @@ function setupScene(opts: {
   })
 
   const tabState: TabSlice = {
-    tabs: opts.hasActiveConversation
+    tabs: opts.draft
       ? [
           {
             id: 1,
-            conversationId: 7,
-            runtimeConversationId: opts.runtimeConversationId,
+            conversationId: null,
+            folderId: 1,
+            agentType: "codex",
+            isChat: opts.draft === "chat",
           },
         ]
-      : [],
-    activeTabId: opts.hasActiveConversation ? 1 : null,
+      : opts.hasActiveConversation
+        ? [
+            {
+              id: 1,
+              conversationId: 7,
+              runtimeConversationId: opts.runtimeConversationId,
+              folderId: 1,
+              agentType: "claude_code",
+              title: "Fix the login flow",
+            },
+          ]
+        : [],
+    activeTabId: opts.hasActiveConversation || opts.draft ? 1 : null,
   }
   mockTabs.mockImplementation((sel: (s: TabSlice) => unknown) => sel(tabState))
   const sessions = new Map<number, unknown>()
@@ -138,9 +170,20 @@ function setupScene(opts: {
   )
   mockWorkspace.mockImplementation((sel: (s: WorkspaceSlice) => unknown) =>
     sel({
-      conversations: opts.hasActiveConversation
-        ? [summary(opts.conversation)]
-        : [],
+      conversations:
+        opts.hasActiveConversation && !opts.unresolved
+          ? [summary(opts.conversation)]
+          : [],
+      allFolders: [
+        {
+          id: 1,
+          name: "codeg",
+          path: "/work/codeg",
+          git_branch: null,
+          kind: "regular",
+        },
+      ],
+      branches: new Map([[1, "feature/panel"]]),
     })
   )
 }
@@ -201,6 +244,34 @@ describe("SessionDetailsTab", () => {
     expect(line).toContainElement(getByText("claude-opus-4-8"))
     // The status is only a dot on the icon; a screen reader hears it here.
     expect(within(line).getByText("Status: In Progress")).toHaveClass("sr-only")
+  })
+
+  it("leads with the assistant a sub-session ran as, named before the agent", () => {
+    setupScene({
+      hasActiveConversation: true,
+      conversation: {
+        parent_id: 3,
+        assistant_id: 5,
+        assistant_name: "Reviewer",
+      },
+    })
+    const { getAllByRole, getByTestId, getByText } = renderTab()
+    const avatar = getByTestId("session-agent-avatar")
+    // The assistant's avatar instead of the agent's icon; the status dot stays.
+    expect(avatar.querySelector('[data-testid="agent-icon"]')).toBeNull()
+    expect(avatar.querySelector(".bg-yellow-400")).not.toBeNull()
+    const line = getByTestId("session-agent-line")
+    const name = getByTestId("session-assistant-name")
+    expect(line.firstElementChild).toBe(name)
+    expect(name).toHaveTextContent("Reviewer")
+    expect(line).toContainElement(getByText("Claude Code"))
+    // No property cell of its own any more.
+    expect(getAllByRole("term").map((term) => term.textContent)).toEqual([
+      "Git Branch",
+      "Session ID",
+      "Session Index",
+      "Parent Session",
+    ])
   })
 
   it("says nothing of when the conversation last moved", () => {
@@ -280,11 +351,11 @@ describe("SessionDetailsTab", () => {
     expect(within(parent.parentElement!).getByText("3")).toBeInTheDocument()
   })
 
-  it("spaces its cards as far apart as they are from its sides", () => {
+  it("lays its sections straight on the panel, a hairline between each two", () => {
     setupScene({ hasActiveConversation: true })
     const { getByTestId } = renderTab()
     const column = getByTestId("session-insights").parentElement
-    expect(column).toHaveClass("p-3", "space-y-3")
+    expect(column).toHaveClass("px-4", "divide-y")
     expect(column).toContainElement(getByTestId("session-agent-avatar"))
   })
 
@@ -292,9 +363,64 @@ describe("SessionDetailsTab", () => {
     setupScene({ hasActiveConversation: false })
     const { getByText, queryByTestId } = renderTab()
     expect(getByText("No active session")).toBeTruthy()
+    // With a word on what would show here.
+    expect(
+      getByText(
+        "Open a session, or start a new one, to see its details, plan and messages here."
+      )
+    ).toBeTruthy()
+    expect(queryByTestId("draft-session-details")).toBeNull()
     expect(queryByTestId("branch-dropdown")).toBeNull()
     expect(queryByTestId("command-dropdown")).toBeNull()
     expect(queryByTestId("session-insights")).toBeNull()
+  })
+
+  it("lays out a new conversation's details before its first message", () => {
+    setupScene({ hasActiveConversation: false, draft: "folder" })
+    const { getByTestId, getAllByRole, getByText, queryByText, queryByTestId } =
+      renderTab()
+    const card = getByTestId("draft-session-details")
+    expect(within(card).getByText("New session")).toBeTruthy()
+    expect(within(card).getByText("Codex")).toBeTruthy()
+    expect(within(card).getByText("Waiting for the first message")).toBeTruthy()
+    // What is known already: the branch the folder is on, and the folder.
+    expect(
+      getAllByRole("term").map((term) => [
+        term.textContent,
+        term.nextElementSibling?.textContent,
+      ])
+    ).toEqual([
+      ["Git Branch", "feature/panel"],
+      ["Folder", "codeg"],
+    ])
+    expect(getByText("codeg")).toHaveAttribute("title", "/work/codeg")
+    // The sections to come, and when.
+    expect(getByText(/Once you send the first message/)).toBeTruthy()
+    expect(queryByText("No active session")).toBeNull()
+    expect(queryByTestId("session-insights")).toBeNull()
+  })
+
+  it("shows what the tab knows of a conversation whose summary isn't in yet", () => {
+    setupScene({ hasActiveConversation: true, unresolved: true })
+    const { getByTestId, getAllByRole, queryByText } = renderTab()
+    const card = getByTestId("draft-session-details")
+    // Its own title, not a new session's, and no wait for a first message.
+    expect(within(card).getByText("Fix the login flow")).toBeTruthy()
+    expect(within(card).queryByText("New session")).toBeNull()
+    expect(within(card).queryByText("Waiting for the first message")).toBeNull()
+    expect(
+      getAllByRole("term").map((term) => term.nextElementSibling?.textContent)
+    ).toEqual(["feature/panel", "codeg"])
+    expect(queryByText(/Once you send the first message/)).toBeNull()
+    expect(queryByText("No active session")).toBeNull()
+  })
+
+  it("shows no folder or branch for a new folderless chat", () => {
+    setupScene({ hasActiveConversation: false, draft: "chat" })
+    const { getAllByRole } = renderTab()
+    expect(
+      getAllByRole("term").map((term) => term.nextElementSibling?.textContent)
+    ).toEqual(["—", "—"])
   })
 
   // The panel follows the conversation's plan, sub-agents and messages
@@ -313,7 +439,11 @@ describe("SessionDetailsTab", () => {
     setupScene({ hasActiveConversation: true })
     const { getByTestId } = renderTab()
     expect(getByTestId("session-insights")).toBeTruthy()
-    expect(lastInsightsProps()).toEqual({ conversationId: 7, active: true })
+    expect(lastInsightsProps()).toEqual({
+      conversationId: 7,
+      dbConversationId: 7,
+      active: true,
+    })
   })
 
   // A conversation started in this tab streams — and publishes — under its
@@ -322,6 +452,9 @@ describe("SessionDetailsTab", () => {
     setupScene({ hasActiveConversation: true, runtimeConversationId: -42 })
     renderTab()
     expect(lastInsightsProps()?.conversationId).toBe(-42)
+    // Its ask conversations are linked to the persisted row, never the
+    // virtual id.
+    expect(lastInsightsProps()?.dbConversationId).toBe(7)
   })
 
   it("tells the insights when another tab is showing", () => {

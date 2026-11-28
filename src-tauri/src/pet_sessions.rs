@@ -44,6 +44,11 @@ fn is_sessions_relevant(payload: &AcpEvent) -> bool {
             | AcpEvent::Error { .. }
             | AcpEvent::PermissionRequest { .. }
             | AcpEvent::PermissionResolved { .. }
+            // A question or plan approval waits on the user too (18 #2).
+            | AcpEvent::QuestionRequest { .. }
+            | AcpEvent::QuestionResolved { .. }
+            | AcpEvent::PlanApprovalRequest { .. }
+            | AcpEvent::PlanApprovalResolved { .. }
             | AcpEvent::TurnComplete { .. }
             | AcpEvent::ConversationLinked { .. }
             | AcpEvent::ConversationStatusChanged { .. }
@@ -171,6 +176,24 @@ mod tests {
                 session_id: "s".into(),
                 stop_reason: "end_turn".into(),
                 agent_type: "claude_code".into(),
+            },
+            // A question or plan approval changes who waits (18 #2).
+            AcpEvent::QuestionRequest {
+                question_id: "q1".into(),
+                questions: vec![],
+            },
+            AcpEvent::QuestionResolved {
+                question_id: "q1".into(),
+                resolution: None,
+            },
+            AcpEvent::PlanApprovalRequest {
+                approval_id: "a1".into(),
+                tool_call_id: "t1".into(),
+                plan_markdown: "# Plan".into(),
+            },
+            AcpEvent::PlanApprovalResolved {
+                approval_id: "a1".into(),
+                resolution: None,
             },
         ];
         for ev in &accepted {

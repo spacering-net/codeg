@@ -3,9 +3,9 @@ import { formatConversationTitle } from "@/lib/conversation-title"
 import { buildFileUri } from "@/lib/reference-link"
 import {
   type AcpAgentInfo,
-  type AssistantInfo,
   type DbConversationSummary,
   type GitLogEntry,
+  type RosterEntry,
 } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
 
@@ -36,6 +36,27 @@ export function fileToSuggestion(
 }
 
 /**
+ * A whole folder (a workspace's project) → a folder reference by its absolute
+ * path: sent as a `file://` link, as a directory picked from the file tree is.
+ */
+export function folderToSuggestion(folder: {
+  name: string
+  path: string
+}): SuggestionItem {
+  return {
+    reference: {
+      refType: "file",
+      id: folder.path,
+      label: folder.name,
+      uri: buildFileUri(folder.path),
+      meta: { fileKind: "dir" },
+    },
+    detail: folder.path,
+    keywords: folder.path,
+  }
+}
+
+/**
  * ACP agent → agent reference. Carries a `codeg://agent/<agent_type>` uri as a
  * routing anchor: it serializes inline as `[@label](codeg://agent/…)` and
  * renders as a badge in the transcript. The readable link IS the routing
@@ -57,26 +78,36 @@ export function agentToSuggestion(agent: AcpAgentInfo): SuggestionItem {
 }
 
 /**
- * Assistant → assistant reference, routed like an agent: it serializes inline
- * as `[@name](codeg://assistant/<id>)`, from which the backend derives the
- * delegation reminder at send time. The second line is the description the
- * delegating agent also reads, or the agent it runs on when there is none; the
- * agent's name and slug are searchable too.
+ * Personal assistant → assistant reference, routed like an agent: it
+ * serializes inline as `[@name](codeg://bot/<uid>)`, from which the backend
+ * derives the delegation reminder at send time. The second line is its
+ * persona's head (`detail`, as the roster reads it), or the agent its work
+ * runs on when it has none written; that agent's name and slug are
+ * searchable too.
  */
 export function assistantToSuggestion(
-  assistant: AssistantInfo
+  entry: RosterEntry & { uid: string },
+  detail?: string | null,
+  /** What the primary is called while it has no name of its own (the
+   *  localized "Personal assistant"). */
+  primaryName = "Personal assistant"
 ): SuggestionItem {
-  const agentLabel = getAgentLabel(assistant.agent_type)
+  const agentType = entry.work_agent_type ?? null
+  const agentLabel = agentType ? getAgentLabel(agentType) : ""
   return {
     reference: {
       refType: "assistant",
-      id: String(assistant.id),
-      label: assistant.name,
-      uri: `codeg://assistant/${assistant.id}`,
-      meta: { assistantId: assistant.id },
+      id: entry.uid,
+      // As its pill and its page name it: one with no name of its own by its
+      // role (the primary) or its number — never a blank `[@](…)` link.
+      label:
+        entry.name.trim() ||
+        (entry.kind === "primary" ? primaryName : `#${entry.id}`),
+      uri: `codeg://bot/${entry.uid}`,
+      meta: { botUid: entry.uid },
     },
-    detail: assistant.description || agentLabel,
-    keywords: `${agentLabel} ${assistant.agent_type}`,
+    detail: detail || agentLabel || null,
+    keywords: agentType ? `${agentLabel} ${agentType}` : "",
   }
 }
 

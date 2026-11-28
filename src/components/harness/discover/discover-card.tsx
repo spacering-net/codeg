@@ -10,6 +10,7 @@ import {
   MessageSquareText,
   Package,
   PlugZap,
+  Puzzle,
   Star,
   type LucideIcon,
 } from "lucide-react"
@@ -38,6 +39,7 @@ const KIND_ICONS: Record<HarnessKnownKind | "unknown", LucideIcon> = {
   prompt: MessageSquareText,
   assistant: Bot,
   connector: Cable,
+  plugin: Puzzle,
   unknown: Package,
 }
 

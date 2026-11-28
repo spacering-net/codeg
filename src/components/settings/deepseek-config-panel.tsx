@@ -5,6 +5,10 @@ import { useTranslations } from "next-intl"
 import { Eye, EyeOff, Loader2, Save } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  AgentPanelCard,
+  AgentPanelSaveBar,
+} from "@/components/settings/agent-panel-layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import type { AcpAgentInfo } from "@/lib/types"
@@ -132,7 +136,8 @@ export function isValidDeepSeekBaseUrl(value: string): boolean {
  * The list those selectors choose FROM is a different thing. Through 0.9.0 it
  * lives in a different file — `llm-deepseek.models` in the harness settings
  * document, edited by the sibling `DeepSeekModelListEditor` under its own
- * section; since 0.10.0 it is built into the bridge and cannot be edited.
+ * section; 0.10.0 and 0.11.0 build it into the bridge and cannot edit it, and
+ * 0.12.0 lays that section over the built-in one again.
  *
  * Both fields here are plain per-agent env vars, read at spawn — a save reaches
  * sessions started after it, not the ones already running.
@@ -223,16 +228,10 @@ export function DeepSeekConfigPanel({
   }, [agent.env, agent.enabled, apiKey, baseUrl, onSaveEnv, t])
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-      <div>
-        <label className="text-xs font-medium">
-          {t("deepseek.configManagement")}
-        </label>
-        <p className="mt-1 text-2xs text-muted-foreground">
-          {t("deepseek.configDescription")}
-        </p>
-      </div>
-
+    <AgentPanelCard
+      title={t("deepseek.configManagement")}
+      description={t("deepseek.configDescription")}
+    >
       {/* ── Endpoint ───────────────────────────────────────────────── */}
       <div className="space-y-1.5">
         <label
@@ -307,7 +306,7 @@ export function DeepSeekConfigPanel({
         </p>
       </div>
 
-      <div className="flex justify-end">
+      <AgentPanelSaveBar>
         <Button
           type="button"
           size="sm"
@@ -327,7 +326,7 @@ export function DeepSeekConfigPanel({
             </>
           )}
         </Button>
-      </div>
-    </div>
+      </AgentPanelSaveBar>
+    </AgentPanelCard>
   )
 }

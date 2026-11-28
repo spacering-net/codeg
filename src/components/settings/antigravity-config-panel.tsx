@@ -23,6 +23,11 @@ import {
 import { toast } from "sonner"
 
 import {
+  AgentPanelCard,
+  AgentPanelGroup,
+  AgentPanelSaveBar,
+} from "@/components/settings/agent-panel-layout"
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -433,12 +438,10 @@ function HeadlessSignIn({
   }, [pending])
 
   return (
-    <div className="space-y-2 rounded-md border border-dashed p-2.5">
+    <div className="space-y-2 border-t pt-3">
       <div>
-        <p className="text-2xs font-medium">
-          {t("antigravity.headless.title")}
-        </p>
-        <p className="mt-0.5 text-3xs text-muted-foreground">
+        <p className="text-xs font-medium">{t("antigravity.headless.title")}</p>
+        <p className="mt-0.5 text-2xs text-muted-foreground">
           {t("antigravity.headless.description")}
         </p>
       </div>
@@ -446,7 +449,7 @@ function HeadlessSignIn({
       {pending ? (
         <div className="space-y-2">
           <div className="space-y-1">
-            <p className="text-3xs text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("antigravity.headless.step1")}
             </p>
             <div className="flex items-start gap-1.5">
@@ -488,7 +491,7 @@ function HeadlessSignIn({
           </div>
 
           <div className="space-y-1">
-            <p className="text-3xs text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("antigravity.headless.step2", {
                 redirectUri: pending.redirectUri,
               })}
@@ -534,7 +537,7 @@ function HeadlessSignIn({
       ) : (
         <div className="space-y-1.5">
           {needsSave ? (
-            <p className="text-3xs text-amber-600 dark:text-amber-400">
+            <p className="text-2xs text-amber-600 dark:text-amber-400">
               {t("antigravity.headless.saveFirst")}
             </p>
           ) : null}
@@ -620,10 +623,10 @@ function SignOut({ disabled }: { disabled: boolean }) {
   }, [t])
 
   return (
-    <div className="flex items-start justify-between gap-2 rounded-md border border-dashed p-2.5">
+    <div className="flex items-start justify-between gap-2 border-t pt-3">
       <div className="min-w-0">
-        <p className="text-2xs font-medium">{t("antigravity.signOut.title")}</p>
-        <p className="mt-0.5 text-3xs text-muted-foreground">
+        <p className="text-xs font-medium">{t("antigravity.signOut.title")}</p>
+        <p className="mt-0.5 text-2xs text-muted-foreground">
           {t("antigravity.signOut.description")}
         </p>
       </div>
@@ -745,17 +748,11 @@ function LeakedTempSection() {
         : false
 
   return (
-    <div className="space-y-1.5 rounded-md border bg-background/60 p-2.5">
-      <div className="flex items-center gap-1.5">
-        <HardDrive className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-xs font-medium">
-          {t("antigravity.tempReclaimTitle")}
-        </span>
-      </div>
-      <p className="text-3xs text-muted-foreground">
-        {t("antigravity.tempReclaimHint")}
-      </p>
-
+    <AgentPanelCard
+      icon={HardDrive}
+      title={t("antigravity.tempReclaimTitle")}
+      description={t("antigravity.tempReclaimHint")}
+    >
       {scan ? (
         <div className="space-y-1">
           <p className="text-2xs">
@@ -767,7 +764,7 @@ function LeakedTempSection() {
                 })}
           </p>
           {scan.skipped > 0 ? (
-            <p className="text-3xs text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("antigravity.tempReclaimSkipped", { count: scan.skipped })}
             </p>
           ) : null}
@@ -893,7 +890,7 @@ function LeakedTempSection() {
           </AlertDialog>
         ) : null}
       </div>
-    </div>
+    </AgentPanelCard>
   )
 }
 
@@ -1030,15 +1027,11 @@ export function AntigravityConfigPanel({
   }
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-      <div>
-        <label className="text-xs font-medium">{t("configManagement")}</label>
-        <p className="mt-1 text-2xs text-muted-foreground">
-          {t("antigravity.configDescription")}
-        </p>
-      </div>
-
-      <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
+    <AgentPanelGroup
+      title={t("configManagement")}
+      description={t("antigravity.configDescription")}
+    >
+      <AgentPanelCard>
         <div className="space-y-1">
           <label
             className="text-2xs text-muted-foreground"
@@ -1065,7 +1058,7 @@ export function AntigravityConfigPanel({
               ))}
             </SelectContent>
           </Select>
-          <p className="text-3xs text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             {t(`antigravity.methodHints.${method}`)}
           </p>
         </div>
@@ -1147,7 +1140,7 @@ export function AntigravityConfigPanel({
                 )}
               </Button>
             </div>
-            <p className="text-3xs text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("antigravity.googleApiKeyHint")}
             </p>
           </div>
@@ -1225,7 +1218,7 @@ export function AntigravityConfigPanel({
 
         {agent.config_file_path ? (
           <div className="space-y-1">
-            <p className="text-3xs text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("antigravity.settingsFileHint")}
             </p>
             <code className="block overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-3xs whitespace-nowrap text-muted-foreground">
@@ -1233,18 +1226,15 @@ export function AntigravityConfigPanel({
             </code>
           </div>
         ) : null}
+      </AgentPanelCard>
 
-        <LeakedTempSection />
-      </div>
+      <LeakedTempSection />
 
       {/* 权限模式（Turbo 开关）：映射为 `agy acp --dangerously-skip-permissions` */}
-      <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
-        <div className="flex items-center gap-1.5">
-          <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-2xs font-medium">
-            {t("antigravity.permissionsTitle")}
-          </span>
-        </div>
+      <AgentPanelCard
+        icon={ShieldCheck}
+        title={t("antigravity.permissionsTitle")}
+      >
         <div className="space-y-1">
           <label
             className="text-2xs text-muted-foreground"
@@ -1277,15 +1267,15 @@ export function AntigravityConfigPanel({
               </SelectItem>
             </SelectContent>
           </Select>
-          <p className="text-3xs text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             {permissionMode === "turbo"
               ? t("antigravity.permissionModeTurboHint")
               : t("antigravity.permissionModeDefaultHint")}
           </p>
         </div>
-      </div>
+      </AgentPanelCard>
 
-      <div className="flex justify-end">
+      <AgentPanelSaveBar>
         <Button
           className="h-7 gap-1.5 px-2.5 text-xs"
           disabled={busy}
@@ -1300,7 +1290,7 @@ export function AntigravityConfigPanel({
           )}
           {t("antigravity.save")}
         </Button>
-      </div>
-    </div>
+      </AgentPanelSaveBar>
+    </AgentPanelGroup>
   )
 }

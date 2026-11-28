@@ -532,15 +532,19 @@ const FolderPicker = memo(function FolderPicker({
         variant="ghost"
         size="xs"
         title={title}
-        // `px-1.5` (rem scale, so it tracks UI zoom) matches the composer "+"
-        // button's icon breathing room; paired with the row's `pl-2` it lands the
-        // folder icon on the same column as the centered "+" icon.
+        // `px-1.5` is on the spacing scale like the composer's "+" button, so
+        // the two stay aligned wherever `--spacing` comes from (root zoom, or
+        // the canvas board's pinned units); the composer's status row adds the
+        // leading inset that lands the folder icon on the "+" icon's column
+        // (see message-input). `shrink` overrides the Button's
+        // `shrink-0` so a narrow row ellipsizes the folder name instead of
+        // pushing the chip into the trailing status icons.
         className={cn(
-          "min-w-0 gap-0.5 px-1.5",
+          "min-w-0 shrink gap-0.5 px-1.5",
           !editable && "cursor-default opacity-60 hover:bg-transparent"
         )}
       >
-        <Folder className="size-3 shrink-0 text-muted-foreground" />
+        <Folder className="me-0.5 size-3 shrink-0 text-muted-foreground" />
         <span className="max-w-[8.75rem] truncate">{currentFolderName}</span>
         <ChevronDown className="size-3 shrink-0 text-muted-foreground/60" />
       </Button>

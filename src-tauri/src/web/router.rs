@@ -292,6 +292,22 @@ pub fn build_router_with_srn(
             post(handlers::conversations::create_conversation),
         )
         .route(
+            "/create_ask_conversation",
+            post(handlers::conversations::create_ask_conversation),
+        )
+        .route(
+            "/list_ask_conversations",
+            post(handlers::conversations::list_ask_conversations),
+        )
+        .route(
+            "/list_check_conversations",
+            post(handlers::conversations::list_check_conversations),
+        )
+        .route(
+            "/detach_ask_conversation",
+            post(handlers::conversations::detach_ask_conversation),
+        )
+        .route(
             "/create_chat_conversation",
             post(handlers::conversations::create_chat_conversation),
         )
@@ -388,20 +404,264 @@ pub fn build_router_with_srn(
             post(handlers::assistants::assistant_list),
         )
         .route(
-            "/assistant_create",
-            post(handlers::assistants::assistant_create),
+            "/personal_agent_get",
+            post(handlers::personal_agent::personal_agent_get),
         )
         .route(
-            "/assistant_update",
-            post(handlers::assistants::assistant_update),
+            "/personal_agent_timeline",
+            post(handlers::personal_agent::personal_agent_timeline),
         )
         .route(
-            "/assistant_delete",
-            post(handlers::assistants::assistant_delete),
+            "/personal_agent_timeline_rows",
+            post(handlers::personal_agent::personal_agent_timeline_rows),
         )
         .route(
-            "/assistant_reorder",
-            post(handlers::assistants::assistant_reorder),
+            "/personal_agent_timeline_updated_since",
+            post(handlers::personal_agent::personal_agent_timeline_updated_since),
+        )
+        .route(
+            "/personal_agent_items",
+            post(handlers::personal_agent::personal_agent_items),
+        )
+        .route(
+            "/personal_agent_dispatches",
+            post(handlers::personal_agent::personal_agent_dispatches),
+        )
+        .route(
+            "/personal_agent_files",
+            post(handlers::personal_agent::personal_agent_files),
+        )
+        .route(
+            "/personal_agent_stats",
+            post(handlers::personal_agent::personal_agent_stats),
+        )
+        .route(
+            "/personal_agent_save",
+            post(handlers::personal_agent::personal_agent_save),
+        )
+        .route(
+            "/personal_agent_send",
+            post(handlers::personal_agent::personal_agent_send),
+        )
+        .route(
+            "/personal_agent_cancel",
+            post(handlers::personal_agent::personal_agent_cancel),
+        )
+        .route(
+            "/personal_agent_stop_all",
+            post(handlers::personal_agent::personal_agent_stop_all),
+        )
+        .route(
+            "/personal_agent_bots",
+            post(handlers::personal_agent::personal_agent_bots),
+        )
+        .route(
+            "/personal_agent_outputs",
+            post(handlers::personal_agent::personal_agent_outputs),
+        )
+        .route(
+            "/personal_agent_output_read",
+            post(handlers::personal_agent::personal_agent_output_read),
+        )
+        .route(
+            "/personal_agent_roster_act",
+            post(handlers::personal_agent::personal_agent_roster_act),
+        )
+        .route(
+            "/personal_agent_turn_steps",
+            post(handlers::personal_agent::personal_agent_turn_steps),
+        )
+        .route(
+            "/personal_agent_item_act",
+            post(handlers::personal_agent::personal_agent_item_act),
+        )
+        .route(
+            "/personal_agent_item_undo",
+            post(handlers::personal_agent::personal_agent_item_undo),
+        )
+        .route(
+            "/personal_agent_presence",
+            post(handlers::personal_agent::personal_agent_presence),
+        )
+        .route(
+            "/personal_agent_profile",
+            post(handlers::personal_agent::personal_agent_profile),
+        )
+        .route(
+            "/personal_agent_profile_update",
+            post(handlers::personal_agent::personal_agent_profile_update),
+        )
+        .route(
+            "/personal_agent_grades",
+            post(handlers::personal_agent::personal_agent_grades),
+        )
+        .route(
+            "/personal_agent_history_search",
+            post(handlers::personal_agent::personal_agent_history_search),
+        )
+        .route(
+            "/personal_agent_history_status",
+            post(handlers::personal_agent::personal_agent_history_status),
+        )
+        .route(
+            "/personal_agent_history_rebuild",
+            post(handlers::personal_agent::personal_agent_history_rebuild),
+        )
+        .route(
+            "/personal_agent_today",
+            post(handlers::personal_agent::personal_agent_today),
+        )
+        .route(
+            "/personal_agent_activity",
+            post(handlers::personal_agent::personal_agent_activity),
+        )
+        .route(
+            "/notification_prefs_sync",
+            post(handlers::personal_agent::notification_prefs_sync),
+        )
+        .route(
+            "/personal_agent_avatar_png",
+            post(handlers::personal_agent::personal_agent_avatar_png),
+        )
+        .route(
+            "/personal_agent_card_act",
+            post(handlers::personal_agent::personal_agent_card_act),
+        )
+        .route(
+            "/personal_agent_dispatch_stop",
+            post(handlers::personal_agent::personal_agent_dispatch_stop),
+        )
+        .route(
+            "/personal_agent_ask_answer",
+            post(handlers::personal_agent::personal_agent_ask_answer),
+        )
+        .route(
+            "/personal_agent_conversation_target",
+            post(handlers::personal_agent::personal_agent_conversation_target),
+        )
+        .route(
+            "/personal_agent_settings_patch",
+            post(handlers::personal_agent::personal_agent_settings_patch),
+        )
+        .route(
+            "/personal_agent_bot_create",
+            post(handlers::personal_agent::personal_agent_bot_create),
+        )
+        .route(
+            "/personal_agent_bot_copy",
+            post(handlers::personal_agent::personal_agent_bot_copy),
+        )
+        .route(
+            "/personal_agent_bot_impact",
+            post(handlers::personal_agent::personal_agent_bot_impact),
+        )
+        .route(
+            "/personal_agent_bot_delete",
+            post(handlers::personal_agent::personal_agent_bot_delete),
+        )
+        .route(
+            "/personal_agent_choice_answer",
+            post(handlers::personal_agent::personal_agent_choice_answer),
+        )
+        .route(
+            "/personal_agent_meet_projects",
+            post(handlers::personal_agent::personal_agent_meet_projects),
+        )
+        .route(
+            "/personal_agent_starter",
+            post(handlers::personal_agent::personal_agent_starter),
+        )
+        .route(
+            "/personal_agent_thread",
+            post(handlers::personal_agent::personal_agent_thread),
+        )
+        .route(
+            "/personal_agent_compact",
+            post(handlers::personal_agent::personal_agent_compact),
+        )
+        .route(
+            "/personal_agent_new_session",
+            post(handlers::personal_agent::personal_agent_new_session),
+        )
+        .route(
+            "/personal_agent_resume_auto_compact",
+            post(handlers::personal_agent::personal_agent_resume_auto_compact),
+        )
+        .route(
+            "/personal_agent_keepalive",
+            post(handlers::personal_agent::personal_agent_keepalive),
+        )
+        .route(
+            "/personal_agent_resend",
+            post(handlers::personal_agent::personal_agent_resend),
+        )
+        .route(
+            "/personal_agent_mark_seen",
+            post(handlers::personal_agent::personal_agent_mark_seen),
+        )
+        .route(
+            "/personal_agent_notice_act",
+            post(handlers::personal_agent::personal_agent_notice_act),
+        )
+        .route(
+            "/personal_agent_routines",
+            post(handlers::personal_agent::personal_agent_routines),
+        )
+        .route(
+            "/personal_agent_routine_runs",
+            post(handlers::personal_agent::personal_agent_routine_runs),
+        )
+        .route(
+            "/personal_agent_routine_save",
+            post(handlers::personal_agent::personal_agent_routine_save),
+        )
+        .route(
+            "/personal_agent_routine_act",
+            post(handlers::personal_agent::personal_agent_routine_act),
+        )
+        .route(
+            "/personal_agent_rules",
+            post(handlers::personal_agent::personal_agent_rules),
+        )
+        .route(
+            "/personal_agent_rule_reset",
+            post(handlers::personal_agent::personal_agent_rule_reset),
+        )
+        .route(
+            "/personal_agent_answer_question",
+            post(handlers::personal_agent::personal_agent_answer_question),
+        )
+        .route(
+            "/personal_agent_answer_plan",
+            post(handlers::personal_agent::personal_agent_answer_plan),
+        )
+        .route(
+            "/personal_agent_respond_permission",
+            post(handlers::personal_agent::personal_agent_respond_permission),
+        )
+        .route(
+            "/personal_agent_file_save",
+            post(handlers::personal_agent::personal_agent_file_save),
+        )
+        .route(
+            "/personal_agent_file_delete",
+            post(handlers::personal_agent::personal_agent_file_delete),
+        )
+        .route(
+            "/personal_agent_skill_switch",
+            post(handlers::personal_agent::personal_agent_skill_switch),
+        )
+        .route(
+            "/personal_agent_check_message",
+            post(handlers::personal_agent::personal_agent_check_message),
+        )
+        .route(
+            "/personal_agent_checks",
+            post(handlers::personal_agent::personal_agent_checks),
+        )
+        .route(
+            "/personal_agent_set_workdir",
+            post(handlers::personal_agent::personal_agent_set_workdir),
         )
         .route(
             "/list_conversation_tags",
@@ -972,6 +1232,10 @@ pub fn build_router_with_srn(
             "/harness_versions",
             post(handlers::harness::harness_versions),
         )
+        .route(
+            "/harness_releases",
+            post(handlers::harness::harness_releases),
+        )
         .route("/harness_readme", post(handlers::harness::harness_readme))
         .route("/harness_prompt", post(handlers::harness::harness_prompt))
         .route("/harness_blob", post(handlers::harness::harness_blob))
@@ -1005,6 +1269,43 @@ pub fn build_router_with_srn(
         .route(
             "/harness_skill_uninstall",
             post(handlers::harness_skills::harness_skill_uninstall),
+        )
+        // ─── Harness plugin installs, updates, switches and repairs ───
+        .route(
+            "/harness_plugin_plan",
+            post(handlers::harness_plugins::harness_plugin_plan),
+        )
+        .route(
+            "/harness_plugin_install",
+            post(handlers::harness_plugins::harness_plugin_install),
+        )
+        .route(
+            "/harness_plugin_uninstall",
+            post(handlers::harness_plugins::harness_plugin_uninstall),
+        )
+        .route(
+            "/harness_plugin_plan_update",
+            post(handlers::harness_plugins::harness_plugin_plan_update),
+        )
+        .route(
+            "/harness_plugin_update",
+            post(handlers::harness_plugins::harness_plugin_update),
+        )
+        .route(
+            "/harness_plugin_set_host",
+            post(handlers::harness_plugins::harness_plugin_set_host),
+        )
+        .route(
+            "/harness_plugin_set_enabled",
+            post(handlers::harness_plugins::harness_plugin_set_enabled),
+        )
+        .route(
+            "/harness_plugin_repair",
+            post(handlers::harness_plugins::harness_plugin_repair),
+        )
+        .route(
+            "/harness_plugin_hook_trust",
+            post(handlers::harness_plugins::harness_plugin_hook_trust),
         )
         // ─── The update check of what was installed from Harness ───
         .route(
@@ -1148,6 +1449,10 @@ pub fn build_router_with_srn(
         .route(
             "/acp_set_config_option",
             post(handlers::acp::acp_set_config_option),
+        )
+        .route(
+            "/acp_set_composer_mode",
+            post(handlers::acp::acp_set_composer_mode),
         )
         .route(
             "/acp_goal_control",

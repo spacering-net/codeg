@@ -144,6 +144,29 @@ describe("denormalizeSnapshot — config staleness", () => {
   })
 })
 
+describe("denormalizeSnapshot — failed turn", () => {
+  // A snapshot taken between the turn's terminal failure and `TurnComplete`
+  // (an attach, a reconnect) closes the turn on the same failure line the
+  // watching clients drew from the event.
+  it("hydrates the failure line the backend kept, as the agent's words", () => {
+    const patch = denormalizeSnapshot(
+      baseSnapshot({
+        live_message: {
+          id: "lm-1",
+          role: "assistant",
+          started_at: "2026-11-24T00:00:00Z",
+          content: [{ kind: "text", text: "Let me look." }],
+          turn_error: "Not eligible.",
+        },
+      })
+    )
+    expect(patch.liveMessage?.content).toEqual([
+      { type: "text", text: "Let me look.", parentToolUseId: undefined },
+      { type: "turn_error", message: "Not eligible.", fromAgent: true },
+    ])
+  })
+})
+
 describe("denormalizeSnapshot — tool call raw output", () => {
   function snapshotWithOutput(
     output: ToolCallState["output"]

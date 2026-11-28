@@ -280,9 +280,14 @@ describe("markdown-document-preview resolves local refs safely", () => {
     expect(markdownSource).toMatch(
       /const localRefsEnabled = !fileDir \|\| !isUncPath\(fileDir\)/
     )
+    // The image loader and link opener are both gated through the derived
+    // `baseDir` / `effectivePreviewRoot` pair, which is null for UNC docs.
     expect(markdownSource).toMatch(
-      /fileDir=\{localRefsEnabled \? fileDir : null\}/
+      /const baseDir = localRefsEnabled \? \(fileDir \?\? previewRoot\) : null/
     )
+    expect(markdownSource).toMatch(/enabled=\{localRefsEnabled\}/)
+    expect(markdownSource).toMatch(/baseDir=\{baseDir\}/)
+    expect(markdownSource).toMatch(/previewRoot=\{effectivePreviewRoot\}/)
     expect(markdownSource).toMatch(/isRelative && href && localRefsEnabled/)
   })
 

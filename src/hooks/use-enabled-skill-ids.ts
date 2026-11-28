@@ -10,6 +10,16 @@ import {
   scienceListAllInstallStatuses,
 } from "@/lib/api"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
+import { harnessFailureOf } from "@/lib/harness/errors"
+import {
+  harnessInstalled,
+  onHarnessInstalledChanged,
+} from "@/lib/harness/mcp-install-api"
+import {
+  pluginProvidersOf,
+  pluginSkillsEnabled,
+  type PluginProvider,
+} from "@/lib/harness/plugin-list"
 import { piUsesCustomAgentDir } from "@/lib/pi-config"
 import { skillsInventory } from "@/lib/skills/api"
 import { listenSkillsChanged } from "@/lib/skills/changes"
@@ -18,8 +28,19 @@ import { seenBy } from "@/lib/skills/model"
 import type { SkillsChanged } from "@/lib/skills/types"
 import type { AgentType, ExpertInstallStatus } from "@/lib/types"
 
-/** Per agent, the ids of the Codeg skills it sees. */
-type Snapshot = ReadonlyMap<AgentType, ReadonlySet<string>>
+/** Per agent, the ids of the Codeg skills it sees — and the skills a
+ *  Harness plugin gives it, with the name it sees each under. */
+interface Snapshot {
+  ids: ReadonlyMap<AgentType, ReadonlySet<string>>
+  providers: ReadonlyMap<AgentType, ReadonlyMap<string, PluginProvider>>
+  /** False while what the plugins give is not known (no read has said yet):
+   *  no expert's name is decided on it. */
+  providersKnown: boolean
+}
+
+type Providers = Snapshot["providers"]
+
+const NO_PROVIDERS: ReadonlyMap<string, PluginProvider> = new Map()
 
 // Module-level cache shared across every consumer (each composer, the welcome
 // page's quick actions). Agent-agnostic — one entry per agent — so switching
@@ -34,14 +55,37 @@ let generation = 0
 let stale = false
 const subscribers = new Set<(snapshot: Snapshot) => void>()
 
-function snapshotOf(pairs: Iterable<[AgentType, string]>): Snapshot {
+function snapshotOf(
+  pairs: Iterable<[AgentType, string]>,
+  providers: Providers | null = new Map()
+): Snapshot {
   const out = new Map<AgentType, Set<string>>()
   for (const [agent, id] of pairs) {
     const ids = out.get(agent) ?? new Set<string>()
     ids.add(id)
     out.set(agent, ids)
   }
-  return out
+  return {
+    ids: out,
+    providers: providers ?? new Map(),
+    providersKnown: providers !== null,
+  }
+}
+
+/** What the installed plugins give each agent: nothing from a Codeg that
+ *  installs none; what the last read said when this one cannot say (a
+ *  failed read, a record that cannot be read) — so a passing failure never
+ *  changes the name an expert is invoked by — and `null` when no read ever
+ *  has. */
+async function readProviders(): Promise<Providers | null> {
+  const kept = () => (cached?.providersKnown ? cached.providers : null)
+  try {
+    const installed = await harnessInstalled()
+    if (installed.plugins_problem) return kept()
+    return pluginProvidersOf(installed.plugins ?? [])
+  } catch (error) {
+    return harnessFailureOf(error).kind === "unsupported" ? new Map() : kept()
+  }
 }
 
 function* linked(
@@ -62,14 +106,27 @@ function* linked(
  * One `skills_inventory` read covers all of them. An older Codeg (a remote
  * workspace, a browser on an older server) has no inventory: its packs' own
  * status snapshots stand in, as they did before, Custom and UI included.
+ *
+ * And the skills a Harness plugin gives an agent — its skills only (linked
+ * under their own names), or installed whole in the agent's host (seen
+ * under the plugin's name where the host namespaces them): an expert a
+ * plugin gives an agent it has on is enabled for it (`harness_installed`).
  */
 async function readSnapshot(): Promise<Snapshot> {
   try {
-    const inventory = await skillsInventory()
+    const [inventory, providers] = await Promise.all([
+      skillsInventory(),
+      readProviders(),
+    ])
+    const seen = [...inventory.skills, ...(inventory.plugin_skills ?? [])]
     return snapshotOf(
-      inventory.skills.flatMap((skill) =>
-        seenBy(skill).map((agent): [AgentType, string] => [agent, skill.id])
-      )
+      [
+        ...seen.flatMap((skill) =>
+          seenBy(skill).map((agent): [AgentType, string] => [agent, skill.id])
+        ),
+        ...pluginSkillsEnabled(providers ?? new Map()),
+      ],
+      providers
     )
   } catch (error) {
     if (skillsFailureOf(error).kind !== "unsupported") throw error
@@ -152,15 +209,40 @@ function onSkillsChanged(change: SkillsChanged | null): void {
 let consumers = 0
 let stopFollowing: (() => void) | null = null
 
+/** `harness://installed-changed`: a plugin installed, updated, switched,
+ *  removed. Followed where the transport has events. */
+function followInstalled(): () => void {
+  let stop: (() => void) | null = null
+  let stopped = false
+  try {
+    onHarnessInstalledChanged(() => refreshSnapshot())
+      .then((unsubscribe) => {
+        if (stopped) unsubscribe()
+        else stop = unsubscribe
+      })
+      .catch(() => {
+        // No event stream: focus and `skills://changed` still refresh.
+      })
+  } catch {
+    // No transport.
+  }
+  return () => {
+    stopped = true
+    stop?.()
+  }
+}
+
 function acquireRefresh(): void {
   if (typeof window === "undefined") return
   consumers += 1
   if (stopFollowing) return
   window.addEventListener("focus", refreshSnapshot)
   const stopChanges = listenSkillsChanged(onSkillsChanged)
+  const stopInstalled = followInstalled()
   stopFollowing = () => {
     window.removeEventListener("focus", refreshSnapshot)
     stopChanges()
+    stopInstalled()
   }
 }
 
@@ -194,6 +276,11 @@ function releaseRefresh(): void {
  */
 export function useEnabledSkillIds(agentType: AgentType | null): {
   enabledIds: Set<string>
+  /** By skill id: the Harness plugin that gives the agent that skill (in
+   *  any state), with the name the agent sees it under. */
+  providers: ReadonlyMap<string, PluginProvider>
+  /** `providers` is what the host said (not merely nothing yet known). */
+  providersKnown: boolean
   ready: boolean
   supported: boolean
 } {
@@ -258,11 +345,19 @@ export function useEnabledSkillIds(agentType: AgentType | null): {
 
   const enabledIds = useMemo(() => {
     if (!snapshot || !agentType || piSkillsUnmanaged) return new Set<string>()
-    return new Set(snapshot.get(agentType) ?? [])
+    return new Set(snapshot.ids.get(agentType) ?? [])
+  }, [snapshot, agentType, piSkillsUnmanaged])
+
+  const providers = useMemo(() => {
+    if (!snapshot || !agentType || piSkillsUnmanaged) return NO_PROVIDERS
+    return snapshot.providers.get(agentType) ?? NO_PROVIDERS
   }, [snapshot, agentType, piSkillsUnmanaged])
 
   return {
     enabledIds,
+    providers,
+    providersKnown:
+      piSkillsUnmanaged || (snapshot !== null && snapshot.providersKnown),
     // An unmanaged pi is authoritatively "no managed skills", so report ready
     // immediately instead of leaving consumers in the optimistic loading state.
     ready: piSkillsUnmanaged || snapshot !== null,

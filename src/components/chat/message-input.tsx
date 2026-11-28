@@ -110,11 +110,15 @@ import {
   serializeDocToText,
 } from "@/components/chat/composer/to-prompt-blocks"
 import { textToInlineContent } from "@/components/chat/composer/plain-text-content"
-import { isEmbeddedReferenceUri } from "@/components/chat/composer/reference-uri"
+import {
+  isEmbeddedReferenceUri,
+  stripEmbeddedReferences,
+} from "@/components/chat/composer/reference-uri"
 import {
   applyExpertReference,
   blankLineAfter,
   isComposerEmpty,
+  restampExpertNames,
   restampSkillPrefixes,
 } from "@/components/chat/composer/composer-commands"
 import { useComposerChromeFocus } from "@/components/chat/composer/use-composer-chrome-focus"
@@ -158,7 +162,9 @@ import { useComposerShortcuts } from "@/components/chat/composer/use-composer-sh
 export type ComposerInjectContent =
   | {
       text: string
-      skill?: { id: string; label: string }
+      /** `expertId`: an expert's own id, where `id` is the name the agent
+       *  sees it under (re-stamped when the agent changes). */
+      skill?: { id: string; label: string; expertId?: string }
       /**
        * How `text` lands in the composer.
        *
@@ -300,29 +306,6 @@ interface MessageInputProps {
 // path (no collision with a genuine attachment) and survives the transcript's
 // sanitize/harden pipeline, so it renders as an inert file badge, not a blocked
 // link — see {@link buildEmbeddedReferenceUri} / {@link isEmbeddedReferenceUri}.
-
-/** Drop embedded-attachment reference badges from a draft document before it is
- *  persisted: their bytes live only in the in-memory `embeddedPayloadsRef` map
- *  (never serialized into the draft), so a restored badge would send nothing.
- *  Identified purely by the unambiguous `codeg://embedded/…` display uri (no map
- *  needed) — a real `file://` attachment is never matched. Stripping at save
- *  keeps the live badge visible this session but matches the pre-existing
- *  behavior where out-of-band pasted bytes don't survive a draft round-trip. */
-function stripEmbeddedReferences(doc: JSONContent): JSONContent {
-  if (!doc.content) return doc
-  const content: JSONContent[] = []
-  for (const child of doc.content) {
-    if (
-      child.type === "reference" &&
-      typeof child.attrs?.uri === "string" &&
-      isEmbeddedReferenceUri(child.attrs.uri)
-    ) {
-      continue
-    }
-    content.push(stripEmbeddedReferences(child))
-  }
-  return { ...doc, content }
-}
 
 /** The notice for a send held while the agent is still responding (see
  *  `handleSend`), under one id: pressing Enter into the hold again updates the
@@ -558,8 +541,11 @@ export function MessageInput({
   }, [])
 
   // Localized group headings + panel chrome for the `@` mention panel.
-  const { groupLabels: referenceGroupLabels, uiLabels: mentionUiLabels } =
-    useComposerMentionLabels()
+  const {
+    groupLabels: referenceGroupLabels,
+    uiLabels: mentionUiLabels,
+    primaryAssistantName,
+  } = useComposerMentionLabels()
 
   // Live data sources for the unified `@` mention panel. Pre-warmed only while
   // this composer is the active one (`enabled`). Referentially stable.
@@ -567,6 +553,8 @@ export function MessageInput({
     defaultPath: defaultPath ?? null,
     enabled: isActive,
     labels: referenceGroupLabels,
+
+    primaryAssistantName,
   })
 
   // Debounced v2 draft persistence. We snapshot the Tiptap *document* (JSON, not
@@ -802,7 +790,13 @@ export function MessageInput({
                 id: payload.skill.id,
                 label: payload.skill.label,
                 uri: null,
-                meta: { invocationPrefix: skillPrefix, scope: "expert" },
+                meta: {
+                  invocationPrefix: skillPrefix,
+                  scope: "expert",
+                  ...(payload.skill.expertId
+                    ? { expertId: payload.skill.expertId }
+                    : {}),
+                },
               })
             }
           }
@@ -831,14 +825,20 @@ export function MessageInput({
   // carry no scope and stay `/`). rAF-deferred like the sibling editor-mutation
   // effects to stay off React's commit phase — the badge NodeView re-renders via
   // a synchronous flushSync().
+  // An expert's name goes with the agent too: a Harness plugin installed
+  // whole gives it as `superpowers:<id>` to one agent, as `<id>` to another.
+  const expertInvocation = menuShortcuts.expertInvocation
   useEffect(() => {
     if (!composerReady) return
     const raf = requestAnimationFrame(() => {
       const editor = editorRef.current?.getEditor()
-      if (editor) restampSkillPrefixes(editor, skillPrefix)
+      if (editor) {
+        restampSkillPrefixes(editor, skillPrefix)
+        restampExpertNames(editor, expertInvocation)
+      }
     })
     return () => cancelAnimationFrame(raf)
-  }, [skillPrefix, composerReady])
+  }, [skillPrefix, expertInvocation, composerReady])
 
   const handleComposerChange = useCallback(() => {
     // The history's own writes are not edits. They must not end navigation, and
@@ -1566,7 +1566,10 @@ export function MessageInput({
     // doc — guarantees the wire text matches the current agent regardless of any
     // timing/ordering (Codex needs `$skill`, not the slash-command `/skill`).
     // Cheap: one small-doc walk, and no dispatch when nothing is stale.
-    if (editor) restampSkillPrefixes(editor, skillPrefix)
+    if (editor) {
+      restampSkillPrefixes(editor, skillPrefix)
+      restampExpertNames(editor, expertInvocation)
+    }
     // Inline badges + prose → text/resource_link blocks (file mentions become
     // first-class ResourceLinks; agent/session/commit/skill stay inline text;
     // embedded badges are dropped here and re-added below from the payload map).
@@ -1611,7 +1614,13 @@ export function MessageInput({
       displayProse ||
       `Attached ${attachments.length} attachment${attachments.length > 1 ? "s" : ""}`
     return { blocks, displayText }
-  }, [attachments, skillPrefix, imagePromptBlocks, embeddedPayloadsRef])
+  }, [
+    attachments,
+    skillPrefix,
+    expertInvocation,
+    imagePromptBlocks,
+    embeddedPayloadsRef,
+  ])
 
   // Clear the editor + attachments after a send / enqueue / save.
   const resetComposer = useCallback(() => {
@@ -2343,26 +2352,36 @@ export function MessageInput({
         </ContextMenu>
         {hasFolderBranchPicker && (
           // `px-2` mirrors the action bar so this row lines up with the composer
-          // above; the folder icon then aligns with the centered "+" icon (both
-          // add the same 1px transparent border, paired with the picker buttons'
-          // `px-1.5`). The row only renders while attached below the composer, so
+          // above. The row only renders while attached below the composer, so
           // it always takes the rounded-bottom box treatment. Pickers sit at the
           // left edge; the context-usage circle + agent connection status
           // right-align at the trailing edge.
           <div className="flex items-center justify-between gap-2 rounded-b-xl px-2 pt-1 text-xs text-muted-foreground">
-            <div className="flex min-w-0 items-center gap-1">
+            {/* `ps-1` centres the folder icon on the "+" icon's column (u =
+                `--spacing`, which canvas cards pin, hence no rem here). The
+                "+" is a `size-8` square inside the composer's 1px border and
+                the action bar's `px-2`, so its `size-4` icon is centred at
+                1px + 2u + 4u; the folder chip's `size-3` icon sits behind this
+                row's `px-2`, `ps-1`, the chip's 1px border and `px-1.5`:
+                2u + 1u + 1px + 1.5u + 1.5u — the same 1px + 6u. Logical side,
+                so it mirrors with the row in RTL. */}
+            <div className="flex min-w-0 items-center gap-1 ps-1">
               <ConversationFolderBranchPicker
                 tabId={attachmentTabId}
                 override={folderPickerOverride}
               />
             </div>
-            {/* `pr-px` offsets the composer chrome's 1px border: the send button
-                sits INSIDE that border while this status row sits outside it, so
-                without the 1px nudge the trailing icon hangs 1px past the button.
-                With it, the connection icon's RIGHT edge is flush (0px) with the
-                send button's right edge in the action bar above — no centring
-                slot, which would inset the narrow icon and break the alignment. */}
-            <div className="flex shrink-0 items-center gap-3 pr-px">
+            {/* The connection icon's trailing edge lines up with the plain
+                send button's icon above: that `size-4` icon is centred in a
+                `size-8` button (2u inset, u = `--spacing`) that sits INSIDE
+                the composer's 1px border and the action bar's `px-2`, while
+                this row sits outside the border — hence 2u + 1px on top of the
+                row's `px-2`. (The live-feedback split ends in a narrower
+                chevron trigger, so it doesn't line up there.) Padding, not a
+                centring slot: the `size-3.5` heart would land 0.25u further in
+                than the `size-4` send icon. Logical side, so it mirrors in
+                RTL. */}
+            <div className="flex shrink-0 items-center gap-3 pe-[calc(var(--spacing)*2+1px)]">
               <ComposerContextUsage tabId={attachmentTabId ?? null} />
               <ComposerConnectionStatus tabId={attachmentTabId ?? null} />
             </div>

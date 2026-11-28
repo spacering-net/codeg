@@ -177,6 +177,7 @@ pub(crate) fn occupied_issue(entry: &Entry, target: &Path) -> Option<SkillsIssue
         Entry::CodegLink { broken: true, .. } | Entry::ForeignLink { broken: true, .. } => {
             SkillsIssue::new(codes::TARGET_BROKEN)
         }
+        Entry::Owned { plugin, .. } => SkillsIssue::new(codes::PLUGIN_OWNED).detail(plugin.clone()),
         Entry::Unreadable(err) => SkillsIssue::new(codes::IO_ERROR).detail(err.clone()),
     };
     Some(issue.path(target))
@@ -219,6 +220,25 @@ fn plan_enable(world: &World, agent: AgentType, skill: &str, plan: &mut Plan) {
     if let Some(issue) = occupied_issue(&world.entry(&target), &target) {
         plan.issue(issue);
         return;
+    }
+    // A Harness plugin provides the name to this agent — or, through a
+    // shared directory, to another that would see this one too: never two
+    // providers of one name.
+    let mut audience = vec![agent];
+    if shared {
+        audience.extend(readers_except(world, &dir, agent));
+    }
+    for reader in audience {
+        for (path, _, _, entry) in world.entries_of(reader, skill) {
+            if let Some(plugin) = entry.plugin() {
+                plan.issue(
+                    SkillsIssue::new(codes::PLUGIN_OWNED)
+                        .path(&path)
+                        .detail(plugin),
+                );
+                return;
+            }
+        }
     }
     for (path, _, _, entry) in world.entries_of(agent, skill) {
         if !entry.is_codeg_of(skill) && path != target {
@@ -334,6 +354,16 @@ fn plan_disable(world: &World, agent: AgentType, skill: &str, plan: &mut Plan) {
                 ..
             } if s == skill => {
                 plan.warn(SkillsIssue::new(codes::COPY_MODIFIED_KEPT).path(&path));
+            }
+            // A Harness plugin's skill of that name stays: it goes only
+            // with the plugin. Said, not refused (turning a skill off
+            // everywhere must not stop at it).
+            Entry::Owned { plugin, .. } => {
+                plan.warn(
+                    SkillsIssue::new(codes::PLUGIN_OWNED)
+                        .path(&path)
+                        .detail(plugin),
+                );
             }
             _ => {}
         }
@@ -1141,7 +1171,51 @@ pub(crate) fn preflight_pending(
     apply_in(World::load_pending(ctx, pending), &request).0
 }
 
-fn apply_in(mut world: World<'_>, request: &SkillsApplyRequest) -> (SkillsApplyResult, Changed) {
+/// [`preflight_pending`] with the entries at `absent` taken to be gone
+/// already (links another call removes first — the Experts pack's, taken
+/// over by a plugin): the plans, effects and `ack`s the later run gets.
+pub(crate) fn preflight_without(
+    ctx: &SkillsCtx,
+    ops: Vec<SkillOp>,
+    pending: BTreeSet<String>,
+    absent: &[PathBuf],
+) -> SkillsApplyResult {
+    let request = SkillsApplyRequest {
+        ops,
+        preflight: true,
+    };
+    let mut world = World::load_pending(ctx, pending);
+    for path in absent {
+        world.set(path, Entry::Absent);
+    }
+    apply_in(world, &request).0
+}
+
+/// [`apply_blocking`] with `prior`'s steps carried out first, in the same
+/// run: a failure anywhere puts them back too. For steps the ops do not
+/// plan themselves (a plugin's removal takes the copies the user changed,
+/// already backed up) and that change nothing any `ack` covers. Caller holds
+/// the skills lock.
+pub(crate) fn apply_after(
+    ctx: &SkillsCtx,
+    request: &SkillsApplyRequest,
+    prior: &Plan,
+) -> (SkillsApplyResult, Changed) {
+    apply_in_after(World::load(ctx), request, Some(prior))
+}
+
+/// The op index [`apply_after`]'s prior steps run under.
+const PRIOR: usize = usize::MAX;
+
+fn apply_in(world: World<'_>, request: &SkillsApplyRequest) -> (SkillsApplyResult, Changed) {
+    apply_in_after(world, request, None)
+}
+
+fn apply_in_after(
+    mut world: World<'_>,
+    request: &SkillsApplyRequest,
+    prior: Option<&Plan>,
+) -> (SkillsApplyResult, Changed) {
     let plans: Vec<Plan> = request
         .ops
         .iter()
@@ -1243,7 +1317,11 @@ fn apply_in(mut world: World<'_>, request: &SkillsApplyRequest) -> (SkillsApplyR
         );
     }
 
-    let indexed: Vec<(usize, &Plan)> = plans.iter().enumerate().collect();
+    let mut indexed: Vec<(usize, &Plan)> = Vec::new();
+    if let Some(prior) = prior.filter(|prior| !prior.steps.is_empty()) {
+        indexed.push((PRIOR, prior));
+    }
+    indexed.extend(plans.iter().enumerate());
     let report = execute(&mut world, &indexed);
     for result in &mut ops {
         if let Some(status) = report.statuses.get(&result.index) {
@@ -1269,9 +1347,17 @@ fn apply_in(mut world: World<'_>, request: &SkillsApplyRequest) -> (SkillsApplyR
         }
     }
     let mut issues = Vec::new();
-    if let Some((None, issue)) = &report.failed {
-        issues.push(issue.clone());
+    match &report.failed {
+        Some((None, issue)) | Some((Some(PRIOR), issue)) => issues.push(issue.clone()),
+        _ => {}
     }
+    issues.extend(
+        report
+            .rollback_issues
+            .iter()
+            .filter(|(index, _)| *index == PRIOR)
+            .map(|(_, issue)| issue.clone()),
+    );
     let ok = report.ok();
     (
         SkillsApplyResult {
@@ -1402,6 +1488,11 @@ pub(crate) fn repair_blocking(
                 plan.issue(SkillsIssue::new(codes::NOT_BROKEN).path(&path))
             }
             Entry::Absent => plan.issue(SkillsIssue::new(codes::NOT_FOUND).path(&path)),
+            Entry::Owned { plugin, .. } => plan.issue(
+                SkillsIssue::new(codes::PLUGIN_OWNED)
+                    .path(&path)
+                    .detail(plugin),
+            ),
             _ => plan.issue(SkillsIssue::new(codes::NOT_CODEG_LINK).path(&path)),
         }
     }

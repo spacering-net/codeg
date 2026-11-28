@@ -20,9 +20,10 @@ import { useTranslations } from "next-intl"
 import { FolderCog, Loader2, Sparkles } from "lucide-react"
 import { toast } from "sonner"
 
-import { SettingCard, SettingRow } from "@/components/shared/setting-card"
+import { AgentPanelCard } from "@/components/settings/agent-panel-layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import {
   acpListCustomAgents,
@@ -127,27 +128,36 @@ export function CustomAgentSkillsToggle({
   // from"), so they share a card and the hairline between them, rather than
   // reading as two unrelated settings.
   return (
-    <SettingCard>
-      <SettingRow
-        icon={Sparkles}
-        title={t("customAgentSkillsLabel")}
-        description={t("customAgentSkillsHint")}
-        htmlFor={SHARED_STORE_SWITCH_ID}
-        control={
-          <Switch
-            id={SHARED_STORE_SWITCH_ID}
-            checked={info.skillsSharedStore}
-            disabled={saving}
-            onCheckedChange={(v) => void handleToggle(v)}
-          />
-        }
-      />
-      <SettingRow
-        icon={FolderCog}
-        title={t("customAgentSkillsDirLabel")}
-        description={t("customAgentSkillsDirHint")}
-        htmlFor={SKILLS_DIR_INPUT_ID}
-      >
+    <AgentPanelCard
+      icon={Sparkles}
+      title={t("customAgentSkillsLabel")}
+      description={t("customAgentSkillsHint")}
+      htmlFor={SHARED_STORE_SWITCH_ID}
+      control={
+        <Switch
+          id={SHARED_STORE_SWITCH_ID}
+          checked={info.skillsSharedStore}
+          disabled={saving}
+          onCheckedChange={(v) => void handleToggle(v)}
+        />
+      }
+    >
+      <div className="space-y-2 border-t pt-3">
+        <div className="space-y-1">
+          <Label
+            htmlFor={SKILLS_DIR_INPUT_ID}
+            className="flex items-center gap-1.5 text-xs leading-normal font-medium"
+          >
+            <FolderCog
+              className="size-3.5 shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+            {t("customAgentSkillsDirLabel")}
+          </Label>
+          <p className="text-2xs text-muted-foreground">
+            {t("customAgentSkillsDirHint")}
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <Input
             id={SKILLS_DIR_INPUT_ID}
@@ -170,7 +180,7 @@ export function CustomAgentSkillsToggle({
             </Button>
           )}
         </div>
-      </SettingRow>
-    </SettingCard>
+      </div>
+    </AgentPanelCard>
   )
 }

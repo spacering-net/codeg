@@ -15,12 +15,14 @@ import {
 import { HarnessInstallDialogs } from "./install/harness-install-dialogs"
 import { McpSection } from "./mcp/mcp-section"
 import { PacksSection } from "./packs/packs-section"
+import { PluginsSection } from "./plugins/plugins-section"
 import { SkillsSection } from "./skills/skills-section"
 
 const SECTION_VIEWS: Record<HarnessSectionId, ComponentType> = {
   discover: DiscoverSection,
   mcp: McpSection,
   skills: SkillsSection,
+  plugins: PluginsSection,
   packs: PacksSection,
 }
 

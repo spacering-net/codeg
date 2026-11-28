@@ -2,6 +2,9 @@
 //! for a pack's (or Harness's) skill set aside before an update, and
 //! `<time>-<agent>/` for an agent's changed copy replaced on request.
 //!
+//! A plugin's own skills (`super::owned`) keep theirs here too, under the
+//! skill's name: Codeg's store is the one place backups are listed from.
+//!
 //! Dot-prefixed, so never listed as a skill (an older release kept them
 //! beside the skills as `<id>.user-backup-<time>`, where they showed up as
 //! Custom skills); not `.codeg-`, so Codeg's backup still takes them. The
@@ -53,7 +56,7 @@ fn fresh_dir(store: &Path, id: &str, suffix: Option<&str>) -> PathBuf {
 /// Same volume: a rename. Returns where it went.
 pub(crate) fn set_aside(ctx: &SkillsCtx, id: &str) -> io::Result<PathBuf> {
     let from = ctx.skill_path(id);
-    let to = fresh_dir(&ctx.store, id, None);
+    let to = fresh_dir(&ctx.main_store(), id, None);
     move_dir(&from, &to, id)?;
     Ok(to)
 }
@@ -62,7 +65,7 @@ pub(crate) fn set_aside(ctx: &SkillsCtx, id: &str) -> io::Result<PathBuf> {
 /// update or an uninstall — Harness's) into the backups of `id`, under a
 /// fresh `<time>` name. Same volume: a rename. Returns where it went.
 pub(crate) fn move_into_backups(ctx: &SkillsCtx, from: &Path, id: &str) -> io::Result<PathBuf> {
-    let to = fresh_dir(&ctx.store, id, None);
+    let to = fresh_dir(&ctx.main_store(), id, None);
     move_dir(from, &to, id)?;
     Ok(to)
 }
@@ -76,7 +79,7 @@ pub(crate) fn copy_into_backups(
     id: &str,
     agent_label: Option<&str>,
 ) -> io::Result<PathBuf> {
-    let to = fresh_dir(&ctx.store, id, agent_label);
+    let to = fresh_dir(&ctx.main_store(), id, agent_label);
     // Every folder it creates on the way (`.user-backups`, `<id>`) is
     // flushed into its parent too.
     copy_tree_durable(from, &to)?;
@@ -89,9 +92,10 @@ pub(crate) fn copy_into_backups(
 
 /// Drop an empty backups folder of `id`.
 pub(crate) fn tidy(ctx: &SkillsCtx, id: &str) {
-    let dir = backups_root(&ctx.store).join(id);
+    let store = ctx.main_store();
+    let dir = backups_root(&store).join(id);
     remove_if_empty(&dir);
-    remove_if_empty(&backups_root(&ctx.store));
+    remove_if_empty(&backups_root(&store));
 }
 
 /// `<YYYYMMDD-HHMMSS>[.mmm][-<agent>]` → (RFC 3339 time, agent).

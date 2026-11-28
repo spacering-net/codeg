@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from "react"
 import { Message, MessageContent } from "@/components/ai-elements/message"
 import { SessionDetailsCard } from "@/components/conversations/session-details-content"
 import { SessionDetailsInsights } from "@/components/layout/session-details-insights"
+import { SESSION_DETAILS_COLUMN } from "@/components/layout/session-details-layout"
 import { CompletedTurnContent } from "@/components/message/completed-turn-content"
 import { ContentPartsRenderer } from "@/components/message/content-parts-renderer"
 import {
@@ -35,6 +36,7 @@ import {
   StaticConnectionStoreProvider,
   type ConnectionStoreApi,
 } from "@/contexts/acp-connections-context"
+import { EMPTY_ATTENTION_INDEX } from "@/lib/conversation-attention"
 import {
   StaticDelegationProvider,
   type DelegationContextValue,
@@ -91,6 +93,8 @@ const STORE: ConnectionStoreApi = {
   getActiveKey: () => null,
   subscribeKey: () => () => {},
   subscribeActiveKey: () => () => {},
+  getAttention: () => EMPTY_ATTENTION_INDEX,
+  subscribeAttention: () => () => {},
 }
 
 const DELEGATION: DelegationContextValue = {
@@ -1262,7 +1266,7 @@ function AsyncTasksScenario() {
  */
 const NAV_CONVERSATION_ID = -1
 
-/** The conversation the nav scenario's summary card describes;
+/** The conversation the nav scenario's summary describes;
  *  `&status=` picks its status. */
 const NAV_SUMMARY: DbConversationSummary = {
   id: 128,
@@ -1383,10 +1387,11 @@ function NavScenario() {
     >
       <ScrollArea className="min-h-0 flex-1" onViewportRef={setViewport}>
         <MessageNavScrollContext.Provider value={viewport}>
-          <div className="min-w-0 space-y-3 p-3 text-sm">
+          <div className={SESSION_DETAILS_COLUMN}>
             <SessionDetailsCard summary={NAV_SUMMARY} model="gpt-5.5-codex" />
             <SessionDetailsInsights
               conversationId={NAV_CONVERSATION_ID}
+              dbConversationId={null}
               active
             />
           </div>

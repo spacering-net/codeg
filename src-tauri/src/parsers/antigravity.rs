@@ -49,6 +49,9 @@
 //! arm is self-describing, while the enum has 118 values whose numbering is
 //! upstream's to change.
 
+pub(crate) mod background;
+mod failure;
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -666,12 +669,15 @@ struct AntigravityAskOption {
 }
 
 /// `exa.cortex_pb.AskQuestionEntry`: one question of an `ask_question` step and
-/// the user's answer to it. Checked against the 1.4.1, 1.4.3, 1.4.4, 1.4.5 and
-/// 1.5.0 descriptors and live runs: options are numbered `"1"`, `"2"`, …; a
+/// the user's answer to it. Checked against the 1.4.1, 1.4.3, 1.4.4, 1.4.5,
+/// 1.5.0 and 1.5.2 descriptors and live runs: options are numbered `"1"`, `"2"`, …; a
 /// question the user dismissed (or never reached, once an earlier one was dismissed) is
 /// `skipped` with nothing chosen; a multi-select question is still answered
 /// with one option, because the ACP server asks it as a single-choice
-/// permission request.
+/// permission request. From 1.5.2 a dismissed question ends the turn, and the
+/// step is stored `CORTEX_STEP_STATUS_CANCELED` with nothing chosen and no
+/// `skipped` (a Stop while the question waits stores the same; 1.5.0 stored no
+/// step for that).
 #[derive(Clone, PartialEq, ::prost::Message)]
 struct AntigravityAskItem {
     #[prost(string, tag = "1")]
@@ -702,6 +708,73 @@ struct ErrorMessageStep {
     error: Option<ErrorDetails>,
     #[prost(bool, tag = "5")]
     should_show_user: bool,
+}
+
+// Native notifications include the original typed message. The sender id is
+// independent of the human-readable (and possibly truncated) result text.
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct SystemMessage {
+    #[prost(string, tag = "3")]
+    kind: String,
+    #[prost(message, optional, tag = "4")]
+    message: Option<TaskMessage>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct TaskMessage {
+    #[prost(string, tag = "1")]
+    id: String,
+    #[prost(string, tag = "2")]
+    recipient: String,
+    #[prost(string, tag = "3")]
+    sender: String,
+    #[prost(int32, tag = "5")]
+    priority: i32,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct NativeTask {
+    #[prost(string, tag = "1")]
+    id: String,
+    #[prost(string, tag = "7")]
+    title: String,
+    #[prost(message, optional, tag = "8")]
+    moved_to_background_at: Option<Timestamp>,
+}
+
+// Antigravity 1.5.13 executes shell and file tools through this generic arm.
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct GenericTool {
+    #[prost(message, optional, tag = "2")]
+    result: Option<GenericResult>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct GenericResult {
+    #[prost(string, tag = "1")]
+    text: String,
+    #[prost(message, optional, tag = "3")]
+    render: Option<GenericRender>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct GenericRender {
+    #[prost(message, optional, tag = "10")]
+    details: Option<GenericRenderDetails>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct GenericRenderDetails {
+    #[prost(message, optional, tag = "3")]
+    command: Option<CommandResult>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct CommandResult {
+    #[prost(int32, optional, tag = "3")]
+    exit_code: Option<i32>,
+    #[prost(string, tag = "4")]
+    output: String,
 }
 
 /// `gemini_coder.Step`. Every field is one arm of the real `oneof step` (plus
@@ -740,15 +813,61 @@ struct Step {
     mcp_tool: Option<McpTool>,
     #[prost(message, optional, tag = "98")]
     file_change: Option<FileChange>,
+    #[prost(message, optional, tag = "114")]
+    system_message: Option<SystemMessage>,
+    #[prost(message, optional, tag = "140")]
+    generic_tool: Option<GenericTool>,
+    #[prost(message, optional, tag = "148")]
+    task: Option<NativeTask>,
     #[prost(message, optional, tag = "116")]
     agency_tool_call: Option<AgencyToolCall>,
     #[prost(message, optional, tag = "154")]
     ask_question: Option<AntigravityAskQuestions>,
 }
 
-/// `CortexStepStatus.CORTEX_STEP_STATUS_ERROR`. The other eleven values are not
-/// needed: everything else reads as "not an error" for tool-result purposes.
+const STEP_STATUS_DONE: i32 = 3;
+/// `CORTEX_STEP_STATUS_CANCELED`.
+const STEP_STATUS_CANCELED: i32 = 6;
 const STEP_STATUS_ERROR: i32 = 7;
+
+impl Step {
+    fn terminal(&self) -> bool {
+        matches!(self.status, 3..=7 | 12)
+    }
+
+    fn task_message(&self) -> Option<&TaskMessage> {
+        let notification = self.system_message.as_ref()?;
+        (notification.kind == "task_notification").then_some(notification.message.as_ref()?)
+    }
+
+    fn final_answer(&self) -> bool {
+        self.status == STEP_STATUS_DONE
+            && self.planner_response.as_ref().is_some_and(|planner| {
+                planner.tool_calls.is_empty() && !planner.response.trim().is_empty()
+            })
+    }
+
+    fn generic_result(&self) -> Option<&GenericResult> {
+        self.generic_tool.as_ref()?.result.as_ref()
+    }
+
+    fn command_result(&self) -> Option<&CommandResult> {
+        self.generic_result()?
+            .render
+            .as_ref()?
+            .details
+            .as_ref()?
+            .command
+            .as_ref()
+    }
+
+    fn exit_code(&self) -> Option<i64> {
+        self.command_result()
+            .and_then(|r| r.exit_code)
+            .or_else(|| self.run_command.as_ref().map(|r| r.exit_code))
+            .map(i64::from)
+    }
+}
 
 impl Timestamp {
     fn to_utc(&self) -> Option<DateTime<Utc>> {
@@ -769,17 +888,134 @@ impl ErrorDetails {
         .find(|s| !s.trim().is_empty())
         .map(|s| truncate_str(s, TOOL_OUTPUT_CAP))
     }
+
+    /// The executor's raw error string, the one the ACP server words its
+    /// account from (see [`failure`]).
+    fn raw_error(&self) -> Option<&str> {
+        [&self.short_error, &self.full_error]
+            .into_iter()
+            .map(|s| s.trim())
+            .find(|s| !s.is_empty())
+    }
+}
+
+/// A failure that ENDED a turn, worded as the ACP server told it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TurnFailure {
+    pub(crate) text: String,
+    /// AIR category (`access|limit|request|service|unknown`).
+    pub(crate) category: &'static str,
+}
+
+impl Step {
+    /// The failure this step records as ending the turn: an `error_message`
+    /// step the server marked `should_show_user`. agy 1.5.2 stores one when
+    /// the agent executor dies (the model API refused, the quota ran out, …)
+    /// and the server then sends the user its account as a plain
+    /// `agent_message_chunk` and ends the turn `end_turn`. An `error_message`
+    /// WITHOUT the flag is model-facing (an invalid tool call the model is
+    /// asked to fix), and the turn goes on.
+    fn turn_failure(&self) -> Option<TurnFailure> {
+        let step = self.error_message.as_ref().filter(|e| e.should_show_user)?;
+        let details = step.error.as_ref()?;
+        let (text, category) = match details.raw_error() {
+            Some(raw) => (
+                failure::turn_failure_text(raw),
+                failure::failure_category(raw),
+            ),
+            None => (details.user_error_message.trim().to_string(), "unknown"),
+        };
+        (!text.trim().is_empty()).then(|| TurnFailure {
+            text: truncate_str(text.trim(), TOOL_OUTPUT_CAP),
+            category,
+        })
+    }
+}
+
+/// The failure the newest round of `session_id`'s trajectory ended on, with
+/// the step's position among the decoded steps (stable, and unique within the
+/// session) — `None` when that round did not end on one, or when its prompt
+/// was stored before `since` (the turn that just ended has not reached the
+/// trajectory, and the newest round is an earlier one).
+///
+/// The live counterpart of the failure line [`project_steps`] draws: read when
+/// a turn ends, because the server tells the failure as an ordinary reply
+/// chunk. Measured on 1.5.2: the step is on disk before the prompt response
+/// is sent.
+pub(crate) fn newest_round_failure(
+    sessions_dir: &Path,
+    session_id: &str,
+    since: DateTime<Utc>,
+) -> Option<(usize, TurnFailure)> {
+    if !crate::parsers::is_safe_subagent_id(session_id) {
+        return None;
+    }
+    let fallback = default_trajectory_dir();
+    let (steps, _) = read_trajectory(&session_db_path(
+        sessions_dir,
+        fallback.as_deref(),
+        session_id,
+    ));
+    let prompt = steps.iter().rposition(|step| step.user_input.is_some())?;
+    let prompted_at = steps[prompt]
+        .metadata
+        .as_ref()
+        .and_then(|m| m.created_at.as_ref())
+        .and_then(Timestamp::to_utc)?;
+    if prompted_at < since {
+        return None;
+    }
+    let mut failure = None;
+    for (position, step) in steps.iter().enumerate().skip(prompt + 1) {
+        if let Some(found) = step.turn_failure() {
+            failure = Some((position, found));
+        } else if step.planner_response.as_ref().is_some_and(|planner| {
+            !planner.response.trim().is_empty() || !planner.tool_calls.is_empty()
+        }) {
+            // The model went on after it: that failure did not end the turn.
+            failure = None;
+        }
+    }
+    failure
 }
 
 // ---------------------------------------------------------------------------
 // Parser
 // ---------------------------------------------------------------------------
 
+/// `agy` keeps its tree beneath the OS home unless told otherwise (1.5.13
+/// wrote there even with GEMINI_HOME in its environment; codeg now passes
+/// `--gemini-dir` instead). Resolve only the requested session there; a
+/// different configured profile must not be merged wholesale with the
+/// default profile.
+fn default_trajectory_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| {
+        home.join(".gemini")
+            .join(CLI_SUBDIR)
+            .join(SESSIONS_DIR_NAME)
+    })
+}
+
+fn session_db_path(directory: &Path, fallback: Option<&Path>, id: &str) -> PathBuf {
+    let name = format!("{id}.db");
+    let configured = directory.join(&name);
+    if configured.is_file() {
+        return configured;
+    }
+    fallback
+        .map(|dir| dir.join(name))
+        .filter(|path| path.is_file())
+        .unwrap_or(configured)
+}
+
 pub struct AntigravityParser {
     base_dir: PathBuf,
     /// Sessions the standalone `agy_acp_server` wrote before codeg switched to
     /// `agy acp`. Still listed so that history does not disappear.
     legacy_dir: Option<PathBuf>,
+    /// The CLI's default tree under the OS home, consulted only for a session
+    /// the caller already identified (see [`default_trajectory_dir`]).
+    fallback: Option<PathBuf>,
 }
 
 impl AntigravityParser {
@@ -792,9 +1028,11 @@ impl AntigravityParser {
         let base_dir = resolve_antigravity_sessions_dir_for_env(env);
         let legacy = resolve_antigravity_legacy_sessions_dir_for_env(env);
         let legacy_dir = (legacy != base_dir).then_some(legacy);
+        let fallback = default_trajectory_dir().filter(|dir| *dir != base_dir);
         Self {
             base_dir,
             legacy_dir,
+            fallback,
         }
     }
 
@@ -805,6 +1043,7 @@ impl AntigravityParser {
         Self {
             base_dir,
             legacy_dir: None,
+            fallback: None,
         }
     }
 
@@ -814,6 +1053,7 @@ impl AntigravityParser {
 
     fn resolve_db(&self, conversation_id: &str) -> Option<PathBuf> {
         self.dirs()
+            .chain(self.fallback.iter())
             .map(|dir| dir.join(format!("{conversation_id}.db")))
             .find(|path| path.is_file())
     }
@@ -840,8 +1080,9 @@ impl AntigravityParser {
         db_path: &Path,
         summary_cwds: Option<&HashMap<String, String>>,
     ) -> SessionParse {
-        let steps = read_steps(db_path);
+        let (steps, watermark) = read_trajectory(db_path);
         let mut parsed = project_steps(&steps);
+        parsed.watermark = watermark;
         // 优先读与该 `.db` 同目录的 `.meta` sidecar（旧 standalone server 格式），
         // 再读轨迹库自身的 `trajectory_metadata_blob`，然后查
         // `conversation_summaries.db`（新 CLI 格式），最后才回退到旧目录同名
@@ -938,7 +1179,10 @@ impl AgentParser for AntigravityParser {
     }
 
     fn get_conversation(&self, conversation_id: &str) -> Result<ConversationDetail, ParseError> {
-        let Some(db_path) = self.resolve_db(conversation_id) else {
+        let db_path = crate::parsers::is_safe_subagent_id(conversation_id)
+            .then(|| self.resolve_db(conversation_id))
+            .flatten();
+        let Some(db_path) = db_path else {
             return Err(ParseError::ConversationNotFound(
                 conversation_id.to_string(),
             ));
@@ -966,7 +1210,7 @@ impl AgentParser for AntigravityParser {
             summary: self.summary_from(conversation_id, &parsed),
             turns,
             session_stats,
-            transcript_watermark: None,
+            transcript_watermark: parsed.watermark,
         })
     }
 }
@@ -979,21 +1223,36 @@ impl AgentParser for AntigravityParser {
 /// error — for the states that are normal rather than broken: the 0-byte DB a
 /// brand-new session starts as (no `steps` table yet), a file the ACP server
 /// currently holds, or a payload that fails to decode.
-fn read_steps(db_path: &Path) -> Vec<Step> {
+fn read_trajectory(db_path: &Path) -> (Vec<Step>, Option<u64>) {
     let Some(conn) = open_trajectory(db_path) else {
-        return Vec::new();
+        return (Vec::new(), None);
     };
-    let Ok(mut stmt) = conn.prepare("SELECT step_payload FROM steps ORDER BY idx") else {
-        return Vec::new();
+    let Ok(mut stmt) = conn.prepare("SELECT idx, step_payload FROM steps ORDER BY idx") else {
+        return (Vec::new(), None);
     };
-    let Ok(rows) = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0)) else {
-        return Vec::new();
+    let Ok(rows) = stmt.query_map([], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+    }) else {
+        return (Vec::new(), None);
     };
 
     let mut steps = Vec::new();
-    for payload in rows.flatten() {
+    let mut watermark = None;
+    for (idx, payload) in rows.flatten() {
         match Step::decode(payload.as_slice()) {
-            Ok(step) => steps.push(step),
+            Ok(step) => {
+                // An in-progress planner row is rewritten at the same index.
+                // Only its final content covers a published background reply.
+                if step.final_answer()
+                    || step
+                        .error_message
+                        .as_ref()
+                        .is_some_and(|e| e.should_show_user)
+                {
+                    watermark = Some((idx + 1) as u64);
+                }
+                steps.push(step);
+            }
             // One unreadable step must not sink the conversation; the rest of
             // the trajectory still renders.
             Err(err) => {
@@ -1004,7 +1263,7 @@ fn read_steps(db_path: &Path) -> Vec<Step> {
             }
         }
     }
-    steps
+    (steps, watermark)
 }
 
 fn open_trajectory(db_path: &Path) -> Option<Connection> {
@@ -1193,6 +1452,7 @@ fn file_uri_to_path(uri: &str) -> Option<String> {
 
 #[derive(Default, Clone)]
 struct SessionParse {
+    watermark: Option<u64>,
     turns: Vec<MessageTurn>,
     cwd: Option<String>,
     /// First user prompt, already truncated for use as the title.
@@ -1299,6 +1559,8 @@ fn project_steps(steps: &[Step]) -> SessionParse {
     // — and, when their statuses differ, answered both ways.
     let mut settled: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut turn_index = 0_usize;
+    let mut background_id = None;
+    let mut yielded = false;
 
     for (idx, step) in steps.iter().enumerate() {
         let ts = step
@@ -1316,14 +1578,23 @@ fn project_steps(steps: &[Step]) -> SessionParse {
         // next prompt's timestamp into it would set `completed_at` to whenever
         // the user came back, and `backfill_turn_durations` would then report
         // the idle gap — possibly hours — as the response's duration.
-        if let Some(user_input) = step.user_input.as_ref() {
+        let wake = step
+            .task_message()
+            .filter(|msg| msg.priority == 3 && yielded && !msg.id.is_empty());
+        if step.user_input.is_some() || wake.is_some() {
             if !pending.is_empty() {
                 let fallback = pending.last_ts.or(ts).unwrap_or_else(Utc::now);
-                let turn = pending.finish(format!("agy-{turn_index}"), fallback);
-                parsed.turns.push(turn);
+                let id = background_id
+                    .take()
+                    .unwrap_or_else(|| format!("agy-{turn_index}"));
+                parsed.turns.push(pending.finish(id, fallback));
                 turn_index += 1;
             }
             pending = PendingAssistant::default();
+            background_id = wake.map(|msg| format!("agy-bg-{}", msg.id));
+            yielded = false;
+        }
+        if let Some(user_input) = step.user_input.as_ref() {
             let Some(text) = user_input_text(user_input) else {
                 continue;
             };
@@ -1344,6 +1615,40 @@ fn project_steps(steps: &[Step]) -> SessionParse {
             agent_message_id: None,
             });
             parsed.message_count = parsed.message_count.saturating_add(1);
+            continue;
+        }
+
+        // A failure that ended the turn closes the round as its failure line
+        // (`turn_error_message`), never as a reply or a tool result: it is the
+        // server's account, not the model's words, and nothing was called.
+        // The work before it stays its own assistant turn.
+        if let Some(failure) = step.turn_failure() {
+            if !pending.is_empty() {
+                let fallback = pending.last_ts.or(ts).unwrap_or_else(Utc::now);
+                let id = background_id
+                    .take()
+                    .unwrap_or_else(|| format!("agy-{turn_index}"));
+                parsed.turns.push(pending.finish(id, fallback));
+                turn_index += 1;
+                pending = PendingAssistant::default();
+            }
+            if let Some(line) = crate::parsers::turn_error_message(
+                format!("agy-{idx}-error"),
+                &failure.text,
+                ts.unwrap_or_else(Utc::now),
+            ) {
+                parsed.turns.push(MessageTurn {
+                    id: line.id,
+                    role: TurnRole::System,
+                    blocks: line.content,
+                    timestamp: line.timestamp,
+                    usage: None,
+                    duration_ms: None,
+                    model: None,
+                    completed_at: line.completed_at,
+                    agent_message_id: None,
+                });
+            }
             continue;
         }
 
@@ -1405,6 +1710,7 @@ fn project_steps(steps: &[Step]) -> SessionParse {
         }
 
         if let Some(planner) = step.planner_response.as_ref() {
+            yielded = step.final_answer();
             if !planner.thinking.trim().is_empty() {
                 pending.blocks.push(ContentBlock::Thinking {
                     text: truncate_str(&planner.thinking, TEXT_CAP),
@@ -1472,16 +1778,16 @@ fn project_steps(steps: &[Step]) -> SessionParse {
             images: Vec::new(),
             // A proto3 int: a run that exited 0 leaves it off the wire, which
             // decodes to the same 0.
-            exit_code: step
-                .run_command
-                .as_ref()
-                .map(|run| i64::from(run.exit_code)),
+            exit_code: step.exit_code(),
         });
     }
 
     if !pending.is_empty() {
         let fallback = parsed.last_ts.unwrap_or_else(Utc::now);
-        let turn = pending.finish(format!("agy-{turn_index}"), fallback);
+        let turn = pending.finish(
+            background_id.unwrap_or_else(|| format!("agy-{turn_index}")),
+            fallback,
+        );
         parsed.turns.push(turn);
     }
 
@@ -1647,6 +1953,22 @@ struct StepOutcome {
 fn step_outcome(step: &Step) -> Option<StepOutcome> {
     let status_error = step.status == STEP_STATUS_ERROR;
     let step_error = step.error.as_ref().and_then(ErrorDetails::best_message);
+
+    if let Some(result) = step.generic_result() {
+        let command = step.command_result();
+        let text = command
+            .map(|run| run.output.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&result.text);
+        if !text.is_empty() || command.is_some() {
+            return Some(StepOutcome {
+                output: non_empty_capped(text.to_owned()),
+                is_error: status_error
+                    || matches!(step.status, 4..=6 | 12)
+                    || step.exit_code().is_some_and(|code| code != 0),
+            });
+        }
+    }
 
     if let Some(run) = step.run_command.as_ref() {
         let command = first_non_empty([run.command_line.as_str(), run.command.as_str()]);
@@ -1826,11 +2148,13 @@ fn step_outcome(step: &Step) -> Option<StepOutcome> {
                 })
             })
             .collect();
-        // Dismissing the card skips every question with nothing chosen; record
-        // that as the live bridge does (a decline), not as "no selection".
+        // Dismissing the card skips every question with nothing chosen (from
+        // 1.5.2: cancels the step with nothing chosen); record that as the live
+        // bridge does (a decline), not as "no selection".
+        let cancelled = step.status == STEP_STATUS_CANCELED;
         let declined = !ask.items.is_empty()
             && ask.items.iter().all(|item| {
-                item.skipped
+                (item.skipped || cancelled)
                     && item.chosen_ids.is_empty()
                     && item.write_in_response.trim().is_empty()
             });
@@ -2276,15 +2600,203 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].0.as_deref().unwrap_or_default().contains("boom"));
         assert_eq!(errors[0].1, Some(2), "the run's exit code is kept");
-        assert!(errors[1]
-            .0
-            .as_deref()
-            .unwrap_or_default()
-            .contains("quota exhausted"));
-        assert_eq!(errors[1].1, None, "an error step ran no process");
+        // The error the server showed the user ended the turn: it closes the
+        // round as the failure line, after the work it interrupted.
+        assert_eq!(detail.turns.len(), 3, "{:?}", detail.turns);
+        assert!(matches!(detail.turns[2].role, TurnRole::System));
+        assert!(matches!(
+            detail.turns[2].blocks.as_slice(),
+            [ContentBlock::TurnError { message }] if message == "quota exhausted"
+        ));
+    }
+
+    /// The executor error agy 1.5.2 stores for a prompt Google refused (field
+    /// capture of a 403 turn), with the generic `user_error_message` it
+    /// carries beside the raw error.
+    fn refused_turn_error(should_show_user: bool) -> ErrorMessageStep {
+        ErrorMessageStep {
+            error: Some(ErrorDetails {
+                user_error_message: "Agent execution terminated due to error.".into(),
+                short_error: "agent executor error: Error 403, Message: Your current account \
+                              is not eligible for Gemini Code Assist for individuals because \
+                              it is not currently available in your location., Status: \
+                              PERMISSION_DENIED, Details: [map[@type:type.googleapis.com/\
+                              google.rpc.ErrorInfo domain:cloudaicompanion.googleapis.com \
+                              metadata:map[error_number:1008 uiMessage:true] \
+                              reason:UNSUPPORTED_LOCATION]]"
+                    .into(),
+                ..Default::default()
+            }),
+            should_show_user,
+        }
+    }
+
+    const REFUSAL_TEXT: &str = "Your current account is not eligible for Gemini Code Assist \
+                                for individuals because it is not currently available in \
+                                your location.";
+
+    fn prompt_step(at: i64, text: &str) -> Step {
+        Step {
+            metadata: Some(StepMetadata {
+                created_at: ts(at),
+                ..Default::default()
+            }),
+            user_input: Some(UserInput {
+                query: text.into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn error_step(at: i64, should_show_user: bool) -> Step {
+        Step {
+            metadata: Some(StepMetadata {
+                created_at: ts(at),
+                ..Default::default()
+            }),
+            error_message: Some(refused_turn_error(should_show_user)),
+            ..Default::default()
+        }
+    }
+
+    fn reply_step(at: i64, text: &str) -> Step {
+        Step {
+            status: STEP_STATUS_DONE,
+            metadata: Some(StepMetadata {
+                created_at: ts(at),
+                ..Default::default()
+            }),
+            planner_response: Some(PlannerResponse {
+                response: text.into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    // A turn the executor died in before the model said anything (the 403
+    // refusal of a user's location) is the prompt and the failure line — in
+    // the server's words, not the generic "terminated due to error", and not a
+    // tool result with no call (which drew as a failed "Result" card).
+    #[test]
+    fn a_refused_turn_reads_as_its_failure_line() {
+        let dir = tempfile::tempdir().unwrap();
+        write_steps(
+            dir.path(),
+            "s-refused",
+            &[
+                prompt_step(1_700_000_000, "hi"),
+                error_step(1_700_000_004, true),
+                prompt_step(1_700_000_010, "again"),
+                error_step(1_700_000_013, true),
+            ],
+        );
+        let parser = AntigravityParser::with_base_dir(dir.path().to_path_buf());
+        let detail = parser.get_conversation("s-refused").unwrap();
+        let shape: Vec<_> = detail
+            .turns
+            .iter()
+            .map(|turn| match (&turn.role, turn.blocks.as_slice()) {
+                (TurnRole::User, [ContentBlock::Text { text }]) => format!("user:{text}"),
+                (TurnRole::System, [ContentBlock::TurnError { message }]) => {
+                    format!("failed:{message}")
+                }
+                other => panic!("unexpected turn {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                "user:hi".to_string(),
+                format!("failed:{REFUSAL_TEXT}"),
+                "user:again".to_string(),
+                format!("failed:{REFUSAL_TEXT}"),
+            ]
+        );
+        assert_eq!(
+            detail.summary.message_count, 2,
+            "a failure line says nothing"
+        );
+    }
+
+    // An error the model is asked to fix (no `should_show_user`) does not end
+    // the turn, so it is not a failure line.
+    #[test]
+    fn a_model_facing_error_is_not_a_failure_line() {
+        let dir = tempfile::tempdir().unwrap();
+        write_steps(
+            dir.path(),
+            "s-retry",
+            &[
+                prompt_step(1_700_000_000, "go"),
+                error_step(1_700_000_001, false),
+                reply_step(1_700_000_002, "done"),
+            ],
+        );
+        let parser = AntigravityParser::with_base_dir(dir.path().to_path_buf());
+        let detail = parser.get_conversation("s-retry").unwrap();
+        assert!(detail
+            .turns
+            .iter()
+            .all(|turn| !matches!(turn.role, TurnRole::System)));
+    }
+
+    #[test]
+    fn the_newest_round_failure_is_read_for_the_turn_that_just_ended() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = |seconds| Utc.timestamp_opt(seconds, 0).single().unwrap();
+        write_steps(
+            dir.path(),
+            "s-live",
+            &[
+                prompt_step(1_700_000_000, "hi"),
+                error_step(1_700_000_004, true),
+            ],
+        );
+        let (position, failure) =
+            newest_round_failure(dir.path(), "s-live", at(1_700_000_000)).unwrap();
+        assert_eq!(position, 1);
+        assert_eq!(failure.text, REFUSAL_TEXT);
+        assert_eq!(failure.category, "access");
+        // A prompt stored before the turn began is an EARLIER round's: the
+        // turn that just ended has not reached the trajectory.
+        assert_eq!(
+            newest_round_failure(dir.path(), "s-live", at(1_700_000_001)),
+            None
+        );
+        assert_eq!(newest_round_failure(dir.path(), "missing", at(0)), None);
+
+        // The model going on after a shown error means it did not end the turn.
+        write_steps(
+            dir.path(),
+            "s-recovered",
+            &[
+                prompt_step(1_700_000_000, "hi"),
+                error_step(1_700_000_001, true),
+                reply_step(1_700_000_002, "hello"),
+            ],
+        );
+        assert_eq!(
+            newest_round_failure(dir.path(), "s-recovered", at(1_700_000_000)),
+            None
+        );
+        // A round with no failure at all.
+        write_steps(
+            dir.path(),
+            "s-ok",
+            &[
+                prompt_step(1_700_000_000, "hi"),
+                reply_step(1_700_000_001, "hello"),
+            ],
+        );
+        assert_eq!(
+            newest_round_failure(dir.path(), "s-ok", at(1_700_000_000)),
+            None
+        );
     }
 
     // The decoder declares a strict SUBSET of the real `Step`. Every field it
@@ -2293,7 +2805,7 @@ mod tests {
     #[test]
     fn unknown_fields_and_unmodelled_oneof_arms_are_skipped() {
         // A `Step` carrying tag 155 (`attachments`, a repeated Any we never
-        // model), tag 148 (`task_details`, a message) and tag 1 (`type`, a
+        // model), tag 1 (`type`, a
         // varint enum) alongside the one arm we do model.
         #[derive(Clone, PartialEq, ::prost::Message)]
         struct WiderStep {
@@ -2305,8 +2817,6 @@ mod tests {
             user_input: Option<UserInput>,
             #[prost(bytes = "vec", repeated, tag = "155")]
             attachments: Vec<Vec<u8>>,
-            #[prost(string, tag = "148")]
-            task_details: String,
             // An arm the parser deliberately does not model.
             #[prost(string, tag = "111")]
             conversation_history: String,
@@ -2323,7 +2833,6 @@ mod tests {
                 ..Default::default()
             }),
             attachments: vec![vec![1, 2, 3], vec![4]],
-            task_details: "ignored".into(),
             conversation_history: "ignored too".into(),
         };
         let decoded = Step::decode(wide.encode_to_vec().as_slice()).expect("decode subset");
@@ -2841,9 +3350,16 @@ mod tests {
     /// Round-trip one `ask_question` step (`Step` field 154) through the store
     /// and return the tool call's name and its result envelope.
     fn ask_step_outcome(items: Vec<AntigravityAskItem>) -> (String, serde_json::Value) {
+        ask_step_outcome_with_status(STEP_STATUS_DONE, items)
+    }
+
+    fn ask_step_outcome_with_status(
+        status: i32,
+        items: Vec<AntigravityAskItem>,
+    ) -> (String, serde_json::Value) {
         let dir = tempfile::tempdir().unwrap();
         let step = Step {
-            status: 3,
+            status,
             metadata: Some(StepMetadata {
                 created_at: ts(1_700_000_000),
                 tool_call: Some(ChatToolCall {
@@ -2857,7 +3373,7 @@ mod tests {
             ..Default::default()
         };
         write_steps(dir.path(), "test-session", &[step]);
-        let parsed = project_steps(&read_steps(&dir.path().join("test-session.db")));
+        let parsed = project_steps(&read_trajectory(&dir.path().join("test-session.db")).0);
         let blocks: Vec<&ContentBlock> = parsed.turns.iter().flat_map(|t| &t.blocks).collect();
         let name = blocks
             .iter()
@@ -3112,7 +3628,7 @@ mod tests {
             .join(CLI_SUBDIR)
             .join(SESSIONS_DIR_NAME)
             .join("wal-session.db");
-        let steps = read_steps(&cli_db);
+        let (steps, _) = read_trajectory(&cli_db);
         assert_eq!(steps.len(), 1);
         assert_eq!(
             steps[0].user_input.as_ref().map(|u| u.query.as_str()),
@@ -3139,7 +3655,7 @@ mod tests {
         write_steps(&legacy_conv, "placeholder-1", &[step]);
         std::fs::write(cli_conv.join("placeholder-1.db"), b"").unwrap();
         assert!(migrate_legacy_session_to_cli(root.path(), "placeholder-1").unwrap());
-        assert_eq!(read_steps(&cli_conv.join("placeholder-1.db")).len(), 1);
+        assert_eq!(read_trajectory(&cli_conv.join("placeholder-1.db")).0.len(), 1);
 
         // 旧会话不存在或为 0 字节时跳过。
         std::fs::write(legacy_conv.join("empty-old.db"), b"").unwrap();
@@ -3153,5 +3669,32 @@ mod tests {
                 "非法 session_id 应被忽略: {bad:?}"
             );
         }
+    }
+    /// 1.5.2 stores a dismissed (or stopped) question as a cancelled step with
+    /// nothing chosen and no `skipped`: still a decline, not "no selection". A
+    /// cancelled step that kept an earlier answer keeps it.
+    #[test]
+    fn antigravity_ask_question_outcome_reads_a_cancelled_step_as_declined() {
+        let (_, cancelled) = ask_step_outcome_with_status(
+            STEP_STATUS_CANCELED,
+            vec![ask_item("Which area first?", &["Backend", "Frontend"], &[])],
+        );
+        assert_eq!(
+            cancelled,
+            serde_json::json!({ "answers": [], "declined": true })
+        );
+
+        let (_, partly) = ask_step_outcome_with_status(
+            STEP_STATUS_CANCELED,
+            vec![
+                ask_item("Which area first?", &["Backend", "Frontend"], &["2"]),
+                ask_item("Pick tags", &["Alpha", "Beta"], &[]),
+            ],
+        );
+        assert_eq!(partly["declined"], false);
+        assert_eq!(
+            partly["answers"][0]["selected"],
+            serde_json::json!(["Frontend"])
+        );
     }
 }

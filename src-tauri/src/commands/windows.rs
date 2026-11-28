@@ -304,6 +304,14 @@ impl SettingsWindowState {
             .ok()
             .and_then(|mut owners| owners.remove(settings_label))
     }
+
+    /// The window a settings window was opened from, left in place.
+    fn owner_of(&self, settings_label: &str) -> Option<String> {
+        self.owner_by_settings_label
+            .lock()
+            .ok()
+            .and_then(|owners| owners.get(settings_label).cloned())
+    }
 }
 
 impl Default for SettingsWindowState {
@@ -1301,14 +1309,14 @@ pub async fn open_project_boot_window(
 
 // ─── Desktop pet window ─────────────────────────────────────────────────
 
-const PET_WINDOW_LABEL: &str = "pet";
+pub const PET_WINDOW_LABEL: &str = "pet";
 const PET_HOVER_ENTER_EVENT: &str = "pet://hover-enter";
 const PET_HOVER_LEAVE_EVENT: &str = "pet://hover-leave";
 /// Single-frame logical pixel dimensions, locked to the Codex sprite-sheet
 /// contract. The window is sized as one frame × user scale, with no extra
 /// chrome — DPR handling lives inside the webview.
-const PET_BASE_WIDTH: f64 = 192.0;
-const PET_BASE_HEIGHT: f64 = 208.0;
+pub(crate) const PET_BASE_WIDTH: f64 = 192.0;
+pub(crate) const PET_BASE_HEIGHT: f64 = 208.0;
 
 /// Process-global "cursor is currently inside the pet window" flag, owned by
 /// the hover watcher but readable/writable by the context-menu command so
@@ -1348,6 +1356,194 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SavedPetOrigin {
+    x: f64,
+    y: f64,
+}
+
+/// Pick the monitor a saved pet origin belongs to: the one containing the
+/// origin itself, or — only when no monitor does (an origin just off a
+/// monitor's top/left edge) — one containing the pet's center. `hit(m, center)`
+/// tests the origin (`center == false`) or the center against monitor `m`.
+/// Testing both per monitor in a single pass let an earlier monitor claim the
+/// pet through a center computed at *that* monitor's scale factor (e.g. a 350%
+/// primary claiming a pet saved on the 1× display above it).
+fn pick_pet_monitor(
+    monitors: &[(i32, i32, u32, u32, f64)],
+    hit: impl Fn((i32, i32, u32, u32, f64), bool) -> bool,
+) -> Option<(i32, i32, u32, u32, f64)> {
+    monitors
+        .iter()
+        .copied()
+        .find(|&m| hit(m, false))
+        .or_else(|| monitors.iter().copied().find(|&m| hit(m, true)))
+}
+
+/// Resolve a persisted `(x, y)` (captured from `outer_position`) into a clamped
+/// Cocoa **logical** origin on macOS.
+///
+/// On macOS, `tao` scales each monitor's origin and size by *that monitor's
+/// own* scale factor, so a 1× display placed to the right of a 2× primary
+/// display overlaps in physical coordinates (e.g. primary `[0, 3024)` vs right
+/// `[1512, 3432)`). When `saved_scale_factor` is present we first convert
+/// `(x, y)` into unambiguous Cocoa logical points and match against the
+/// non-overlapping logical monitor rects; legacy rows without a stored scale
+/// factor fall back to physical rect matching.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn resolve_saved_pet_origin_macos(
+    saved: Option<(f64, f64)>,
+    saved_scale_factor: Option<f64>,
+    pet_w: f64,
+    pet_h: f64,
+    monitors: &[(i32, i32, u32, u32, f64)],
+) -> Option<SavedPetOrigin> {
+    let (x, y) = saved?;
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+
+    if let Some(saved_sf) = saved_scale_factor.filter(|sf| sf.is_finite() && *sf > 0.0) {
+        let lx = x / saved_sf;
+        let ly = y / saved_sf;
+        let (mx, my, mw, mh, msf) = pick_pet_monitor(monitors, |(mx, my, mw, mh, msf), center| {
+            if !msf.is_finite() || msf <= 0.0 || mw == 0 || mh == 0 {
+                return false;
+            }
+            let mlx = f64::from(mx) / msf;
+            let mly = f64::from(my) / msf;
+            let mlw = f64::from(mw) / msf;
+            let mlh = f64::from(mh) / msf;
+            let cx = lx + pet_w / 2.0;
+            let cy = ly + pet_h / 2.0;
+            let (px, py) = if center { (cx, cy) } else { (lx, ly) };
+            px >= mlx && px < mlx + mlw && py >= mly && py < mly + mlh
+        })?;
+        let mlx = f64::from(mx) / msf;
+        let mly = f64::from(my) / msf;
+        let mlw = f64::from(mw) / msf;
+        let mlh = f64::from(mh) / msf;
+        let max_x = (mlx + mlw - pet_w).max(mlx);
+        let max_y = (mly + mlh - pet_h).max(mly);
+        return Some(SavedPetOrigin {
+            x: lx.clamp(mlx, max_x),
+            y: ly.clamp(mly, max_y),
+        });
+    }
+
+    // Legacy row (no recorded scale factor): match raw physical monitor rect
+    // and convert into that monitor's logical coordinates.
+    let (mx, my, mw, mh, msf) = pick_pet_monitor(monitors, |(mx, my, mw, mh, msf), center| {
+        if !msf.is_finite() || msf <= 0.0 || mw == 0 || mh == 0 {
+            return false;
+        }
+        let mx = f64::from(mx);
+        let my = f64::from(my);
+        let mw = f64::from(mw);
+        let mh = f64::from(mh);
+        let cx = x + (pet_w * msf) / 2.0;
+        let cy = y + (pet_h * msf) / 2.0;
+        let (px, py) = if center { (cx, cy) } else { (x, y) };
+        px >= mx && px < mx + mw && py >= my && py < my + mh
+    })?;
+    let mlx = f64::from(mx) / msf;
+    let mly = f64::from(my) / msf;
+    let mlw = f64::from(mw) / msf;
+    let mlh = f64::from(mh) / msf;
+    let max_x = (mlx + mlw - pet_w).max(mlx);
+    let max_y = (mly + mlh - pet_h).max(mly);
+    Some(SavedPetOrigin {
+        x: (x / msf).clamp(mlx, max_x),
+        y: (y / msf).clamp(mly, max_y),
+    })
+}
+
+/// Resolve a persisted physical `(x, y)` against live monitor geometries on
+/// Windows / Linux, where physical desktop coordinates form one non-overlapping
+/// coordinate space. Returns clamped physical `(x, y)` or `None` to center.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn resolve_saved_pet_origin_physical(
+    saved: Option<(f64, f64)>,
+    pet_w: f64,
+    pet_h: f64,
+    monitors: &[(i32, i32, u32, u32, f64)],
+) -> Option<SavedPetOrigin> {
+    let (x, y) = saved?;
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+
+    let (mx, my, mw, mh, sf) = pick_pet_monitor(monitors, |(mx, my, mw, mh, sf), center| {
+        if !sf.is_finite() || sf <= 0.0 || mw == 0 || mh == 0 {
+            return false;
+        }
+        let mx = f64::from(mx);
+        let my = f64::from(my);
+        let mw = f64::from(mw);
+        let mh = f64::from(mh);
+        let cx = x + (pet_w * sf) / 2.0;
+        let cy = y + (pet_h * sf) / 2.0;
+        let (px, py) = if center { (cx, cy) } else { (x, y) };
+        px >= mx && px < mx + mw && py >= my && py < my + mh
+    })?;
+
+    let mx = f64::from(mx);
+    let my = f64::from(my);
+    let mw = f64::from(mw);
+    let mh = f64::from(mh);
+    let max_x = (mx + mw - pet_w * sf).max(mx);
+    let max_y = (my + mh - pet_h * sf).max(my);
+    Some(SavedPetOrigin {
+        x: x.clamp(mx, max_x),
+        y: y.clamp(my, max_y),
+    })
+}
+
+/// The pet window's live `(outer x, outer y, scale factor)` in the same shape
+/// `pet_window_record_position` stores, for saving on quit. `None` when the
+/// window can't report it or is minimized (Windows parks minimized windows at
+/// -32000, which must not overwrite a real saved position).
+#[cfg(feature = "tauri-runtime")]
+pub(crate) fn pet_window_live_origin(
+    window: &tauri::WebviewWindow,
+) -> Option<(f64, f64, Option<f64>)> {
+    if window.is_minimized().unwrap_or(false) {
+        return None;
+    }
+    let pos = window.outer_position().ok()?;
+    let scale_factor = window
+        .scale_factor()
+        .ok()
+        .filter(|sf| sf.is_finite() && *sf > 0.0);
+    Some((f64::from(pos.x), f64::from(pos.y), scale_factor))
+}
+
+/// Physical top-left that centers a `box_w × box_h` (physical px) staging
+/// window on the monitor holding a resolved (already clamped) physical
+/// origin, for Windows / Linux where physical monitor rects do not overlap.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn pet_staging_origin(
+    origin: SavedPetOrigin,
+    monitors: &[(i32, i32, u32, u32, f64)],
+    box_w: f64,
+    box_h: f64,
+) -> Option<(i32, i32)> {
+    monitors
+        .iter()
+        .find(|&&(mx, my, mw, mh, _)| {
+            let (mx, my) = (f64::from(mx), f64::from(my));
+            origin.x >= mx
+                && origin.x < mx + f64::from(mw)
+                && origin.y >= my
+                && origin.y < my + f64::from(mh)
+        })
+        .map(|&(mx, my, mw, mh, _)| {
+            let x = f64::from(mx) + (f64::from(mw) - box_w) / 2.0;
+            let y = f64::from(my) + (f64::from(mh) - box_h) / 2.0;
+            (x.round() as i32, y.round() as i32)
+        })
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn open_pet_window(
@@ -1369,33 +1565,57 @@ pub async fn open_pet_window(
             .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))??;
     }
 
+    let scale = config.scale.clamp(0.5, 3.0);
+    let pet_w = PET_BASE_WIDTH * scale;
+    let pet_h = PET_BASE_HEIGHT * scale;
+
     if let Some(existing) = app.get_webview_window(PET_WINDOW_LABEL) {
         let _ = existing.unminimize();
+        let _ = existing.set_size(LogicalSize::new(pet_w, pet_h));
         existing
             .set_focus()
             .map_err(|e| AppCommandError::window("Failed to focus pet window", e.to_string()))?;
         return Ok(());
     }
 
-    let scale = config.scale.clamp(0.5, 3.0);
     config.scale = scale;
     config.enabled = true;
     crate::commands::pet::pet_save_window_state_core(
         &db.conn,
         crate::models::pet::PetWindowStatePatch {
-            x: None,
-            y: None,
             scale: Some(scale),
-            always_on_top: None,
             enabled: Some(true),
+            ..Default::default()
         },
     )
     .await?;
 
+    let monitors: Vec<(i32, i32, u32, u32, f64)> = app
+        .available_monitors()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| {
+            let pos = m.position();
+            let size = m.size();
+            (pos.x, pos.y, size.width, size.height, m.scale_factor())
+        })
+        .collect();
+    #[cfg(target_os = "macos")]
+    let saved_origin = resolve_saved_pet_origin_macos(
+        config.x.zip(config.y),
+        config.position_scale_factor,
+        pet_w,
+        pet_h,
+        &monitors,
+    );
+    #[cfg(not(target_os = "macos"))]
+    let saved_origin =
+        resolve_saved_pet_origin_physical(config.x.zip(config.y), pet_w, pet_h, &monitors);
+
     let url = WebviewUrl::App(format!("pet?petId={pet_id}").into());
     let mut builder = WebviewWindowBuilder::new(&app, PET_WINDOW_LABEL, url)
         .title("codeg pet")
-        .inner_size(PET_BASE_WIDTH * scale, PET_BASE_HEIGHT * scale)
+        .inner_size(pet_w, pet_h)
         .min_inner_size(PET_BASE_WIDTH * 0.5, PET_BASE_HEIGHT * 0.5)
         .max_inner_size(PET_BASE_WIDTH * 3.0, PET_BASE_HEIGHT * 3.0)
         .resizable(false)
@@ -1410,11 +1630,55 @@ pub async fn open_pet_window(
         .focused(false)
         .accept_first_mouse(true);
 
-    builder = builder.center();
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(origin) = saved_origin {
+            builder = builder.position(origin.x, origin.y);
+        } else {
+            builder = builder.center();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if saved_origin.is_none() {
+            builder = builder.center();
+        }
+    }
 
-    apply_pet_window_style(builder)
+    let window = apply_pet_window_style(builder)
         .build()
         .map_err(|e| AppCommandError::window("Failed to open pet window", e.to_string()))?;
+
+    #[cfg(not(target_os = "macos"))]
+    if let Some(saved) = saved_origin {
+        let origin = tauri::PhysicalPosition::new(saved.x.round() as i32, saved.y.round() as i32);
+        // Stage wholly on the target monitor first. The window still has the
+        // build monitor's physical size here, and near a seam — or when the
+        // target monitor is smaller than that size — moving it straight to
+        // the saved origin can leave most of it on the build monitor, so
+        // Windows keeps that monitor's DPI and the logical resize below lands
+        // at the wrong physical size. Shrinking to the minimum logical size
+        // and centering that on the target monitor puts the whole window on
+        // it; the DPI switches, and the resize + final move (to an origin
+        // already clamped to fit) then use the target monitor's scale.
+        let (stage_w, stage_h) = (PET_BASE_WIDTH * 0.5, PET_BASE_HEIGHT * 0.5);
+        let build_sf = window
+            .scale_factor()
+            .ok()
+            .filter(|sf| sf.is_finite() && *sf > 0.0)
+            .unwrap_or(1.0);
+        let staging = pet_staging_origin(saved, &monitors, stage_w * build_sf, stage_h * build_sf)
+            .map(|(x, y)| tauri::PhysicalPosition::new(x, y))
+            .unwrap_or(origin);
+        let _ = window.set_size(LogicalSize::new(stage_w, stage_h));
+        let _ = window.set_position(staging);
+        let _ = window.set_size(LogicalSize::new(pet_w, pet_h));
+        let _ = window.set_position(origin);
+    }
+
+    // Re-assert exact logical dimensions after build/placement so mixed-DPI
+    // monitor transitions can never leave the window scaled by a stale factor.
+    let _ = window.set_size(LogicalSize::new(pet_w, pet_h));
 
     spawn_pet_hover_watcher(app.clone());
 
@@ -1503,11 +1767,8 @@ pub async fn close_pet_window(
     let _ = crate::commands::pet::pet_save_window_state_core(
         &db.conn,
         crate::models::pet::PetWindowStatePatch {
-            x: None,
-            y: None,
-            scale: None,
-            always_on_top: None,
             enabled: Some(false),
+            ..Default::default()
         },
     )
     .await?;
@@ -1519,18 +1780,22 @@ pub async fn close_pet_window(
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn pet_window_record_position(
+    app: AppHandle,
     db: tauri::State<'_, AppDatabase>,
     x: f64,
     y: f64,
 ) -> Result<(), AppCommandError> {
+    let position_scale_factor = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .and_then(|w| w.scale_factor().ok())
+        .filter(|sf| sf.is_finite() && *sf > 0.0);
     crate::commands::pet::pet_save_window_state_core(
         &db.conn,
         crate::models::pet::PetWindowStatePatch {
             x: Some(x),
             y: Some(y),
-            scale: None,
-            always_on_top: None,
-            enabled: None,
+            position_scale_factor,
+            ..Default::default()
         },
     )
     .await?;
@@ -1746,9 +2011,17 @@ fn open_pet_panel_window(app: &AppHandle) -> Result<(), AppCommandError> {
         .focused(true)
         .accept_first_mouse(true);
 
-    apply_pet_window_style(builder)
+    let panel = apply_pet_window_style(builder)
         .build()
         .map_err(|e| AppCommandError::window("Failed to open pet panel", e.to_string()))?;
+
+    // Show it here rather than waiting for the renderer's first
+    // `resize_pet_panel`: that call is scheduled from `requestAnimationFrame`,
+    // which a hidden WKWebView never runs, so a panel left hidden would stay
+    // hidden. `tauri-plugin-window-state` used to do this show + focus for us
+    // on window-ready; the panel is now on its denylist.
+    let _ = panel.show();
+    let _ = panel.set_focus();
 
     Ok(())
 }
@@ -1784,6 +2057,33 @@ pub async fn resize_pet_panel(app: AppHandle, height: f64) -> Result<(), AppComm
     let _ = panel.set_position(LogicalPosition::new(panel_x, panel_y));
     let _ = panel.show();
     let _ = panel.set_focus();
+    Ok(())
+}
+
+/// From the settings window: bring the workspace window it was opened from
+/// to the front, on the assistants page with its settings open at `page`
+/// (the executor configs, from Collaboration's "moved to the assistants
+/// page"). An event, not a reload, so the workspace keeps its state; the
+/// workspace's `PersonalAgentOpenBridge` takes it.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn open_personal_agent_page(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, SettingsWindowState>,
+    page: String,
+) -> Result<(), AppCommandError> {
+    let owner = state
+        .owner_of(window.label())
+        .filter(|label| app.get_webview_window(label).is_some())
+        .unwrap_or_else(|| "main".to_string());
+    show_and_focus_window(&app, &owner);
+    app.emit_to(
+        owner.as_str(),
+        "workspace://open-personal-agent",
+        serde_json::json!({ "page": page }),
+    )
+    .map_err(|e| AppCommandError::window("Failed to signal the workspace window", e.to_string()))?;
     Ok(())
 }
 
@@ -2017,6 +2317,13 @@ fn load_macos_tray_template_icon() -> Result<tauri::image::Image<'static>, Strin
 pub const TRAY_MENU_ID_PREFIX: &str = "tray:";
 pub const TRAY_MENU_ID_SHOW: &str = "tray:show";
 pub const TRAY_MENU_ID_QUIT: &str = "tray:quit";
+/// "Settings…": the assistants' settings, on the page with the menu bar's
+/// switches (10.10).
+pub const TRAY_MENU_ID_SETTINGS: &str = "tray:settings";
+/// One of the latest assistants: `tray:bot:<id>` opens it.
+pub const TRAY_MENU_ID_BOT_PREFIX: &str = "tray:bot:";
+/// The latest assistants' heading (not clickable).
+const TRAY_MENU_ID_RECENT: &str = "tray:recent";
 pub const TRAY_ICON_ID: &str = "codeg-tray";
 
 /// True after `install_tray_icon` returns `Ok`. The hide-on-close path
@@ -2365,6 +2672,8 @@ pub fn open_local_workspace(app: AppHandle) {
 struct TrayLabels {
     show_workspace: &'static str,
     quit: &'static str,
+    recent: &'static str,
+    settings: &'static str,
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -2374,42 +2683,62 @@ fn tray_labels_for(locale: crate::models::system::AppLocale) -> TrayLabels {
         AppLocale::ZhCn => TrayLabels {
             show_workspace: "显示工作台",
             quit: "退出 Codeg",
+            recent: "最近的助手",
+            settings: "设置…",
         },
         AppLocale::ZhTw => TrayLabels {
             show_workspace: "顯示工作臺",
             quit: "退出 Codeg",
+            recent: "最近的助手",
+            settings: "設定…",
         },
         AppLocale::Ja => TrayLabels {
             show_workspace: "ワークスペースを表示",
             quit: "Codeg を終了",
+            recent: "最近のアシスタント",
+            settings: "設定…",
         },
         AppLocale::Ko => TrayLabels {
             show_workspace: "워크스페이스 표시",
             quit: "Codeg 종료",
+            recent: "최근 어시스턴트",
+            settings: "설정…",
         },
         AppLocale::Es => TrayLabels {
             show_workspace: "Mostrar el área de trabajo",
             quit: "Salir de Codeg",
+            recent: "Asistentes recientes",
+            settings: "Ajustes…",
         },
         AppLocale::De => TrayLabels {
             show_workspace: "Arbeitsbereich anzeigen",
             quit: "Codeg beenden",
+            recent: "Letzte Assistenten",
+            settings: "Einstellungen…",
         },
         AppLocale::Fr => TrayLabels {
             show_workspace: "Afficher l'espace de travail",
             quit: "Quitter Codeg",
+            recent: "Assistants récents",
+            settings: "Réglages…",
         },
         AppLocale::Pt => TrayLabels {
             show_workspace: "Mostrar área de trabalho",
             quit: "Sair do Codeg",
+            recent: "Assistentes recentes",
+            settings: "Configurações…",
         },
         AppLocale::Ar => TrayLabels {
             show_workspace: "إظهار مساحة العمل",
             quit: "إنهاء Codeg",
+            recent: "المساعدون الأخيرون",
+            settings: "الإعدادات…",
         },
         AppLocale::En => TrayLabels {
             show_workspace: "Show Workspace",
             quit: "Quit Codeg",
+            recent: "Recent assistants",
+            settings: "Settings…",
         },
     }
 }
@@ -2424,22 +2753,14 @@ pub fn install_tray_icon(
     app: &AppHandle,
     locale: crate::models::system::AppLocale,
 ) -> tauri::Result<()> {
-    use tauri::menu::{MenuBuilder, MenuItem, PredefinedMenuItem};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-    let labels = tray_labels_for(locale);
-    let show_item = MenuItem::with_id(
-        app,
-        TRAY_MENU_ID_SHOW,
-        labels.show_workspace,
-        true,
-        None::<&str>,
-    )?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    let quit_item = MenuItem::with_id(app, TRAY_MENU_ID_QUIT, labels.quit, true, None::<&str>)?;
-    let menu = MenuBuilder::new(app)
-        .items(&[&show_item, &separator, &quit_item])
-        .build()?;
+    let bots = {
+        let mut state = tray_menu_state();
+        state.locale = locale;
+        state.bots.clone()
+    };
+    let menu = build_tray_menu(app, locale, bots.as_deref())?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ICON_ID)
         .tooltip("Codeg")
@@ -2501,11 +2822,120 @@ pub fn refresh_tray_menu(
     app: &AppHandle,
     locale: crate::models::system::AppLocale,
 ) -> tauri::Result<()> {
-    use tauri::menu::{MenuBuilder, MenuItem, PredefinedMenuItem};
+    tray_menu_state().locale = locale;
+    apply_tray_menu(app)
+}
 
+/// Rebuild the tray's menu from what it is built from. One rebuild at a
+/// time (off the main thread: building waits on it), so the last change
+/// is the menu shown.
+#[cfg(feature = "tauri-runtime")]
+fn apply_tray_menu(app: &AppHandle) -> tauri::Result<()> {
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
     let Some(tray) = app.tray_by_id(TRAY_ICON_ID) else {
         return Ok(());
     };
+    let (locale, bots) = {
+        let state = tray_menu_state();
+        (state.locale, state.bots.clone())
+    };
+    let menu = build_tray_menu(app, locale, bots.as_deref())?;
+    tray.set_menu(Some(menu))?;
+    Ok(())
+}
+
+/// The workspace's event that opens an assistant, as a followed
+/// notification does (`listenPersonalAgentFollow`).
+pub const PERSONAL_AGENT_FOLLOW_EVENT: &str = "workspace://follow-personal-agent";
+
+/// The tray's "Settings…": the workspace in front, on the assistants'
+/// settings page with the menu bar's switches.
+#[cfg(feature = "tauri-runtime")]
+pub fn tray_open_settings(app: &AppHandle) {
+    show_main_window(app);
+    if let Err(e) = app.emit_to(
+        "main",
+        "workspace://open-personal-agent",
+        serde_json::json!({ "page": "proactive" }),
+    ) {
+        tracing::warn!("[Tray] settings not opened: {e}");
+    }
+}
+
+/// One of the tray's latest assistants: the workspace in front, on its
+/// conversation.
+#[cfg(feature = "tauri-runtime")]
+pub fn tray_open_bot(app: &AppHandle, bot: i32) {
+    show_main_window(app);
+    if let Err(e) = app.emit_to(
+        "main",
+        PERSONAL_AGENT_FOLLOW_EVENT,
+        serde_json::json!({ "kind": "bot", "bot_id": bot, "row_id": null }),
+    ) {
+        tracing::warn!("[Tray] assistant not opened: {e}");
+    }
+}
+
+/// An assistant in the tray's menu (10.10).
+#[cfg(feature = "tauri-runtime")]
+#[derive(Debug, Clone)]
+pub struct TrayBotRow {
+    pub id: i32,
+    /// As the owner named it; empty: the default name.
+    pub name: String,
+    pub primary: bool,
+    pub unread: bool,
+    /// Its face, open-eyed.
+    pub icon: Option<crate::personal_agent::menubar::Rgba>,
+}
+
+/// What the tray's menu is built from: the locale, and the latest
+/// assistants (`None`: the menu bar's switch is off — the menu as it was).
+#[cfg(feature = "tauri-runtime")]
+struct TrayMenuState {
+    locale: crate::models::system::AppLocale,
+    bots: Option<Vec<TrayBotRow>>,
+}
+
+#[cfg(feature = "tauri-runtime")]
+static TRAY_MENU: std::sync::Mutex<TrayMenuState> = std::sync::Mutex::new(TrayMenuState {
+    locale: crate::models::system::AppLocale::En,
+    bots: None,
+});
+
+#[cfg(feature = "tauri-runtime")]
+fn tray_menu_state() -> std::sync::MutexGuard<'static, TrayMenuState> {
+    TRAY_MENU.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The name a row of the menu shows: the owner's, else the default one.
+#[cfg(feature = "tauri-runtime")]
+fn tray_bot_label(row: &TrayBotRow, locale: crate::models::system::AppLocale) -> String {
+    let name = if !row.name.is_empty() {
+        row.name.clone()
+    } else if row.primary {
+        crate::personal_agent::reach::primary_name(locale).to_string()
+    } else {
+        format!("#{}", row.id)
+    };
+    if row.unread {
+        format!("● {name}")
+    } else {
+        name
+    }
+}
+
+/// The tray's menu: with the latest assistants, then "Show Workspace",
+/// "Settings…" and "Quit" (10.10); without them, the two items it always
+/// had.
+#[cfg(feature = "tauri-runtime")]
+fn build_tray_menu(
+    app: &AppHandle,
+    locale: crate::models::system::AppLocale,
+    bots: Option<&[TrayBotRow]>,
+) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{IconMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem};
 
     let labels = tray_labels_for(locale);
     let show_item = MenuItem::with_id(
@@ -2515,14 +2945,138 @@ pub fn refresh_tray_menu(
         true,
         None::<&str>,
     )?;
-    let separator = PredefinedMenuItem::separator(app)?;
     let quit_item = MenuItem::with_id(app, TRAY_MENU_ID_QUIT, labels.quit, true, None::<&str>)?;
-    let menu = MenuBuilder::new(app)
-        .items(&[&show_item, &separator, &quit_item])
-        .build()?;
+    let Some(bots) = bots else {
+        let separator = PredefinedMenuItem::separator(app)?;
+        return MenuBuilder::new(app)
+            .items(&[&show_item, &separator, &quit_item])
+            .build();
+    };
+    let mut builder = MenuBuilder::new(app);
+    if !bots.is_empty() {
+        let heading =
+            MenuItem::with_id(app, TRAY_MENU_ID_RECENT, labels.recent, false, None::<&str>)?;
+        builder = builder.item(&heading);
+        for row in bots {
+            let icon = row
+                .icon
+                .as_ref()
+                .map(|f| tauri::image::Image::new_owned(f.data.clone(), f.width, f.height));
+            let item = IconMenuItem::with_id(
+                app,
+                format!("{TRAY_MENU_ID_BOT_PREFIX}{}", row.id),
+                tray_bot_label(row, locale),
+                true,
+                icon,
+                None::<&str>,
+            )?;
+            builder = builder.item(&item);
+        }
+        builder = builder.separator();
+    }
+    let settings_item = MenuItem::with_id(
+        app,
+        TRAY_MENU_ID_SETTINGS,
+        labels.settings,
+        true,
+        None::<&str>,
+    )?;
+    builder
+        .item(&show_item)
+        .item(&settings_item)
+        .separator()
+        .item(&quit_item)
+        .build()
+}
 
-    tray.set_menu(Some(menu))?;
-    Ok(())
+/// The latest assistants in the tray's menu (`None`: the menu as it was).
+#[cfg(feature = "tauri-runtime")]
+pub fn set_tray_bots(app: &AppHandle, bots: Option<Vec<TrayBotRow>>) {
+    tray_menu_state().bots = bots;
+    if let Err(e) = apply_tray_menu(app) {
+        tracing::warn!("[Tray] menu not set: {e}");
+    }
+}
+
+/// The tray's icon: an assistant's face (`None`: codeg's own, as it was).
+#[cfg(feature = "tauri-runtime")]
+pub fn set_tray_face(app: &AppHandle, frame: Option<&crate::personal_agent::menubar::Rgba>) {
+    let Some(tray) = app.tray_by_id(TRAY_ICON_ID) else {
+        return;
+    };
+    let done = match frame {
+        // In colour: on macOS no longer a template the bar tints.
+        Some(f) => tray.set_icon_with_as_template(
+            Some(tauri::image::Image::new_owned(
+                f.data.clone(),
+                f.width,
+                f.height,
+            )),
+            false,
+        ),
+        None => {
+            #[cfg(target_os = "macos")]
+            {
+                match load_macos_tray_template_icon() {
+                    Ok(icon) => tray.set_icon_with_as_template(Some(icon), true),
+                    Err(e) => {
+                        tracing::warn!("[Tray] template icon: {e}");
+                        Ok(())
+                    }
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                match app.default_window_icon() {
+                    Some(icon) => tray.set_icon(Some(icon.clone())),
+                    None => Ok(()),
+                }
+            }
+        }
+    };
+    if let Err(e) = done {
+        tracing::warn!("[Tray] icon not set: {e}");
+    }
+}
+
+/// The number beside the tray's icon: the assistants with unread (0: none).
+/// Windows shows no text there: the tooltip says it; Linux shows it where
+/// the panel shows a label at all (no tooltips there).
+#[cfg(feature = "tauri-runtime")]
+pub fn set_tray_count(app: &AppHandle, count: u32) {
+    let Some(tray) = app.tray_by_id(TRAY_ICON_ID) else {
+        return;
+    };
+    let title = (count > 0).then(|| count.to_string());
+    if let Err(e) = tray.set_title(title.as_deref()) {
+        tracing::warn!("[Tray] title not set: {e}");
+    }
+    let tooltip = match count {
+        0 => "Codeg".to_string(),
+        n => format!("Codeg ({n})"),
+    };
+    if let Err(e) = tray.set_tooltip(Some(tooltip)) {
+        tracing::warn!("[Tray] tooltip not set: {e}");
+    }
+}
+
+/// The dock's badge (0: none). On Windows the taskbar button's overlay
+/// icon stands in for it.
+#[cfg(feature = "tauri-runtime")]
+pub fn set_dock_badge(app: &AppHandle, count: u32) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    #[cfg(target_os = "windows")]
+    let done = window.set_overlay_icon((count > 0).then(|| {
+        let icon = crate::personal_agent::menubar::badge_icon(count);
+        tauri::image::Image::new_owned(icon.data, icon.width, icon.height)
+    }));
+    #[cfg(not(target_os = "windows"))]
+    let done = window.set_badge_count((count > 0).then_some(i64::from(count)));
+    if let Err(e) = done {
+        tracing::warn!("[Tray] badge not set: {e}");
+    }
 }
 
 /// Push the current effective UI locale to the system tray. Called by
@@ -2833,5 +3387,185 @@ mod macos_fullscreen_close_tests {
 
         release_macos_fullscreen_drain(second);
         assert!(!macos_fullscreen_drain_in_flight());
+    }
+}
+
+#[cfg(test)]
+mod pet_window_origin_tests {
+    use super::{
+        pet_staging_origin, resolve_saved_pet_origin_macos, resolve_saved_pet_origin_physical,
+        SavedPetOrigin, PET_BASE_HEIGHT, PET_BASE_WIDTH,
+    };
+
+    // Mixed-DPI setup: 2× primary Retina at (0, 0) + 1× external monitor to its left.
+    const MIXED_DPI_LEFT: [(i32, i32, u32, u32, f64); 2] =
+        [(0, 0, 3024, 1964, 2.0), (-1920, 0, 1920, 1080, 1.0)];
+
+    // Mixed-DPI setup where tao's physical rects overlap on macOS:
+    // 2× primary Retina `[0, 3024)` (logical `[0, 1512)`) + 1× display on its
+    // right `[1512, 3432)` (logical `[1512, 3432)`).
+    const MIXED_DPI_RIGHT: [(i32, i32, u32, u32, f64); 2] =
+        [(0, 0, 3024, 1964, 2.0), (1512, 0, 1920, 1080, 1.0)];
+
+    #[test]
+    fn macos_resolves_right_1x_monitor_without_colliding_with_2x_primary() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156
+
+        // `x = 1800` lies inside BOTH `[0, 3024)` (2× primary physical) and
+        // `[1512, 3432)` (1× right). With `saved_scale_factor = 1.0`, it must
+        // map to logical `(1800, 500)` on the right 1× monitor — not `(900, 250)`.
+        let origin = resolve_saved_pet_origin_macos(
+            Some((1800.0, 500.0)),
+            Some(1.0),
+            pet_w,
+            pet_h,
+            &MIXED_DPI_RIGHT,
+        );
+        assert_eq!(
+            origin,
+            Some(SavedPetOrigin {
+                x: 1800.0,
+                y: 500.0
+            })
+        );
+    }
+
+    #[test]
+    fn macos_resolves_left_1x_and_clamps_2x_primary_in_logical_points() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156
+
+        assert_eq!(
+            resolve_saved_pet_origin_macos(
+                Some((-215.0, 708.0)),
+                None,
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
+            Some(SavedPetOrigin {
+                x: -215.0,
+                y: 708.0
+            })
+        );
+
+        // Near bottom-right of 2× primary (logical 1512×982): clamped in logical pts.
+        assert_eq!(
+            resolve_saved_pet_origin_macos(
+                Some((2950.0, 1900.0)),
+                Some(2.0),
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
+            Some(SavedPetOrigin {
+                x: 1512.0 - pet_w,
+                y: 982.0 - pet_h,
+            })
+        );
+    }
+
+    #[test]
+    fn physical_origin_clamps_per_monitor_and_falls_back_when_disconnected() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144 logical -> 288 physical at 2×
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156 logical -> 312 physical at 2×
+
+        assert_eq!(
+            resolve_saved_pet_origin_physical(
+                Some((2950.0, 1900.0)),
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
+            Some(SavedPetOrigin {
+                x: 3024.0 - 288.0,
+                y: 1964.0 - 312.0,
+            })
+        );
+
+        let only_primary = [(0, 0, 3024, 1964, 2.0)];
+        assert_eq!(
+            resolve_saved_pet_origin_macos(
+                Some((-215.0, 708.0)),
+                Some(1.0),
+                pet_w,
+                pet_h,
+                &only_primary,
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_saved_pet_origin_physical(Some((-215.0, 708.0)), pet_w, pet_h, &only_primary,),
+            None
+        );
+        assert_eq!(
+            resolve_saved_pet_origin_physical(
+                Some((f64::NAN, 100.0)),
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn physical_restore_stages_centered_on_the_target_monitor() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144 logical
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156 logical
+
+        // 250% primary with a 100% display directly to its left. Saved just
+        // left of the seam: fits on the 1x display (144 px wide), but a window
+        // still carrying the primary's 360 px width would straddle the seam
+        // with most of itself on the primary. The staging box (min size at
+        // the build monitor's 2.5x = 240×260) is centered on the 1x display.
+        let seam = [(0, 0, 3840, 2160, 2.5), (-1920, 0, 1920, 1080, 1.0)];
+        let origin = resolve_saved_pet_origin_physical(Some((-160.0, 500.0)), pet_w, pet_h, &seam)
+            .expect("origin on the 1x display");
+        assert_eq!(
+            origin,
+            SavedPetOrigin {
+                x: -160.0,
+                y: 500.0
+            }
+        );
+        assert_eq!(
+            pet_staging_origin(origin, &seam, 240.0, 260.0),
+            Some((-1920 + (1920 - 240) / 2, (1080 - 260) / 2))
+        );
+
+        // A target monitor smaller than the pet at the build DPI (350% 4K
+        // primary, 1280×720 at 100% above it, pet at 2×): the staging box
+        // (96×104 logical at 3.5x = 336×364) still fits wholly inside it.
+        let stacked = [(0, 0, 3840, 2160, 3.5), (0, -720, 1280, 720, 1.0)];
+        let big_w = PET_BASE_WIDTH * 2.0;
+        let big_h = PET_BASE_HEIGHT * 2.0;
+        let origin =
+            resolve_saved_pet_origin_physical(Some((100.0, -700.0)), big_w, big_h, &stacked)
+                .expect("origin on the upper display");
+        // The origin lies on the upper display; the primary must not claim it
+        // through a center computed at its own 3.5x scale.
+        assert_eq!(
+            origin,
+            SavedPetOrigin {
+                x: 100.0,
+                y: -700.0
+            }
+        );
+        let (sx, sy) = pet_staging_origin(origin, &stacked, 336.0, 364.0).expect("staging");
+        assert!(
+            sx >= 0 && sx + 336 <= 1280,
+            "staging x inside upper display"
+        );
+        assert!(
+            sy >= -720 && sy + 364 <= 0,
+            "staging y inside upper display"
+        );
+
+        assert_eq!(
+            pet_staging_origin(SavedPetOrigin { x: 5000.0, y: 10.0 }, &seam, 240.0, 260.0),
+            None
+        );
     }
 }

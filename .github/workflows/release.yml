@@ -196,6 +196,26 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Enlarge swap on the Linux runner
+        # The release build of the codeg crate needs more memory than the
+        # 16 GB Linux runner's stock 4 GB swap leaves: the VM starved and the
+        # runner lost contact mid-compile ("The runner has received a shutdown
+        # signal" → "The operation was canceled"), same as test.yml before it
+        # got this step. macOS grows swap on demand and Windows has its
+        # pagefile, so only Linux needs this. The preinstalled SDKs removed
+        # first are never used here and make room for the swapfile.
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo swapoff -a
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+          df -h /
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -752,6 +772,21 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Enlarge swap on the Linux runner
+        # Same as build-tauri above: compiling the codeg crate in release can
+        # starve the Linux runner's stock 4 GB swap and kill the runner.
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo swapoff -a
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+          df -h /
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable

@@ -13,15 +13,22 @@
 //! image support). So an edit here changes what can be PICKED, never what the
 //! endpoint accepts.
 //!
-//! Only deepseek-acp 0.9.0 and earlier read this section. 0.10.0 (DSH 0.2)
-//! drops the file-backed settings provider (`dsh-settings-file`) that laid
-//! `$DSH_HOME/settings.yaml` over the plugin configs: the official route takes
-//! the catalog built into the bridge, and the bridge's own document,
-//! `$DSH_HOME/deepseek-acp/settings.yaml`, holds only `llm-pi-ai` routes
-//! (measured: a two-model `llm-deepseek.models` list replaces the dropdown on
-//! 0.9.0 and leaves 0.11.0's built-in pair). The settings page therefore shows
-//! the editor only for an install older than 0.10.0
-//! (`deepseekReadsHarnessCatalog`); these commands stay for it.
+//! deepseek-acp 0.9.0 and earlier read this section, and 0.12.0 reads it
+//! again; 0.10.0 and 0.11.0 do not. 0.10.0 (DSH 0.2) dropped the file-backed
+//! settings provider (`dsh-settings-file`) that laid `$DSH_HOME/settings.yaml`
+//! over the plugin configs, so the official route took the catalog built into
+//! the bridge (measured: a two-model `llm-deepseek.models` list replaces the
+//! dropdown on 0.9.0 and leaves 0.11.0's built-in pair). 0.12.0 (upstream
+//! issue #13) lays the section over that built-in configuration itself
+//! (`mountDeepSeekProvider`), taking it from the first of the bridge's own
+//! document, `$DSH_HOME/deepseek-acp/settings.yaml`, then
+//! `$DSH_HOME/settings.yaml`, then `settings.yaml.imported` that has an
+//! `llm-deepseek` key (`readDeepSeekSection`; unreadable files are skipped, and
+//! nothing merges across files). Mappings merge into the built-in
+//! configuration, while a `models` list replaces the built-in pair. So the
+//! settings page shows the editor below 0.10.0 and from 0.12.0 on
+//! (`deepseekReadsHarnessCatalog`), and the panel says which release it edits
+//! for ([`CatalogReader`]): that decides the document and the defaults.
 //!
 //! The other half of this module is the surface that DOES still move a 0.10.0+
 //! model list: the `llm-pi-ai` provider routes in that bridge document
@@ -128,6 +135,53 @@ const IMAGE_PIXEL_BUDGET_LOW: &str = "low";
 /// The only value the adapter's `systemPromptUpdate` accepts when present.
 const SYSTEM_PROMPT_UPDATE_IN_HISTORY: &str = "in-history";
 
+/// The values DSH 0.2's adapter accepts for `toolUpdate` when present
+/// (`resolveModels`); DSH 0.1 has no such key.
+const TOOL_UPDATE_MODES: &[&str] = &["in-history", "addition-only"];
+
+/// `OFFICIAL_CONTEXT_WINDOW` in deepseek-acp 0.12.0's `boot.ts` (1 MiB of
+/// tokens), what its built-in catalog declares for both models.
+const BRIDGE_CONTEXT_WINDOW: u64 = 1_048_576;
+/// DSH 0.2's `DEFAULT_REQUEST_IMAGE_MAX_BYTES` (2 MiB), what a vision entry
+/// without `imageMaxBytes` resolves to there.
+const BRIDGE_REQUEST_IMAGE_MAX_BYTES: u64 = 2_097_152;
+
+/// Which deepseek-acp the catalog is edited for: the reader decides which
+/// document holds the list and what a session inherits without one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogReader {
+    /// 0.9.0 and earlier: the harness's `dsh-settings-file` reads
+    /// `$DSH_HOME/settings.yaml`, and nothing else.
+    HarnessDocument,
+    /// 0.10.0 on, of which 0.12.0 and later read the section: the bridge's
+    /// `readDeepSeekSection` and its 0.12.0 built-in catalog.
+    Bridge,
+}
+
+impl CatalogReader {
+    /// The reader of a deepseek-acp `version`, as the settings page reports
+    /// it. Only a version that parses as below 0.10.0 is the harness's; a
+    /// missing or unparseable one is the pinned release, which is later.
+    pub fn for_version(version: Option<&str>) -> Self {
+        let parsed = version.map(str::trim).and_then(|v| {
+            let v = v.strip_prefix('v').unwrap_or(v);
+            let mut parts = v.splitn(3, '.');
+            let major = parts.next()?.parse::<u64>().ok()?;
+            let minor = parts.next()?.parse::<u64>().ok()?;
+            let patch: String = parts
+                .next()?
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            Some((major, minor, patch.parse::<u64>().ok()?))
+        });
+        match parsed {
+            Some(version) if version < (0, 10, 0) => Self::HarnessDocument,
+            _ => Self::Bridge,
+        }
+    }
+}
+
 /// A vision entry's per-request pixel budget: a count, or the adapter's named
 /// low-detail tier. `z.union([z.number(), "low"])` upstream.
 ///
@@ -189,6 +243,14 @@ pub struct DeepSeekCatalogModel {
     /// route is driven, not a choice a deployment makes per model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt_update: Option<String>,
+    /// How a change to the tool list mid-session reaches this route:
+    /// `"in-history"` or `"addition-only"` (DSH 0.2; 0.12.0's own entry for the
+    /// default model says `addition-only`, which keeps the cached prompt
+    /// prefix when an MCP server connects late). Carried through, not edited,
+    /// for the reason [`Self::system_prompt_update`] is. DSH 0.1 (deepseek-acp
+    /// 0.9.0) passes the key through its schema and never reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_update: Option<String>,
     /// The retired detail tier. Read-only on purpose, and NEVER serialized:
     /// `deepseek-acp` 0.9.0 refuses a catalog entry that so much as carries the
     /// key (`resolveModels` throws on `Object.hasOwn(model, "imageDetail")`),
@@ -215,6 +277,7 @@ impl DeepSeekCatalogModel {
             image_pixel_budget: None,
             image_max_bytes: None,
             system_prompt_update: None,
+            tool_update: None,
             image_detail: None,
         }
     }
@@ -250,6 +313,8 @@ impl DeepSeekCatalogModel {
 /// has announced its retirement (2026-09-14, requests routed to V4.1 Flash);
 /// it leaves this list when it leaves `DEEPSEEK_MODELS`, not before — the
 /// panel's job is to mirror the agent, not to predict it.
+///
+/// This is 0.9.0's list (DSH 0.1); [`bridge_default_models`] is 0.12.0's.
 pub fn default_models() -> Vec<DeepSeekCatalogModel> {
     vec![
         DeepSeekCatalogModel {
@@ -269,6 +334,7 @@ pub fn default_models() -> Vec<DeepSeekCatalogModel> {
             )),
             image_max_bytes: Some(DEFAULT_REQUEST_IMAGE_MAX_BYTES),
             system_prompt_update: Some(SYSTEM_PROMPT_UPDATE_IN_HISTORY.to_string()),
+            tool_update: None,
             image_detail: None,
         },
         DeepSeekCatalogModel::text_only(
@@ -277,6 +343,50 @@ pub fn default_models() -> Vec<DeepSeekCatalogModel> {
             "旧的高价档，官方已宣布有序下线；除非有特定理由，优先用 Flash。",
         ),
     ]
+}
+
+/// The catalog a 0.12.0 session inherits: that release's `DEEPSEEK_MODELS`
+/// (`src/launcher/boot.ts`), which its `llm-deepseek.models` replaces whole.
+///
+/// It differs from 0.9.0's in what the pin has to carry: both models declare
+/// a 1,048,576-token window, the default model `toolUpdate: addition-only`
+/// beside `systemPromptUpdate`, and neither an image pixel budget. With none,
+/// DSH 0.2 sizes request images on its token grid, so none is pinned here
+/// either (a count would change what the model sees); the byte cap is pinned
+/// at the 2 MiB DSH 0.2 resolves an absent one to. V4 Pro is no longer said to
+/// be retiring: 0.12.0 dropped that note, as DeepSeek's pricing page did.
+pub fn bridge_default_models() -> Vec<DeepSeekCatalogModel> {
+    vec![
+        DeepSeekCatalogModel {
+            id: "deepseek-flash".to_string(),
+            name: Some("DeepSeek-V4.1-Flash".to_string()),
+            description: Some("更快更省，支持图像理解。日常编码的默认档。".to_string()),
+            context_window: Some(BRIDGE_CONTEXT_WINDOW),
+            max_tokens: None,
+            input_modalities: Some(vec![MODALITY_TEXT.to_string(), MODALITY_IMAGE.to_string()]),
+            image_pixel_budget: None,
+            image_max_bytes: Some(BRIDGE_REQUEST_IMAGE_MAX_BYTES),
+            system_prompt_update: Some(SYSTEM_PROMPT_UPDATE_IN_HISTORY.to_string()),
+            tool_update: Some("addition-only".to_string()),
+            image_detail: None,
+        },
+        DeepSeekCatalogModel {
+            context_window: Some(BRIDGE_CONTEXT_WINDOW),
+            ..DeepSeekCatalogModel::text_only(
+                "deepseek-v4-pro",
+                "DeepSeek-V4-Pro",
+                "价格更高，不支持图像理解；上游建议用于复杂或对质量要求高的任务。",
+            )
+        },
+    ]
+}
+
+/// The catalog a session of `reader` inherits when no list is stored.
+fn inherited_models(reader: CatalogReader) -> Vec<DeepSeekCatalogModel> {
+    match reader {
+        CatalogReader::HarnessDocument => default_models(),
+        CatalogReader::Bridge => bridge_default_models(),
+    }
 }
 
 /// What the settings panel reads.
@@ -316,19 +426,65 @@ pub fn dsh_settings_path() -> PathBuf {
     crate::parsers::deepseek::resolve_dsh_home_dir().join("settings.yaml")
 }
 
-/// Read the catalog for the settings panel. Never errors: a missing file is
-/// "inheriting the defaults", and an unreadable one is reported in-band.
-pub fn load_deepseek_model_catalog_core() -> DeepSeekModelCatalog {
-    load_deepseek_model_catalog_at(&dsh_settings_path())
+/// The document that holds the catalog `reader` reads: for the harness its
+/// `settings.yaml`; for the bridge the first of `own` (its own document) and
+/// `legacy` (`settings.yaml`, `settings.yaml.imported`) whose root has an
+/// `llm-deepseek` key, as `readDeepSeekSection` picks it, skipping what does
+/// not parse as it does. With none, `settings.yaml`: the file this panel has
+/// always written, and the one both readers look at.
+fn catalog_document(reader: CatalogReader, own: &Path, legacy: &[PathBuf]) -> PathBuf {
+    let harness_document = || legacy.first().cloned().unwrap_or_else(dsh_settings_path);
+    if reader == CatalogReader::HarnessDocument {
+        return harness_document();
+    }
+    std::iter::once(own)
+        .chain(legacy.iter().map(PathBuf::as_path))
+        .find(|path| declares_catalog_section(path))
+        .map(Path::to_path_buf)
+        .unwrap_or_else(harness_document)
 }
 
+/// Whether the document at `path` is one `readDeepSeekSection` takes the
+/// section from: it reads and parses with a mapping (or empty) root, and that
+/// root maps `llm-deepseek` to a mapping or to `null`. Upstream's `record()`
+/// throws on any other value, a scalar or a list, and the reader then skips
+/// the document with a warning and goes on to the next one.
+fn declares_catalog_section(path: &Path) -> bool {
+    matches!(read_document(path), Ok(Some(raw)) if section_declared(&raw))
+}
+
+/// [`declares_catalog_section`] for a document's text.
+fn section_declared(raw: &str) -> bool {
+    let Ok(root) = serde_yaml::from_str::<serde_yaml::Value>(raw) else {
+        return false;
+    };
+    root.as_mapping()
+        .and_then(|map| map.get(serde_yaml::Value::String(SECTION_KEY.to_string())))
+        .is_some_and(|section| section.is_mapping() || section.is_null())
+}
+
+/// Read the catalog for the settings panel, for the deepseek-acp `version`
+/// the page judges by. Never errors: a missing file is "inheriting the
+/// defaults", and an unreadable one is reported in-band.
+pub fn load_deepseek_model_catalog_core(version: Option<&str>) -> DeepSeekModelCatalog {
+    let reader = CatalogReader::for_version(version);
+    let path = catalog_document(reader, &pi_settings_path(), &legacy_pi_settings_paths());
+    load_catalog_for(&path, reader)
+}
+
+/// [`load_catalog_for`] the harness's own document, as 0.9.0 reads it.
+#[cfg(test)]
 fn load_deepseek_model_catalog_at(path: &Path) -> DeepSeekModelCatalog {
+    load_catalog_for(path, CatalogReader::HarnessDocument)
+}
+
+fn load_catalog_for(path: &Path, reader: CatalogReader) -> DeepSeekModelCatalog {
     let display = path.display().to_string();
     let inherited = |exists: bool, error: Option<String>| DeepSeekModelCatalog {
         path: display.clone(),
         exists,
         configured: false,
-        models: default_models(),
+        models: inherited_models(reader),
         error,
         invalid: None,
     };
@@ -380,6 +536,7 @@ const KNOWN_FIELDS: &[&str] = &[
     "imagePixelBudget",
     "imageMaxBytes",
     "systemPromptUpdate",
+    "toolUpdate",
     "imageDetail",
 ];
 
@@ -531,6 +688,17 @@ fn validate_models(models: &[DeepSeekCatalogModel]) -> Result<Vec<DeepSeekCatalo
             }
         };
 
+        let tool_update = match model.tool_update.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(mode) if TOOL_UPDATE_MODES.contains(&mode) => Some(mode.to_string()),
+            Some(mode) => {
+                return Err(format!(
+                    "model \"{id}\" has an unknown tool update mode \"{mode}\"; the agent \
+                     accepts \"in-history\" or \"addition-only\""
+                ))
+            }
+        };
+
         let input_modalities = match model.input_modalities.as_deref() {
             None => None,
             Some([]) => return Err(format!("model \"{id}\" lists no input modalities")),
@@ -563,6 +731,7 @@ fn validate_models(models: &[DeepSeekCatalogModel]) -> Result<Vec<DeepSeekCatalo
             image_pixel_budget,
             image_max_bytes,
             system_prompt_update,
+            tool_update,
             // Rejected above; carrying it into the normalized entry would put
             // it back on the write path, and the field is never serialized.
             image_detail: None,
@@ -591,15 +760,100 @@ fn validate_models(models: &[DeepSeekCatalogModel]) -> Result<Vec<DeepSeekCatalo
 /// deleted — REMOVES the key so the adapter's built-in catalog is inherited
 /// again. Storing `models: []` instead would be a deployment that advertises no
 /// model at all, which is never what deleting the last row asks for.
+///
+/// The document is the one [`catalog_document`] picks for `version`'s reader.
+/// For the bridge, clearing the list keeps the document's section, as
+/// `llm-deepseek: {}` when `models` was its only key: dropping it would hand
+/// the lookup to the next document, whose own list (or `baseURL`) would then
+/// apply instead of the built-in configuration.
 pub fn update_deepseek_model_catalog_core(
     models: Option<Vec<DeepSeekCatalogModel>>,
+    version: Option<&str>,
     emitter: &EventEmitter,
 ) -> Result<(), AcpError> {
-    let path = dsh_settings_path();
-    update_deepseek_model_catalog_at(&path, models)?;
+    let reader = CatalogReader::for_version(version);
+    {
+        let _writing = DOCUMENT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+        update_catalog_for(
+            reader,
+            &pi_settings_path(),
+            &legacy_pi_settings_paths(),
+            models,
+        )?;
+    }
     emit_acp_agents_updated(emitter, "config_updated", Some(AgentType::DeepSeek));
     Ok(())
 }
+
+fn update_catalog_for(
+    reader: CatalogReader,
+    own: &Path,
+    legacy: &[PathBuf],
+    models: Option<Vec<DeepSeekCatalogModel>>,
+) -> Result<(), AcpError> {
+    let clearing = models.as_ref().is_none_or(Vec::is_empty);
+    let path = catalog_document(reader, own, legacy);
+    if reader != CatalogReader::Bridge || !clearing {
+        return update_deepseek_model_catalog_at(&path, models);
+    }
+    // Cleared for the bridge: the document keeps its section, and the whole
+    // new text is checked before anything is written, so a document the
+    // section cannot be kept in is refused unchanged.
+    let existing = read_document(&path)
+        .map_err(|err| {
+            AcpError::protocol(format!(
+                "could not read the DeepSeek settings document: {err}"
+            ))
+        })?
+        .unwrap_or_default();
+    let mut patched = patch_settings_models(&existing, None)
+        .map_err(|message| AcpError::protocol(format!("DeepSeek settings: {message}")))?;
+    if section_declared(&existing) && !section_declared(&patched) {
+        patched = with_empty_section(&patched)?;
+    }
+    if patched == existing {
+        return Ok(());
+    }
+    write_settings_document(&path, &patched)
+}
+
+/// `body` with `llm-deepseek: {}` appended, for a document clearing its only
+/// key removed the section from: the bridge takes an empty mapping as this
+/// document's section (nothing to lay over the built-in configuration), so the
+/// lookup still ends here. Refused unless the result is one document whose
+/// section is that mapping (a `...` end marker, say, would put it in a second
+/// document).
+fn with_empty_section(body: &str) -> Result<String, AcpError> {
+    let newline = if body.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut out = body.to_string();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push_str(newline);
+    }
+    out.push_str(&format!("{SECTION_KEY}: {{}}{newline}"));
+    let kept = serde_yaml::from_str::<serde_yaml::Value>(&out)
+        .ok()
+        .and_then(|root| {
+            root.as_mapping()
+                .and_then(|map| map.get(serde_yaml::Value::String(SECTION_KEY.to_string())))
+                .map(serde_yaml::Value::is_mapping)
+        })
+        .unwrap_or(false);
+    if !kept {
+        return Err(AcpError::protocol(format!(
+            "DeepSeek settings: clearing the model list would drop the `{SECTION_KEY}` \
+             section, and an empty one cannot be added to this document; edit it by hand \
+             instead"
+        )));
+    }
+    Ok(out)
+}
+
+/// One write to the DeepSeek settings documents at a time. The catalog and the
+/// route editors save through separate commands, may share a document (the
+/// bridge's own one holds both sections), and each reads the file, patches it
+/// and renames the result over it; two at once would let the second rename
+/// drop the first edit.
+static DOCUMENT_WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn update_deepseek_model_catalog_at(
     path: &Path,
@@ -923,6 +1177,17 @@ fn classify_key_line(text: &str, key: &str) -> KeyLine {
     KeyLine::Other
 }
 
+/// Whether a `key: …` line's value is an empty flow mapping, `{}`, with at most
+/// a comment after it.
+fn is_empty_flow_mapping(text: &str) -> bool {
+    text.split_once(':')
+        .and_then(|(_, value)| value.trim().strip_prefix("{}"))
+        .is_some_and(|rest| {
+            let rest = rest.trim();
+            rest.is_empty() || rest.starts_with('#')
+        })
+}
+
 /// Render `models:` as a block sequence indented to `indent`, with the line
 /// terminator the document already uses.
 fn render_models_block(
@@ -1003,6 +1268,21 @@ fn splice_models(
             KeyLine::Block => {
                 section = Some(index);
                 break;
+            }
+            // `llm-deepseek: {}`, which clearing writes for the bridge (see
+            // `with_empty_section`): an empty section, so there is nothing to
+            // remove, and a list replaces the line with a block.
+            KeyLine::Inline if is_empty_flow_mapping(&line.text) => {
+                let Some(models) = models else {
+                    return Ok(existing.to_string());
+                };
+                let block = render_models_block(models, 2, newline)?;
+                let mut out = String::with_capacity(existing.len() + block.len());
+                out.push_str(&existing[..line.range.start]);
+                out.push_str(&format!("{SECTION_KEY}:{newline}"));
+                out.push_str(&block);
+                out.push_str(&existing[line.range.end..]);
+                return Ok(out);
             }
             KeyLine::Inline => {
                 return Err(format!(
@@ -1691,11 +1971,14 @@ pub fn update_deepseek_provider_routes_core(
         _ => None,
     };
 
-    update_deepseek_provider_routes_at(
-        &pi_settings_path(),
-        &legacy_pi_settings_paths(),
-        validated.as_deref(),
-    )?;
+    {
+        let _writing = DOCUMENT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+        update_deepseek_provider_routes_at(
+            &pi_settings_path(),
+            &legacy_pi_settings_paths(),
+            validated.as_deref(),
+        )?;
+    }
     emit_acp_agents_updated(emitter, "config_updated", Some(AgentType::DeepSeek));
     Ok(())
 }
@@ -2039,8 +2322,10 @@ fn verify_pi_patch(
 /// directly. Reads the filesystem only — no DB/state needed.
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn acp_load_deepseek_model_catalog() -> Result<DeepSeekModelCatalog, AcpError> {
-    Ok(load_deepseek_model_catalog_core())
+pub async fn acp_load_deepseek_model_catalog(
+    version: Option<String>,
+) -> Result<DeepSeekModelCatalog, AcpError> {
+    Ok(load_deepseek_model_catalog_core(version.as_deref()))
 }
 
 /// Store (or clear) the DeepSeek Harness model catalog. Desktop command; the
@@ -2049,10 +2334,11 @@ pub async fn acp_load_deepseek_model_catalog() -> Result<DeepSeekModelCatalog, A
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn acp_update_deepseek_model_catalog(
     models: Option<Vec<DeepSeekCatalogModel>>,
+    version: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
     let emitter = EventEmitter::from_app(&app);
-    update_deepseek_model_catalog_core(models, &emitter)
+    update_deepseek_model_catalog_core(models, version.as_deref(), &emitter)
 }
 
 /// Read the DeepSeek Harness provider routes for the settings panel. Desktop
@@ -2092,6 +2378,7 @@ mod tests {
             image_pixel_budget: None,
             image_max_bytes: None,
             system_prompt_update: None,
+            tool_update: None,
             image_detail: None,
         }
     }
@@ -2107,6 +2394,7 @@ mod tests {
             image_pixel_budget: None,
             image_max_bytes: None,
             system_prompt_update: None,
+            tool_update: None,
             image_detail: None,
         }
     }
@@ -2611,6 +2899,7 @@ mod tests {
             image_pixel_budget: Some(DeepSeekImagePixelBudget::Pixels(262_144)),
             image_max_bytes: None,
             system_prompt_update: None,
+            tool_update: None,
             image_detail: None,
         };
         let patched =
@@ -3339,6 +3628,222 @@ llm-deepseek:
         let view = load_deepseek_provider_routes_at(&bridge, &roots);
         assert!(view.error.is_none(), "{view:?}");
         assert_eq!(view.routes[0].id, "opencode");
+    }
+
+    #[test]
+    fn the_reader_follows_the_release_line() {
+        for version in ["0.9.0", " v0.9.0 ", "0.6.3", "0.9.9-rc.1"] {
+            assert_eq!(
+                CatalogReader::for_version(Some(version)),
+                CatalogReader::HarnessDocument,
+                "{version}"
+            );
+        }
+        for version in [
+            Some("0.10.0"),
+            Some("0.12.0"),
+            Some("v1.0.0"),
+            Some("local"),
+            None,
+        ] {
+            assert_eq!(
+                CatalogReader::for_version(version),
+                CatalogReader::Bridge,
+                "{version:?}"
+            );
+        }
+    }
+
+    /// 0.12.0's `DEEPSEEK_MODELS`, as its `boot.ts` declares them, pinned the
+    /// way the panel pins them, and valid by the same rules a user edit is.
+    #[test]
+    fn bridge_defaults_mirror_the_twelve_catalog() {
+        let defaults = bridge_default_models();
+        let ids: Vec<&str> = defaults.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["deepseek-flash", "deepseek-v4-pro"]);
+        assert!(defaults.iter().all(|m| m.context_window == Some(1_048_576)));
+        assert!(defaults[0].accepts_images());
+        assert_eq!(defaults[0].image_pixel_budget, None);
+        assert_eq!(defaults[0].image_max_bytes, Some(2_097_152));
+        assert_eq!(
+            defaults[0].system_prompt_update.as_deref(),
+            Some("in-history")
+        );
+        assert_eq!(defaults[0].tool_update.as_deref(), Some("addition-only"));
+        assert!(!defaults[1].accepts_images());
+        validate_models(&defaults).expect("defaults are valid");
+
+        // Pinned, the list keeps both delivery modes in the document.
+        let patched = patch_settings_models("", Some(&defaults)).expect("patch");
+        assert!(patched.contains("toolUpdate: addition-only"), "{patched}");
+        assert_eq!(models_of(&patched), validate_models(&defaults).unwrap());
+    }
+
+    #[test]
+    fn tool_update_is_read_validated_and_carried_through() {
+        let doc = "llm-deepseek:\n  models:\n    - id: a\n      toolUpdate: in-history\n";
+        let models = models_of(doc);
+        assert_eq!(models[0].tool_update.as_deref(), Some("in-history"));
+        assert!(validate_models(&models).is_ok());
+        let unknown = DeepSeekCatalogModel {
+            tool_update: Some("every-turn".into()),
+            ..model("a")
+        };
+        let err = validate_models(&[unknown]).expect_err("unknown mode");
+        assert!(err.contains("tool update"), "{err}");
+    }
+
+    /// 0.12.0's `readDeepSeekSection`: the first of the bridge's own document,
+    /// `settings.yaml` and `settings.yaml.imported` with an `llm-deepseek` key,
+    /// skipping one that does not parse; 0.9.0 reads `settings.yaml` alone.
+    #[test]
+    fn the_catalog_document_is_the_one_the_reader_takes_the_section_from() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let own = dir.path().join("deepseek-acp").join("settings.yaml");
+        fs::create_dir_all(own.parent().unwrap()).expect("mkdir");
+        let legacy = dir.path().join("settings.yaml");
+        let imported = dir.path().join("settings.yaml.imported");
+        let roots = [legacy.clone(), imported.clone()];
+        let bridge = |expected: &Path| {
+            assert_eq!(
+                catalog_document(CatalogReader::Bridge, &own, &roots),
+                expected
+            );
+        };
+
+        // Nothing anywhere: the harness document, where the panel always wrote.
+        bridge(&legacy);
+        // Only the imported copy has the section.
+        fs::write(&imported, "llm-deepseek:\n  models:\n    - id: i\n").expect("write");
+        bridge(&imported);
+        // `settings.yaml` with the section outranks it, even a null one.
+        fs::write(&legacy, "llm-deepseek:\n").expect("write");
+        bridge(&legacy);
+        // The bridge's own document without the section does not shadow…
+        fs::write(&own, "llm-pi-ai:\n  providers: {}\n").expect("write");
+        bridge(&legacy);
+        // …and with it, it does.
+        fs::write(
+            &own,
+            "llm-pi-ai:\n  providers: {}\nllm-deepseek:\n  reasoningEffort: max\n",
+        )
+        .expect("write");
+        bridge(&own);
+        // One that does not parse is skipped, and so is one whose section is
+        // neither a mapping nor null.
+        fs::write(&own, "llm-deepseek: [unclosed\n").expect("write");
+        bridge(&legacy);
+        fs::write(&own, "llm-deepseek: false\n").expect("write");
+        bridge(&legacy);
+        fs::write(&own, "llm-deepseek:\n  - a\n").expect("write");
+        bridge(&legacy);
+        // 0.9.0 reads only its own file.
+        fs::write(&own, "llm-deepseek:\n  models:\n    - id: o\n").expect("write");
+        assert_eq!(
+            catalog_document(CatalogReader::HarnessDocument, &own, &roots),
+            legacy
+        );
+
+        // The panel shows the bridge's built-in list for what it inherits.
+        let view = load_catalog_for(&legacy, CatalogReader::Bridge);
+        assert!(!view.configured);
+        assert_eq!(view.models, bridge_default_models());
+    }
+
+    /// Saving writes the document the bridge reads; clearing keeps that
+    /// document's section, so the lookup still ends there and nothing behind it
+    /// (a list, a `baseURL`) comes into force.
+    #[test]
+    fn bridge_saves_land_where_read_and_clearing_keeps_the_lookup_there() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let own = dir.path().join("deepseek-acp").join("settings.yaml");
+        fs::create_dir_all(own.parent().unwrap()).expect("mkdir");
+        let legacy = dir.path().join("settings.yaml");
+        let imported = dir.path().join("settings.yaml.imported");
+        let roots = [legacy.clone(), imported.clone()];
+        let legacy_doc = "llm-deepseek:\n  baseURL: https://gw.example\n  models:\n    - id: old\n";
+        fs::write(
+            &own,
+            "llm-pi-ai:\n  providers: {}\nllm-deepseek:\n  models:\n    - id: own\n",
+        )
+        .expect("write");
+        fs::write(&legacy, legacy_doc).expect("write");
+
+        update_catalog_for(
+            CatalogReader::Bridge,
+            &own,
+            &roots,
+            Some(vec![model("mine")]),
+        )
+        .expect("save");
+        assert_eq!(models_of(&fs::read_to_string(&own).unwrap())[0].id, "mine");
+
+        update_catalog_for(CatalogReader::Bridge, &own, &roots, None).expect("clear");
+        let own_now = fs::read_to_string(&own).unwrap();
+        assert!(own_now.contains("llm-pi-ai:"), "{own_now}");
+        assert!(own_now.ends_with("llm-deepseek: {}\n"), "{own_now}");
+        assert_eq!(read_models(&own_now).expect("parses"), None);
+        // The lookup still ends at the bridge's own document, and the legacy
+        // one is left alone.
+        assert_eq!(catalog_document(CatalogReader::Bridge, &own, &roots), own);
+        assert_eq!(fs::read_to_string(&legacy).unwrap(), legacy_doc);
+        let view = load_catalog_for(&own, CatalogReader::Bridge);
+        assert!(!view.configured);
+        assert!(view.error.is_none());
+        assert_eq!(view.models, bridge_default_models());
+
+        // Clearing again changes nothing, and a list can be saved over the
+        // kept section.
+        update_catalog_for(CatalogReader::Bridge, &own, &roots, None).expect("clear again");
+        assert_eq!(fs::read_to_string(&own).unwrap(), own_now);
+        update_catalog_for(
+            CatalogReader::Bridge,
+            &own,
+            &roots,
+            Some(vec![model("again")]),
+        )
+        .expect("save over the kept section");
+        let saved = fs::read_to_string(&own).unwrap();
+        assert!(saved.contains("llm-pi-ai:"), "{saved}");
+        assert_eq!(models_of(&saved)[0].id, "again");
+        assert_eq!(catalog_document(CatalogReader::Bridge, &own, &roots), own);
+        assert!(is_empty_flow_mapping("llm-deepseek: {} # kept"));
+        assert!(!is_empty_flow_mapping("llm-deepseek: {models: []}"));
+
+        // A section with other keys keeps them and needs nothing added.
+        fs::write(
+            &own,
+            "llm-deepseek:\n  reasoningEffort: max\n  models:\n    - id: own\n",
+        )
+        .expect("write");
+        update_catalog_for(CatalogReader::Bridge, &own, &roots, None).expect("clear");
+        assert_eq!(
+            fs::read_to_string(&own).unwrap(),
+            "llm-deepseek:\n  reasoningEffort: max\n"
+        );
+
+        // A document the empty section cannot be appended to is refused as it
+        // was, not half changed.
+        let ended = "llm-deepseek:\n  models:\n    - id: own\n...\n";
+        fs::write(&own, ended).expect("write");
+        let err = update_catalog_for(CatalogReader::Bridge, &own, &roots, None)
+            .expect_err("no place for the section");
+        assert!(err.to_string().contains("edit it by hand"), "{err}");
+        assert_eq!(fs::read_to_string(&own).unwrap(), ended);
+
+        // With no section anywhere, clearing writes nothing.
+        let bare = tempfile::tempdir().expect("tempdir");
+        let bare_own = bare.path().join("deepseek-acp").join("settings.yaml");
+        let bare_roots = [bare.path().join("settings.yaml")];
+        update_catalog_for(CatalogReader::Bridge, &bare_own, &bare_roots, None).expect("clear");
+        assert!(!bare_roots[0].exists());
+
+        // 0.9.0 clears its own file the way it always has.
+        fs::write(&legacy, "llm-deepseek:\n  models:\n    - id: old\n").expect("write");
+        update_catalog_for(CatalogReader::HarnessDocument, &own, &roots, None).expect("clear");
+        assert!(!fs::read_to_string(&legacy)
+            .unwrap()
+            .contains("llm-deepseek"));
     }
 
     #[test]

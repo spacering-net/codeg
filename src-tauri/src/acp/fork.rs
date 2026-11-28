@@ -41,12 +41,10 @@ use crate::models::message::{ContentBlock, MessageTurn, TurnRole};
 ///   fingerprint match even wins regardless of occurrence).
 /// * **codex-acp 1.8.0** first matches `message_id` against `items[].id`, then
 ///   falls back to hashing each agent message and taking the
-///   `message_occurrence`-th match. Codex rollout files record NO item ids, so
-///   codeg cannot produce one it would recognise — the fingerprint is the only
-///   path that resolves there, and `message_id` is sent as codeg's own turn id
-///   purely because the field is required.
-/// * **deepseek-acp 0.8.0** is the only one that can use BOTH halves, so codeg
-///   sends both. Its id side accepts either the wire id it stamps on message
+///   `message_occurrence`-th match. Newer Codex rollouts carry the native
+///   assistant item id; older records use the fingerprint of the source text.
+/// * **deepseek-acp 0.8.0** can also use both halves. Its id side accepts
+///   either the wire id it stamps on message
 ///   chunks (`<turn>:<step>`) or the session log's own `message.id`, and
 ///   `crate::parsers::deepseek` records the latter. Its fingerprint side hashes
 ///   the history TWICE — once per assistant message, once per whole turn — and
@@ -102,7 +100,7 @@ fn fingerprint_occurrence(turns: &[MessageTurn], idx: usize, fingerprint: &str) 
 }
 
 /// Build the fork point naming `turn_id`, or `None` when this agent/turn cannot
-/// be named — in which case the caller forks at the tail, as before.
+/// be named. The caller decides whether a tail fork is appropriate.
 ///
 /// Only ASSISTANT turns are fork points: every adapter resolves the point
 /// against an agent message, and "continue from my own prompt" is already what
@@ -118,41 +116,9 @@ pub fn resolve_fork_point(
     let turn = &turns[idx];
 
     match agent_type {
-        // Codex rollouts carry no item ids, so the id can never match and the
-        // fingerprint is the only thing that resolves. `message_id` is still
-        // required by the wire contract, so it carries codeg's own turn id —
-        // deliberately something codex will not find, which is exactly what
-        // makes it fall through to the fingerprint branch.
-        AgentType::Codex => {
-            let text = turn_text(turn);
-            if text.trim().is_empty() {
-                return None;
-            }
-            let fingerprint = fingerprint_agent_message(&text);
-            let occurrence = fingerprint_occurrence(turns, idx, &fingerprint);
-            Some(ForkPoint {
-                message_id: turn_id.to_string(),
-                message_fingerprint: Some(fingerprint),
-                message_occurrence: u32::try_from(occurrence).ok(),
-            })
-        }
-        // DeepSeek and Claude 0.75.1 both read the two halves in the same
-        // order, so both are sent. The id resolves on its own whenever the
-        // transcript named the message, and the fingerprint is what still
-        // resolves when it did not — a DeepSeek log written without an `id` or
-        // a parse that began mid-log; on Claude, a fork point that has drifted
-        // off the active parentUuid chain onto an abandoned branch. Sending the
-        // fingerprint alongside an id costs nothing: both adapters stop at the
-        // first id that matches and never look at it.
-        //
-        // The `text.trim().is_empty()` guard below is load-bearing on Claude,
-        // not just tidiness. Every turn `parsers::claude` leaves unnamed is one
-        // codeg SYNTHESIZED with no text of its own (a `/goal` marker, a bare
-        // top-level `tool_use`, a bare `tool_result`); `fingerprint("")` would
-        // match every text-free grouping on the agent's side at once and then
-        // pick between them by occurrence, forking somewhere arbitrary. A tail
-        // fork is the honest answer for those.
-        AgentType::ClaudeCode | AgentType::DeepSeek => {
+        // Prefer the agent's own item id. Older transcripts may only have
+        // assistant text; pass its fingerprint and its one-based occurrence.
+        AgentType::Codex | AgentType::ClaudeCode | AgentType::DeepSeek => {
             let text = turn_text(turn);
             let fingerprint = (!text.trim().is_empty()).then(|| fingerprint_agent_message(&text));
             // Neither half can name this turn — an assistant bubble opened by a
@@ -164,11 +130,9 @@ pub fn resolve_fork_point(
                 .as_ref()
                 .map(|fp| fingerprint_occurrence(turns, idx, fp));
             Some(ForkPoint {
-                // Same reasoning as codex when the transcript named nothing:
-                // the field is required, and codeg's own turn id (`turn-<n>`,
+                // The field is required, and codeg's own turn id (`turn-<n>`,
                 // a position, never a record uuid) is deliberately something
-                // neither adapter will find, which is what makes it fall
-                // through to the fingerprint.
+                // the adapter will not find, so it falls through to the fingerprint.
                 message_id: turn
                     .agent_message_id
                     .clone()
@@ -181,6 +145,46 @@ pub fn resolve_fork_point(
         // it; forking at the tail is the honest fallback.
         _ => None,
     }
+}
+
+/// A missing anchor can describe the tail of a live transcript. For a named
+/// historical Codex turn, only fall back to the tail if it really is the tail
+/// (see [`is_thread_tail`]).
+pub(super) fn requested_fork_point(
+    turns: &[MessageTurn],
+    turn_id: &str,
+    agent_type: AgentType,
+) -> Result<Option<ForkPoint>, AcpError> {
+    let point = resolve_fork_point(turns, turn_id, agent_type);
+    if point.is_none()
+        && agent_type == AgentType::Codex
+        && turn_id
+            .strip_prefix("turn-")
+            .is_some_and(|n| n.parse::<usize>().is_ok())
+        && !is_thread_tail(turns, turn_id)
+    {
+        return Err(AcpError::protocol(format!(
+            "Cannot locate the selected Codex fork point {turn_id}"
+        )));
+    }
+    Ok(point)
+}
+
+/// Whether a tail fork lands on `turn_id`: nothing the agent carries on from
+/// follows it. Mirrors the UI's `markThreadTail`, which steps over a failed
+/// round's closing line and over turns that render nothing, so the reply
+/// before them is still offered "fork from here" as the tail.
+fn is_thread_tail(turns: &[MessageTurn], turn_id: &str) -> bool {
+    let Some(idx) = turns.iter().position(|t| t.id == turn_id) else {
+        return false;
+    };
+    turns[idx + 1..].iter().all(|t| {
+        t.blocks.is_empty()
+            || (matches!(t.role, TurnRole::System)
+                && t.blocks
+                    .iter()
+                    .all(|b| matches!(b, ContentBlock::TurnError { .. })))
+    })
 }
 
 impl ForkPoint {
@@ -617,6 +621,186 @@ mod tests {
         assert_eq!(point.message_id, "msg_01");
         assert!(point.message_fingerprint.is_none());
         assert!(point.message_occurrence.is_none());
+    }
+
+    #[test]
+    fn codex_fork_preserves_native_ids_and_fingerprints_before_rendering_citations() {
+        use crate::parsers::{
+            codex::{CodexParser, CodexText},
+            AgentParser,
+        };
+        use serde_json::json;
+
+        let original = r#"See :codex-file-citation{path="src/main.rs"}."#;
+        let response = |citation: &str| {
+            json!({"type":"message", "role":"assistant",
+            "content":[{"type":"output_text", "text":format!("{original}<oai-mem-citation>{citation}</oai-mem-citation>")}]})
+        };
+        let completion = |kind: &str, id: &str, source: &str| {
+            json!({"type":"item_completed", "thread_id":source,
+            "item":{"type":kind, "id":id, "content":[{"type":"Text","text":original}]}})
+        };
+        let mut selected = response("selected");
+        selected["id"] = "msg-selected".into();
+        let mut unnamed = response("third");
+        unnamed["id"] = "  ".into();
+        let records = [
+            (
+                "session_meta",
+                json!({"id":"fork-test","cwd":"/repo","forked_from_id":"parent"}),
+            ),
+            ("session_meta", json!({"id":"parent","cwd":"/repo"})),
+            ("response_item", selected),
+            (
+                "event_msg",
+                completion("AgentMessage", "msg-completed", "fork-test"),
+            ),
+            ("response_item", response("second")),
+            (
+                "event_msg",
+                completion("McpToolCall", "tool-id", "fork-test"),
+            ),
+            ("response_item", unnamed),
+            (
+                "event_msg",
+                completion("AgentMessage", "foreign-id", "other-thread"),
+            ),
+            ("response_item", response("fourth")),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = records
+            .into_iter()
+            .map(|(kind, payload)| {
+                json!({"timestamp":"2026-10-29T10:00:00Z","type":kind,"payload":payload})
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(dir.path().join("fork-test.jsonl"), transcript).unwrap();
+        let parser = CodexParser::with_base_dir(dir.path().to_owned());
+        let display = parser.get_conversation("fork-test").unwrap();
+        assert!(turn_text(&display.turns[0]).contains("[src/main.rs]"));
+        assert!(turn_text(&display.turns[0]).contains("<oai-mem-citation>selected"));
+        let native = parser
+            .with_text(CodexText::Fork)
+            .get_conversation("fork-test")
+            .unwrap();
+        let fingerprint = fingerprint_agent_message(original);
+        for (index, expected_id) in ["msg-selected", "msg-completed", "turn-2", "turn-3"]
+            .into_iter()
+            .enumerate()
+        {
+            let clicked = &display.turns[index].id;
+            let point = requested_fork_point(&native.turns, clicked, AgentType::Codex)
+                .unwrap()
+                .unwrap();
+            let wire = serde_json::to_value(build_fork_request(
+                &SessionId::new("fork-test"),
+                AgentType::Codex,
+                "/repo",
+                &[],
+                &ClaudeSessionOptions::new(true),
+                Some(&point),
+            ))
+            .unwrap();
+            let anchor = &wire["_meta"]["jetbrains"]["air"]["fork"];
+            assert_eq!(anchor["messageId"], expected_id);
+            assert_eq!(anchor["messageFingerprint"], fingerprint);
+            assert_eq!(anchor["messageOccurrence"], index + 1);
+        }
+    }
+
+    #[test]
+    fn codex_does_not_tail_fork_an_unnamed_historical_turn() {
+        let turns = [
+            turn("turn-0", TurnRole::Assistant, "", None),
+            turn("turn-1", TurnRole::User, "later", None),
+        ];
+        assert!(requested_fork_point(&turns, "turn-0", AgentType::Codex).is_err());
+        assert!(requested_fork_point(&[], "turn-0", AgentType::Codex).is_err());
+        assert!(
+            requested_fork_point(&turns[..1], "turn-0", AgentType::Codex)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// Codex builds a multi-part reply's item from its parts concatenated as-is,
+    /// while codeg renders them joined by newlines. The completion twin must be
+    /// matched on Codex's text, or an id-less record loses the only id it has
+    /// and falls back to a fingerprint no Codex item carries.
+    #[test]
+    fn codex_multi_part_reply_takes_its_completion_id() {
+        use crate::parsers::{
+            codex::{CodexParser, CodexText},
+            AgentParser,
+        };
+        use serde_json::json;
+
+        let records = [
+            ("session_meta", json!({"id":"multi-part","cwd":"/repo"})),
+            (
+                "event_msg",
+                json!({"type":"item_completed", "thread_id":"multi-part",
+                "item":{"type":"AgentMessage", "id":"msg-completed",
+                "content":[{"type":"Text","text":"Read this."}]}}),
+            ),
+            (
+                "response_item",
+                json!({"type":"message", "role":"assistant", "content":[
+                    {"type":"output_text", "text":"Read "},
+                    {"type":"output_text",
+                     "text":"<oai-mem-citation>memory</oai-mem-citation>this."}
+                ]}),
+            ),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = records
+            .into_iter()
+            .map(|(kind, payload)| {
+                json!({"timestamp":"2026-10-29T10:00:00Z","type":kind,"payload":payload})
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(dir.path().join("multi-part.jsonl"), transcript).unwrap();
+        let native = CodexParser::with_base_dir(dir.path().to_owned())
+            .with_text(CodexText::Fork)
+            .get_conversation("multi-part")
+            .unwrap();
+        let point = requested_fork_point(&native.turns, &native.turns[0].id, AgentType::Codex)
+            .unwrap()
+            .unwrap();
+        assert_eq!(point.message_id, "msg-completed");
+    }
+
+    /// A failed round's closing line (and a turn with nothing to render) is
+    /// stepped over by the UI's tail marker, so the text-less reply before it
+    /// is still the tail and must still tail-fork, as it did before.
+    #[test]
+    fn codex_tail_forks_an_unnamed_reply_before_a_failed_rounds_closing_line() {
+        let failure = MessageTurn {
+            role: TurnRole::System,
+            blocks: vec![ContentBlock::TurnError {
+                message: "API Error: 503".into(),
+            }],
+            ..turn("turn-1", TurnRole::System, "", None)
+        };
+        let empty = MessageTurn {
+            blocks: vec![],
+            ..turn("turn-2", TurnRole::Assistant, "", None)
+        };
+        let unnamed = turn("turn-0", TurnRole::Assistant, "", None);
+        let tail = [unnamed.clone(), failure.clone(), empty];
+        assert!(requested_fork_point(&tail, "turn-0", AgentType::Codex)
+            .unwrap()
+            .is_none());
+        let later = [
+            unnamed,
+            failure,
+            turn("turn-2", TurnRole::User, "later", None),
+        ];
+        assert!(requested_fork_point(&later, "turn-0", AgentType::Codex).is_err());
     }
 
     #[test]

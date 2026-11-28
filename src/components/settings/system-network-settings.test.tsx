@@ -706,6 +706,11 @@ describe("SystemNetworkSettings — proxy bypass list", () => {
       no_proxy: "corp.example.com",
     })
 
+    // The switch stays disabled until the first save has answered; a click
+    // before that is dropped.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Enable system proxy")).toBeEnabled()
+    )
     fireEvent.click(screen.getByLabelText("Enable system proxy"))
     await waitFor(() => expect(mockSetProxy).toHaveBeenCalledTimes(2))
     expect(mockSetProxy).toHaveBeenLastCalledWith({

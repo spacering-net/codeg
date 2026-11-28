@@ -58,11 +58,14 @@ import {
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { HarnessUpdatesBadge } from "@/components/harness/harness-updates-badge"
+import { UserRoundStar } from "@/components/icons/user-round-star"
+import { LabelWithHint } from "@/components/layout/label-with-hint"
 import {
   MENU_TEXT,
   MenuRow,
   MenuSub,
 } from "@/components/layout/status-bar-menu-rows"
+import { BetaBadge } from "@/components/ui/beta-badge"
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { useAutomationsView } from "@/contexts/automations-view-context"
 import { useHarnessView } from "@/contexts/harness-view-context"
@@ -216,7 +219,22 @@ export function QuickActionsItems({ actions }: { actions: QuickActions }) {
           are not. None of them mark the current route the way the sidebar
           rows do — this is a launcher, not a nav list, and every other row
           in it is stateless, so a tinted row here reads as hover/focus
-          rather than "you are here". */}
+          rather than "you are here". The personal agent's row is the one
+          without its sidebar twin's badge or face: here it is only the way
+          to its page. */}
+      <MenuRow
+        icon={<UserRoundStar />}
+        label={
+          // "Beta" hugs the name, as beside the sidebar's "Assistants".
+          <span className="inline-flex max-w-full items-center gap-1.5">
+            <span className="min-w-0 truncate">
+              {tSidebar("personalAgent")}
+            </span>
+            <BetaBadge />
+          </span>
+        }
+        onSelect={() => setRoute("personalAgent")}
+      />
       <MenuRow
         icon={<Zap />}
         label={tSidebar("automations")}
@@ -255,7 +273,12 @@ export function QuickActionsItems({ actions }: { actions: QuickActions }) {
       />
       <MenuRow
         icon={<DraftingCompass />}
-        label={tSidebar("harness")}
+        label={
+          <LabelWithHint
+            label={tSidebar("harness")}
+            hint={tSidebar("harnessHint")}
+          />
+        }
         trailing={
           harnessUpdates > 0 && <HarnessUpdatesBadge count={harnessUpdates} />
         }

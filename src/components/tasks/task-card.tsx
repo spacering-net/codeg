@@ -12,6 +12,7 @@ import {
   FolderX,
   GitMerge,
   Loader2,
+  Sparkles,
 } from "lucide-react"
 import { AgentIcon } from "@/components/agent-icon"
 import { BrowserLink } from "@/components/ui/browser-link"
@@ -404,6 +405,28 @@ export function ScheduleChip({ task }: { task: WorkTask }) {
 }
 
 /**
+ * A task an assistant dispatched: that it did, and which assistant. It
+ * lands as the board's settings say, like any other task.
+ */
+export function PersonalAgentChip({ task }: { task: WorkTask }) {
+  const t = useTranslations("Tasks")
+  if (task.personal_agent_dispatch_id == null) return null
+  const executor = task.config?.executor_name ?? null
+  const label = executor
+    ? t("badgePersonalAgentExecutor", { executor })
+    : t("badgePersonalAgent")
+  return (
+    <span
+      className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-violet-500/10 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-violet-700 dark:text-violet-300"
+      title={label}
+    >
+      <Sparkles className="size-2.5 shrink-0" aria-hidden="true" />
+      <span className="truncate">{label}</span>
+    </span>
+  )
+}
+
+/**
  * One board card. The whole card opens the detail sheet; the footer carries
  * the shared action set (see `buildTaskActions`): one filled primary on the
  * left, round icon buttons for the secondaries on the right.
@@ -505,6 +528,7 @@ export function TaskCard({
         ) : null}
         {when ? <span className="shrink-0">{when}</span> : null}
         <ScheduleChip task={task} />
+        <PersonalAgentChip task={task} />
         <MergeQueuedChip task={task} rank={mergeQueueRank} />
         <PreflightChip task={task} />
         <WorktreeRemovedChip task={task} />

@@ -368,3 +368,46 @@ it("shows a filtered current model without offering it again", () => {
     )
   ).toEqual(["relay/allowed"])
 })
+
+describe("buildSessionSettings — model effort ranges", () => {
+  it("puts each model's effort range on the model selector only", () => {
+    const settings = build([
+      select("model", "Model", "model", "gpt-5.5", [
+        {
+          value: "gpt-6.2-sol",
+          name: "6.2 Sol",
+          description: null,
+          reasoning_efforts: {
+            values: ["low", "medium", "high", "xhigh", "max", "ultra"],
+            recommended: "low",
+          },
+        },
+        {
+          value: "gpt-5.5",
+          name: "5.5",
+          description: null,
+          reasoning_efforts: {
+            values: ["low", "medium", "high", "xhigh"],
+            recommended: "medium",
+          },
+        },
+      ]),
+      select("reasoning_effort", "Reasoning effort", "thought_level", "low", [
+        { value: "low", name: "Low", description: null },
+        { value: "xhigh", name: "Extra high", description: null },
+      ]),
+    ])
+    const model = choice(settings[0])
+    expect(model.isModel).toBe(true)
+    expect(
+      model.effortRanges && Object.fromEntries(model.effortRanges)
+    ).toEqual({ "gpt-6.2-sol": "Low–Ultra", "gpt-5.5": "Low–Extra high" })
+    expect(choice(settings[1]).effortRanges).toBeNull()
+  })
+
+  it("has none for an agent that names no efforts", () => {
+    for (const setting of build(CLAUDE)) {
+      if (setting.kind !== "switch") expect(setting.effortRanges).toBeNull()
+    }
+  })
+})

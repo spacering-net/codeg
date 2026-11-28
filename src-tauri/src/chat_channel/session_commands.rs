@@ -888,18 +888,21 @@ pub async fn handle_resume(
 
     // Spawn agent with session_id for resume
     let owner_label = owner_label_for(channel_id, sender_id, target);
-    let connection_id = match conn_mgr
-        .spawn_agent(
-            conv.agent_type,
-            Some(folder.path.clone()),
-            conv.external_id.clone(),
-            runtime_env,
-            owner_label,
-            emitter.clone(),
-            None,
-            BTreeMap::new(),
-        )
-        .await
+    // The conversation's own stored selection is replayed (codeg#1179).
+    let connection_id = match crate::commands::acp::spawn_with_conversation_selection(
+        conn_mgr,
+        db,
+        conv.agent_type,
+        Some(folder.path.clone()),
+        conv.external_id.clone(),
+        runtime_env,
+        owner_label,
+        emitter.clone(),
+        Some(conv.id),
+        None,
+        BTreeMap::new(),
+    )
+    .await
     {
         Ok(id) => id,
         Err(e) => {
@@ -993,7 +996,11 @@ pub async fn handle_cancel(
 
     // Cancel the ACP connection (also CAS-updates the row to Cancelled and
     // emits ConversationStatusChanged when the row is still InProgress).
-    let _ = conn_mgr.cancel(db, &session_ref.connection_id).await;
+    // A plain turn cancel leaves delegated sub-agents running; `/cancel` also
+    // unbinds the session from the channel, so it stops them with the turn.
+    let _ = conn_mgr
+        .cancel_with_delegated_children(db, &session_ref.connection_id)
+        .await;
 
     // Remove from bridge
     bridge.lock().await.remove(&session_ref.connection_id);
@@ -1533,19 +1540,22 @@ async fn spawn_chat_connection_for_conversation(
             .await
             .map_err(|e| e.to_string())?;
     let owner_label = owner_label_for(channel_id, sender_id, target);
-    let connection_id = conn_mgr
-        .spawn_agent(
-            conv.agent_type,
-            Some(folder.path.clone()),
-            conv.external_id.clone(),
-            runtime_env,
-            owner_label,
-            emitter.clone(),
-            None,
-            BTreeMap::new(),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+    // The conversation's own stored selection is replayed (codeg#1179).
+    let connection_id = crate::commands::acp::spawn_with_conversation_selection(
+        conn_mgr,
+        db,
+        conv.agent_type,
+        Some(folder.path.clone()),
+        conv.external_id.clone(),
+        runtime_env,
+        owner_label,
+        emitter.clone(),
+        Some(conv.id),
+        None,
+        BTreeMap::new(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok((connection_id, folder))
 }

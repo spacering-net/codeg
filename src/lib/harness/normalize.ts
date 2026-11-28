@@ -440,7 +440,8 @@ export function normalizeConfig(value: unknown): HarnessConfig {
       }))
       .filter((tag) => tag.id),
     review: text(source.review),
-  }
+    plugins: { adapters: record(record(source.plugins)?.adapters) ?? {} },
+  } as HarnessConfig
 }
 
 /** `harness_status`' answer. */

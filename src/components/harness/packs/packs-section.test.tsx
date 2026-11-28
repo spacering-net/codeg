@@ -54,6 +54,11 @@ import {
 } from "@/contexts/harness-view-context"
 import { OFFICE_INSTALL } from "@/lib/harness/packs-state"
 import {
+  MEMBERS,
+  rawListedHost,
+  rawListedPlugin,
+} from "@/lib/harness/plugin-install-fixtures"
+import {
   createEngine,
   STORE,
   type Engine,
@@ -207,6 +212,8 @@ function setup(options: Partial<EngineOptions> = {}) {
       runtimeError: null,
     }),
     generative_ui_skill_info: () => ({ id: "ui-render", conflict: false }),
+    // Nothing installed from SRN Harness, so no plugin provides an expert.
+    harness_installed: () => ({ mcp: [], skills: [], plugins: [] }),
     experts_read_content: () => "---\nname: brainstorming\n---\n# Brainstorm\n",
     generative_ui_read_content: () =>
       "---\nname: ui-render\n---\n# Show it as UI\n",
@@ -442,6 +449,77 @@ describe("PacksSection — switching through the engine", () => {
     await chooseTab("UI")
     await screen.findByRole("switch", { name: /^UI Render, Claude Code/ })
     expect(screen.queryByRole("textbox", { name: m.search.label })).toBeNull()
+  })
+})
+
+describe("PacksSection — experts a plugin provides", () => {
+  const EXPERTS = [
+    { id: "brainstorming", origin: "experts" as const },
+    { id: "writing-plans", origin: "experts" as const },
+  ]
+  /** superpowers, with brainstorming its one skill, whole on `agents`. */
+  const providing = (agents: string[]) => () => ({
+    mcp: [],
+    skills: [],
+    plugins: [
+      rawListedPlugin({
+        members: [MEMBERS[0]],
+        hosts: agents.map((agent) => rawListedHost(agent)),
+      }),
+    ],
+  })
+  const rowOf = async (name: string) => {
+    await screen.findByRole("switch", { name: new RegExp(`^${name}, Codex`) })
+    const row = screen.getByText(name).closest("tr")
+    if (!row) throw new Error(`no row for ${name}`)
+    return row
+  }
+
+  it("drops the count of a row a plugin holds for every agent, and skips it in a batch", async () => {
+    setup({ skills: EXPERTS })
+    answers.harness_installed = providing([
+      "claude_code",
+      "codex",
+      "cline",
+      "custom:only-shared",
+    ])
+    render(<Page />)
+    const held = await rowOf("Brainstorming")
+    expect(
+      within(held).getByText(
+        ms.grid.providedBy.replace("{plugin}", "superpowers")
+      )
+    ).toBeTruthy()
+    expect(within(held).queryByText("0/4")).toBeNull()
+    expect(within(await rowOf("Writing plans")).getByText("0/4")).toBeTruthy()
+
+    await userEvent.click(
+      screen.getByRole("button", { name: ms.grid.everything })
+    )
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: ms.grid.everythingOn })
+    )
+    await waitFor(() =>
+      expect(callsOf("skills_apply_links").length).toBeGreaterThan(0)
+    )
+    const skills = callsOf("skills_apply_links").flatMap((call) =>
+      (call.args.ops as { skill: string }[]).map((op) => op.skill)
+    )
+    expect(skills).toContain("writing-plans")
+    expect(skills).not.toContain("brainstorming")
+  })
+
+  it("keeps the count of a row a plugin holds for some agents only", async () => {
+    setup({ skills: EXPERTS })
+    answers.harness_installed = providing(["claude_code"])
+    render(<Page />)
+    const row = await rowOf("Brainstorming")
+    expect(
+      within(row).getByText(
+        ms.grid.providedBy.replace("{plugin}", "superpowers")
+      )
+    ).toBeTruthy()
+    expect(within(row).getByText("0/4")).toBeTruthy()
   })
 })
 

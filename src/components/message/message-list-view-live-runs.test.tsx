@@ -32,6 +32,14 @@ const { rendered } = vi.hoisted(() => ({
   },
 }))
 
+// No assistants' roster read here: whether a reply can be checked (10.3)
+// is not what this file is about.
+vi.mock("@/stores/personal-agent-roster-store", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/stores/personal-agent-roster-store")
+  >()),
+  useRoster: () => null,
+}))
 vi.mock("@/lib/api", () => ({
   getFolderConversation: vi.fn(() => new Promise(() => {})),
   getFolderConversationTurns: vi.fn(),
@@ -227,6 +235,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   resetConversationRuntimeStore()
+  vi.restoreAllMocks()
 })
 
 describe("MessageListView: the live activity row", () => {
@@ -270,6 +279,36 @@ describe("MessageListView: the live activity row", () => {
       })
     )
     expect(chip(1)).toBeNull()
+  })
+
+  it("goes in the render its turn ends in, though a slide shut could play", () => {
+    // A slide shut waits on the main thread (animationend, or its fallback
+    // timer); anything stalling that thread as a turn ends left the figures
+    // up over an idle composer. jsdom plays no animations, so say one would.
+    const computed = window.getComputedStyle
+    vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (element, pseudo) =>
+        element.classList.contains("slide-slot")
+          ? ({
+              animationName: "slide-slot-close",
+              animationDuration: "0.18s",
+            } as CSSStyleDeclaration)
+          : computed(element, pseudo)
+    )
+    seed()
+    act(() => {
+      actions().setLiveMessage(CID, LIVE, true)
+    })
+    const { rerender } = render(
+      view({ connStatus: "prompting", liveRuns: NO_RUNS })
+    )
+    expect(timer()).not.toBeNull()
+
+    // The status flips first; the panel promotes the reply (`completeTurn`)
+    // from an effect after, so the live message is still in the store here.
+    rerender(view({ connStatus: "connected", liveRuns: NO_RUNS }))
+    expect(timer()).toBeNull()
+    expect(document.querySelector(".slide-slot")).toBeNull()
   })
 
   it("comes up for work running past any turn — a delegation, say — with no turn at all", () => {

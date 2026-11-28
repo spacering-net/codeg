@@ -1,8 +1,15 @@
 "use client"
 
 /**
- * Persists user's selector preferences (mode & config option selections)
- * per agentType to localStorage, so they survive session restarts.
+ * The NEW-CONVERSATION DEFAULT (mode & config option selections) per
+ * agentType, in localStorage (codeg#1179). Written only by an explicit pick
+ * in a draft (the surfaces decide at pick time); read by new drafts, and once
+ * by a legacy conversation that never recorded a selection of its own. Every
+ * existing conversation keeps its own selection on its row
+ * (`conversation.selector_state`, written by the backend), which the backend
+ * replays on connect instead of this default — so picking in one
+ * conversation never changes another, and changing the default never changes
+ * an existing conversation.
  *
  * Structure hash is stored alongside values — when the saved value no
  * longer exists in the current option set (item renamed / removed) the
@@ -157,20 +164,66 @@ export function getSavedModeId(agentType: string): string | null {
  * `session_modes` / `session_config_options` event is emitted, so the
  * frontend never needs to "intercept event and overwrite, then sync back".
  */
-export function getSavedPrefsForConnect(agentType: string): {
+export function getSavedPrefsForConnect(
+  agentType: string,
+  /** The surface connecting: a one-off selection registered for it
+   *  ({@link setConnectSelection}) is laid over the saved default. */
+  contextKey?: string
+): {
   modeId: string | null
   configValues: Record<string, string> | null
 } {
   const prefs = prefsOf(readAll(), agentType)
-  if (!prefs) return { modeId: null, configValues: null }
-  const configValues =
-    prefs.configValues && Object.keys(prefs.configValues).length > 0
+  const saved =
+    prefs?.configValues && Object.keys(prefs.configValues).length > 0
       ? healLegacyValues(prefs.configValues)
       : null
+  const own = contextKey != null ? connectSelections.get(contextKey) : null
+  const configValues =
+    own && own.agentType === agentType
+      ? { ...saved, ...own.configValues }
+      : saved
   return {
-    modeId: prefs.modeId ?? null,
+    modeId: prefs?.modeId ?? null,
     configValues,
   }
+}
+
+// ── One-off connect selections (memory only) ──
+
+/**
+ * Config selections a surface's FIRST connect starts from instead of the saved
+ * default, keyed by its connection key — never persisted, and never written to
+ * the default. The selection bubble's ask composer picks the new
+ * conversation's model and options before any connection exists; registering
+ * them here lets `acp_connect` apply them on the session it creates, the same
+ * atomic way it applies the default (no "default first, then switch" flicker,
+ * no set racing the first send).
+ *
+ * Laid over the default rather than replacing it: an option the pick leaves
+ * out still starts from the saved value. Ignored for any other agent than the
+ * one it was picked for, and harmless after the conversation exists — the
+ * backend replays the row's own stored selection over it from then on.
+ */
+const connectSelections = new Map<
+  string,
+  { agentType: string; configValues: Record<string, string> }
+>()
+
+export function setConnectSelection(
+  contextKey: string,
+  agentType: string,
+  configValues: Record<string, string>
+) {
+  if (Object.keys(configValues).length === 0) {
+    connectSelections.delete(contextKey)
+    return
+  }
+  connectSelections.set(contextKey, { agentType, configValues })
+}
+
+export function clearConnectSelection(contextKey: string) {
+  connectSelections.delete(contextKey)
 }
 
 // ── Save (user actions only) ──

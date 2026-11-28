@@ -642,7 +642,7 @@ describe("Discover — search as you type", () => {
 })
 
 describe("Discover — kinds, filters and sort", () => {
-  it("offers the four kinds and 'All', and narrows the list at once", async () => {
+  it("offers the five kinds and 'All', and narrows the list at once", async () => {
     const user = userEvent.setup()
     render(<Harness />)
     await screen.findByText("Item 1")
@@ -652,7 +652,7 @@ describe("Discover — kinds, filters and sort", () => {
       within(kinds)
         .getAllByRole("radio")
         .map((radio) => radio.textContent)
-    ).toEqual(["All", "Skills", "MCP", "Prompts", "Assistants"])
+    ).toEqual(["All", "Skills", "MCP", "Prompts", "Assistants", "Plugins"])
     expect(within(kinds).getByRole("radio", { name: "All" })).toBeChecked()
 
     await user.click(within(kinds).getByRole("radio", { name: "MCP" }))
@@ -673,6 +673,7 @@ describe("Discover — kinds, filters and sort", () => {
       ["Skills", "skill"],
       ["Prompts", "prompt"],
       ["Assistants", "assistant"],
+      ["Plugins", "plugin"],
     ] as const) {
       await user.click(within(kinds).getByRole("radio", { name }))
       await waitFor(() =>
@@ -802,6 +803,7 @@ describe("Discover — the heading, the counts and the layout", () => {
     mcp: 26392,
     prompt: 475,
     assistant: 631,
+    plugin: 61,
   }
 
   it("asks how much there is of each kind, once, and says so", async () => {
@@ -822,6 +824,7 @@ describe("Discover — the heading, the counts and the layout", () => {
         "MCP26,392",
         "Prompts475",
         "Assistants631",
+        "Plugins61",
       ])
     )
     // As the list asks for a kind's first page — so the backend's cache
@@ -833,10 +836,11 @@ describe("Discover — the heading, the counts and the layout", () => {
         { kind: "mcp", sort: "popular" },
         { kind: "prompt", sort: "popular" },
         { kind: "assistant", sort: "popular" },
+        { kind: "plugin", sort: "popular" },
       ])
     )
     expect(
-      screen.getByText(/^28,858 community skills, MCP servers/)
+      screen.getByText(/^28,858 community skills, plugins, MCP servers/)
     ).toBeInTheDocument()
   })
 
@@ -855,7 +859,7 @@ describe("Discover — the heading, the counts and the layout", () => {
       within(kinds)
         .getAllByRole("radio")
         .map((radio) => radio.textContent)
-    ).toEqual(["All", "Skills", "MCP", "Prompts", "Assistants"])
+    ).toEqual(["All", "Skills", "MCP", "Prompts", "Assistants", "Plugins"])
   })
 
   it("says nothing of the size when the counts cannot be had", async () => {
@@ -867,7 +871,7 @@ describe("Discover — the heading, the counts and the layout", () => {
     await screen.findByText("Item 1")
 
     expect(
-      screen.getByText(/^Community skills, MCP servers/)
+      screen.getByText(/^Community skills, plugins, MCP servers/)
     ).toBeInTheDocument()
     expect(screen.queryByRole("alert")).toBeNull()
   })

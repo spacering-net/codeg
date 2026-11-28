@@ -247,18 +247,24 @@
         "appliedToast": "桌布已套用",
         "credit": "圖片來源 wallhaven.cc · 僅 SFW 內容"
       }
+    },
+    "paAccent": {
+      "title": "助手強調色",
+      "description": "助手對話中卡片強調邊框與卡片按鈕所用的顏色；你的對話泡泡一律使用助手的顏色。",
+      "default": "預設",
+      "bot": "跟隨助手顏色"
     }
   },
   "SystemSettings": {
     "loading": "載入中...",
     "sectionTitle": "系統管理",
-    "sectionDescription": "管理應用升級、開機自動啟動、網路代理與語言偏好。",
+    "sectionDescription": "管理應用程式升級、開機自動啟動、網路代理與語言偏好。",
     "autostartTitle": "開機自動啟動",
     "autostartDescription": "登入這台電腦後自動啟動，不必每次手動開啟。",
     "autostartSaveFailed": "開機自動啟動設定儲存失敗：{message}",
     "autostartUnavailable": "無法讀取本機的開機自動啟動狀態：{message}",
     "cliAccessTitle": "命令列存取",
-    "cliAccessDescription": "允許本機的 codeg-cli 指令透過 Codeg 執行提示詞，用於指令碼、CI 工作或 Codeg 內建的終端機。只有本機能連線，金鑰保存在私有檔案中。",
+    "cliAccessDescription": "允許本機的 codeg-cli 指令透過 Codeg 執行提示詞，用於指令碼、CI 工作或 Codeg 內建的終端機。只有本機能連線，金鑰儲存在私有檔案中。",
     "cliAccessEndpointFile": "探索檔案：",
     "cliAccessExample": "範例：",
     "cliAccessOff": "已關閉：本機的 codeg-cli 無法連線到 Codeg。",
@@ -286,15 +292,15 @@
     "saveSuccess": "系統代理設定已儲存",
     "saveFailed": "儲存失敗：{message}",
     "languageTitle": "語言",
-    "languageDescription": "設定應用語言。跟隨系統時，若系統語言不受支援將回退為英文。",
-    "appLanguage": "應用語言",
+    "languageDescription": "設定應用程式語言。跟隨系統時，若系統語言不受支援將回退為英文。",
+    "appLanguage": "應用程式語言",
     "languageSaveSuccess": "語言設定已儲存",
     "languageSaveFailed": "語言設定儲存失敗：{message}",
     "dataTitle": "資料與同步",
     "dataDescription": "「設定同步」在裝置之間搬運設定；「備份」打包這台裝置上的全部 codeg 資料。",
-    "updateTitle": "應用升級",
+    "updateTitle": "應用程式升級",
     "versionTitle": "軟體更新",
-    "updateDescription": "點擊檢查後會從設定的發佈來源拉取最新版本資訊，有新版本時可直接下載並安裝。",
+    "updateDescription": "點擊檢查後會從設定的發布來源拉取最新版本資訊，有新版本時可直接下載並安裝。",
     "currentVersion": "目前版本",
     "upgradableVersion": "最新版本",
     "none": "暫無",
@@ -309,7 +315,7 @@
     "foundUpdate": "發現新版本 v{version}",
     "alreadyLatest": "目前已是最新版本",
     "checkUpdateFailed": "檢查更新失敗：{message}",
-    "installSuccess": "升級包已安裝，正在重新啟動應用",
+    "installSuccess": "升級包已安裝，正在重新啟動應用程式",
     "installFailed": "升級失敗：{message}",
     "upgradeSuccess": "升級完成，正在重新載入...",
     "restartTimeout": "服務未能即時恢復，請檢查容器或服務記錄。",
@@ -344,7 +350,7 @@
       "sourceUnavailable": "無法連線更新來源，請檢查網路或代理設定後重試。",
       "network": "網路連線異常，請檢查網路或代理設定後重試。",
       "downloadFailed": "下載更新包失敗，請稍後再試。",
-      "installFailed": "安裝更新失敗，請關閉應用後重試。",
+      "installFailed": "安裝更新失敗，請關閉應用程式後重試。",
       "unknown": "更新失敗，請稍後再試。"
     }
   },
@@ -561,6 +567,54 @@
       "zoom_reset": {
         "title": "重設縮放",
         "description": "把視窗縮放恢復為 100%"
+      },
+      "switch_assistant_1": {
+        "title": "切換到第 1 個助手",
+        "description": "在助手頁：開啟名單上第 1 個助手（1 是主助手）"
+      },
+      "switch_assistant_2": {
+        "title": "切換到第 2 個助手",
+        "description": "在助手頁：開啟名單上第 2 個助手（1 是主助手）"
+      },
+      "switch_assistant_3": {
+        "title": "切換到第 3 個助手",
+        "description": "在助手頁：開啟名單上第 3 個助手（1 是主助手）"
+      },
+      "switch_assistant_4": {
+        "title": "切換到第 4 個助手",
+        "description": "在助手頁：開啟名單上第 4 個助手（1 是主助手）"
+      },
+      "switch_assistant_5": {
+        "title": "切換到第 5 個助手",
+        "description": "在助手頁：開啟名單上第 5 個助手（1 是主助手）"
+      },
+      "switch_assistant_6": {
+        "title": "切換到第 6 個助手",
+        "description": "在助手頁：開啟名單上第 6 個助手（1 是主助手）"
+      },
+      "switch_assistant_7": {
+        "title": "切換到第 7 個助手",
+        "description": "在助手頁：開啟名單上第 7 個助手（1 是主助手）"
+      },
+      "switch_assistant_8": {
+        "title": "切換到第 8 個助手",
+        "description": "在助手頁：開啟名單上第 8 個助手（1 是主助手）"
+      },
+      "switch_assistant_9": {
+        "title": "切換到第 9 個助手",
+        "description": "在助手頁：開啟名單上第 9 個助手（1 是主助手）"
+      },
+      "prev_assistant": {
+        "title": "上一個助手",
+        "description": "在助手頁：開啟名單上的上一個助手"
+      },
+      "next_assistant": {
+        "title": "下一個助手",
+        "description": "在助手頁：開啟名單上的下一個助手"
+      },
+      "cycle_assistant": {
+        "title": "循環切換助手",
+        "description": "在助手頁：依最近開啟的順序切換助手"
       }
     }
   },
@@ -606,7 +660,7 @@
       "openInWindow": "在新視窗打開",
       "delete": "刪除",
       "deleting": "刪除中...",
-      "refresh": "刷新",
+      "refresh": "重新整理",
       "newSkill": "新增 Skill",
       "reset": "重置",
       "save": "儲存",
@@ -672,9 +726,9 @@
       "installConfig": "安裝配置"
     },
     "toasts": {
-      "uninstalled": "已卸載 MCP",
-      "uninstallFailed": "卸載失敗：{message}",
-      "selectAtLeastOneApp": "請至少選擇一個目標應用",
+      "uninstalled": "已解除安裝 MCP",
+      "uninstallFailed": "解除安裝失敗：{message}",
+      "selectAtLeastOneApp": "請至少選擇一個目標應用程式",
       "saveSuccess": "儲存成功",
       "saveFailed": "儲存失敗：{message}",
       "installed": "已安裝 {name}",
@@ -686,20 +740,20 @@
     "installDialog": {
       "title": "確認安裝 MCP",
       "descriptionWithName": "將 {name} 安裝到本地配置。",
-      "description": "選擇安裝目標應用。",
+      "description": "選擇安裝目標應用程式。",
       "protocol": "協議",
       "selectProtocol": "選擇協議",
       "parameters": "配置參數",
       "booleanPlaceholder": "請選擇 true/false",
       "selectOneValue": "選擇一個值",
-      "targetApps": "目標應用"
+      "targetApps": "目標應用程式"
     },
     "actions": {
       "cancel": "取消",
       "confirmInstall": "確認安裝",
       "installing": "安裝中",
-      "uninstall": "卸載",
-      "uninstalling": "卸載中",
+      "uninstall": "解除安裝",
+      "uninstalling": "解除安裝中",
       "viewDetails": "查看詳情",
       "save": "儲存",
       "saving": "儲存中",
@@ -720,7 +774,7 @@
       "saveBlockedByUnreadableSource": "儲存前請先修復或刪除該檔案並重新整理：指派結果依本頁能讀取到的智慧體計算，現在儲存可能會將該伺服器從讀不到的智慧體中移除。",
       "empty": "目前未檢測到本地 MCP。",
       "description": "本地 MCP 配置可直接編輯並儲存。",
-      "enabledApps": "啟用應用",
+      "enabledApps": "已啟用的應用程式",
       "configJson": "MCP 配置(JSON)",
       "draftTitle": "新建 MCP",
       "draftDescription": "填寫 Server ID 與設定以建立本地 MCP 伺服器。",
@@ -758,7 +812,7 @@
   },
   "AcpAgentSettings": {
     "title": "Agent SDK管理",
-    "description": "統一管理 Agent 的連接SDK、啟用狀態、環境變數、配置管理與版本預檢資訊。",
+    "description": "管理各 Agent 的 SDK 連接、啟用狀態、環境變數、配置與版本預檢。",
     "loadingAgents": "載入 Agent 列表中...",
     "agentList": "Agent 列表",
     "emptyNoAgent": "暫無可用 Agent。",
@@ -766,7 +820,7 @@
     "envVars": "環境變數",
     "systemInstructions": {
       "label": "系統級提示詞",
-      "hint": "設定此 Agent 的全域系統級提示詞，並儲存至其全域指令檔案。",
+      "hint": "此 Agent 的全域指令，儲存至其全域指令檔案。",
       "placeholder": "輸入全域系統提示詞（Markdown 格式，例如角色定義、行為準則、程式碼規範等）...",
       "filePath": "檔案路徑",
       "unsaved": "有未儲存的變更",
@@ -776,22 +830,22 @@
     },
     "hostTools": {
       "label": "由 Agent 自行處理檔案與指令",
-      "description": "codeg 不再代為提供檔案存取與終端指令，改由 Agent 在自己的行程中執行——只有這樣它自帶的沙箱與權限規則才會生效。同時會關閉向其他 Agent 委派，否則同樣的操作又會繞回 codeg 執行。codeg 本身不提供沙箱，因此請僅在 Agent 已設定沙箱時開啟。"
+      "description": "檔案與終端機操作使用 Agent 自身的權限。codeg 不提供沙箱，並會關閉委派。請僅在 Agent 已設定沙箱時開啟。"
     },
     "nativeJsonConfig": "原生 JSON 配置",
     "modelHintDefault": "留空則使用系統預設模型。",
-    "generalConfigDescriptionClaude": "支援 API URL、API Key 與 Claude 模型快捷配置，並與原生 JSON 配置聯動。",
-    "generalConfigDescriptionDefault": "支援重要配置輸入（API URL、API Key、Model）和原生 JSON 配置管理。",
+    "generalConfigDescriptionClaude": "快捷配置 API URL、API Key 與 Claude 模型，與原生 JSON 配置同步。",
+    "generalConfigDescriptionDefault": "配置 API URL、API Key、Model，並管理原生 JSON 配置。",
     "multiAgent": {
       "title": "多智慧體協同",
       "description": "允許活躍的智慧體將子任務委派給其他智慧體。",
       "enable": "啟用委派",
       "enableHint": "關閉後，delegate_to_agent 工具會從智慧體的 MCP 工具清單中隱藏。",
-      "withheldByHostTools": "{agents} 不會拿到委派工具：它們單獨開啟了「由 Agent 自行處理檔案與命令」。",
+      "withheldByHostTools": "{agents} 不會拿到委派工具：已開啟「由 Agent 自行處理檔案與命令」。",
       "depthLimit": "最大委派深度",
-      "depthHint": "允許範圍：{min}–{max}。限制委派鏈（根 → 子 → 孫 …）的最大遞迴深度。",
+      "depthHint": "範圍：{min}–{max}。限制委派鏈的最大巢狀深度。",
       "completedCacheLabel": "已完成結果快取（MB）",
-      "completedCacheHint": "執行中委派工作階段已完成子代理結果的記憶體快取，僅在該工作階段執行期間保留，工作階段結束後自動清除。超出此預算時優先從記憶體中捨棄最舊的結果（仍可在子代理自己的工作階段中檢視）；0 表示不限（工作階段結束後仍會清除）。",
+      "completedCacheHint": "已完成子代理結果的記憶體快取，工作階段結束即清除。超出預算時先捨棄最舊的（仍可在子代理工作階段中檢視）；0 表示不限。",
       "save": "儲存",
       "saving": "儲存中…",
       "saved": "委派設定已儲存",
@@ -799,7 +853,7 @@
       "loadFailed": "載入委派設定失敗：{detail}",
       "tabGeneral": "一般",
       "tabAgentDefaults": "子智慧體設定",
-      "agentDefaultsDescription": "多智慧體協同在為委派呼叫啟動子智慧體時使用這些覆寫項。下方選項透過即時探測取得，所選即所用。",
+      "agentDefaultsDescription": "委派啟動子智慧體時使用的覆寫項，選項來自對智慧體的即時探測。",
       "agentDefaultsAgentHint": "保持「預設」的選項沿用智慧體自己的設定。",
       "agentDefaultsDelegationOff": "多智慧體協同已關閉，開啟後才能修改這些設定。",
       "probing": "正在載入該智慧體的可用設定項…",
@@ -810,25 +864,24 @@
       "agentDefaultHint": "智慧體預設：{value}",
       "defaultOptionLabel": "預設（{value}）",
       "overrideCount": "已自訂 {count} 項",
-      "tabAssistants": "助手設定",
+      "tabAssistants": "助手",
       "booleanOn": "開啟",
       "booleanOff": "關閉",
       "modelNotSwitched": "智慧體沒有切換到所選模型，下面的選項可能屬於另一個模型。",
       "unsavedChanges": "有未儲存的修改",
       "assistants": {
-        "description": "助手是可以被 @ 的委派預設：一個智慧體、選定的每一項選項，加上常駐指令。委派給助手時，就按這套設定執行。",
-        "create": "新增助手",
-        "delegationOff": "多智慧體協同已關閉，助手暫時無法被委派。",
+        "create": "新增執行配置",
+        "delegationOff": "多智慧體協同已關閉，執行配置暫時無法被委派。",
         "delegationOffAction": "前往「{tab}」",
         "unsavedElsewhere": "{tabs}有未儲存的修改。",
         "unsavedGoBack": "返回",
-        "loadFailed": "載入助手失敗：{detail}",
-        "emptyTitle": "還沒有助手",
-        "empty": "新增一個，給智慧體一套固定的設定和常駐指令，在任何對話裡都能 @ 它。",
-        "reorderFailed": "調整助手順序失敗",
-        "saveFailed": "儲存助手失敗",
+        "loadFailed": "載入執行配置失敗：{detail}",
+        "emptyTitle": "還沒有執行配置",
+        "empty": "給智慧體一套固定設定和常駐指令，在任何對話裡 @ 它。",
+        "reorderFailed": "調整執行配置順序失敗",
+        "saveFailed": "儲存執行配置失敗",
         "duplicated": "已建立 {name}",
-        "deleteFailed": "刪除助手失敗",
+        "deleteFailed": "刪除執行配置失敗",
         "deleteTitle": "刪除 {name}？",
         "deleteDescription": "它會從設定和提及面板中消失，也無法再被委派。對話裡已有的委派卡片仍會顯示它。",
         "cancel": "取消",
@@ -840,27 +893,27 @@
         "more": "{name} 的更多操作",
         "agentNotInstalled": "未安裝",
         "agentDisabled": "已停用",
-        "createTitle": "新增助手",
-        "editTitle": "編輯助手",
-        "editorDescription": "委派給這個助手時，就按這裡設定的智慧體、選項和常駐指令執行。",
+        "createTitle": "新增執行配置",
+        "editTitle": "編輯執行配置",
+        "editorDescription": "委派時嚴格按這裡的智慧體、選項和常駐指令執行。",
         "nameLabel": "名稱",
         "namePlaceholder": "例如：程式碼審查員",
         "descriptionLabel": "簡介",
-        "descriptionPlaceholder": "什麼時候用這個助手",
-        "descriptionHint": "顯示在提及面板中，也會告訴發起委派的智慧體什麼時候該選這個助手。",
+        "descriptionPlaceholder": "什麼時候用這個執行配置",
+        "descriptionHint": "顯示在提及面板中，並告訴發起委派的智慧體何時選它。",
         "agentLabel": "智慧體",
         "agentPlaceholder": "選擇智慧體",
         "agentHint": "它的每一項選項都要選定。",
         "instructionsLabel": "常駐指令",
-        "instructionsPlaceholder": "這個助手每次接任務時都要遵守的角色和工作要求",
-        "instructionsHint": "每次委派時隨任務一起交給智慧體，不會顯示在子對話的訊息裡。",
+        "instructionsPlaceholder": "智慧體每次接任務時都要遵守的角色和工作要求",
+        "instructionsHint": "隨每次委派任務交給智慧體，不顯示在子對話訊息裡。",
         "charCount": "{count} / {max}",
         "save": "儲存",
         "createSubmit": "建立",
         "pickAgentFirst": "先選擇智慧體，再選它的選項。",
         "pickModelFirst": "選擇模型後顯示其餘選項。",
         "modelNotSwitched": "智慧體沒有切換到這個模型，讀不到它的其餘選項。可以重試，也可以換一個模型。",
-        "agentUnavailableHint": "這個智慧體已停用或未安裝，無法核對它的選項。下面是存著的選項；改選別的智慧體才能修改。",
+        "agentUnavailableHint": "智慧體已停用或未安裝，無法核對選項。下面是已存選項；改選其他智慧體才能修改。",
         "optionsChanged": "智慧體的選項有變化，請補選標出的 {count} 項。",
         "missingCount": "還有 {count} 項未選",
         "cannotSaveProbeFailed": "無法儲存：讀不到智慧體的選項，無法確認每一項都已選定。請先重試。",
@@ -882,37 +935,38 @@
         "avatarUseMonogram": "使用字母",
         "avatarEmojiPlaceholder": "輸入或貼上 emoji",
         "avatarEmojiUse": "使用",
-        "avatarUpload": "上傳圖片",
-        "avatarUploadHint": "會置中裁成正方形，並縮小到 128×128。",
-        "avatarTooLarge": "這張圖片縮小之後仍然太大，請換一張。",
-        "avatarUnreadable": "無法把這個檔案讀成圖片。",
         "avatarColor": "顏色",
         "errors": {
-          "emptyName": "請填寫助手名稱。",
+          "emptyName": "請填寫執行配置名稱。",
           "nameTooLong": "名稱最多 {max} 個字。",
-          "duplicateName": "已經有一個名為「{name}」的助手。",
+          "duplicateName": "已經有一個名為「{name}」的執行配置。",
           "descriptionTooLong": "簡介最多 {max} 個字。",
           "instructionsTooLong": "常駐指令最多 {max} 個字。",
           "invalidAvatar": "這個頭像不能用，請換一個。",
           "avatarTooLarge": "頭像圖片太大。",
-          "invalidAgentOptions": "智慧體的選項沒有選齊。請重新開啟助手，把每一項都選上。",
-          "notFound": "這個助手已經不存在了。"
-        }
-      }
+          "invalidAgentOptions": "智慧體的選項沒有選齊。請重新開啟執行配置，把每一項都選上。",
+          "notFound": "這個執行配置已經不存在了。"
+        },
+        "disableTitle": "停用「{name}」？",
+        "disableConfirm": "停用"
+      },
+      "assistantsMoved": "助手：在左側欄的「助手」分組裡管理",
+      "assistantsMovedHint": "會話裡 @ 的個人助手，各有自己的智能體和常駐指令。",
+      "assistantsMovedOpen": "開啟"
     },
     "actions": {
       "saveSystemInstructions": "儲存系統級提示詞",
       "dragSort": "拖拽排序",
       "dragSortAgent": "拖拽排序 {name}",
-      "refreshCheck": "刷新檢測",
-      "refreshCheckAgent": "刷新檢測 {name}",
+      "refreshCheck": "重新檢查",
+      "refreshCheckAgent": "重新檢查 {name}",
       "clickEnable": "點擊啟用 {name}",
       "clickDisable": "點擊停用 {name}",
       "install": "安裝",
       "upgrade": "升級",
-      "uninstall": "卸載",
+      "uninstall": "解除安裝",
       "installGuide": "安裝指南",
-      "uninstalling": "卸載中...",
+      "uninstalling": "解除安裝中...",
       "saveEnvVars": "儲存環境變數",
       "saving": "儲存中...",
       "saveGrokConfig": "儲存 Grok 設定",
@@ -932,7 +986,7 @@
       "delete": "刪除",
       "deleting": "刪除中...",
       "confirmDelete": "確認刪除",
-      "confirmUninstall": "確認卸載",
+      "confirmUninstall": "確認解除安裝",
       "saveClineConfig": "儲存 Cline 配置",
       "saveHermesConfig": "儲存 Hermes 配置",
       "saveCodeBuddyConfig": "儲存 CodeBuddy 設定",
@@ -955,7 +1009,7 @@
       "notRun": "尚未執行檢測。"
     },
     "grok": {
-      "configDescription": "在此設定 Grok。下方控制項——權限模式、推理強度、選用的自訂（自帶端點）模型與壓縮——會合併寫入 ~/.grok/config.toml，並保留你的其他鍵與註解。登入使用你的 XAI_API_KEY 或 `grok login`。其他鍵可在「進階」中編輯。",
+      "configDescription": "合併寫入 ~/.grok/config.toml，保留其他鍵與註解。登入用 XAI_API_KEY 或 `grok login`。",
       "permissionModeLabel": "權限模式",
       "permissionDefault": "每次詢問",
       "permissionAcceptEdits": "自動批准編輯",
@@ -970,9 +1024,9 @@
       "authTitle": "驗證",
       "authMode": "認證方式",
       "authModeApiKey": "XAI API 金鑰",
-      "authModeApiKeyHint": "使用 xAI 主控台的 XAI_API_KEY 認證——適用於非互動/無頭執行。儲存在該智慧體的環境變數中。",
+      "authModeApiKeyHint": "xAI 主控台的 XAI_API_KEY，適用於無頭執行；儲存在該智慧體的環境變數中。",
       "authModeCustom": "自訂接口",
-      "authModeCustomHint": "使用自訂接口（BYO 端點）：在下方定義一個帶有獨立 base URL 和 API 金鑰的自訂模型，它將成為 Grok 的預設模型。",
+      "authModeCustomHint": "在下方定義帶獨立 base URL 和 API 金鑰的自訂模型，它將成為 Grok 的預設模型。",
       "subscriptionHint": "使用 `grok login` 登入（SuperGrok / X Premium+）。不會儲存 API 金鑰。",
       "loginHint": "在終端機執行以下指令登入，然後重新開啟此設定：",
       "commandCopied": "指令已複製到剪貼簿",
@@ -981,13 +1035,13 @@
       "authKeyMissing": "未設定 XAI_API_KEY。",
       "advancedToggle": "進階（原始 config.toml）",
       "configTomlNative": "config.toml（原生）",
-      "configTomlHint": "按原樣整體寫入 ~/.grok/config.toml。非法 TOML 會被拒絕，絕不因筆誤截斷檔案。",
+      "configTomlHint": "整體取代 ~/.grok/config.toml；非法 TOML 會被拒絕。",
       "configTomlPlaceholder": "# 上面控制項之外的鍵，例如\n# [mcp_servers.*]、[cli]、[permission] 規則。",
       "customModelTitle": "自訂模型（自帶端點）",
-      "customModelHint": "讓 Grok 指向自訂或自架端點。codeg 會寫入按模型的 `[model.*]` 區塊並設為預設模型。清空模型 ID 即可移除。",
+      "customModelHint": "讓 Grok 指向自訂或自架端點，並設為預設模型。清空模型 ID 即可移除。",
       "customModelIdLabel": "模型 ID",
       "customModelIdPlaceholder": "grok-4.5",
-      "customModelIdHint": "註冊為 `[model.*]` 區塊，並作為模型名稱傳送給 API；同時設為 `[models].default`。",
+      "customModelIdHint": "作為模型名稱傳送給 API，同時設為 `[models].default`。",
       "customBaseUrlLabel": "Base URL",
       "customBaseUrlPlaceholder": "https://api.x.ai/v1（預設）",
       "customApiBackendLabel": "API 後端",
@@ -999,43 +1053,43 @@
       "customContextWindowLabel": "上下文視窗（tokens）",
       "customContextWindowHint": "選填。用於自動壓縮計時；留空則使用端點預設值。",
       "customReasoningEffortsLabel": "可選推理級別",
-      "customReasoningEffortsEmptyHint": "未宣告級別。除非 Grok 自己的模型清單裡已有這個模型 ID 的描述，否則輸入框不會為它顯示推理級別選擇器。選上你的端點支援的級別即可加上。",
-      "customReasoningEffortsHint": "寫入 `[model.*].reasoning_efforts`。每個級別都會原樣傳送給你的端點，請只選它支援的。新工作階段從上方選擇的「推理級別」開始；那裡為「使用預設」時，從這裡的第一個級別開始。",
+      "customReasoningEffortsEmptyHint": "未宣告級別：除非 Grok 已認得這個模型 ID，否則輸入框不會顯示推理級別選擇器。",
+      "customReasoningEffortsHint": "原樣傳送給你的端點，請只選它支援的。上方為「使用預設」時，新工作階段從第一個級別開始。",
       "autoCompactLabel": "自動壓縮閾值（%）",
-      "autoCompactHint": "當上下文使用率達到此百分比時壓縮對話（Grok 預設 85）。寫入 `[session]`。"
+      "autoCompactHint": "上下文使用率達到此百分比時壓縮對話（Grok 預設 85）。"
     },
     "cursor": {
-      "configDescription": "在此設定 Cursor。先選擇驗證方式——官網訂閱（瀏覽器登入）或用於無頭/伺服器的 Cursor API 金鑰——然後選擇模型並編輯 CLI 的權限規則與沙箱。codeg 會寫入 ~/.cursor/cli-config.json，與 cursor-agent CLI 共用。",
+      "configDescription": "選擇驗證方式（訂閱或 API 金鑰）、模型、權限規則與沙箱。寫入 ~/.cursor/cli-config.json，與 cursor-agent 共用。",
       "authTitle": "驗證",
       "authChecking": "檢測中…",
       "authNotInstalled": "cursor-agent 未安裝",
       "authLoggedIn": "已登入",
       "authNotLoggedIn": "未登入",
       "authUnverified": "已登入（憑證未通過驗證）",
-      "authUnverifiedHint": "cursor-agent 仍存有登入憑證，但剛才無法用它存取 Cursor——通常是登入已過期。在重新登入之前，工作階段都會顯示「Authentication required」；此 CLI 無法自行更新瀏覽器登入。",
-      "authUnverifiedHintApiKey": "cursor-agent 裡存了 API Key，但 Cursor 剛剛拒絕了它——通常是金鑰已撤銷、已過期或填錯。在下方儲存一個可用的金鑰之前，工作階段都會以「Authentication required」失敗。",
-      "loginHint": "在終端機執行以下指令登入 Cursor 帳號（會開啟瀏覽器），完成後點重新整理：",
-      "loginHintRemote": "請在安裝了 cursor-agent 的 codeg 主機上執行，而不是本機，完成後點重新整理。該主機通常沒有可開啟的瀏覽器，所以要帶上 NO_OPEN_BROWSER=1 執行——它會改為印出一個登入連結，你在自己的瀏覽器開啟即可。無人值守的伺服器請把上方的方式改為 API Key。",
+      "authUnverifiedHint": "無法驗證已儲存的 Cursor 登入。若工作階段顯示「Authentication required」，請重新登入。",
+      "authUnverifiedHintApiKey": "無法驗證已儲存的 Cursor API Key。若工作階段顯示「Authentication required」，請在下方儲存有效金鑰。",
+      "loginHint": "在終端機執行以下指令登入（會開啟瀏覽器），完成後點重新整理：",
+      "loginHintRemote": "請在 codeg 主機上執行（而非本機），完成後點重新整理。NO_OPEN_BROWSER=1 會讓它印出登入連結，在你的瀏覽器開啟。無人值守的伺服器請改用上方的 API Key。",
       "apiKeyLabel": "Cursor API 金鑰",
       "apiKeyPlaceholder": "在 cursor.com/dashboard 取得",
-      "apiKeyHint": "CURSOR_API_KEY —— Cursor Dashboard 的帳號金鑰，在無頭/伺服器環境下取代瀏覽器登入。不是第三方或 OpenAI 金鑰。",
+      "apiKeyHint": "CURSOR_API_KEY —— Cursor Dashboard 的帳號金鑰，用於無頭/伺服器環境。不是第三方或 OpenAI 金鑰。",
       "modelTitle": "預設模型",
       "loadModels": "取得模型清單",
       "modelsUnavailable": "模型清單不可用",
-      "modelHint": "會話啟動時透過 --model 傳給 CLI；保持預設則由 Cursor 自行選擇。",
+      "modelHint": "工作階段啟動時作為 --model 傳入；預設由 Cursor 選擇。",
       "modelThinkingLabel": "思考",
       "modelEffortLabel": "思考強度",
       "modelFastLabel": "Fast 快速模式",
       "variantOn": "開",
       "variantOff": "關",
-      "modelVariantHint": "Cursor 把每種組合都當作獨立的模型 ID，這幾個控制項負責挑出對應的那一個。它們設定的是啟動預設值——工作階段中隨時可在輸入框上方變更模型、思考與 Fast。",
+      "modelVariantHint": "選出對應的 Cursor 模型 ID。這裡設定啟動預設值；工作階段中可隨時在輸入框變更模型、思考與 Fast。",
       "permissionsTitle": "權限與沙箱",
-      "permissionsDescription": "可視化編輯 CLI 權限規則（cli-config.json）。允許規則免確認執行；拒絕規則一律攔截。",
+      "permissionsDescription": "允許規則免確認執行；拒絕規則一律攔截。",
       "permissionModeLabel": "權限模式",
       "permissionModeDefault": "執行前詢問（預設）",
       "permissionModeForce": "全部放行 Run Everything（--force）",
-      "permissionModeHint": "Run Everything 以 --force 啟動工作階段：除 deny 規則外的所有工具呼叫自動放行、不再跳出確認（組織政策可能將其降級為僅按 allow 規則放行）。對新工作階段生效。",
-      "permissionModeAskHint": "「執行前詢問」會把每次工具呼叫交給你確認，其中帶有 Cursor 自己的「一律允許」選項——選它會往下方的「允許規則」追加一條，之後同類呼叫便不再詢問。",
+      "permissionModeHint": "以 --force 啟動：除 deny 規則外的工具呼叫全部自動放行、不跳出確認（組織政策可能限制為僅按 allow 規則放行）。",
+      "permissionModeAskHint": "每次工具呼叫前詢問；選 Cursor 的「一律允許」會向下方「允許規則」追加一條。",
       "optionDefault": "預設（未設定）",
       "sandboxLabel": "沙箱",
       "sandboxEnabled": "啟用",
@@ -1043,44 +1097,44 @@
       "allowRulesLabel": "允許規則",
       "denyRulesLabel": "拒絕規則",
       "addRule": "新增規則",
-      "rulesSyntaxHint": "規則語法：Shell(命令)、Read(路徑/萬用字元)、Write(路徑/萬用字元)、WebFetch(網域)、Mcp(伺服器:工具)——deny 規則始終優先。",
+      "rulesSyntaxHint": "語法：Shell(命令)、Read(路徑/萬用字元)、Write(路徑/萬用字元)、WebFetch(網域)、Mcp(伺服器:工具)。deny 優先。",
       "saveConfig": "儲存設定",
       "advancedToggle": "進階：原始 cli-config.json",
-      "advancedHint": "完整的 ~/.cursor/cli-config.json。此處儲存按原文寫入；上方結構化控制項則以合併方式寫入。",
+      "advancedHint": "完整的 ~/.cursor/cli-config.json，按原文儲存；上方控制項以合併方式寫入。",
       "saveRawConfig": "儲存檔案",
       "authMode": "認證方式",
       "subscriptionHint": "使用 Cursor 帳號登入，使用 Cursor 的模型。",
       "customApiKeyRequired": "需要填寫 Cursor API 金鑰。",
       "authModeApiKey": "Cursor API 金鑰（無頭/伺服器）",
-      "authModeApiKeyHint": "使用 Cursor 官網 Dashboard 產生的帳號 API 金鑰進行驗證（適用於無頭/伺服器環境）。這是 Cursor 帳號金鑰，不是第三方/OpenAI 端點——cursor-agent 只會連線到 Cursor 自己的後端。若要使用 codex/OpenAI 相容端點，請改用 Codex 智慧體。",
+      "authModeApiKeyHint": "Cursor Dashboard 產生的帳號金鑰，適用於無頭/伺服器環境。不支援 OpenAI 相容端點，那類端點請用 Codex 智慧體。",
       "modelPickerPlaceholder": "搜尋模型…",
       "modelNoMatch": "沒有相符的模型",
       "modelsNeedAuth": "登入後載入模型清單。",
       "modelDefaultBadge": "預設"
     },
     "qoder": {
-      "configDescription": "在此登入 Qoder 帳號。CLI 讀取的其餘設定全部集中在一個檔案裡——$QODER_CONFIG_DIR/settings.json（預設 ~/.qoder，與 qoder CLI 共用），請在下方按原文編輯。模型與推理強度不在這裡：Qoder 透過 ACP 回報它們，由輸入框的選擇器逐次決定。",
+      "configDescription": "在此登入。其餘設定在 $QODER_CONFIG_DIR/settings.json（預設 ~/.qoder，與 qoder CLI 共用），在下方按原文編輯。模型與推理強度在輸入框中逐次設定。",
       "authTitle": "帳號",
       "authChecking": "檢查中…",
       "authNotInstalled": "qoder 未安裝",
       "authUnknown": "狀態無法取得",
       "authLoggedIn": "已登入",
       "authNotLoggedIn": "未登入",
-      "loginHint": "在終端機執行以下指令登入 Qoder 帳號（會開啟瀏覽器），完成後按重新整理：",
+      "loginHint": "在終端機執行以下指令登入（會開啟瀏覽器），完成後按重新整理：",
       "authMethodLabel": "登入方式",
       "tokenLabel": "個人存取權杖",
       "tokenPlaceholder": "用於無頭 / 伺服器環境",
-      "tokenHint": "QODER_PERSONAL_ACCESS_TOKEN —— 瀏覽器登入無法執行時使用的非互動憑證。留空則使用 qoder 帳號登入。",
+      "tokenHint": "QODER_PERSONAL_ACCESS_TOKEN —— 用於無法用瀏覽器登入的機器。留空則使用 qoder 帳號登入。",
       "saveToken": "儲存權杖",
       "advancedToggle": "進階：原始 settings.json",
-      "advancedHint": "完整的 settings.json，儲存時會按原文寫入——這也是唯一能刪除某個鍵的入口。",
+      "advancedHint": "完整的 settings.json，按原文儲存；也是唯一能刪除鍵的入口。",
       "saveRawConfig": "儲存檔案"
     },
     "antigravity": {
       "configDescription": "Antigravity 的登入由 Antigravity CLI 自行管理。codeg 會直接啟動 `agy acp`，這裡只決定它使用哪種方式認證：Google 帳號沿用 CLI 已快取的登入（本機沒有瀏覽器時請使用下方的免瀏覽器登入），API Key 方式則讀取下方填寫的憑證。模型與工作階段模式不在這裡：Antigravity 會透過 ACP 回報它們，由輸入框的選擇器按工作階段管理。",
       "methodLabel": "认证方式",
       "methods": {
-        "oauth-personal": "使用 Google 账号登录",
+        "oauth-personal": "使用 Google 帳號登入",
         "oauth-business": "Gemini Enterprise",
         "gemini-api-key": "Gemini API Key",
         "agent-platform": "Gemini Enterprise Agent Platform"
@@ -1124,13 +1178,13 @@
       },
       "signOut": {
         "title": "登入了錯誤的帳號？",
-        "description": "Antigravity 會快取登入時使用的 Google 帳號並靜默重複使用，所以再次登入也換不到別的帳號。登出會清除已儲存的憑證；正在執行的 Antigravity 工作階段會先被結束，否則它們會把舊帳號寫回去。",
+        "description": "Antigravity 會靜默重複使用快取的帳號，重新登入換不了帳號。登出會清除憑證，並先結束正在執行的 Antigravity 工作階段。",
         "action": "登出",
         "done": "已登出。重新登入即可選擇其他帳號。",
         "failed": "登出失敗"
       },
       "tempReclaimTitle": "殘留暫存空間",
-      "tempReclaimHint": "舊版本 codeg 無法清理此代理每次啟動時解壓的暫存目錄。此操作會掃描系統暫存資料夾中的這些殘留。該資料夾與其他應用程式共用，因此在你確認之前不會刪除任何內容，仍在使用中的項目也會被跳過。",
+      "tempReclaimHint": "尋找舊版 codeg 下此代理遺留的暫存目錄。確認前不會刪除任何內容，使用中的項目會被跳過。",
       "tempReclaimScan": "掃描",
       "tempReclaimDelete": "刪除殘留",
       "tempReclaimNone": "沒有可回收的內容。",
@@ -1140,58 +1194,58 @@
       "tempReclaimSelectAll": "全選",
       "tempReclaimAgeHours": "{hours} 小時",
       "tempReclaimConfirmTitle": "刪除選取的 {count} 項？",
-      "tempReclaimConfirmBody": "將永久刪除 {size}。系統暫存目錄與其他應用共用，確認前請先核對每條路徑；仍在使用中的項目會被略過。",
+      "tempReclaimConfirmBody": "將永久刪除 {size}。系統暫存目錄與其他應用程式共用，確認前請先核對每條路徑；仍在使用中的項目會被略過。",
       "tempReclaimConfirmAction": "刪除",
       "tempReclaimCancel": "取消"
     },
     "kiro": {
       "configManagement": "設定管理",
-      "configDescription": "Kiro CLI 的登入狀態、agent 與 MCP 伺服器都保存在 ~/.kiro。模型、agent、thinking 與思考等級不在這裡：Kiro 透過 ACP 回報它們，由輸入框的選擇器按工作階段管理。",
+      "configDescription": "登入狀態、agent 與 MCP 伺服器儲存在 ~/.kiro。模型、agent、thinking 與思考等級在輸入框中按工作階段設定。",
       "permissionsTitle": "權限",
       "permissionModeLabel": "權限模式",
       "permissionModeAsk": "執行工具前詢問（預設）",
       "permissionModeTrustAll": "信任所有工具（--trust-all-tools）",
-      "permissionModeAskHint": "需要確認的工具呼叫（執行指令、寫入檔案等）會先交給你確認；唯讀工具直接執行。",
-      "permissionModeTrustAllHint": "以 --trust-all-tools 啟動工作階段：所有工具呼叫都不再跳出確認，包括執行指令與寫入檔案。對新工作階段生效。",
+      "permissionModeAskHint": "需要確認的工具呼叫（執行指令、寫入檔案等）先詢問你；唯讀工具直接執行。",
+      "permissionModeTrustAllHint": "以 --trust-all-tools 啟動：所有工具呼叫都不跳出確認，包括執行指令與寫入檔案。",
       "apiKeyLabel": "API Key（選填）",
-      "apiKeyHint": "以 KIRO_API_KEY 傳給 CLI。留空則使用 kiro-cli login 登入的帳號；只有無法用瀏覽器登入的環境（伺服器、Docker）才需要 API Key。",
+      "apiKeyHint": "以 KIRO_API_KEY 傳入。僅在無法用瀏覽器登入時（伺服器、Docker）需要；留空則用 kiro-cli login 的帳號。",
       "saveConfig": "儲存 Kiro 設定"
     },
     "trae": {
       "configManagement": "設定管理",
-      "configDescription": "TRAE CLI 2.0 僅開放給 TRAE 企業版旗艦版方案的客戶。Codeg 執行你安裝的 traecli，它把登入狀態、技能和 MCP 伺服器儲存在 ~/.trae 中。模型、模式和推理強度不在這裡設定：TRAE CLI 會透過 ACP 回報它們，由輸入框內建的選擇器依工作階段管理。",
+      "configDescription": "TRAE CLI 2.0 僅開放給 TRAE 企業版旗艦版方案的客戶。登入狀態、技能和 MCP 伺服器儲存在 ~/.trae；模型、模式和推理強度在輸入框中依工作階段設定。",
       "signInTitle": "登入",
-      "signInHint": "在終端機中執行一次下面的命令，用企業 SSO 登入。Codeg 裡的工作階段會沿用這次登入。",
+      "signInHint": "在終端機中執行一次下面的命令，用企業 SSO 登入。",
       "copyCommand": "複製命令",
       "commandCopied": "命令已複製",
       "patLabel": "個人存取權杖（選填）",
-      "patHint": "適用於無法用瀏覽器登入的機器，例如伺服器或 Docker 部署。Codeg 會以 TRAECLI_PERSONAL_ACCESS_TOKEN 傳給 TRAE CLI，並在每次啟動工作階段時用它登入。留空則使用 traecli login 的登入。",
+      "patHint": "以 TRAECLI_PERSONAL_ACCESS_TOKEN 傳入，用於無法用瀏覽器登入的機器（伺服器、Docker）。留空則使用 traecli login 的登入。",
       "hostLabel": "企業 API 位址（選填）",
-      "hostHint": "僅當你的組織在自有網域上部署 TRAE 時填寫。以 TRAECLI_HOST 傳入；留空則使用 TRAE 官方服務。",
+      "hostHint": "僅當組織在自有網域部署 TRAE 時填寫（TRAECLI_HOST）。留空則用 TRAE 官方服務。",
       "saveConfig": "儲存 TRAE CLI 設定"
     },
     "commandCode": {
       "configManagement": "設定管理",
-      "configDescription": "Codeg 執行 command-code npm 套件提供的 Command Code CLI，它把登入狀態、技能和 MCP 伺服器儲存在 ~/.commandcode 中。模型、模式和推理強度不在這裡設定：Command Code 會透過 ACP 回報它們，由輸入框內建的選擇器依工作階段管理。",
+      "configDescription": "登入狀態、技能和 MCP 伺服器儲存在 ~/.commandcode。模型、模式和推理強度在輸入框選擇。",
       "signInTitle": "登入",
-      "signInHint": "在終端機中執行一次下面的命令，登入你的 Command Code 帳號。Codeg 裡的工作階段會沿用這次登入。",
+      "signInHint": "在終端機執行一次以登入；Codeg 工作階段會沿用這次登入。",
       "copyCommand": "複製命令",
       "commandCopied": "命令已複製",
       "apiKeyLabel": "API 金鑰（選填）",
-      "apiKeyHint": "適用於無法用瀏覽器登入的機器，例如伺服器或 Docker 部署。以 COMMAND_CODE_API_KEY 傳給 Command Code，優先於 command-code login 的登入。留空則使用那次登入。",
+      "apiKeyHint": "用於無法瀏覽器登入的伺服器/Docker。以 COMMAND_CODE_API_KEY 傳入，優先於 command-code login；留空則用該登入。",
       "saveConfig": "儲存 Command Code 設定"
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness 設定",
-      "configDescription": "端點與金鑰是 deepseek-acp 啟動時讀取的環境變數。模型與推理等級是工作階段層級的選擇器，在輸入框裡切換。",
+      "configDescription": "端點與金鑰是啟動時讀取的環境變數。模型與推理等級在輸入框選擇。",
       "baseUrlLabel": "API 端點",
-      "baseUrlHint": "留空則使用官方端點。自訂端點須提供 DeepSeek 相容 Anthropic 的 Messages API。儲存後對新建的工作階段生效——正在進行的工作階段需要重新連線才會切換。",
+      "baseUrlHint": "留空使用官方端點。自訂端點須提供 DeepSeek 相容 Anthropic 的 Messages API。",
       "baseUrlInvalid": "請填寫完整的 http(s) 網址且不帶查詢參數，例如 https://api.deepseek.com/anthropic",
       "apiKeyLabel": "API 金鑰",
-      "apiKeyHint": "以 DEEPSEEK_API_KEY 傳給智慧體。終端機登入（deepseek-acp --setup）存下的金鑰優先於這裡，因此用終端機登入過的話，要換金鑰請重新登入。"
+      "apiKeyHint": "以 DEEPSEEK_API_KEY 傳入。deepseek-acp --setup 存下的金鑰優先；要更換請重新用它登入。"
     },
     "codex": {
-      "configDescription": "支援 API URL、API Key、模型名稱快捷配置，並與 `auth.json` / `config.toml` 雙向聯動。",
+      "configDescription": "快速設定 API URL、API Key 與模型，並與 `auth.json` / `config.toml` 雙向同步。",
       "authMode": "認證方式",
       "chatgptSubscription": "官網訂閱",
       "chatgptSubscriptionHint": "使用 ChatGPT 官網訂閱登入，無需配置 API Key",
@@ -1200,21 +1254,24 @@
       "modelName": "模型名稱",
       "enableWebsocket": "啟用 WebSocket",
       "enableWebsocketAria": "Codex Provider 啟用 WebSocket",
-      "enableWebsocketHint": "僅當你的介面支援 Responses API 的 WebSocket 模式（OpenAI 官方 API 支援）時才開啟。介面不支援時，codex 可能直接讓這一輪失敗，或者最多重連 5 次後才退回 HTTPS，而且每個新會話都會再來一遍。會在 ~/.codex/config.toml 裡為目前的 provider 寫入 supports_websockets，下次會話生效。",
+      "enableWebsocketHint": "僅當端點支援 Responses API 的 WebSocket 模式時開啟，否則可能失敗。",
       "enableDefaultModeRequestUserInput": "預設模式下允許提問",
       "enableDefaultModeRequestUserInputAria": "允許 Codex 在預設模式下提問",
-      "enableDefaultModeRequestUserInputHint": "Codex 的 request_user_input 工具預設只在 Plan 模式可用。開啟後，一般回合也能向你提問。會寫入 ~/.codex/config.toml 的 [features].default_mode_request_user_input；該開關在上游仍處於開發中。下次新建工作階段生效。",
+      "enableDefaultModeRequestUserInputHint": "開發中功能：允許 codex 在 Plan 模式之外向你提問。",
+      "suppressUnstableFeaturesWarning": "隱藏開發中功能警告",
+      "suppressUnstableFeaturesWarningAria": "隱藏 Codex 開發中功能警告",
+      "suppressUnstableFeaturesWarningHint": "隱藏 codex 連線時的「Under-development features enabled」提示。",
       "sandboxGroupTitle": "沙箱與審批",
-      "sandboxGroupHint": "寫入全域 ~/.codex/config.toml，codex CLI 與 IDE 的工作階段同樣生效。這是執行緒預設值，只作用於 codex 自行發起的回合（/goal、/review、/compact）；一般對話使用輸入框裡的審批預設。變更需重開工作階段才生效。",
-      "sandboxShadowedWarning": "config.toml 裡設定了 default_permissions，codex 會改走權限設定檔並完全忽略 sandbox_mode。刪除 default_permissions 後下面的選項才會生效。",
-      "sandboxPermissionsTableWarning": "config.toml 定義了 [permissions] 設定檔卻沒有 default_permissions，codex 會拒絕啟動。請在下方原始編輯器裡補上。",
+      "sandboxGroupHint": "執行緒預設值，寫入全域 ~/.codex/config.toml，codex CLI 與 IDE 共用。只作用於 codex 自行發起的回合（/goal、/review、/compact），一般對話使用輸入框的預設。重開工作階段生效。",
+      "sandboxShadowedWarning": "config.toml 設定了 default_permissions，codex 會改用該權限設定檔並忽略 sandbox_mode。刪除 default_permissions 後，下方選項才會生效。",
+      "sandboxPermissionsTableWarning": "config.toml 有 [permissions] 設定檔卻沒有 default_permissions，codex 無法啟動。請在下方原始編輯器設定 default_permissions。",
       "approvalPolicyLabel": "審批策略",
       "approvalPolicyUnset": "未設定（codex 預設：依需求詢問）",
       "approvalPolicy_on-request": "依需求詢問 — 由模型決定何時請求批准",
       "approvalPolicy_untrusted": "僅信任唯讀 — codex 已不再支援",
       "approvalPolicy_never": "從不詢問 — 完全不彈審批",
       "approvalPolicy_granular": "精細控制 — 依提示類型分別設定",
-      "approvalPolicyUntrustedRetired": "codex 已不再接受 untrusted：config.toml 中有這個值時，codex 會拒絕啟動，codeg 裡和 codex CLI、IDE 工作階段裡都一樣。請改選其他審批策略並儲存。",
+      "approvalPolicyUntrustedRetired": "codex 已不再接受 untrusted：config.toml 中有它時 codex 無法啟動（codeg、CLI、IDE 皆同）。請改選其他策略並儲存。",
       "granularHint": "關閉表示該類請求會被自動拒絕，而不是彈給你確認。",
       "granular_sandbox_approval": "Shell 指令越權申請",
       "granular_rules": "Execpolicy 規則提示",
@@ -1226,9 +1283,9 @@
       "sandboxMode_read-only": "唯讀",
       "sandboxMode_workspace-write": "可寫工作區",
       "sandboxMode_danger-full-access": "完全開放（無沙箱）",
-      "sandboxModeReadOnlyAcpWarning": "codex-acp 1.7–1.13 沒有唯讀沙箱：在這些轉接器版本上，無論這裡怎麼選，codeg 工作階段都以可寫工作區執行，但每一次越權仍會交給你審批。codex-acp 2.0 已恢復唯讀沙箱，若裝的是舊版轉接器請升級。codex CLI 和 IDE 工作階段始終遵守唯讀。",
+      "sandboxModeReadOnlyAcpWarning": "codex-acp 1.7–1.13 沒有唯讀沙箱：codeg 工作階段以可寫工作區執行，每一次越權仍交你審批。請升級至 codex-acp 2.0+。codex CLI 與 IDE 始終遵守唯讀。",
       "sandboxModeHint": "在 Windows 上，未開啟 codex 的實驗性 Windows 沙箱時，可寫工作區會被降級為唯讀。",
-      "sandboxModeSeedsPresetHint": "codeg 還會用它推導工作階段的初始審批預設，因此與審批策略不同，它對一般提問同樣生效。唯讀從「Read-only」開始。審批策略為 never 時，完全存取從「Full access」開始，可寫工作區從「Auto review」開始——由模型先篩一遍越權請求，只把它判定為不安全的轉給你。審批策略為其他值時，可寫工作區與完全存取在 codex-acp 2.0 及以上從「Workspace access」開始，每一次越權都交給你審批；在更舊的轉接器上從「Auto review」開始。未設定時沿用轉接器預設的「Auto review」。輸入框中選擇的預設始終覆蓋它。",
+      "sandboxModeSeedsPresetHint": "同時決定工作階段的初始審批預設，因此也影響一般對話：唯讀 →「Read-only」。審批策略為 never 時：完全存取 →「Full access」，可寫工作區 →「Auto review」（由模型篩選，只轉給你它判定不安全的越權）。其他策略下兩者 →「Workspace access」（每次越權都交你審批；codex-acp 2.0 之前為「Auto review」）。未設定 sandbox_mode →「Auto review」。輸入框的預設始終優先。",
       "writableRootsLabel": "額外可寫目錄",
       "writableRootsHint": "每行一個絕對路徑，作為工作目錄之外的額外可寫位置。",
       "sandboxRootsRelativeError": "必須是絕對路徑 — codex 會把相對路徑解析到 ~/.codex 底下：{path}",
@@ -1253,11 +1310,11 @@
       "loginSaveFailed": "登入成功但配置儲存失敗",
       "apiUrlLabel": "API 位址",
       "apiKeyLabel": "API 金鑰",
-      "managedKeysHint": "codeg 發布模型清單期間，這裡的 model_catalog_json 與根鍵 model 由 codeg 管理，請在上方的模型清單中修改。"
+      "managedKeysHint": "codeg 發布模型清單期間託管 model_catalog_json 與根鍵 model，請在上方模型清單中修改。"
     },
     "gemini": {
       "authConfig": "Gemini 認證配置",
-      "authConfigDescription": "對齊 Gemini CLI 認證文件，支援自訂、Google 登入、Gemini API Key、Vertex AI（ADC / 服務帳號 / API Key）。",
+      "authConfigDescription": "支援自訂、Google 登入、Gemini API Key、Vertex AI（ADC / 服務帳號 / API Key）。",
       "authMode": "認證方式",
       "selectAuthMode": "選擇認證方式",
       "viewAuthDoc": "查看認證文件",
@@ -1267,7 +1324,7 @@
         "vertexServiceAccount": "Vertex AI（服務帳號）"
       },
       "hint": {
-        "custom": "填寫 API URL、API Key 和 Model，分別映射到 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY / GEMINI_MODEL。",
+        "custom": "分別映射到 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY / GEMINI_MODEL。",
         "loginGoogle": "首次在終端執行 gemini 並完成 Google 登入；無需填寫 API Key。",
         "geminiApiKey": "使用 Gemini API 時填寫 GEMINI_API_KEY。",
         "vertexAdc": "使用 gcloud ADC，建議填寫 GOOGLE_CLOUD_PROJECT 與 GOOGLE_CLOUD_LOCATION。",
@@ -1277,7 +1334,7 @@
     },
     "openCode": {
       "configManagement": "OpenCode 配置管理",
-      "configDescription": "管理 OpenCode 2 的設定檔（opencode.jsonc 或 opencode.json）與它自己的憑證庫：供應商、模型、權限與行為，與下方原生 JSON 雙向同步。",
+      "configDescription": "管理 OpenCode 2 的設定與憑證庫，與下方原生 JSON 雙向同步。",
       "providerManagement": "Provider 管理",
       "providerCount": "共 {count} 個",
       "emptyProvider": "還沒有自訂 Provider。點擊「新增自訂 Provider」建立。",
@@ -1285,7 +1342,7 @@
       "selectProviderNpm": "選擇 provider.npm",
       "modelManagement": "模型管理",
       "modelCount": "共 {count} 個",
-      "modelDescription": "供應商的 `models`。快速編輯支援模型 ID 與 `name`；其他欄位會保留，可在下方原生 JSON 中編輯。",
+      "modelDescription": "快速編輯支援模型 ID 與 `name`；`models` 的其他欄位可在下方 JSON 中編輯。",
       "addModel": "新增模型",
       "emptyModel": "暫無模型，輸入 model id 後點擊「新增模型」建立。",
       "modelId": "模型 ID",
@@ -1299,7 +1356,7 @@
       "connectedProviders": "已連接的 Provider",
       "noConnectedProviders": "還沒有從目錄連接 Provider。",
       "advancedProviderConfig": "自訂 Provider",
-      "customProviderConfigHint": "你自己定義的端點：供應商區塊寫在 OpenCode 設定中，API 金鑰存在 OpenCode 的憑證庫裡。",
+      "customProviderConfigHint": "自訂端點：供應商區塊寫入 OpenCode 設定，API 金鑰存入其憑證庫。",
       "addCustomProvider": "新增自訂 Provider",
       "disconnect": "中斷連接",
       "editConfig": "編輯",
@@ -1312,7 +1369,7 @@
       "keyStored": "金鑰已存入 OpenCode",
       "keyMissing": "未儲存金鑰",
       "setApiKey": "設定 API 金鑰",
-      "credentialsNeedInstall": "OpenCode 把供應商金鑰存在自己的憑證庫中，連接供應商需要先安裝 OpenCode。請先在上方安裝。",
+      "credentialsNeedInstall": "請先在上方安裝 OpenCode——供應商金鑰存在它的憑證庫中。",
       "connect": {
         "title": "連接 Provider",
         "description": "選擇一個 OpenCode 支援的供應商。金鑰會存入 OpenCode 自己的憑證庫。",
@@ -1321,10 +1378,10 @@
         "loading": "正在載入供應商…",
         "modelsAvailable": "{count} 個可用模型",
         "connectedBadge": "已連接",
-        "noKeyMethod": "OpenCode 不透過 API 金鑰連接此供應商。請在終端機中執行 opencode auth login 登入。",
+        "noKeyMethod": "此供應商不使用 API 金鑰。請在終端機執行 opencode auth login 登入。",
         "getKey": "取得 API Key",
         "apiKey": "API Key",
-        "apiKeyHint": "存入 OpenCode 的憑證庫，不會寫進設定檔。Codeg 之後不會再顯示它。",
+        "apiKeyHint": "存入 OpenCode 憑證庫，不寫進設定。Codeg 不會再顯示。",
         "apiKeyEditHint": "留空則保留已存的金鑰；填入新金鑰會取代它。",
         "baseUrlOptional": "Base URL 覆寫（選填）",
         "providerId": "Provider ID",
@@ -1339,7 +1396,7 @@
       },
       "customProvider": {
         "title": "新增自訂 Provider",
-        "description": "定義你自己的端點。供應商區塊寫入 OpenCode 設定，API 金鑰存入 OpenCode 的憑證庫。",
+        "description": "自訂端點：供應商區塊寫入 OpenCode 設定，API 金鑰存入其憑證庫。",
         "action": "新增 Provider",
         "idInCatalog": "{providerId} 是已知 Provider，請改用「連接 Provider」連接。"
       },
@@ -1348,18 +1405,18 @@
       "contextWindow": "上下文視窗",
       "permissions": {
         "title": "權限",
-        "description": "決定哪些操作直接執行、先徵求你的同意，還是被阻止。寫入 OpenCode 設定的 permissions 規則，點擊下方儲存後生效。",
+        "description": "決定哪些操作直接執行、先徵求你的同意，還是被阻止。",
         "docsLink": "權限文件",
         "unparsableConfig": "下方的原生 JSON 目前無法解析，視覺化編輯已暫停。修正 JSON 後即可繼續。",
-        "invalidBlock": "permissions 規則的結構無法識別。請在下方原生 JSON 中修改，或點擊「恢復預設」重來。",
-        "orderingUnsafe": "規則沒有按下方顯示的順序撰寫（某個工具的規則被拆開、基礎規則寫在其模式之後，或全域規則寫在最後），因此 OpenCode 的實際效果與下方顯示不一致。「修正順序」會按顯示的順序重寫規則，不改動任何取值。",
-        "orderingUnsafeManual": "有規則被後面更寬鬆的模式遮蔽，OpenCode 永遠不會套用它——下方各列顯示的並非實際生效的規則。兩個互相重疊的模式沒有唯一正確的順序，請在下方原生 JSON 中調整，把較寬鬆的寫在前面。",
-        "orderingLocked": "在順序修正之前，下方編輯暫停，以免這裡的任何修改悄悄改變這些規則的順序。",
+        "invalidBlock": "無法識別 permissions 規則。請在下方原生 JSON 中修改，或「恢復預設」重來。",
+        "orderingUnsafe": "規則未按顯示順序撰寫，OpenCode 的實際效果與下方不一致。「修正順序」只調整順序，不改取值。",
+        "orderingUnsafeManual": "有規則被後面更寬鬆的模式遮蔽，永遠不會生效。請在原生 JSON 中把較寬鬆的移到前面。",
+        "orderingLocked": "順序修正前，下方編輯暫停。",
         "fixOrder": "修正順序",
-        "agentOverrides": "下列智慧代理個別覆寫了權限，且在最後套用，因此會蓋過此處的所有設定：{agents}。請在下方原生 JSON 中修改，或開啟「自動接受所有權限」將其清除。",
-        "legacyRules": "這些規則來自 OpenCode 1 的 permission 與 tools 設定，OpenCode 2 仍會讀取。你在這裡的下一次修改會把它們改寫為 OpenCode 2 的 permissions 規則。",
+        "agentOverrides": "下列智慧代理的權限覆寫會蓋過此處所有設定：{agents}。請在原生 JSON 中修改，或開啟「自動接受所有權限」清除。",
+        "legacyRules": "來自 OpenCode 1 的 permission 與 tools 設定（仍會讀取）。下次修改會改寫為 permissions 規則。",
         "autoAcceptTitle": "自動接受所有權限",
-        "autoAcceptHint": "所有工具呼叫（shell 命令、檔案修改、存取專案外路徑）都不再詢問，直接執行。開啟後會用一條全域允許規則取代下方的逐工具設定，並清除各智慧體自己的規則與舊版 tools 開關——否則它們仍會攔截。policies 中的強制拒絕仍然生效。",
+        "autoAcceptHint": "自動核准所有工具，包括 shell 指令和專案外的檔案編輯。將工具規則取代為全部允許，並清除各智慧體規則與舊版 tools 開關。policies 中的強制拒絕仍然生效。",
         "globalLabel": "全域預設",
         "globalHint": "即 * 規則：下方工具未個別覆寫時採用的動作。",
         "actionUnset": "未設定（OpenCode 預設）",
@@ -1371,7 +1428,7 @@
         "reset": "恢復預設",
         "ruleCount": "細則 {count} 條",
         "rulesToggle": "{tool} 的細緻規則",
-        "rulesHint": "按工具作用的對象（命令、路徑、URL、搜尋詞等）比對，最後符合的規則優先，因此請把寬泛的模式寫在前面。* 比對任意多個字元，? 精確比對一個字元；路徑開頭的 ~ 展開為主目錄。",
+        "rulesHint": "最後符合的規則優先，請把寬泛的模式寫在前面。* 比對任意字元，? 比對一個字元；路徑模式中開頭的 ~ 會展開為主目錄。",
         "noRules": "尚無細緻規則。",
         "addRule": "新增規則",
         "deleteRule": "刪除規則 {pattern}",
@@ -1398,7 +1455,7 @@
       },
       "behavior": {
         "title": "行為與壓縮",
-        "description": "工作階段預設值、上下文壓縮、實驗性工具與工具輸出上限。寫入 OpenCode 設定，點擊下方儲存後生效。",
+        "description": "工作階段預設值、上下文壓縮、實驗性工具與工具輸出上限。",
         "docsLink": "設定文件",
         "unset": "未設定",
         "ignoredLegacyKeys": "檔案中的這些設定 OpenCode 已不再讀取：{keys}。",
@@ -1406,16 +1463,16 @@
         "defaultAgent": "預設智慧體",
         "defaultAgentHint": "新工作階段使用哪個主要智慧體。留空或名稱無效時回落到 build。",
         "autoUpdate": "更新（TUI）",
-        "autoUpdateHint": "OpenCode 終端應用如何自我更新。Codeg 執行的 OpenCode（opencode acp）從不自行更新。",
+        "autoUpdateHint": "僅作用於 OpenCode 終端機應用程式；Codeg 執行的 OpenCode（opencode acp）從不自行更新。",
         "autoUpdateOn": "自動更新",
         "autoUpdateNotify": "僅提示",
         "autoUpdateOff": "永不",
         "snapshot": "檔案系統快照",
-        "snapshotHint": "每一步之前記錄一次快照。關閉後復原與還原將無法回復檔案。",
+        "snapshotHint": "每一步前記錄快照。關閉後復原與還原無法回復檔案。",
         "compactionAuto": "自動壓縮",
         "compactionAutoHint": "上下文視窗快滿時自動總結對話。",
         "backgroundCompaction": "背景壓縮",
-        "backgroundCompactionHint": "預設開啟：上下文接近上限時在背景預先產生摘要，自動壓縮無需等待。未用上的摘要同樣消耗 token。",
+        "backgroundCompactionHint": "預設開啟。在背景預先產生摘要；未用上的摘要同樣消耗 token。",
         "todo": "待辦清單工具",
         "todoHint": "實驗性：為智慧體提供 todowrite 工具，Codeg 即可把它的計畫顯示為待辦清單。",
         "fields": {
@@ -1426,9 +1483,9 @@
           "maxBytes": "工具輸出位元組上限"
         },
         "hints": {
-          "subagentDepth": "子智慧體最多可以巢狀幾層（experimental.subagent_depth）。填 1 表示子智慧體不能再啟動子智慧體。",
-          "preserveRecentTokens": "壓縮後仍按原文保留的最近對話 token 預算（compaction.keep.tokens）。預設 15000。",
-          "reserved": "自動壓縮前在上下文視窗裡預留的空間（compaction.buffer）：填 token 數，如 <code>20000</code>；或填視窗占比，<code>1%</code> 到 <code>99%</code>，如 <code>20%</code>。不填則預留視窗的 <code>15%</code>，至少 <code>16000</code> 個 token。",
+          "subagentDepth": "子智慧體最大巢狀層數（experimental.subagent_depth）。1 表示子智慧體不能再啟動子智慧體。",
+          "preserveRecentTokens": "壓縮後原文保留的最近對話 token 數（compaction.keep.tokens）。預設 15000。",
+          "reserved": "自動壓縮前預留的上下文空間（compaction.buffer）：token 數如 <code>20000</code>，或 <code>1%</code>–<code>99%</code> 如 <code>20%</code>。不填為 <code>15%</code>，至少 <code>16000</code> token。",
           "maxLines": "超過該行數的輸出會落檔，只在對話裡留一段預覽。預設 2000。",
           "maxBytes": "超過該位元組數的輸出會落檔，只在對話裡留一段預覽。預設 51200。"
         }
@@ -1444,19 +1501,19 @@
     },
     "hermes": {
       "configManagement": "Hermes 配置",
-      "configDescription": "Hermes 在 ~/.hermes/.env 中管理自己的憑證，在 ~/.hermes/config.yaml 中管理設定。選擇一個供應商，然後設定 API 金鑰與模型——codeg 會替你寫入這兩個檔案。",
+      "configDescription": "選擇供應商，再設定 API 金鑰與模型；codeg 會寫入 ~/.hermes/.env 與 config.yaml。",
       "providerLabel": "供應商",
-      "providerHint": "供應商決定 Hermes 使用哪個 API 金鑰變數與 model.provider。OAuth 供應商透過下方的終端機設定進行設定。",
+      "providerHint": "決定 Hermes 使用的 API 金鑰變數與 model.provider。OAuth 供應商請用下方終端機設定。",
       "groupApiKey": "API 金鑰供應商",
       "groupOauth": "OAuth 供應商",
       "groupAws": "AWS",
-      "apiKeyHint": "儲存到 ~/.hermes/.env。它絕不會被注入行程——Hermes 會從自己的設定中讀取它。",
+      "apiKeyHint": "儲存到 ~/.hermes/.env，由 Hermes 自行讀取，絕不注入行程。",
       "modelName": "模型",
       "oauthHint": "此供應商使用 OAuth。請執行下方的設定流程，在終端機中完成驗證。",
-      "awsHint": "Bedrock 使用你的 AWS 憑證（環境變數或共用設定）。請在上方填寫模型 ID，並在系統環境中設定 AWS 存取權限。",
-      "unsupportedProvider": "此供應商無法透過結構化欄位編輯。請使用下方的 config.yaml 原始編輯器或終端機引導設定。",
+      "awsHint": "Bedrock 使用環境變數或共用設定中的 AWS 憑證；請在上方填寫模型 ID。",
+      "unsupportedProvider": "此供應商無法用欄位編輯；請用下方的 config.yaml 原始編輯器或終端機設定。",
       "setupTitle": "自管理設定",
-      "setupHint": "Hermes 的互動式設定需要終端機。可在下方啟動，或複製指令自行執行。",
+      "setupHint": "互動式設定需要終端機：可在下方啟動，或複製指令自行執行。",
       "runSetup": "執行 Hermes 設定",
       "configureModel": "設定模型",
       "openConfigFolder": "開啟 ~/.hermes",
@@ -1468,32 +1525,32 @@
     },
     "codebuddy": {
       "configManagement": "CodeBuddy 設定",
-      "configDescription": "CodeBuddy 使用 API Key 進行驗證。中國版還必須將環境設為「中國版（internal）」；iOA 版使用「iOA」；海外版則不設定。",
+      "configDescription": "使用 API Key 驗證。中國版需將環境設為「中國版（internal）」，iOA 版設為「iOA」；海外版不設定。",
       "apiKeyLabel": "API Key",
-      "apiKeyHint": "將作為此智能體的 CODEBUDDY_API_KEY 儲存。也可以在終端機用 CodeBuddy CLI 登入。",
-      "apiKeyHintSelfHosted": "將作為此智能體的 CODEBUDDY_API_KEY 儲存。請使用你的私有化部署簽發的金鑰。",
+      "apiKeyHint": "為此智慧體儲存為 CODEBUDDY_API_KEY。也可在終端機用 CodeBuddy CLI 登入。",
+      "apiKeyHintSelfHosted": "為此智慧體儲存為 CODEBUDDY_API_KEY。請使用私有化部署簽發的金鑰。",
       "environmentLabel": "環境",
-      "environmentHint": "設定 CODEBUDDY_INTERNET_ENVIRONMENT。中國大陸必須使用「中國版（internal）」；海外版則不設定。",
+      "environmentHint": "設定 CODEBUDDY_INTERNET_ENVIRONMENT。中國大陸必須用「中國版（internal）」；海外版不設定。",
       "envOverseas": "海外版（預設）",
       "envChina": "中國版（internal）",
       "envIoa": "iOA",
       "envSelfHosted": "私有化部署",
       "baseUrlLabel": "私有化部署位址",
       "baseUrlPlaceholder": "https://codebuddy.your-company.com",
-      "baseUrlHint": "儲存為 CODEBUDDY_BASE_URL，將 CodeBuddy 指向你的私有端點。私有化部署不設定網路環境（CODEBUDDY_INTERNET_ENVIRONMENT）。",
+      "baseUrlHint": "儲存為 CODEBUDDY_BASE_URL，指向你的私有端點。不設定網路環境。",
       "baseUrlInvalid": "請輸入合法的 http(s) 位址。",
-      "loginHint": "沒有 API Key？也可以在終端機執行「codebuddy」用騰訊雲帳號登入。"
+      "loginHint": "沒有 API Key？在終端機執行「codebuddy」用騰訊雲帳號登入。"
     },
     "minimaxCode": {
       "title": "MiniMax Code 設定",
-      "description": "codeg 沿用 mcode 原生憑證與所選服務商。請在 mcode 中設定自己的 API 金鑰，不必在此重複儲存；已有 BYOK 設定無須額外登入。",
-      "loginHint": "使用 MiniMax 訂閱時，請在執行 codeg 的機器終端中執行（中國區）：",
+      "description": "沿用 mcode 自身的憑證與服務商——API 金鑰請在 mcode 中設定，不在這裡。BYOK 無須額外登入。",
+      "loginHint": "MiniMax 訂閱（中國區）請在執行 codeg 的機器終端執行：",
       "globalHint": "國際區帳號請使用：",
-      "modelHint": "完成設定後重新連線智慧體。可用模型和權限模式由 mcode 透過 ACP 在對話中提供。"
+      "modelHint": "設定後重新連線。可用模型與權限模式由 mcode 在對話中提供。"
     },
     "kimiCode": {
       "configManagement": "Kimi Code 設定",
-      "configDescription": "`kimi acp` 只認已儲存的登入權杖，所以 codeg 會在 ~/.kimi-code/config.toml 寫入受管供應商，並在本機植入一個門控權杖——推論仍然走你自己的 Key。",
+      "configDescription": "`kimi acp` 只認已儲存的登入，codeg 因此寫入受管供應商和本機門控權杖——推論仍走你自己的 Key。",
       "statusUnconfigured": "尚未設定",
       "statusDirty": "有未儲存的變更",
       "summaryLabel": "生效設定",
@@ -1504,37 +1561,37 @@
       "authModeLabel": "驗證方式",
       "authModeApiKey": "API Key",
       "authModeLogin": "Kimi 帳號登入（訂閱）",
-      "authModeApiKeyHint": "在 config.toml 寫入受管供應商，並植入門控權杖以便工作階段能夠開啟。",
-      "loginHint": "在終端機執行 `kimi login`，用 Kimi 訂閱帳號登入；Kimi 0.39.0 起，kimi.ai 帳號需加上 `--region global`，預設登入的是 kimi.com。codeg 不儲存任何憑證，沿用 Kimi 自己的登入。在此儲存會移除 codeg 的 API Key 門控權杖。",
+      "authModeApiKeyHint": "向 config.toml 寫入受管供應商和門控權杖，使工作階段可以開啟。",
+      "loginHint": "codeg 會沿用 Kimi 已儲存的登入。執行 `kimi login` 用 Kimi 訂閱帳號登入（0.39.0 起 kimi.ai 帳號加 `--region global`）。在此儲存會移除 codeg 的 API Key 門控權杖。",
       "credentialTitle": "憑證",
       "interfaceTypeLabel": "供應商類型",
-      "interfaceTypeHint": "Kimi 使用的供應商協定（config.toml 的 `type`）。Moonshot / platform.kimi.com 的 Key 請選「Kimi / Moonshot」。",
+      "interfaceTypeHint": "供應商協定（config.toml 的 `type`）。Moonshot / platform.kimi.com 的 Key 選「Kimi / Moonshot」。",
       "endpointLabel": "接入點",
       "endpointCustom": "自訂（OpenAI 相容）",
-      "endpointHint": "國際 = api.moonshot.ai；中國（platform.kimi.com 的 Key）= api.moonshot.cn。自訂可指向任意 OpenAI 相容端點。",
+      "endpointHint": "國際 = api.moonshot.ai；中國（platform.kimi.com）= api.moonshot.cn；自訂 = 任意 OpenAI 相容位址。",
       "regionInternational": "國際（api.moonshot.ai）",
       "regionChina": "中國（api.moonshot.cn）",
       "baseUrlLabel": "Base URL",
       "baseUrlHint": "留空則使用供應商 SDK 預設值。",
       "apiKeyLabel": "API Key",
-      "apiKeyHint": "寫入 ~/.kimi-code/config.toml 並用於推論。來自 platform.kimi.com 或 platform.kimi.ai。",
+      "apiKeyHint": "寫入 config.toml 用於推論。在 platform.kimi.com 或 platform.kimi.ai 取得。",
       "vertexProjectLabel": "GCP 專案（GOOGLE_CLOUD_PROJECT）",
       "vertexLocationLabel": "GCP 區域（GOOGLE_CLOUD_LOCATION）",
-      "vertexHint": "Vertex AI 使用 Google 應用程式預設憑證——執行 `gcloud auth application-default login`（不需 API Key）。",
+      "vertexHint": "Vertex AI 使用應用程式預設憑證，不需 API Key。如有需要，執行 `gcloud auth application-default login`。",
       "modelTitle": "模型",
       "modelLabel": "模型",
-      "modelHint": "寫入 config.toml 的模型 id。展開輸入框右側的模型清單，可查看你的 Key 實際能存取哪些模型。",
+      "modelHint": "模型 id。展開輸入框右側清單可查看你的 Key 能存取的模型。",
       "maxContextLabel": "最大上下文長度",
-      "maxContextHint": "Kimi 的設定 schema 要求必填：缺少會讓 Kimi 丟棄整個模型區塊，導致每次對話都沒有回覆。預設 262144。",
+      "maxContextHint": "必填：缺少會讓 Kimi 丟棄整個模型區塊，每次對話都無回覆。預設 262144。",
       "fetchModelsOk": "Key 可用——共 {count} 個模型",
       "fetchModelsEmpty": "Key 可用，但未回傳任何模型",
       "fetchModelsFailed": "測試失敗",
       "modelNotInList": "該模型不在你的 Key 可存取清單中，Kimi 會回報「模型不存在」。",
       "reasoningTitle": "推理",
       "reasoningEnableLabel": "啟用",
-      "reasoningDescription": "只有當模型宣告了推理能力，Kimi 才會在輸入框顯示「Thinking」選擇器，所以這裡由 codeg 寫入該宣告。對新建工作階段生效。",
+      "reasoningDescription": "宣告推理能力，讓 Kimi 在輸入框顯示「Thinking」選擇器。",
       "effortsLabel": "可選檔位",
-      "effortsHint": "這些會成為輸入框「Thinking」選擇器裡的檔位。Kimi 會把檔位原樣轉傳給供應商，請選你的模型能接受的值。",
+      "effortsHint": "「Thinking」選擇器的檔位。Kimi 原樣轉傳給供應商，請選模型能接受的值。",
       "effortsEmptyHint": "一個檔位都不選時，輸入框只會退化成 Off / On 兩檔開關。",
       "effortsCustomPlaceholder": "新增其他檔位",
       "effortsAdd": "新增",
@@ -1561,8 +1618,8 @@
       "rawEditorPlaceholder": "[providers.codeg]\ntype = \"kimi\"\nbase_url = \"https://api.moonshot.cn/v1\"\napi_key = \"sk-...\""
     },
     "authModeOfficialSubscription": "官網訂閱",
-    "authModeCustomEndpoint": "自定義介面",
-    "authModeCustomEndpointHint": "手動配置 API URL 和 API Key 連接自定義介面。",
+    "authModeCustomEndpoint": "自訂端點",
+    "authModeCustomEndpointHint": "手動配置 API URL 和 API Key 以連線到自訂端點。",
     "authModeModelProvider": "模型供應商",
     "modelProvider": "模型供應商",
     "modelProviderHint": "使用已配置的模型供應商的 API URL、API Key 和模型。",
@@ -1581,7 +1638,7 @@
       "customModelOption": "自訂模型 ID",
       "customModelOptionName": "自訂模型名稱",
       "customModelOptionDescription": "自訂模型描述",
-      "customModelOptionHint": "在 Claude 模型選擇器中新增一個自訂項目（例如透過自訂閘道／代理提供的模型）。名稱與描述為選填的顯示資訊。",
+      "customModelOptionHint": "在 Claude 模型選擇器中新增一個項目（如閘道提供的模型）；名稱與描述選填。",
       "sendAttributionHeader": "向介面傳送歸屬/計費識別碼",
       "sendAttributionHeaderAria": "向介面傳送 Claude Code 歸屬/計費識別碼",
       "disableNonessentialTraffic": "停用遙測或多餘的網路請求",
@@ -1589,17 +1646,17 @@
       "promptCacheMode": "快取模式",
       "promptCacheMain": "主智慧體使用 1 小時快取",
       "promptCacheSubagent": "子智慧體使用 1 小時快取",
-      "promptCacheHint": "開啟會在 settings.json 寫入 \"1h\"；關閉則刪除該項，Claude Code 沿用預設快取時長。1 小時快取在較長停頓後依然有效，但每次寫入快取的計費高於 5 分鐘快取。",
+      "promptCacheHint": "1 小時快取在較長停頓後依然有效，但寫入快取的計費高於 5 分鐘快取。",
       "gatewayDiscovery": "讓 Claude 列出閘道的 Claude 模型",
       "gatewayDiscoveryAria": "讓 Claude Code 列出閘道的 Claude 模型",
-      "gatewayDiscoveryHint": "Claude 會自行向 API 位址查詢模型，只保留含「claude」或「anthropic」的 ID，從下一個工作階段起出現。",
+      "gatewayDiscoveryHint": "Claude 向 API 位址查詢，保留含「claude」或「anthropic」的模型 ID。",
       "thinkingSummaries": "顯示 Claude 的思考摘要",
-      "thinkingSummariesHint": "Claude Code 預設只顯示 Claude 在工具呼叫之間寫下的說明。開啟後還會顯示其推理過程的摘要。不額外消耗 token，需要 claude-agent-acp 0.99.0 或更新版本。"
+      "thinkingSummariesHint": "不額外消耗 token，需要 claude-agent-acp 0.99.0 或更新版本。"
     },
     "dialogs": {
       "confirmDeleteProvider": "確認刪除 Provider {providerId}？",
       "confirmDeleteProviderDescription": "將同步更新 OpenCode 配置與認證 JSON 檔案，刪除後不可恢復。",
-      "confirmUninstall": "確認卸載 {name}？",
+      "confirmUninstall": "確認解除安裝 {name}？",
       "confirmUninstallDescription": "這會移除本地安裝版本，之後可隨時重新安裝。",
       "customInstallTitle": "自訂安裝 {name}",
       "customInstallDescription": "輸入要安裝的版本號。將重新安裝並替換目前已安裝的版本。",
@@ -1632,8 +1689,8 @@
       "agentActionFailed": "{name}{action}失敗",
       "localVersion": "本地版本：{version}",
       "installCompletedVersionLater": "安裝完成，版本將在下一次檢測時更新",
-      "uninstallCompleted": "{name}卸載完成",
-      "uninstallFailed": "{name}卸載失敗",
+      "uninstallCompleted": "{name} 解除安裝完成",
+      "uninstallFailed": "{name} 解除安裝失敗",
       "localVersionRemoved": "本地版本已移除",
       "saveAgentOrderFailed": "儲存 Agent 排序失敗",
       "saveAgentSwitchFailed": "儲存 Agent 開關失敗",
@@ -1708,15 +1765,15 @@
       "localOnly": "本機：{localVersion}",
       "localUndetected": "本機：未偵測到版本",
       "localInstalled": "{versionText}。已安裝。",
-      "systemInstalled": "{versionText}。由其官方安裝程式安裝與更新，Codeg 直接啟動這份安裝。",
-      "systemInstalledUpdatable": "{versionText}。透過官方安裝程式安裝；點擊「升級」會執行它內建的更新程式。",
+      "systemInstalled": "{versionText}。由官方安裝程式管理，Codeg 直接啟動。",
+      "systemInstalledUpdatable": "{versionText}。官方安裝；「升級」會執行其內建更新程式。",
       "systemMissing": "本機未找到。請用官方安裝程式安裝後再重新整理。",
       "platformUnsupported": "{versionText}。目前平台不支援該 Agent。",
-      "uvxNotReady": "{versionText}。uv 執行階段未安裝——請在下方 uv 預檢項中安裝後再使用該 Agent。",
+      "uvxNotReady": "{versionText}。未安裝 uv，請在下方 uv 預檢項中安裝。",
       "clickInstall": "{versionText}。請點擊右側安裝。",
-      "localUnrecognized": "{versionText}。本地版本無法識別，可嘗試升級覆蓋安裝。",
+      "localUnrecognized": "{versionText}。本地版本無法識別，可升級覆蓋安裝。",
       "upgradeAvailable": "{versionText}。發現可升級版本。",
-      "openCodeV1Unsupported": "{versionText}。Codeg 已改用 OpenCode 2，不再支援 OpenCode 1.x，請升級後再開啟工作階段。",
+      "openCodeV1Unsupported": "{versionText}。不再支援 OpenCode 1.x，請升級到 OpenCode 2 後再開啟工作階段。",
       "recommendedUnavailable": "{versionText}。暫無建議版本。",
       "latest": "{versionText}。已是最新版本。",
       "unreviewedAvailable": "{versionText}。有未經審查的較新版本。"
@@ -1724,23 +1781,23 @@
     "adapter": {
       "label": "ACP 轉接器",
       "badge": "ACP 轉接器",
-      "badgeHint": "Codeg 為此智能體安裝的是 ACP 轉接器套件，而不是廠商 CLI —— 兩者各自獨立，設定共用。",
+      "badgeHint": "Codeg 安裝的是 ACP 轉接器套件，不是廠商 CLI；兩者獨立，設定共用。",
       "learnMore": "了解詳情",
-      "missingWithNative": "已偵測到你本機的 {nativeLabel}：{nativePath}。Codeg 透過 ACP 協定驅動智能體，而該 CLI 本身不支援 ACP，所以 Codeg 需要獨立的轉接器套件 {adapterPackage}（由 Agent Client Protocol 專案維護，最初由 Zed 團隊發起）。它自帶執行環境，不會修改或取代你的 {nativeCmd} 指令，讀取的也是同一個 {configDir} —— 既有的登入與設定可直接沿用。點擊下方安裝即可。",
-      "missing": "Codeg 透過 ACP 協定驅動智能體，而 {nativeLabel} 本身不支援 ACP，所以 Codeg 需要獨立的轉接器套件 {adapterPackage}（由 Agent Client Protocol 專案維護，最初由 Zed 團隊發起）。它自帶執行環境，因此不必先安裝 {nativeCmd} CLI；若你已經安裝，兩者可以並存，並共用 {configDir} 中的登入與設定。點擊下方安裝即可。",
-      "readyWithNative": "轉接器 {adapterCmd} 已安裝 —— Codeg 啟動的是它，而不是你本機的 {nativeCmd}（{nativePath}）。兩者是各自獨立的套件，可以並存，且都讀取 {configDir}，登入與設定共用。",
-      "ready": "轉接器 {adapterCmd} 已安裝 —— Codeg 啟動的就是它。它自帶執行環境，所以不需要另外安裝 {nativeLabel}；即使日後你安裝了，兩者也能並存並共用 {configDir}。"
+      "missingWithNative": "已偵測到 {nativeLabel}：{nativePath}，但它不支援 ACP，Codeg 需要轉接器 {adapterPackage}。它不會改動 {nativeCmd}，並共用 {configDir} 的登入與設定。點擊下方安裝。",
+      "missing": "{nativeLabel} 不支援 ACP，Codeg 需要轉接器 {adapterPackage}。它自帶執行環境，無需 {nativeCmd}；已安裝則兩者使用 {configDir} 中相同的登入與設定。點擊下方安裝。",
+      "readyWithNative": "轉接器 {adapterCmd} 已安裝；Codeg 啟動的是它，而非你的 {nativeCmd}（{nativePath}）。兩者使用 {configDir} 中相同的登入與設定。",
+      "ready": "轉接器 {adapterCmd} 已安裝，Codeg 啟動的就是它。無需 {nativeLabel}；若安裝，兩者共用 {configDir}。"
     },
     "cline": {
-      "configDescription": "配置 Cline API 提供商和憑證。設定將儲存到 ~/.cline/data/。",
+      "configDescription": "Cline API 提供商和憑證，儲存到 ~/.cline/data/。",
       "signInGroup": "使用 Cline 帳號登入",
       "byoGroup": "自帶供應商",
       "externalGroup": "在 codeg 之外設定的",
-      "signInHint": "這類憑證由 cline 自己保管。在終端機執行下面的指令登入——它會印出一組驗證碼，並開啟瀏覽器頁面讓你確認。"
+      "signInHint": "執行下面的指令，並在瀏覽器中輸入它顯示的代碼。憑證由 cline 自己保管。"
     },
     "opencodePlugins": {
       "title": "OpenCode 外掛",
-      "description": "OpenCode 會在下次工作階段啟動時自行安裝套件外掛。為 OpenCode 1 撰寫的外掛無法在 OpenCode 2 中執行。",
+      "description": "OpenCode 會在下次工作階段啟動時安裝套件外掛。OpenCode 1 外掛無法在 OpenCode 2 中執行。",
       "configPath": "設定檔：{path}",
       "declared": "已宣告的外掛",
       "noPlugins": "未宣告任何外掛。",
@@ -1750,13 +1807,13 @@
         "directive": "指令"
       },
       "legacy": "OpenCode 1 清單",
-      "legacyNote": "標示為「OpenCode 1 清單」的項目宣告在 OpenCode 1 的 `plugin` 鍵下。OpenCode 2 仍會載入它們；下次新增或移除外掛時，它們會移入 `plugins`。",
+      "legacyNote": "標示為「OpenCode 1 清單」的項目位於舊的 `plugin` 鍵下，仍會載入；下次新增或移除時移入 `plugins`。",
       "pathState": {
         "missing": "找不到",
         "not_directory": "不是目錄"
       },
       "addPlaceholder": "npm 套件或 ./外掛目錄",
-      "addHint": "例如 opencode-wakatime@1.2.0。本機外掛必須是目錄；./ 與 ../ 相對於此設定檔所在的資料夾。",
+      "addHint": "例如 opencode-wakatime@1.2.0，或本機目錄（./ 與 ../ 相對於此設定檔）。",
       "add": "新增",
       "remove": "移除",
       "refresh": "重新整理",
@@ -1765,7 +1822,7 @@
     },
     "pi": {
       "configManagement": "Pi 設定",
-      "configDescription": "Pi 透過模型提供方的 API Key 驗證。Key 寫入 ~/.pi/agent/auth.json，模型選擇寫入 settings.json。",
+      "configDescription": "Pi 使用模型提供方的 API Key 驗證，Key 存於 ~/.pi/agent/auth.json。",
       "providerLabel": "提供方",
       "modelLabel": "模型",
       "thinkingLabel": "思考",
@@ -1786,7 +1843,7 @@
       "runtimeTitle": "執行環境",
       "runtimeDescription": "選擇執行哪個 pi。使用預設，或指向你自己的 pi 建置。",
       "modeDefault": "預設 pi",
-      "modeDefaultHint": "使用內建 pi-acp 轉接器拉起 PATH 上的 pi。 安裝 pi：npm install -g @earendil-works/pi-coding-agent",
+      "modeDefaultHint": "內建 pi-acp + PATH 上的 pi。安裝：npm install -g @earendil-works/pi-coding-agent",
       "modeCustom": "自訂 pi",
       "modeCustomHint": "執行你自己的 pi 建置、安裝或包裝腳本。",
       "commandLabel": "pi 命令或路徑",
@@ -1798,7 +1855,7 @@
       "advanced": "進階",
       "configDirLabel": "設定目錄 (PI_CODING_AGENT_DIR)",
       "sessionDirLabel": "工作階段目錄 (PI_CODING_AGENT_SESSION_DIR)",
-      "flagsHint": "pi-acp 不會轉發自訂 pi 參數（--approve、-e 等）——用腳本包裝 pi 並將命令指向它。",
+      "flagsHint": "pi-acp 不轉發自訂 pi 參數（--approve、-e 等）——請將命令指向包裝腳本。",
       "customIncomplete": "請輸入 pi 命令以儲存",
       "saveRuntime": "儲存執行環境",
       "providerPlaceholder": "選擇供應方",
@@ -1806,20 +1863,20 @@
       "providerIdLabel": "供應方 ID",
       "apiProtocolLabel": "API 協定",
       "baseUrlLabel": "介接位址（Base URL）",
-      "customProviderHint": "在 ~/.pi/agent/models.json 中依你的介接位址定義一個供應方。多數自架或代理服務使用 openai-completions。",
+      "customProviderHint": "在 models.json 中為你的介接位址新增供應方。多數自架或代理服務用 openai-completions。",
       "baseUrlRequired": "介接位址（Base URL）為必填",
       "binaryTitle": "pi 二進位 (pi-coding-agent)",
-      "binaryDescription": "pi-acp 會執行此 pi 二進位。可在此安裝，或在下方指向你自己的組建。",
+      "binaryDescription": "pi-acp 執行的 pi 二進位。可在此安裝，或在下方使用你自己的組建。",
       "binaryInstalled": "已安裝",
       "binaryMissing": "未安裝",
       "binaryChecking": "偵測中…",
       "installBinary": "安裝 pi",
       "installing": "安裝中…",
       "recheck": "重新偵測",
-      "configDirSkillsNote": "設定自訂組態目錄後，駕馭工程中管理的技能、專家與辦公工具將不會套用至該 pi；請直接在該目錄中管理其技能。",
-      "dirHistoryNote": "這兩個目錄只對 pi 行程生效。codeg 的歷史對話清單讀取的是 pi 的預設位置，寫入自訂目錄的工作階段不會出現在清單中。",
+      "configDirSkillsNote": "使用自訂組態目錄時，駕馭工程中的技能、專家與辦公工具不會套用；請在該目錄中管理技能。",
+      "dirHistoryNote": "這兩個目錄只對 pi 生效；寫入自訂目錄的工作階段不會出現在 codeg 歷史對話中。",
       "projectTrustTitle": "專案信任",
-      "projectTrustDescription": "你允許 pi 從中載入專案檔案的目錄。被信任的目錄會讓該儲存庫的 .pi/extensions 在 pi 啟動時執行程式碼，且對其下所有子目錄同樣生效，你在終端機執行 pi 時也會沿用。",
+      "projectTrustDescription": "允許 pi 載入專案檔案的目錄。信任後，該儲存庫的 .pi/extensions 會在 pi 啟動時執行程式碼——含子目錄及終端機中執行的 pi。",
       "projectTrustLoading": "載入中…",
       "projectTrustEmpty": "尚未對任何目錄做出決定。",
       "projectTrustTrusted": "已信任",
@@ -1827,12 +1884,12 @@
       "projectTrustRevoke": "撤銷",
       "reasoningTitle": "推理",
       "reasoningEnableLabel": "啟用",
-      "reasoningDescription": "只有模型宣告了推理能力，pi 才會傳送推理強度——未宣告的模型所有等級都會被壓回 Off，所以輸入框裡的選擇器一改就彈回。這裡寫入 models.json 中該模型的項目。",
+      "reasoningDescription": "只有模型宣告了推理能力，pi 才傳送推理強度；否則所有等級都被壓回 Off。",
       "levelsLabel": "可選等級",
-      "levelsHint": "這些會成為輸入框推理選擇器裡的等級。請選你的端點能接受的值；不在這裡的等級 pi 一律拒絕。",
+      "levelsHint": "輸入框推理選擇器的等級。請選端點接受的值；未列出的等級 pi 會拒絕。",
       "levelsEmptyError": "至少選一個等級——一個都不選時 pi 只會退回 Off。",
       "wireValuesTitle": "進階：送給供應商的值",
-      "wireValuesHint": "留空表示原樣送出等級名稱。端點需要別的寫法時才填——Google 系需要 LOW / HIGH。",
+      "wireValuesHint": "留空則原樣送出等級名稱。僅當端點需要別的寫法時填寫——Google 系需要 LOW / HIGH。",
       "defaultLevelUnlisted": "該等級不在上面的可選清單裡——pi 會把它壓下來。",
       "modelLevels": "{model} 提供：{levels}。",
       "modelNoThinking": "{model} 沒有思考等級——Pi 執行它時一律關閉思考。",
@@ -1843,7 +1900,7 @@
       "runtimeTooOld": "此 Pi 版本過舊：Codeg 需要 Pi {min} 或更新版本才能開啟工作階段。請先更新 Pi。"
     },
     "addCustomAgent": "新增自訂智慧體",
-    "addCustomAgentHint": "接入任何相容 ACP 的智慧體。可從公開 ACP 註冊表中選擇，或直接貼上其註冊表資訊。",
+    "addCustomAgentHint": "從公開 ACP 註冊表選擇相容 ACP 的智慧體，或貼上其註冊表資訊。",
     "customAgentFromRegistry": "ACP 註冊表",
     "customAgentManual": "手動填寫",
     "customAgentSearchPlaceholder": "搜尋智慧體…",
@@ -1858,7 +1915,7 @@
     "customAgentNameLabel": "顯示名稱",
     "customAgentVersionLabel": "版本",
     "customAgentSpecLabel": "散發資訊（JSON）",
-    "customAgentSpecHint": "與 ACP 註冊表 distribution 物件同構：支援 npx、uvx、binary 三種通道，也可整筆貼上註冊表條目。npx/uvx 的 cmd 為套件安裝的可執行命令名稱，預設按套件名稱推導，與套件名稱不同時需填寫。binary 按平台鍵區分（本機為 {platform}），cmd 為壓縮檔內啟動路徑，sha256 可選用於驗證下載。",
+    "customAgentSpecHint": "ACP 註冊表 distribution 格式（npx、uvx、binary），也可整筆貼上註冊表條目。npx/uvx 的執行檔若與依套件名稱推導的預設值不同，請設定 cmd；binary 按平台鍵區分（本機 {platform}），cmd 為壓縮檔內路徑，sha256 可選。",
     "customAgentTemplateLabel": "範本",
     "customAgentKindLabel": "啟動方式",
     "customAgentInvalidJson": "不是合法的 JSON",
@@ -1867,24 +1924,24 @@
     "customAgentSave": "新增智慧體",
     "customAgentSaveChanges": "儲存變更",
     "customAgentEdit": "編輯智慧體",
-    "customAgentEditHint": "修改名稱、圖示、分發資訊與技能宣告；智慧體 ID 不可修改。",
+    "customAgentEditHint": "修改名稱、圖示、分發與技能；智慧體 ID 不可改。",
     "customAgentEditNotFound": "找不到自訂智慧體 {id}",
     "customAgentSaved": "已儲存 {name}",
     "customAgentVersionProbeLabel": "版本查詢命令（可選）",
-    "customAgentVersionProbeHint": "查詢本機安裝版本的命令；留空時預設執行智慧體命令加 --version。",
+    "customAgentVersionProbeHint": "查詢本機版本的命令；留空則執行智慧體命令加 --version。",
     "customAgentRemove": "移除智慧體",
-    "customAgentRemoveHint": "刪除該智慧體定義。既有工作階段的歷史會保留，只是該智慧體無法再啟動。",
+    "customAgentRemoveHint": "刪除該智慧體定義，既有工作階段歷史保留。",
     "customAgentIconLabel": "圖示（選填）",
     "customAgentIconUpload": "上傳",
     "customAgentIconReplace": "更換",
     "customAgentIconClear": "移除圖示",
     "customAgentIconHint": "隨智慧體一併儲存，離線也能顯示。未上傳則使用彩色首字母。",
     "customAgentSkillsLabel": "Skills（共享 .agents/skills）",
-    "customAgentSkillsHint": "聲明該智能體會讀取共享的 .agents/skills 目錄（全域與專案級），並將其加入所有技能矩陣。連結到共享目錄的技能對讀取該目錄的其他智能體同樣可見。",
+    "customAgentSkillsHint": "讀取共享的 .agents/skills 目錄（全域與專案級）；連結到此處的技能對所有讀取它的智能體可見。",
     "customAgentSkillsDirLabel": "專屬技能目錄",
-    "customAgentSkillsDirHint": "該智慧體自身載入技能的目錄絕對路徑 —— 可與共享目錄並存，也可單獨使用。~ 會展開為主目錄；連結技能時優先放入此目錄。",
+    "customAgentSkillsDirHint": "該智慧體自有技能目錄的絕對路徑，可與共享目錄並存或取代它。~ 即主目錄；連結技能優先放這裡。",
     "customAgentMcpLabel": "MCP 支援",
-    "customAgentMcpHint": "工作階段建立時向該智慧體注入 codeg 內建的 codeg-mcp 伴生行程 —— 委派、即時回饋與任務工具都依賴它。若該智慧體不支援 MCP、連線時報錯，請關閉此項；設定會在下次連線時生效。",
+    "customAgentMcpHint": "工作階段建立時注入 codeg-mcp 伴生行程（委派、即時回饋、任務工具依賴它）。若該智慧體不支援 MCP 導致連線失敗，請關閉。",
     "customAgentIconNotAnImage": "請選擇圖片檔案。",
     "customAgentIconTooLarge": "圖示需小於 {limit} KB。",
     "customAgentIconReadFailed": "無法讀取該圖片。",
@@ -1895,7 +1952,7 @@
     "customAgentNotLaunchable": "該智慧體在此環境無法啟動：{reason}",
     "zcode": {
       "adapterInfo": "Codeg 透過 {adapterPackage} 橋接 ACP。請先安裝並登入官方 ZCode；橋接器使用其執行環境與現有設定。",
-      "runtimeHint": "請先安裝並登入官方 ZCode，Codeg 僅安裝 ACP 橋接器。自動偵測失敗時，可用 ZCODE_BIN 指定 CLI 入口、ZCODE_NODE 指定 Node.js。模型與憑證在 ZCode 中管理。"
+      "runtimeHint": "請先安裝並登入官方 ZCode，Codeg 僅安裝 ACP 橋接器。偵測失敗時，用 ZCODE_BIN 指定 CLI、ZCODE_NODE 指定 Node.js。"
     }
   },
   "AgentVocabulary": {
@@ -1971,7 +2028,7 @@
     "terminalCurrentShell": "目前使用：{path}",
     "colorizeCommandOutput": "為命令輸出著色",
     "colorizeCommandOutputDescription": "強制智慧代理執行的命令輸出 ANSI 色彩，使其在對話記錄中以彩色而非純文字呈現。對新建工作階段生效。",
-    "renderingDescription": "若應用出現黑屏或渲染異常（Windows 上常見於 AMD 顯示卡或部分 Intel 內顯，Linux 上常見於 NVIDIA 閉源驅動），可關閉硬體加速。僅 Windows 與 Linux 桌面端生效。",
+    "renderingDescription": "若應用程式出現黑屏或渲染異常（Windows 上常見於 AMD 顯示卡或部分 Intel 內顯，Linux 上常見於 NVIDIA 閉源驅動），可關閉硬體加速。僅 Windows 與 Linux 桌面端生效。",
     "disableHardwareAcceleration": "停用硬體加速",
     "renderingSaveFailed": "渲染設定儲存失敗：{message}",
     "restartRequired": "已儲存，需重新啟動應用程式才會生效。",
@@ -2007,7 +2064,7 @@
   "CommitPage": {
     "title": "提交程式碼",
     "invalidFolderId": "無效的 folderId",
-    "loadingRepo": "正在載入倉庫..."
+    "loadingRepo": "正在載入儲存庫..."
   },
   "CommitMessageGeneration": {
     "generate": "產生提交訊息",
@@ -2068,7 +2125,7 @@
   "MergePage": {
     "title": "解決衝突",
     "invalidFolderId": "無效的 folderId",
-    "loadingRepo": "正在載入倉庫...",
+    "loadingRepo": "正在載入儲存庫...",
     "localVersion": "本地（我們的）",
     "result": "結果",
     "remoteVersion": "遠端（他們的）",
@@ -2157,8 +2214,8 @@
       "delete": "刪除",
       "rename": "重新命名",
       "loading": "載入中...",
-      "refresh": "刷新",
-      "refreshing": "刷新中...",
+      "refresh": "重新整理",
+      "refreshing": "重新整理中...",
       "create": "建立",
       "createAndSwitch": "建立並切換",
       "openFile": "打開檔案",
@@ -2216,6 +2273,7 @@
       "viewOptions": "顯示選項",
       "listOptions": "會話列表",
       "showCompleted": "顯示已完成對話",
+      "showAssistant": "顯示助手會話",
       "showWorktrees": "顯示工作樹分支",
       "showRecent": "顯示「最近」分組",
       "tabsFollowFolder": "分頁跟隨資料夾",
@@ -2230,9 +2288,15 @@
       "sectionOrderMoveUp": "上移",
       "sectionOrderMoveDown": "下移",
       "sectionOrderItemLabel": "{name} — 第 {position} 位，共 {total} 位",
-      "statusRunningBadge": "運行中",
+      "statusRunningBadge": "執行中",
       "runningCountBadge": "{count} 個會話進行中",
       "statusCancelledBadge": "已取消",
+      "awaitingCountBadge": "{count, plural, other {# 個會話在等你}}",
+      "statusAwaiting": {
+        "permission": "待你授權",
+        "question": "待你回答",
+        "plan": "待你確認"
+      },
       "originalWorkingDir": "最初執行目錄",
       "cliBadge": "從命令列啟動",
       "conversationCountUnit": "{count} 條",
@@ -2288,6 +2352,12 @@
       "sectionFolders": "資料夾",
       "sectionChats": "聊天",
       "sectionRecent": "最近",
+      "timeGroupPriorities": "進行中",
+      "timeGroupToday": "今天",
+      "timeGroupYesterday": "昨天",
+      "timeGroupPrevious7Days": "前 7 天",
+      "timeGroupPrevious30Days": "過去 30 天",
+      "timeGroupOlder": "更早",
       "noChats": "沒有聊天",
       "noRecent": "暫無最近對話",
       "showMoreRecent": "顯示更多（{count}）",
@@ -2300,6 +2370,7 @@
       "forge": "儲存庫面板",
       "canvas": "無限畫布",
       "harness": "駕馭工程",
+      "harnessHint": "技能 · MCP",
       "folderGroup": {
         "newGroup": "新增分組",
         "newGroupTitle": "新增資料夾分組",
@@ -2322,7 +2393,14 @@
       "noRecentChats": "沒有最近的聊天",
       "noRecentFolders": "沒有最近的資料夾對話",
       "noRecentCli": "沒有最近從命令列啟動的對話",
-      "recentFilterMenuLabel": "最近顯示"
+      "recentFilterMenuLabel": "最近顯示",
+      "personalAgent": "個人助手",
+      "personalAgentUnreadBots": "{count} 個助手有未讀訊息",
+      "personalAgentBadge": "由個人助手派出",
+      "sectionAssistants": "助手",
+      "timeGroupPrioritiesTooltip": "包含目前正在執行的任務",
+      "recentGroupingModeTime": "切換為時間分組",
+      "recentGroupingModeFlat": "切換為平鋪列表"
     },
     "conversation": {
       "reloadFailed": "會話重新載入失敗：{message}",
@@ -2337,6 +2415,10 @@
       "forkSessionSuccess": "會話分叉成功",
       "forkSessionFailed": "會話分叉失敗：{error}",
       "forkSessionBusy": "分叉失敗：目前有回合正在進行",
+      "editMessageRefused": "無法編輯這則訊息：{reason, select, busy {智慧體仍在工作} backgroundWork {仍有背景工作在執行} beforeCompaction {這則訊息在對話壓縮之前} clearedContext {這則訊息之後對話被清除過} unavailable {智慧體無法回到這則訊息} other {智慧體拒絕了}}",
+      "editMessageBusy": "無法編輯這則訊息：有回合正在執行",
+      "editMessageFailed": "無法編輯這則訊息：{error}",
+      "editMessageQueued": "無法編輯這則訊息：請先傳送或移除排隊中的訊息",
       "exportConversation": "匯出對話",
       "exportImage": "圖片",
       "exportMarkdown": "Markdown",
@@ -2351,7 +2433,7 @@
         "status": "狀態",
         "started": "開始時間",
         "updated": "更新時間",
-        "tokens": "令牌統計",
+        "tokens": "Token 統計",
         "duration": "時長",
         "inputTokens": "輸入",
         "outputTokens": "輸出",
@@ -2369,6 +2451,10 @@
     "sessionDetails": {
       "menuLabel": "對話詳情",
       "noActiveSession": "暫無使用中的對話",
+      "noActiveSessionHint": "開啟或新建一個對話後，這裡會顯示它的詳細資訊、計畫和訊息導覽。",
+      "draftTitle": "新對話",
+      "draftWaiting": "等待第一則訊息",
+      "draftHint": "傳送第一則訊息後，對話 ID、智慧體的計畫和訊息導覽會顯示在這裡。",
       "title": "對話詳情",
       "subtitle": "對話中繼資料與 Token 用量",
       "fieldTitle": "標題",
@@ -2401,6 +2487,26 @@
       "copyField": "複製{field}",
       "copiedField": "已複製{field}",
       "assistant": "助手"
+    },
+    "askConversations": {
+      "title": "提問會話",
+      "total": "共 {count} 個",
+      "untitled": "新提問",
+      "convertToRegular": "轉為一般會話",
+      "convertConfirmTitle": "轉為一般會話？",
+      "convertConfirmDescription": "「{title}」將與目前會話解除關聯，作為一般會話列出。此操作無法復原。",
+      "convertConfirm": "轉換",
+      "cancel": "取消",
+      "converted": "已轉為一般會話",
+      "convertFailed": "轉為一般會話失敗",
+      "drawerTitle": "提問會話",
+      "drawerDescription": "從此會話選取內容發起的提問會話",
+      "pendingFirstMessage": "問題正等待智慧體就緒後傳送，再操作一次將放棄它。"
+    },
+    "checkConversations": {
+      "title": "核查會話",
+      "untitled": "核查",
+      "drawerDescription": "個人助手核查此會話中訊息的過程"
     },
     "conversationCard": {
       "untitledConversation": "未命名會話",
@@ -2726,7 +2832,7 @@
     "folderNameDropdown": {
       "fallbackFolderName": "資料夾",
       "openFolder": "打開資料夾",
-      "cloneRepository": "複製倉庫",
+      "cloneRepository": "複製儲存庫",
       "projectBoot": "專案啟動器",
       "opened": "已打開",
       "recentOpen": "最近打開"
@@ -2825,9 +2931,9 @@
         "mergeBranch": "合併 {branchName}",
         "rebaseTo": "變基到 {branchName}",
         "deleteRemoteBranch": "刪除遠端分支 {branchName}",
-        "initGitRepo": "初始化 Git 倉庫",
+        "initGitRepo": "初始化 Git 儲存庫",
         "pullCode": "更新程式碼",
-        "fetchInfo": "獲取資訊",
+        "fetchInfo": "取得資訊",
         "pushCode": "推送程式碼",
         "stashChanges": "暫存變更",
         "stashPop": "取消暫存",
@@ -2842,7 +2948,7 @@
         "mergeDescription": "確定將 {branchName} 合併到目前分支 {currentBranch} 嗎？",
         "rebaseDescription": "確定將目前分支 {currentBranch} 變基到 {branchName} 嗎？",
         "deleteRemoteTitle": "刪除遠端分支",
-        "deleteRemoteDescription": "確定刪除遠端分支 {branchName} 嗎？此操作將從遠端倉庫中移除該分支，且不可恢復。",
+        "deleteRemoteDescription": "確定刪除遠端分支 {branchName} 嗎？此操作將從遠端儲存庫中移除該分支，且不可恢復。",
         "deleteTitle": "刪除分支",
         "deleteDescription": "確定刪除分支 {branchName} 嗎？此操作無法復原。",
         "forceDeleteTitle": "強制刪除分支",
@@ -2862,7 +2968,7 @@
       "rebaseCurrentToBranch": "將 {currentBranch} 變基到 {branchName}",
       "noBranch": "無分支",
       "detachedHead": "分離 HEAD（{sha}）",
-      "initGitRepo": "初始化 Git 倉庫",
+      "initGitRepo": "初始化 Git 儲存庫",
       "pullCode": "更新程式碼",
       "fetchRemoteBranches": "提取遠端分支",
       "openCommitWindow": "提交程式碼...",
@@ -2906,7 +3012,7 @@
       },
       "stashDialog": {
         "title": "貯藏更改",
-        "description": "將當前更改保存到貯藏區",
+        "description": "將目前的變更儲存到貯藏區",
         "messageLabel": "訊息",
         "messagePlaceholder": "貯藏訊息（可選）",
         "keepIndex": "保留暫存區（已暫存的更改保持不變）",
@@ -3075,7 +3181,7 @@
         "localBranches": "本地分支",
         "current": "目前",
         "remoteBranches": "遠端分支",
-        "refreshCommitHistory": "刷新提交記錄",
+        "refreshCommitHistory": "重新整理提交記錄",
         "clearBranchFilterAria": "清除分支篩選"
       },
       "dialogs": {
@@ -3252,8 +3358,8 @@
         "newFile": "新建檔案",
         "newDirectory": "新建目錄",
         "description": "輸入新{kind}的名稱。",
-        "placeholderFile": "file-name.ext",
-        "placeholderDirectory": "folder-name"
+        "placeholderFile": "檔案名稱.ext",
+        "placeholderDirectory": "資料夾名稱"
       },
       "renameDialog": {
         "renameDirectory": "重新命名目錄",
@@ -3527,6 +3633,7 @@
         "modelListLabel": "模型",
         "recommendedBadge": "推薦",
         "recommendedValue": "推薦：{value}",
+        "effortRange": "推理級別：{range}",
         "searchOptions": "搜尋選項...",
         "searchOptionsAria": "搜尋選項",
         "noOptions": "找不到選項",
@@ -3564,7 +3671,8 @@
         "mentionGroupSession": "工作階段",
         "mentionGroupCommit": "提交",
         "mentionGroupSkill": "技能",
-        "mentionGroupAssistant": "助手"
+        "mentionGroupAssistant": "助手",
+        "mentionManageAssistants": "管理助手…"
       },
       "messageQueue": {
         "addToQueue": "加入佇列",
@@ -3690,7 +3798,8 @@
             "title": "「{skill}」技能尚未對 {agent} 啟用",
             "description": "前往駕馭工程 › 技能包 啟用後即可在此使用。",
             "action": "前往啟用",
-            "hint": "技能未啟用"
+            "hint": "技能未啟用",
+            "showPlugin": "檢視外掛"
           },
           "scrollPrev": "顯示上一組技能",
           "scrollNext": "顯示下一組技能"
@@ -3812,6 +3921,11 @@
         "systemMessage": "系統訊息",
         "turnFailed": "本輪失敗：{message}",
         "copyMessage": "複製",
+        "editMessage": "編輯訊息",
+        "editMessageBusy": "等回覆結束後再編輯",
+        "editMessageHint": "這則訊息之後的內容會被取代",
+        "editMessageCancel": "取消",
+        "editMessageSend": "傳送",
         "forkFromHere": "從此處分叉",
         "forkBusy": "目前有回合正在進行，暫不可分叉",
         "forkNotReady": "這則回覆暫時還不能作為分叉點，請稍後再試",
@@ -3824,7 +3938,7 @@
         "selectionSaveAsNote": "存為便利貼",
         "selectionAsk": "提問",
         "selectionAskPlaceholder": "針對選取內容提問…",
-        "selectionAskSubmit": "在新建會話中提問",
+        "selectionAskClose": "關閉",
         "downloadImage": "下載圖片",
         "copyImage": "複製圖片",
         "copiedImage": "已複製圖片",
@@ -3923,7 +4037,7 @@
         "agentModelLabel": "模型",
         "agentEffortLabel": "思考強度",
         "agentRecoveredNote": "子智慧體實際已完成，以下產出因回合中斷未送達主工作階段：",
-        "agentProgressTools": "{count} 次工具調用",
+        "agentProgressTools": "{count} 次工具呼叫",
         "agentProgressTurns": "{count} 輪",
         "agentProgressContext": "上下文 {pct}%",
         "agentSessionTitle": "子智慧體工作階段",
@@ -4150,7 +4264,8 @@
           "allowAlways": "一律允許",
           "rejected": "已拒絕",
           "viaChatChannel": "來自聊天頻道",
-          "byPolicy": "由執行的權限原則決定"
+          "byPolicy": "由執行的權限原則決定",
+          "byAssistant": "由助理代答"
         }
       },
       "messageNav": {
@@ -4163,6 +4278,7 @@
         "hideDiff": "收合 {filePath} 的變更",
         "openFile": "開啟 {filePath}",
         "collapse": "收合",
+        "expand": "展開",
         "currentMessage": "目前訊息",
         "scrollToCurrent": "捲動到目前訊息（#{ordinal}）",
         "running": "進行中",
@@ -4376,13 +4492,13 @@
       "noDiffData": "無差異資料",
       "showRemainingLines": "顯示剩餘 {count} 行",
       "viewMode": {
-        "split": "切換為左右分欄視圖",
-        "unified": "切換為內聯視圖"
+        "split": "切換為左右分欄檢視",
+        "unified": "切換為內嵌檢視"
       },
       "binaryFile": "二進位檔案 — 不顯示內容",
       "image": {
-        "sideBySide": "切換為左右分欄視圖",
-        "swipe": "切換為滑動比較視圖",
+        "sideBySide": "切換為左右分欄檢視",
+        "swipe": "切換為滑動比較檢視",
         "swipeHandle": "圖片比較滑桿",
         "noImage": "此版本沒有圖片",
         "unavailable": "無法載入此側內容",
@@ -4393,36 +4509,36 @@
     "conversationContextBar": {
       "folderTitle": "工作資料夾",
       "branchTitle": "工作分支",
-      "searchFolder": "Search folder...",
-      "searchBranch": "Search branch...",
-      "noFolders": "No folders",
-      "noBranches": "No branches",
-      "noBranch": "(no branch)",
+      "searchFolder": "搜尋資料夾...",
+      "searchBranch": "搜尋分支...",
+      "noFolders": "沒有資料夾",
+      "noBranches": "沒有分支",
+      "noBranch": "（無分支）",
       "chatModeLabel": "聊天模式",
-      "commit": "Commit",
-      "push": "Push",
-      "merge": "Merge",
+      "commit": "提交",
+      "push": "推送",
+      "merge": "合併",
       "toasts": {
-        "folderChanged": "Switched to {name}",
-        "openFolderFailed": "Failed to open folder",
+        "folderChanged": "已切換到 {name}",
+        "openFolderFailed": "開啟資料夾失敗",
         "switchedToChatMode": "已切換到聊天模式",
-        "openStashFailed": "Failed to open stash window",
-        "openMergeFailed": "Failed to open merge window"
+        "openStashFailed": "開啟貯藏視窗失敗",
+        "openMergeFailed": "開啟合併視窗失敗"
       }
     },
     "cloneDialog": {
-      "title": "複製倉庫",
-      "repositoryUrl": "倉庫地址",
+      "title": "複製儲存庫",
+      "repositoryUrl": "儲存庫網址",
       "repositoryUrlPlaceholder": "https://github.com/user/repo.git",
       "directory": "目錄",
       "directoryPlaceholder": "選擇目標目錄...",
       "browseDirectory": "瀏覽目錄",
       "cancel": "取消",
       "clone": "複製",
-      "clonePath": "克隆路徑: {path}"
+      "clonePath": "複製路徑：{path}"
     },
     "toasts": {
-      "cloneFailed": "複製倉庫失敗"
+      "cloneFailed": "複製儲存庫失敗"
     }
   },
   "ProjectBoot": {
@@ -4451,12 +4567,12 @@
       "theme": "主題",
       "chartColor": "圖表顏色",
       "iconLibrary": "圖示庫",
-      "font": "字體",
-      "fontHeading": "標題字體",
+      "font": "字型",
+      "fontHeading": "標題字型",
       "menuAccent": "選單強調",
       "menuColor": "選單顏色",
       "radius": "圓角",
-      "template": "模板",
+      "template": "範本",
       "createProject": "建立專案",
       "sectionStyle": "風格",
       "sectionColors": "配色",
@@ -4470,7 +4586,7 @@
       "title": "建立專案",
       "projectName": "專案名稱",
       "projectNamePlaceholder": "my-app",
-      "frameworkTemplate": "框架模板",
+      "frameworkTemplate": "框架範本",
       "packageManager": "套件管理器",
       "saveDirectory": "儲存目錄",
       "saveDirectoryPlaceholder": "選擇目錄...",
@@ -5125,7 +5241,9 @@
       "statusRunning": "執行中",
       "statusWaiting": "等待中",
       "statusError": "發生錯誤",
-      "subAgentOf": "子智慧代理"
+      "subAgentOf": "子智慧代理",
+      "askQuestion": "在問你",
+      "askPlan": "計畫等你審批"
     },
     "menu": {
       "scale": "縮放",
@@ -5404,7 +5522,7 @@
       "customAgents": "自訂智慧體",
       "quickMessages": "快捷訊息",
       "taskTemplates": "任務範本",
-      "preferences": "應用偏好（語言、開關）",
+      "preferences": "應用程式偏好設定（語言、開關）",
       "assistants": "助手",
       "appearance": "外觀（明暗模式、主題色、縮放、字型、背景設定、自訂樣式）"
     },
@@ -5430,15 +5548,15 @@
       "custom": "自訂"
     },
     "presetHint": {
-      "jianguoyun": "堅果雲需要在「安全選項」裡產生應用密碼，不能用登入密碼。",
-      "nextcloud": "把網域和使用者名稱換成你自己的，密碼用「設定 → 安全」裡產生的應用密碼。",
+      "jianguoyun": "堅果雲需要在「安全選項」裡產生應用程式密碼，不能用登入密碼。",
+      "nextcloud": "把網域和使用者名稱換成你自己的，密碼用「設定 → 安全」裡產生的應用程式密碼。",
       "synology": "需要在 DSM 套件中心安裝並啟用 WebDAV Server，預設埠 5005（HTTP）/ 5006（HTTPS）。"
     },
     "serverUrl": "伺服器位址",
     "username": "使用者名稱",
     "password": "密碼",
     "passwordKeep": "留空則沿用已儲存的密碼",
-    "passwordPlaceholder": "應用密碼",
+    "passwordPlaceholder": "應用程式密碼",
     "remoteDir": "遠端目錄",
     "profile": "設定集",
     "profileHint": "使用相同設定集的裝置共用同一份設定；要區分工作與個人環境時可以分開命名。",
@@ -5477,26 +5595,27 @@
       "customAgents": "{count} 個自訂智能體",
       "quickMessages": "{count} 則快捷訊息",
       "taskTemplates": "{count} 個任務範本",
-      "preferences": "{count} 項應用偏好",
+      "preferences": "{count} 項應用程式偏好設定",
       "assistants": "{count} 個助手",
       "appearance": "{count} 項外觀設定"
     },
     "rollbackTitle": "復原匯入",
-    "rollbackHint": "每次匯入與每次還原前，都會先保存這台裝置當時的設定，最近十份會保留下來。",
+    "rollbackHint": "每次匯入與每次還原前，都會先儲存這台裝置當時的設定，最近十份會保留下來。",
     "rollbackAction": "復原",
     "rollbackUnknownTime": "時間不明",
     "rollbackConfirmTitle": "回到這份設定？",
-    "rollbackConfirmBody": "這會用 {time} 保存的那份副本取代目前的設定。目前的設定會先被保存，所以這一步同樣可以復原。",
+    "rollbackConfirmBody": "這會用 {time} 儲存的那份副本取代目前的設定。目前的設定會先被儲存，所以這一步同樣可以復原。",
     "rollbackConfirmAction": "復原",
     "rolledBack": "已還原 {count} 項設定",
     "encryptLabel": "加密快照",
     "encryptHint": "用通行密語保護上傳的檔案。參與同步的每台裝置都要使用同一組。",
     "encryptedNotice": "快照會先用你的通行密語加密再上傳。一旦遺失，伺服器上的副本將無法復原。",
     "passphrase": "通行密語",
-    "passphraseKeep": "留空則沿用已保存的通行密語",
+    "passphraseKeep": "留空則沿用已儲存的通行密語",
     "passphrasePlaceholder": "加密通行密語",
-    "passphraseHint": "只保存在這台裝置的鑰匙圈中，不會上傳。請在你的其他裝置上輸入同一組。",
+    "passphraseHint": "只儲存在這台裝置的鑰匙圈中，不會上傳。請在你的其他裝置上輸入同一組。",
     "assistantsRenamed": "有 {count} 個助手與本機已有的助手重名，已自動改名。",
+    "assistantsPersonaKept": "有 {count} 個助手保留了本機的人設：它們已經在本機寫好了人設檔案，匯入不會覆蓋。",
     "conflictTitle": "自動上傳已暫停",
     "conflictBody": "伺服器上有一份來自 {device}、{time} 的快照，本機尚未還原過。上傳會取代它，而伺服器不保留舊版本。",
     "conflictRestore": "還原它",
@@ -5526,7 +5645,7 @@
   "configSync": {
     "error": {
       "newerSchema": "這份快照由更新版本的 codeg 建立（格式 {snapshotVersion}），目前版本最高支援格式 {appVersion}。",
-      "checksum": "快照與校驗值不符，可能不完整。",
+      "checksum": "快照與總和檢查碼不符，可能不完整。",
       "invalidSnapshot": "這不是有效的 codeg 設定快照檔案。",
       "noRemoteSnapshot": "伺服器上還沒有設定快照。",
       "notConfigured": "請先完成 WebDAV 伺服器設定再同步。",
@@ -5539,7 +5658,7 @@
       "passphraseRequired": "該快照已加密，請先設定加密通行密語再同步。",
       "badPassphrase": "無法解密該快照。請檢查通行密語，也可能是檔案已損毀。",
       "badDomain": "無法讀取該快照中的 {domain} 部分。",
-      "noRollback": "這台裝置上已經沒有那份保存的設定了。",
+      "noRollback": "這台裝置上已經沒有那份儲存的設定了。",
       "credentialsUnreadable": "無法讀取已儲存的憑證。請解鎖系統鑰匙圈後重試。",
       "notEncrypted": "伺服器上的快照未加密，但本機已開啟加密。請從本機上傳以取代它，或關閉加密後再使用。"
     }
@@ -5645,7 +5764,7 @@
     "permissionDeniedHint": "目前瀏覽器正在摞截 Codeg 的通知。只能在瀏覽器的網站設定裡重新開啟——網頁無法再次彈窗請求。",
     "permissionDefaultHint": "還沒有向目前瀏覽器請求過權限。在你允許之前不會有任何通知。",
     "permissionUnsupportedHint": "通知需要安全上下文。請透過 HTTPS 或 localhost 存取該服務。",
-    "permissionManagedByOsHint": "桌面版透過系統通知中心發送，而系統不會告訴應用 Codeg 是否被允許。發一則測試通知即可確認。",
+    "permissionManagedByOsHint": "桌面版透過系統通知中心發送，而系統不會告訴應用程式 Codeg 是否被允許。發一則測試通知即可確認。",
     "identityTitle": "投遞身分",
     "identityHint": "系統會把這些通知記在這個 App 名下，生效的是它自己的通知開關。",
     "identityDegradedHint": "無法使用 Codeg 自己的識別碼，系統改以 {bundleId} 的身分投遞，生效的是那個 App 的通知開關。將 Codeg 安裝到「應用程式」資料夾即可恢復。",
@@ -5665,7 +5784,7 @@
     "whenUnfocused": "視窗未取得焦點時",
     "whenHidden": "視窗不可見時",
     "hideBody": "隱藏通知內容",
-    "hideBodyHint": "用一句通用文案代替智慧體輸出。通知中心會把內容保留在應用之外，對話關掉了也還在。標題仍會顯示資料夾名稱，好讓你知道該回到哪個視窗。",
+    "hideBodyHint": "用一句通用文案代替智慧體輸出。通知中心會把內容保留在應用程式之外，對話關掉了也還在。標題仍會顯示資料夾名稱，好讓你知道該回到哪個視窗。",
     "eventsTitle": "事件",
     "eventsHint": "關掉不想被打斷的事件。同一事件在數秒內重複觸發時只通知一次。權限請求包含計畫核准。",
     "eventBackgroundTask": "背景任務",
@@ -6026,7 +6145,7 @@
       },
       "clipboard": {
         "label": "允許智慧體使用剪貼簿",
-        "hint": "開啟後，智慧體可以把文字放到剪貼簿上再貼上，也可以讀回它自己從你分享的視窗中拷貝的內容。你自己拷貝的內容永遠不會讀給智慧體，智慧體也只能貼上它自己放到剪貼簿上的內容。"
+        "hint": "開啟後，智慧體可以把文字放到剪貼簿上再貼上，也可以讀回它自己從你分享的視窗中複製的內容。你自己複製的內容永遠不會讀給智慧體，智慧體也只能貼上它自己放到剪貼簿上的內容。"
       },
       "screen": {
         "label": "允許分享整個螢幕",
@@ -6376,7 +6495,7 @@
     "baseBranch": "基準分支",
     "baseBranchDefault": "任務開始時的目前分支",
     "baseBranchHint": "任務從該分支拉出工作樹，合併時也會落回該分支。",
-    "agentInheritedHint": "繼承自任務設定，修改後僅對本任務生效",
+    "agentInheritedHint": "來自任務設定——隨任務儲存",
     "agentNoDefaultHint": "任務設定中沒有預設 agent，目前選取的 agent 將隨任務儲存",
     "agentInheritedUnavailableHint": "任務設定中的 {agent} 無法使用，目前選取的 agent 將隨任務儲存",
     "agentOverrideReset": "恢復繼承",
@@ -6578,12 +6697,27 @@
     "deliverPrBackSubmit": "推送",
     "deliverPrBackDone": "已推回 PR",
     "deliverPrBackDoneMr": "已推回合併請求",
+    "badgePersonalAgent": "個人助手派出",
+    "badgePersonalAgentExecutor": "個人助手派出 · {executor}",
     "deliverPrUncommitted": "任務工作樹裡還有 {count} 個未提交的檔案。會先提交到 {branch}，再和其餘變更一起推送。",
     "deliverPrUncommittedFiles": "要提交的檔案",
     "deliverPrCommitMessageLabel": "提交訊息",
     "deliverPrUncommittedHint": "想讓智能體自己提交的話，取消後把任務退回再跑一輪。",
     "deliverPrCommitSubmit": "提交、推送並建立",
-    "deliverPrCommitPushSubmit": "提交並推送"
+    "deliverPrCommitPushSubmit": "提交並推送",
+    "agentLockedHint": "此任務已產生對話，不能更換智慧體",
+    "conversationSelectionTitle": "此對話的模型與選項",
+    "conversationSelectionHint": "請在對話中修改；下次重試、退回或合併會沿用此對話及這些設定。",
+    "conversationSelectionOpen": "在對話中修改",
+    "conversationSelectionLoading": "載入中…",
+    "conversationSelectionUnavailable": "目前伺服器不提供此資訊",
+    "conversationSelectionEmpty": "智慧體預設",
+    "conversationSelectionLegacy": "尚未記錄——對話下次連線時會固定為這些設定",
+    "conversationSelectionStarting": "任務正在啟動，請在執行後再試",
+    "conversationSelectionReplaced": "此任務的智慧體與其對話不同：下次執行會用下面的設定開啟新對話。",
+    "settingsAgentFrozenHint": "任務會保留建立時的智慧體和選項——此處的修改只影響之後建立的任務。",
+    "actionEditTaskConfig": "編輯任務設定",
+    "selectorOnlyHint": "審閱中只能修改智慧體選項，任務描述和標題保持不變。"
   },
   "CustomSkillsSettings": {
     "loading": "正在載入自訂技能…",
@@ -6669,7 +6803,7 @@
     }
   },
   "CodexModelEditor": {
-    "customizedNotice": "你已自訂模型清單，codeg 將接管 codex 的完整模型表。codex 日後新增的官方模型不會自動出現——點擊下方重新整理並再次儲存即可同步。清空所有自訂即可交回 codex 自動更新。",
+    "customizedNotice": "已自訂模型清單，codeg 將接管 codex 的完整模型表，官方新模型不會自動出現：點下方重新整理並儲存即可同步，清空自訂則交回 codex 自動更新。",
     "modelsTitle": "模型",
     "officialsHint": "自動納入你啟動的 codex 的官方模型；可刪除不需要的。",
     "builtinSummary": "{count} 個模型 · 來自 codex",
@@ -6691,7 +6825,7 @@
     "presetLabel": "範本",
     "presetGpt": "原生 GPT",
     "presetCompat": "OpenAI 相容",
-    "presetHint": "相容模式讓 codex 送出標準的 OpenAI Responses 請求（不用 code mode 工具、不用多智慧體、不用 responses-lite、不用自訂 apply patch 工具）——第三方閘道只實作公開介面時請選它。",
+    "presetHint": "「OpenAI 相容」送出標準 OpenAI Responses 請求（不用 code mode、多智慧體、responses-lite、自訂 apply patch 工具），適合只實作公開介面的第三方閘道。",
     "baseTemplate": "基礎範本",
     "baseTemplateHint": "從哪個官方模型複製必填欄位（系統提示詞、工具、限制）。",
     "groupProtocol": "介面協定",
@@ -6771,9 +6905,9 @@
       "refreshFailed": "重新整理失敗：{reason}",
       "refreshFailedAt": "自動重新整理失敗（{time}）：{reason}",
       "stillUsing": "仍在使用 {time} 檢查的清單。",
-      "catalogUrlHint": "config.toml 裡有 model_catalog_url。codeg 產生了模型清單檔時它不會生效；沒有產生時由 Codex 自行取得，此時建立工作階段取決於介面是否在線，0.160.x 還需要開啟 api_key_model_discovery，否則沒有模型。",
-      "savePreviewManaged": "儲存時 codeg 會把根 model 設為「{model}」、model_catalog_json 設為 codeg-model-catalog.json，並在發布這份清單期間持續管理這兩項。",
-      "savePreviewManagedNoModel": "儲存時 codeg 會把 model_catalog_json 設為 codeg-model-catalog.json，並在發布這份清單期間持續管理它。",
+      "catalogUrlHint": "config.toml 設定了 model_catalog_url。codeg 發布模型清單時它不生效；否則 codex 每次新建工作階段都會去拉取，拉取失敗就沒有模型、工作階段無法開啟（0.160.x 還需開啟 api_key_model_discovery）。",
+      "savePreviewManaged": "儲存後 codeg 接管頂層 model（{model}）與 model_catalog_json。",
+      "savePreviewManagedNoModel": "儲存後 codeg 接管 model_catalog_json。",
       "savePreviewError": "這樣無法儲存：{message}",
       "codexCatalog": {
         "missing_api_key": "請先填寫 API 金鑰：模型清單需要用它取得。",
@@ -6953,7 +7087,7 @@
   },
   "DiagnosticsSettings": {
     "title": "環境診斷",
-    "description": "檢查本應用在自身行程中如何解析該智能體的 CLI——這可能與你的終端機不同。",
+    "description": "檢查本應用程式在自身行程中如何解析該智能體的 CLI——這可能與你的終端機不同。",
     "loading": "正在執行診斷…",
     "error": "診斷失敗",
     "rerun": "重新執行",
@@ -6961,15 +7095,15 @@
     "copied": "診斷資訊已複製到剪貼簿",
     "button": "診斷",
     "verdict": {
-      "ok": "環境正常。若仍提示未安裝，請徹底重新啟動應用以重新整理前綴快取。",
-      "node_missing": "在應用的 PATH 上找不到 Node.js。",
-      "npm_missing": "在應用的 PATH 上找不到 npm。",
+      "ok": "環境正常。若仍提示未安裝，請徹底重新啟動應用程式以重新整理前綴快取。",
+      "node_missing": "在應用程式的 PATH 上找不到 Node.js。",
+      "npm_missing": "在應用程式的 PATH 上找不到 npm。",
       "not_installed": "此智能體似乎尚未安裝。",
-      "installed_but_unresolved": "紀錄顯示已安裝，但應用無法定位其執行檔。",
-      "user_prefix_not_on_path": "安裝到了回退前綴（~/.codeg/npm-global），但它不在應用的 PATH 上。請徹底重新啟動應用後再試。",
-      "homebrew_bin_not_on_path": "安裝在 Homebrew 的 bin 目錄下，但它不在應用的 PATH 上（Apple Silicon keg 拆分）。",
-      "terminal_only_path": "此命令在你的終端機能解析，但在應用中不能——這是 GUI PATH 差異。請從終端機啟動應用，或在智能體設定中重新安裝。",
-      "npm_prefix_timeout": "npm prefix -g 太慢（超過 1.5 秒），已略過回退偵測。請重新啟動應用後再試。",
+      "installed_but_unresolved": "紀錄顯示已安裝，但應用程式無法定位其執行檔。",
+      "user_prefix_not_on_path": "安裝到了回退前綴（~/.codeg/npm-global），但它不在應用程式的 PATH 上。請徹底重新啟動應用程式後再試。",
+      "homebrew_bin_not_on_path": "安裝在 Homebrew 的 bin 目錄下，但它不在應用程式的 PATH 上（Apple Silicon keg 拆分）。",
+      "terminal_only_path": "此命令在你的終端機能解析，但在應用程式中不能——這是 GUI PATH 差異。請從終端機啟動應用程式，或在智能體設定中重新安裝。",
+      "npm_prefix_timeout": "npm prefix -g 太慢（超過 1.5 秒），已略過回退偵測。請重新啟動應用程式後再試。",
       "node_too_old": "目前 Node.js 版本低於此智能體的要求。請升級 Node.js。",
       "adapter_missing_native_present": "你本機的 {agent} CLI 確實安裝了，但 Codeg 啟動的是另一個 ACP 轉接器套件，而它還沒安裝。到「智能體設定」中安裝即可 —— 它不會動到你的 CLI，登入狀態也是共用的。",
       "adapter_missing": "Codeg 為 {agent} 啟動的是獨立的 ACP 轉接器套件，目前尚未安裝。請到「智能體設定」中安裝 —— 只安裝廠商 CLI 是不夠的。"
@@ -7566,6 +7700,7 @@
       "discover": "探索",
       "mcp": "MCP",
       "skills": "技能",
+      "plugins": "外掛",
       "packs": "技能包"
     },
     "updatesAvailable": "{count, number} 項可更新",
@@ -7601,7 +7736,8 @@
         "skill": "技能",
         "mcp": "MCP",
         "prompt": "提示詞",
-        "assistant": "助手"
+        "assistant": "助手",
+        "plugin": "外掛"
       },
       "kind": {
         "skill": "技能",
@@ -7609,6 +7745,7 @@
         "prompt": "提示詞",
         "assistant": "助手",
         "connector": "連接器",
+        "plugin": "外掛",
         "unknown": "未知類別"
       },
       "filters": {
@@ -7876,10 +8013,21 @@
           "unsupportedWeb": "Codeg 伺服器還不能複製定義，更新伺服器後即可複製。"
         }
       },
+      "plugin": {
+        "hosts": "宿主",
+        "members": "成員",
+        "autorun": "自動執行",
+        "releases": "發布紀錄",
+        "added": "新增",
+        "updated": "更新",
+        "removed": "移除",
+        "unpinned": "沒有釘死版本的 MCP 服務",
+        "noAutorun": "無"
+      },
       "hero": {
         "title": "為你的智慧體找到<accent>新能力</accent>",
-        "subtitle": "{count, number} 個社群技能、MCP 服務、提示詞與助手，安裝一次，多個智慧體都能用",
-        "subtitleNoCount": "社群技能、MCP 服務、提示詞與助手，安裝一次，多個智慧體都能用"
+        "subtitle": "{count, number} 個社群技能、外掛、MCP 服務、提示詞與助手，安裝一次，多個智慧體都能用",
+        "subtitleNoCount": "社群技能、外掛、MCP 服務、提示詞與助手，安裝一次，多個智慧體都能用"
       },
       "layout": {
         "label": "版面",
@@ -8069,8 +8217,10 @@
           "latest": "已是最新",
           "updateAvailable": "可更新",
           "yanked": "版本已撤回",
+          "unapproved": "核准已撤銷",
           "disabledByAuthor": "已被作者停用",
-          "removedByHarness": "已被 SRN Harness 下架"
+          "removedByHarness": "已被 SRN Harness 下架",
+          "gone": "SRN 上已沒有這一項"
         },
         "editDefinition": "編輯定義",
         "editDefinitionLetter": "編輯定義 {letter}",
@@ -8424,7 +8574,11 @@
         "permissionsNotStated": "SRN Harness 沒有說明它要求哪些權限。",
         "noPermissions": "沒有特別的要求。",
         "undeclared": "偵測到，但未聲明",
-        "declaredOnly": "已聲明，但未偵測到"
+        "declaredOnly": "已聲明，但未偵測到",
+        "undeclaredCount": "{count, plural, other {# 項未聲明}}",
+        "moreValues": "還有 {count, plural, other {# 項}}",
+        "fewerValues": "收起",
+        "noneDeclared": "發布者沒有聲明任何權限，下面都是偵測到的。"
       },
       "blocked": {
         "title": "無法安裝",
@@ -8730,18 +8884,22 @@
         "clearFilters": "清除搜尋和篩選",
         "deleteTicked": "刪除…",
         "orphans": "指向已刪除技能的失效連結",
-        "problems": "Codeg 在技能存放區中發現了需要留意的地方"
+        "problems": "Codeg 在技能存放區中發現了需要留意的地方",
+        "pluginSkills": "外掛的技能"
       },
       "marks": {
         "harnessVersion": "SRN Harness {version}",
-        "problem": "需要處理"
+        "problem": "需要處理",
+        "belongsTo": "屬於 {plugin}"
       },
       "harnessStates": {
         "latest": "已是最新",
         "updateAvailable": "有可用更新",
         "yanked": "版本已撤回",
+        "unapproved": "核准已撤銷",
         "disabledByAuthor": "已被作者停用",
         "removedByHarness": "已從 SRN Harness 下架",
+        "gone": "SRN 上已沒有這一項",
         "changedLocally": "本機改過",
         "filesMissing": "檔案遺失"
       },
@@ -8888,7 +9046,8 @@
         "forSome": "{count, number} 個智能體",
         "batchOn": "啟用",
         "batchOff": "停用",
-        "clear": "清除"
+        "clear": "清除",
+        "providedBy": "由 {plugin} 提供"
       },
       "write": {
         "notOn": "沒有為 {agent} 啟用 <code>{skill}</code>。",
@@ -9076,7 +9235,8 @@
           "brokenCodeg": "Codeg 建立的連結，哪裡也不指向。可以修復或刪除。",
           "brokenOther": "不是 Codeg 建立的連結，哪裡也不指向。可以刪除。",
           "unknown": "這個 Codeg 沒有說明這項技能是誰的。"
-        }
+        },
+        "showPlugin": "檢視外掛"
       },
       "editor": {
         "newCustom": "新增自訂技能",
@@ -9279,8 +9439,9 @@
         "archive": "從 SRN Harness 保存的副本下載，先按 SHA-256 <code>{hash}</code>… 核對整個壓縮檔，再逐一核對檔案。",
         "source": "從 GitHub 取得：儲存庫 <code>{repository}</code>，提交 <code>{commit}</code>，資料夾 <code>{path}</code>。每個檔案都按它的 SHA-256 核對。",
         "noSource": "SRN Harness 既沒有提供檔案的副本，也沒有提供取得檔案的來源。",
-        "files": "顯示 {count, plural, other {# 個檔案}}",
-        "executable": "可執行"
+        "executable": "可執行",
+        "fileList": "檔案清單",
+        "executableCount": "{count, plural, other {# 個可執行}}"
       },
       "name": {
         "title": "安裝名稱",
@@ -9506,9 +9667,245 @@
       },
       "ownershipUnresolved": "Codeg 無法讀取它從 SRN Harness 安裝技能的紀錄，因此無法判斷這項技能是否來自 SRN Harness。在能讀取這份紀錄之前，會原樣保留它。"
     },
+    "pluginInstall": {
+      "actions": {
+        "install": "安裝"
+      },
+      "versions": {
+        "behindPending": "完整安裝：<code>{full}</code>（<code>{latest}</code> 待審核）",
+        "behindUnpinned": "完整安裝：<code>{full}</code>（<code>{latest}</code>：沒有釘死版本的 MCP 服務）",
+        "pending": "完整安裝待審核",
+        "unpinned": "完整安裝：沒有釘死版本的 MCP 服務"
+      },
+      "members": {
+        "title": "成員",
+        "none": "無",
+        "kinds": {
+          "assistant": "助手",
+          "unknown": "未知"
+        }
+      },
+      "hostParts": {
+        "skills": "技能 {count, number}",
+        "agents": "助手 {count, number}",
+        "commands": "指令 {count, number}",
+        "hooks": "鉤子 {count, number}",
+        "mcp": "MCP 服務 {count, number}",
+        "code": "程式外掛 {count, number}",
+        "nothing": "無"
+      },
+      "autorun": {
+        "title": "自動執行",
+        "consent": "同意自動執行",
+        "show": "展開",
+        "hide": "收起",
+        "reading": "正在讀取…",
+        "types": {
+          "hook": "鉤子",
+          "code": "程式外掛",
+          "mcp": "MCP 服務",
+          "lsp": "語言服務",
+          "monitor": "監視器",
+          "bin": "指令",
+          "unknown": "其他"
+        },
+        "consentNote": "勾選即表示你同意上面 {count, plural, other {# 項}}在以外掛安裝的智能體裡自動執行。",
+        "consentNoteNoList": "勾選即表示你同意這個外掛帶的內容在以外掛安裝的智能體裡自動執行。"
+      },
+      "modes": {
+        "native": "以外掛安裝",
+        "skills": "只裝技能",
+        "none": "不裝",
+        "unknown": "未知"
+      },
+      "hosts": {
+        "title": "智能體",
+        "none": "沒有偵測到智能體",
+        "codexTrust": "需在 Codex 中信任鉤子",
+        "experts": "接管專家技能 {count, number}",
+        "held": "名稱已被占用 {count, number}",
+        "copiesToTake": "移入備份的副本：",
+        "noPreview": "無法讀取連結的影響",
+        "setAll": "全部設為"
+      },
+      "missing": {
+        "noHosts": "為至少一個智能體選擇安裝方式。",
+        "name": "SRN Harness 沒有提供安裝名稱。",
+        "consent": "同意自動執行。",
+        "agentBlocked": "{agent}：技能無法放入。",
+        "agentNoPreview": "{agent}：無法讀取連結的影響。"
+      },
+      "notices": {
+        "effectsChanged": "預覽已過時，未寫入任何內容。",
+        "stateMoved": "SRN Harness 上的資訊已更新。"
+      },
+      "outcome": {
+        "installed": "已安裝。",
+        "busy": "另一項變更正在進行，未寫入任何內容。",
+        "failed": "安裝失敗。",
+        "unknown": "這個 Codeg 無法判斷安裝結果。",
+        "needsRepair": "需修復：{agents}",
+        "problems": "未完成的清理：",
+        "status": {
+          "done": "完成",
+          "failed": "失敗",
+          "undone": "已還原",
+          "needs_repair": "需修復",
+          "unknown": "未知"
+        }
+      },
+      "reasons": {
+        "not_a_plugin": "這不是外掛（它是：{kind}）。",
+        "plugin_info_missing": "SRN Harness 沒有提供外掛本身的內容。",
+        "plugin_install_name_invalid": "<code>{name}</code> 不能用作外掛的安裝名稱。",
+        "plugin_install_name_mismatch": "安裝名稱 <code>{name}</code> 不是這個版本的 <code>{expected}</code>。",
+        "plugin_install_name_taken": "<code>{name}</code> 已被另一個外掛占用（<code>{ref}</code>）。",
+        "plugin_already_installed": "已以 <code>{name}</code> 安裝。",
+        "plugin_no_hosts": "沒有為任何智能體安裝。",
+        "plugin_no_adapter": "{agent} 不能以外掛安裝。",
+        "plugin_native_unavailable": "{agent} 不能以外掛安裝：",
+        "plugin_revision_not_target": "修訂 #{revision} 不能這樣安裝。",
+        "plugin_revision_not_target_native": "修訂 #{revision} 不是可以完整安裝的修訂（#{expected}）。",
+        "plugin_revision_not_target_skills": "修訂 #{revision} 不是最新修訂（#{expected}）。",
+        "plugin_no_full": "還沒有可以完整安裝的修訂（待審核）。",
+        "plugin_no_full_unpinned": "沒有可以完整安裝的修訂（沒有釘死版本的 MCP 服務）。",
+        "plugin_not_approved": "修訂 #{revision} 未獲准完整安裝。",
+        "plugin_mcp_unpinned": "沒有釘死版本的 MCP 服務：<code>{servers}</code>。",
+        "plugin_consent_required": "自動執行的部分需要你同意。",
+        "plugin_consent_stale": "自動執行的部分已有變化，需要重新同意。",
+        "plugin_host_step_failed": "{agent}：「{step}」失敗。",
+        "plugin_needs_repair": "需修復：{agents}。",
+        "plugin_up_to_date": "已是修訂 #{revision}。",
+        "plugin_record_changed": "Codeg 的外掛紀錄已有變化。",
+        "plugin_not_on_agent": "{agent} 沒有這個外掛。",
+        "plugin_last_host": "{agent} 是唯一裝了它的智能體。",
+        "plugin_unchanged": "{agent} 已經是這樣。",
+        "plugin_suspended": "Codeg 已為 {agent} 停用它。",
+        "plugin_no_repair_needed": "{agent} 不需要修復。",
+        "plugin_reinstall_required": "{agent}：需要解除安裝後重新安裝。",
+        "plugin_revision_modified": "修訂 #{revision} 的檔案已被改動。",
+        "plugin_unverified": "無法向 SRN 核實這個修訂。",
+        "plugin_advisory_disable": "有公告要求停用這個修訂。",
+        "plugin_launch_env_unreadable": "無法讀取 {agent} 的啟動設定。",
+        "plugin_host_not_found": "找不到宿主。",
+        "plugin_host_version_unknown": "無法讀取宿主的版本。",
+        "plugin_host_home_relative": "{variable} 是相對路徑：<code>{path}</code>。",
+        "plugin_adapter_off": "這個宿主暫時不能以外掛安裝。",
+        "plugin_host_version_unsupported": "不支援宿主版本 <code>{version}</code>。",
+        "plugin_host_command_failed": "<code>{command}</code> 失敗（{status}）。",
+        "plugin_host_command_timed_out": "<code>{command}</code> 超過 {seconds, number} 秒沒有完成。",
+        "plugin_host_command_not_started": "無法啟動 <code>{command}</code>。",
+        "plugin_marketplace_unreadable": "無法讀取 Codeg 的外掛市集檔案。",
+        "plugin_host_name_taken": "宿主裡已有名為 <code>{name}</code> 的外掛（<code>{plugin}</code>）。",
+        "plugin_host_name_changed": "它在宿主裡的名稱從 <code>{from}</code> 改成了 <code>{to}</code>。",
+        "plugin_revision_missing": "外掛儲存庫裡沒有修訂 #{revision}。",
+        "plugin_host_files": "無法寫入宿主的檔案。",
+        "plugin_host_not_listed": "外掛沒有這個宿主的清單。",
+        "plugin_entry_missing": "外掛裡沒有這個宿主能載入的程式碼。",
+        "plugin_host_settings_unreadable": "無法讀取宿主的設定。",
+        "plugin_host_not_installed": "宿主裡沒有安裝 <code>{name}</code>。",
+        "plugin_marketplace_not_added": "宿主裡沒有 Codeg 的外掛市集。",
+        "plugin_marketplace_elsewhere": "宿主裡同名的外掛市集在別處：<code>{path}</code>。",
+        "plugin_marketplace_elsewhere_unknown": "宿主裡同名的外掛市集在別處。",
+        "plugin_marketplace_entry_missing": "Codeg 的外掛市集裡沒有它。",
+        "plugin_marketplace_source_mismatch": "外掛市集指向 <code>{found}</code>，而不是 <code>{expected}</code>。",
+        "plugin_host_entry_mismatch": "宿主設定列出的是 <code>{found}</code>，而不是 <code>{expected}</code>。",
+        "plugin_host_cache_missing": "宿主裡沒有這個外掛的副本。",
+        "plugin_hooks_unreadable": "無法讀取鉤子的信任狀態。",
+        "experts_linked": "專家技能仍在連結中：<code>{names}</code>。",
+        "owned_set_differs": "其他智能體裝的是它的另一組技能，請先更新。",
+        "owned_by_other": "<code>{name}</code> 屬於另一個外掛（<code>{plugin}</code>）。",
+        "copies_not_refreshed": "無法更新 <code>{name}</code> 的副本。",
+        "member_duplicate": "有兩個成員都叫 <code>{name}</code>。",
+        "member_file_mismatch": "<code>{name}</code> 的 <code>{path}</code> 與清單不符。",
+        "plugin_owned": "<code>{name}</code> 屬於外掛，只能隨外掛一起管理。"
+      }
+    },
+    "plugins": {
+      "refresh": "重新讀取外掛",
+      "listLabel": "已裝外掛",
+      "none": "還沒有安裝外掛",
+      "browse": "去探索中瀏覽",
+      "retry": "重試",
+      "version": "版本 {version}",
+      "revision": "修訂 #{revision}",
+      "installed": "已安裝 {version}",
+      "states": {
+        "disabled": "已停用",
+        "suspended": "SRN 已停用",
+        "needsRepair": "需修復",
+        "unknown": "未知狀態"
+      },
+      "actions": {
+        "update": "更新",
+        "repair": "修復",
+        "uninstall": "解除安裝",
+        "disable": "停用",
+        "enable": "啟用",
+        "changeMode": "改裝法",
+        "hookTrust": "鉤子信任",
+        "manage": "管理"
+      },
+      "hooks": {
+        "again": "重新讀取",
+        "none": "沒有鉤子",
+        "trusted": "鉤子已信任",
+        "untrusted": "需在 Codex 中信任鉤子",
+        "modified": "鉤子已改動，需在 Codex 中重新信任",
+        "unknown": "無法讀取鉤子的信任狀態"
+      },
+      "dialog": {
+        "checking": "正在檢查…",
+        "writing": "正在寫入…",
+        "refused": "未執行：",
+        "failed": "操作失敗。",
+        "giveBack": "交還專家技能 {count, number}",
+        "fromTo": "<code>{from}</code> → <code>{to}</code>",
+        "upToDate": "已是最新。",
+        "changedMembers": "改動的成員",
+        "memberChanges": {
+          "added": "新增",
+          "removed": "移除",
+          "changed": "更新"
+        },
+        "actions": {
+          "update": "更新",
+          "resume": "更新並重新啟用",
+          "to_skills": "改為只裝技能",
+          "record_only": "保持停用",
+          "none": "不變",
+          "needs_repair": "需修復，不更新",
+          "unknown": "未知"
+        },
+        "title": {
+          "mode": "<code>{name}</code> · {agent}：{mode}",
+          "enable": "啟用 <code>{name}</code> · {agent}",
+          "disable": "停用 <code>{name}</code> · {agent}",
+          "repair": "修復 <code>{name}</code>"
+        },
+        "confirm": {
+          "mode": "變更",
+          "enable": "啟用",
+          "disable": "停用",
+          "repair": "修復"
+        },
+        "outcome": {
+          "updated": "已更新。",
+          "changed": "已變更。",
+          "repaired": "已修復。"
+        },
+        "missing": {
+          "title": "更新之前，還需要：",
+          "titleChange": "還需要：",
+          "target": "沒有可更新到的修訂。",
+          "yanked": "確認更新到已撤回的版本。"
+        }
+      }
+    },
     "record": {
       "mcp": "Codeg 無法讀取它從 SRN Harness 安裝 MCP 服務的紀錄，所以這裡沒有任何服務標示為來自 SRN Harness。在能讀取這份紀錄之前，不會從 SRN Harness 安裝或解除安裝任何內容。",
-      "skills": "Codeg 無法讀取它從 SRN Harness 安裝技能的紀錄，所以這裡沒有任何技能標示為來自 SRN Harness。在能讀取這份紀錄之前，不會從 SRN Harness 安裝或解除安裝任何內容，可能來自 SRN Harness 的技能也會原樣保留。"
+      "skills": "Codeg 無法讀取它從 SRN Harness 安裝技能的紀錄，所以這裡沒有任何技能標示為來自 SRN Harness。在能讀取這份紀錄之前，不會從 SRN Harness 安裝或解除安裝任何內容，可能來自 SRN Harness 的技能也會原樣保留。",
+      "plugins": "無法讀取外掛的紀錄。"
     },
     "errors": {
       "disabled": "這個 Codeg 已關閉「探索」。",
@@ -9832,6 +10229,3029 @@
       }
     }
   },
+  "PersonalAgent": {
+    "title": "個人助手",
+    "readOnly": "個人助手在同一資料目錄的另一個 codeg 處理程序中執行，本頁在這裡為唯讀。",
+    "viewSession": "檢視底層會話",
+    "viewSessionHint": "目前會話段的完整記錄，即時更新。",
+    "sessionTitle": "第 {seq} 段 · 完整記錄",
+    "errors": {
+      "engineElsewhere": "個人助手在同一資料目錄的另一個 codeg 處理程序中執行，本頁在這裡為唯讀。"
+    },
+    "state": {
+      "queued": "排隊中",
+      "running": "進行中",
+      "waiting_input": "等你處理",
+      "review": "待驗收",
+      "completed": "已完成",
+      "failed": "失敗",
+      "canceled": "已取消",
+      "interrupted": "已中斷",
+      "handed_over": "已接手"
+    },
+    "mode": {
+      "task": "看板任務",
+      "chat": "聊天會話",
+      "session": "工作會話"
+    },
+    "reason": {
+      "first": "首次啟動",
+      "switch": "切換大腦",
+      "option_restart": "啟動設定有變",
+      "workdir": "更換工作目錄",
+      "manual": "新會話",
+      "recovery": "原會話無法恢復",
+      "overflow": "上下文溢位"
+    },
+    "timeline": {
+      "loadOlder": "載入更早的記錄",
+      "empty": "打個招呼，或者交給它一件事。",
+      "newMessages": "以下是新訊息",
+      "openTask": "在看板中開啟",
+      "openConversation": "開啟會話",
+      "viewSession": "檢視會話",
+      "loading": "正在載入對話…"
+    },
+    "work": {
+      "taskNotStarted": "這個任務還沒開始，開始後這裡會顯示它的會話。",
+      "taskGone": "找不到這個任務，可能已被刪除。"
+    },
+    "composer": {
+      "placeholder": "傳訊息給 {name}…",
+      "placeholderBusy": "{name} 正在處理，你的訊息會排在後面",
+      "readOnly": "在此處理程序中唯讀",
+      "ariaLabel": "傳給個人助手的訊息",
+      "send": "傳送",
+      "queue": "加入佇列",
+      "waitForUpload": "請等圖片上傳完成。",
+      "draftWhileSending": "正在傳送，傳完再放進輸入框。"
+    },
+    "aux": {
+      "rename": "點擊修改名稱",
+      "title": "助理面板",
+      "waiting": "{count} 件等你處理"
+    },
+    "status": {
+      "thresholdMark": "{percent}% 自動壓縮",
+      "elsewhere": "個人助手在另一個 codeg 處理程序中執行，這裡顯示的是資料庫裡的狀態。",
+      "model": "模型",
+      "mode": "模式",
+      "session": "會話段",
+      "started": "開始於",
+      "connection": "連線",
+      "segmentValue": "第 {seq} 段 · {reason}",
+      "noSegment": "尚未開始",
+      "connected": "線上",
+      "disconnected": "未連線（下一則訊息時重新連線）",
+      "handoff": "交接卡",
+      "handoffSize": "{size} 字",
+      "handoffTrimmed": "已裁剪",
+      "context": "上下文",
+      "usageValue": "已用 {percent}%（{source}）",
+      "usageSource": {
+        "live": "即時",
+        "transcript": "來自會話檔案"
+      },
+      "usageUnknown": "用量未知：這個 agent 不回報用量",
+      "threshold": "達到 {percent}% 自動壓縮",
+      "thresholdOff": "自動壓縮已關閉",
+      "noCommand": "不知道這個 agent 的壓縮指令",
+      "compactions": "壓縮次數",
+      "compactionCounts": "codeg {auto} · 你 {manual} · agent {agent}",
+      "lastCheck": "最近一次檢查",
+      "check": {
+        "below": "低於閾值",
+        "compacted": "送出前已壓縮",
+        "disabled": "自動壓縮已關閉",
+        "usage_unknown": "略過：用量未知",
+        "no_command": "略過：沒有壓縮指令",
+        "paused": "略過：本段已暫停",
+        "skipped_after_attempt": "剛壓縮過，直接送出"
+      },
+      "paused": "本段已暫停自動壓縮",
+      "resume": "恢復",
+      "queued": "等待中",
+      "queuedValue": "{messages} 則訊息 · {events} 則進展",
+      "dispatchSlots": "派出的會話",
+      "slotsValue": "執行 {running}/{limit} · 排隊 {queued}",
+      "slotsUnlimited": "執行 {running} · 排隊 {queued}",
+      "engine": "執行於",
+      "engineHere": "此處理程序",
+      "engineElsewhere": "另一個 codeg 處理程序",
+      "workdir": "工作目錄",
+      "lastError": "最近錯誤",
+      "compactionStatus": {
+        "ok": "成功",
+        "failed": "失敗",
+        "canceled": "已取消",
+        "running": "進行中"
+      },
+      "usageUnknownOffline": "用量未知：重新連線後讀取",
+      "copyPath": "複製路徑",
+      "copied": "已複製",
+      "startedValue": "開始於 {when}",
+      "pendingValue": "下一則訊息起新會話：{reason}",
+      "agent": "智能體",
+      "state": "狀態"
+    },
+    "items": {
+      "waitingAnswer": "等 {name} 回覆：{text}",
+      "wroteToYou": "{name} 傳來訊息：{text}",
+      "kind": {
+        "dispatch": "派出的工作",
+        "reminder": "提醒",
+        "followup": "跟進",
+        "question": "提問",
+        "when_mentioned": "提到時提醒",
+        "message": "訊息"
+      },
+      "onDone": "完成後：{text}",
+      "mention": "你提到 {words} 時提醒 · 已提醒 {times}/{max} 次 · 到 {until}"
+    },
+    "data": {
+      "inDays": "{days} 天內 {count} 次",
+      "smallSample": "樣本僅 {count} 次，參考有限",
+      "rangeMenu": "時間範圍",
+      "interactions": "每日互動",
+      "messages": "你的訊息",
+      "replies": "回覆",
+      "dispatches": "每日派活",
+      "completed": "已完成",
+      "other": "其他",
+      "failed": "失敗",
+      "completedHint": "完成 {count}",
+      "tokens": "每日 token",
+      "agentTokens": "個人助手",
+      "dispatchTokens": "派出的工作",
+      "syncedAt": "token 資料截至上次用量同步：{when}",
+      "notSynced": "token 資料會在用量同步後顯示（見「Token 用量」頁）。",
+      "usageCurve": "上下文用量",
+      "noUsage": "還沒有讀數。",
+      "empty": "尚無資料",
+      "range": "近 {days} 天",
+      "figure": {
+        "conversation": "對話",
+        "conversationSub": "你 {owner} · 回覆 {replies}",
+        "dispatches": "派活",
+        "dispatchesSub": "完成 {completed} · 失敗 {failed}",
+        "completion": "完成率",
+        "completionSub": "派出去的工作中",
+        "tokens": "Token",
+        "tokensSub": "助手 {agent} · 派活 {dispatch}",
+        "tokensUnsynced": "用量同步後顯示"
+      },
+      "agents": "按智能體"
+    },
+    "settings": {
+      "setupStart": "與助手對話",
+      "setupAskName": "幫我取個名字吧？",
+      "setupHello": "嗨，我是「{name}」！",
+      "setupRandomName": "隨機取個名字",
+      "setupNames": "小橙|阿星|糰子|小滿|知了|米粒|阿福|小七|糯米|布丁|芝麻|可可",
+      "setupMoreAgents": "更多（{count}）",
+      "setupFewerAgents": "收起",
+      "setupNoAgents": "還沒有可用的 agent：先在設定裡安裝一個。",
+      "setupMissing": "智能體還有 {count} 項未選",
+      "setupBrainAgent": "大腦用的智能體",
+      "tabPersona": "人設與記憶",
+      "name": "名稱",
+      "nameHint": "它在頁面和訊息裡顯示的名字和頭像；助手也知道自己叫這個名字。名字留空則使用預設名稱。",
+      "namePlaceholder": "個人助手",
+      "agentHint": "和你聊天、幫你想事情時用的智能體。",
+      "agentOptions": "模型和設定",
+      "switchNote": "換成另一個 agent 後，下一則訊息會新起一個會話。不會續接舊會話，codeg 會把時間軸交接給新會話。",
+      "autoCompact": "自動壓縮閾值",
+      "autoCompactHint": "上下文佔用達到這個比例時，codeg 會在下一則訊息前先送出壓縮指令。0 表示關閉。應低於 agent 自己的自動壓縮觸發點。",
+      "compactCommand": "壓縮指令",
+      "compactCommandHint": "照原樣送出；留空時自動選用 agent 自己的指令（/compact、/compress…）。切換到別的 agent 時清空。",
+      "compactionNote": "壓縮後仍是同一個會話：下一則訊息會附上狀態卡，帶上人設、規則和在途事項。連續兩次壓縮都沒有效果時，本段會暫停自動壓縮。",
+      "concurrency": "同時執行的派出會話",
+      "concurrencyHint": "聊天會話和工作會話同時執行的上限，超出的排隊。0 表示不限。看板任務沿用看板自己的上限。",
+      "handoffBudget": "交接卡預算",
+      "handoffBudgetHint": "新會話交接卡最多使用多少字；裁掉的部分，助手可以用工具翻閱。",
+      "skill": "內建技能",
+      "skillHint": "透過工作目錄裡的技能，教助手它的慣例（派活方式、在途事項、記憶檔案）。",
+      "saveFile": "儲存檔案",
+      "fileSaved": "已儲存 {name}。",
+      "cancel": "取消",
+      "save": "儲存",
+      "fileGroups": {
+        "persona": "人設",
+        "rules": "規則",
+        "owner": "主人",
+        "memory": "記憶",
+        "skills": "流程技能"
+      },
+      "byOwner": "你維護",
+      "byAgent": "助手維護",
+      "soulHint": "它是誰、怎麼說話。由你來寫，助手只在你要求時才改。每個會話開始時完整讀入。",
+      "rulesHint": "它必須遵守的規則。由你來寫，助手只在你要求時才改。每個會話開始時完整讀入。",
+      "userHint": "助手對你的了解：角色、專案、偏好。它了解到新情況會自己更新，每個會話開始時完整讀入。",
+      "memoryHint": "記憶的索引，每條一行：事實、參考資料，以及工作方式上的教訓（你糾正過的、認可過的做法）。每一條是 memory/ 下自己的檔案，類型寫在檔案開頭。兩者都由助手維護。每個工作階段開始時讀入索引的前 200 行，條目在需要時才讀。",
+      "entryHint": "單個條目，助手需要時才讀。刪除時，索引裡指向它的那一行也會一併刪掉。",
+      "entryType": {
+        "lesson": "教訓",
+        "fact": "事實",
+        "reference": "參考"
+      },
+      "deleteEntry": "刪除",
+      "confirmDelete": "確定刪除",
+      "confirmDeleteHint": "刪除這個條目和索引裡指向它的那一行？",
+      "entryDeleted": "已刪除 {name}。",
+      "saved": "已儲存。",
+      "saveFailed": "儲存失敗",
+      "restoreDefaults": "恢復本頁預設",
+      "back": "返回對話",
+      "viewTitle": "助手偏好設定",
+      "readOnly": "助手在另一個 codeg 處理程序裡執行，這裡的設定唯讀。",
+      "setUpFirst": "請先設定主助手。",
+      "nav": {
+        "identity": "身分與大腦",
+        "persona": "人設與記憶",
+        "notify": "通知",
+        "advanced": "進階",
+        "communication": "溝通",
+        "proactive": "主動與通知",
+        "automation": "派活與自動",
+        "about": "了解你",
+        "projects": "你的專案"
+      },
+      "pages": {
+        "communicationNote": "語氣與稱呼不在這一頁：寫在各助手的 SOUL.md 和主助手的 USER.md 裡。",
+        "proactiveNote": "每個助手自己的開關（通知我、靜音、隱藏）在它的「通知」頁。codeg 一般設定裡的通知總開關和「隱藏通知內容」（設定 → 通知）對助手同樣有效。",
+        "byKind": "依類別調整",
+        "byKindHint": "每類訊息能打擾你到什麼程度。緊急：立刻送到；一般：挑合適的時候送；低：只進「今日」。",
+        "automationNote": "要你確認的，會出一張卡，卡上就是要執行的完整內容，點了才執行。"
+      },
+      "prefs": {
+        "default": "（預設）",
+        "reply_length": {
+          "title": "回覆長短",
+          "hint": "助手回覆的長短。",
+          "short": "簡短",
+          "medium": "適中",
+          "long": "詳細"
+        },
+        "cards": {
+          "title": "用卡片回覆",
+          "hint": "助手回覆時用不用卡片（介面渲染）。",
+          "prefer": "盡量用卡片",
+          "decisions": "只在要你決定時用",
+          "never": "不用卡片"
+        },
+        "when_unsure": {
+          "title": "拿不準你的意思時",
+          "hint": "助手替你辦事時怎麼理解你的話。執行者的提問另計。",
+          "assume": "按最合理的理解先做，寫明假設",
+          "ask": "先問我"
+        },
+        "chat_changes": {
+          "title": "你在對話裡要改的",
+          "hint": "你讓助手改的設定。",
+          "apply": "直接改，出卡可復原",
+          "show": "先給我看"
+        },
+        "confirm_dispatch": {
+          "title": "派活前確認",
+          "hint": "要確認時出「等你確認」卡，卡上是完整的派活內容，點了才派。",
+          "never": "不用，直接派",
+          "code": "改程式碼的先確認",
+          "always": "每次都確認"
+        },
+        "followups": {
+          "title": "自己派出的工作的續作與重試",
+          "hint": "助手續作或重試它派出的工作時。",
+          "auto": "直接做",
+          "ask": "先問我"
+        },
+        "messages": {
+          "title": "給別的助手傳訊息",
+          "hint": "一個助手寫給另一個助手時。",
+          "auto": "直接傳送",
+          "ask": "先問我"
+        },
+        "loop_rounds": {
+          "title": "助手之間來回沒進展時停下",
+          "hint": "同一對助手來回幾輪（每輪兩則訊息）沒有進展就停；繞成一圈立刻停。0 表示不限。"
+        },
+        "automation_level": {
+          "title": "自動程度",
+          "standard": "標準",
+          "ask_more": "多問我",
+          "custom": "自訂",
+          "standardHint": "大多自動，做了出卡片告訴你；合併 PR、關 issue、在 forge 上留言、修看護 PR 的檢查失敗或衝突，都先問你。",
+          "ask_moreHint": "續作與重試、中斷後的重試、傳訊息給其他助理、對話裡的變更、會改程式碼的派工，都先出卡片，你點了才做；執行工作階段的提問和計畫審批一律轉給你。",
+          "customHint": "下面有幾項是你自己調過的。",
+          "confirmTitle": "切換到「{level}」？",
+          "confirmBody": "會覆蓋你改過的 {count} 項。",
+          "confirm": "切換"
+        },
+        "interrupt_retry": {
+          "title": "中斷後自動重試",
+          "hint": "codeg 重新啟動打斷了助理派出的工作時。",
+          "auto": "自動重試",
+          "ask": "先問我"
+        },
+        "retry_rounds": {
+          "title": "同一件工作最多自動重試",
+          "hint": "同一件工作 codeg 自己重試幾次，之後交給你決定。0 是不自動重試。"
+        },
+        "exec_questions": {
+          "title": "執行工作階段的提問",
+          "hint": "助理派出的工作階段停下來提問時。要填密鑰的問題一律交給你。",
+          "assistant": "助理代答，拿不準時轉給我",
+          "owner": "一律轉給我"
+        },
+        "exec_plans": {
+          "title": "執行工作階段的計畫審批",
+          "hint": "助理派出的工作階段要先批准計畫才往下做時。",
+          "assistant": "助理代答，拿不準時轉給我",
+          "owner": "一律轉給我"
+        },
+        "time_zone": {
+          "title": "時區",
+          "hint": "助手讀寫的每個時間——提醒、「明天上午」、告訴它的目前時間——都依這個時區。",
+          "system": "跟隨系統"
+        },
+        "presence": {
+          "title": "記錄在場與作息",
+          "hint": "記下你在 codeg 裡有操作的分鐘（保留 60 天），學你一天通常幾點開始、幾點結束。關掉後不再記錄，作息用預設值。",
+          "on": "開",
+          "off": "關"
+        },
+        "disturb_level": {
+          "title": "打擾程度",
+          "quiet": "少打擾",
+          "standard": "標準",
+          "more": "多提醒",
+          "custom": "自訂",
+          "quietHint": "只有緊急的訊息和你設的提醒會通知你，其餘進「今日」；收尾只在你說時出。",
+          "standardHint": "一般的訊息在你在場、沒在打字時通知你；打字時等你停手再說，離開時累積到你回來。",
+          "moreHint": "一般的訊息打字時也照常通知；低級的訊息合併成一則，最多每 2 小時一次。",
+          "customHint": "下面有幾項是你自己調過的。",
+          "confirmTitle": "切換到「{level}」？",
+          "confirmBody": "會覆蓋你改過的 {count} 項。",
+          "confirm": "切換"
+        },
+        "level": {
+          "urgent": "緊急",
+          "normal": "一般",
+          "low": "低"
+        },
+        "proactive": {
+          "title": "主動功能",
+          "hint": "關閉後，助手只在你說話時回應；你設的提醒照常到點。",
+          "on": "開",
+          "off": "關"
+        },
+        "urgent_via": {
+          "title": "緊急訊息",
+          "hint": "你設的提醒、助手轉給你的提問、助手在等你核准、會話等你超過 10 分鐘。",
+          "system_attention": "系統通知，加 Dock／工作列提醒",
+          "system": "只發系統通知",
+          "in_page": "只在 codeg 裡"
+        },
+        "normal_via": {
+          "title": "一般訊息",
+          "hint": "派出的工作做完了、它回你結論了、有卡片等你處理。",
+          "system": "系統通知",
+          "in_page": "只在 codeg 裡",
+          "today": "只進「今日」"
+        },
+        "low_via": {
+          "title": "低級訊息",
+          "hint": "進展、助手之間的往來、照你說的改了設定。",
+          "today": "只進「今日」",
+          "digest": "合併成一則通知，最多每 2 小時一次"
+        },
+        "focus_wait": {
+          "title": "打字時",
+          "hint": "你停手幾分鐘後，再把一般的訊息合併成一則送出。0 表示照常送。"
+        },
+        "quiet_hours": {
+          "title": "安靜時段",
+          "hint": "安靜時段裡只送你設的提醒，其餘等你回來。",
+          "auto": "作息之外（學到作息之前是 22:00～08:00）",
+          "fixed": "固定時段",
+          "none": "不設"
+        },
+        "quiet_from": {
+          "title": "安靜開始",
+          "hint": "安靜時段從幾點開始。"
+        },
+        "quiet_to": {
+          "title": "安靜結束",
+          "hint": "安靜時段到幾點結束。"
+        },
+        "quiet_lets": {
+          "title": "安靜時段裡",
+          "hint": "這段時間仍會通知你的。",
+          "reminders": "只送到期提醒",
+          "urgent": "到期提醒和緊急訊息"
+        },
+        "morning": {
+          "title": "提醒裡的「明天上午」",
+          "hint": "把提醒延到「明天上午」時，它幾點再來。",
+          "hours": "依作息的開始時間",
+          "fixed": "固定時刻"
+        },
+        "morning_at": {
+          "title": "「明天上午」是",
+          "hint": "「明天上午」指的時刻。"
+        },
+        "projects": {
+          "title": "你的專案",
+          "hint": "助手替你留意哪些專案。",
+          "all": "所有專案",
+          "more": "{names} 等 {count} 個",
+          "none": "一個都不盯"
+        },
+        "level_reminder": {
+          "title": "提醒",
+          "hint": "你設的提醒到點了。"
+        },
+        "level_forwarded": {
+          "title": "轉給你的",
+          "hint": "助手派出的會話裡的提問或計畫，它轉給了你。"
+        },
+        "level_approval": {
+          "title": "助手等你核准",
+          "hint": "助手要你核准一步才能繼續。"
+        },
+        "level_waiting": {
+          "title": "等你 10 分鐘",
+          "hint": "會話或派出的工作等你回答已經 10 分鐘。"
+        },
+        "level_question": {
+          "title": "助手在問你",
+          "hint": "助手自己的提問，或它的選擇卡。"
+        },
+        "level_confirm": {
+          "title": "等你確認的卡",
+          "hint": "你要求先確認的事，或先給你看的變更。"
+        },
+        "level_stuck": {
+          "title": "卡住了",
+          "hint": "不知道做成沒有的一步，或助手之間來回沒進展停下了。"
+        },
+        "level_done": {
+          "title": "工作做完了",
+          "hint": "助手派出的工作做完了、失敗了，或等你驗收。"
+        },
+        "level_reply": {
+          "title": "回覆",
+          "hint": "助手回答了你交代它的事。"
+        },
+        "level_exchange": {
+          "title": "助手之間",
+          "hint": "助手之間的往來訊息。"
+        },
+        "level_changed": {
+          "title": "改了設定",
+          "hint": "助手照你說的改了一項設定。"
+        },
+        "level_answered": {
+          "title": "替你回答了",
+          "hint": "派出的會話裡的提問，助手替你回答了。"
+        },
+        "auto_accept": {
+          "title": "自動驗收",
+          "hint": "助手派出的改程式的活進入待驗收時，用它做事的智能體唯讀檢查一遍，助手對照驗收標準下結論。關掉就回到你自己驗收。",
+          "on": "開",
+          "off": "關"
+        },
+        "accept_revise": {
+          "title": "驗收後退回",
+          "hint": "檢查之後助理要退回修改時。",
+          "auto": "自動退回",
+          "ask": "先問我（出驗收卡）"
+        },
+        "accept_rounds": {
+          "title": "驗收檢查最多幾輪",
+          "hint": "檢查到這麼多輪還要退回，就交給你決定。0 是不自動退回。"
+        },
+        "level_acceptance": {
+          "title": "驗收",
+          "hint": "派出的工作驗收通過可以合併、已合併，或要你決定。"
+        },
+        "level_used_up": {
+          "title": "用完輪次仍沒過",
+          "hint": "退回到你允許的輪數還沒通過。"
+        },
+        "forge_comment": {
+          "title": "在 forge 上留言",
+          "hint": "助手在 issue 或 PR 上留言時。",
+          "auto": "直接發",
+          "ask": "先問我（出審批卡）"
+        },
+        "issue_close": {
+          "title": "關 issue",
+          "hint": "助手在 forge 上關 issue 時。",
+          "auto": "直接關",
+          "ask": "先問我（出審批卡）"
+        },
+        "pr_merge": {
+          "title": "合併 PR",
+          "hint": "只有頭提交是該合的那個版本（開著自動驗收時，是驗收通過的那個）、而且檢查全部通過時才合；儲存庫的分支保護照常起作用。CNB 讀不到檢查、合併也鎖不住頭提交，所以 CNB 上的合併總是先問你。",
+          "auto": "檢查全綠時直接合併",
+          "ask": "先問我（出審批卡）"
+        },
+        "ci_failure": {
+          "title": "看護的 PR 檢查沒過",
+          "hint": "由它的任務去修：交付它的任務還在待驗收時續作，否則在這個 PR 上開一個新任務。驗收通過後 codeg 把修復推上去，最多修下面設的次數。",
+          "fix": "自動修",
+          "ask": "先問我（卡片上確認）",
+          "tell": "只告訴我"
+        },
+        "pr_conflict": {
+          "title": "看護的 PR 有衝突",
+          "hint": "由它的任務把目標分支合進來並解決衝突（不是 rebase：codeg 從不往 PR 上強推）。",
+          "auto": "自動解決",
+          "ask": "先問我（卡片上確認）"
+        },
+        "review_feedback": {
+          "title": "有寫權限的人的評審意見",
+          "hint": "能寫這個儲存庫的人要求修改、或者在某一行留了意見：原文交給任務，逐條「接受 / 澄清 / 有理由地反駁」。",
+          "auto": "交回任務",
+          "ask": "先問我（卡片上確認）"
+        },
+        "outsider_comments": {
+          "title": "沒有寫權限的人的評論",
+          "hint": "助手看到是誰寫了什麼，自己判斷：交給任務、告訴你，或者不理（比如機器人洗版）。",
+          "auto": "助手判斷要不要交給任務",
+          "ask": "先問我（卡片上確認）"
+        },
+        "ci_rounds": {
+          "title": "同一個 PR 最多自動修幾次",
+          "hint": "檢查沒過和有衝突都算，跨任務累計。修到這麼多次還不行，下一次失敗就緊急告訴你，並寫明每次改了什麼。0 是不自動修。"
+        },
+        "level_forge": {
+          "title": "forge 上的動作",
+          "hint": "助手留的言、關的 issue、合的 PR。"
+        },
+        "level_pr_ready": {
+          "title": "PR 可以合併",
+          "hint": "看護的 PR 檢查全綠、平台也能合了，或者 codeg 已經自動合併了。"
+        },
+        "level_pr": {
+          "title": "PR 的其他動態",
+          "hint": "看護的 PR：檢查沒過或又綠了、有衝突、已合併、已關閉。"
+        },
+        "routine_dispatch": {
+          "title": "例程派工作",
+          "hint": "派工作型例程每次執行時派出的工作。",
+          "auto": "直接派",
+          "ask": "每次先問我（等你確認卡）"
+        },
+        "level_routine": {
+          "title": "例程報告",
+          "hint": "你設的例程跑完有話要說時。"
+        },
+        "level_routine_paused": {
+          "title": "例程被暫停",
+          "hint": "連續失敗 3 次，或者它做事用的智能體不能用了。"
+        },
+        "level_proposal": {
+          "title": "提議：卡在你身上的",
+          "hint": "失敗沒人管、待驗收太久、PR 等你審查。"
+        },
+        "level_proposal_low": {
+          "title": "提議：其他",
+          "hint": "改動沒提交、事項太久沒動、分支落後、重複的請求。"
+        },
+        "rule_failed": {
+          "title": "失敗沒人管",
+          "hint": "派工作或看板任務失敗了一直沒人處理。卡片出在派出它的助手那裡。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_review": {
+          "title": "待驗收太久",
+          "hint": "看板任務待驗收，這一輪還沒驗收過。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_session": {
+          "title": "工作階段一直等你",
+          "hint": "任何工作階段等你核准或回答，而你不在那個工作階段裡。緊急。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_pr_review": {
+          "title": "PR 等你審查",
+          "hint": "在你盯著的專案裡；從 codeg 第一次看到這個請求時算起。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_uncommitted": {
+          "title": "改動沒提交",
+          "hint": "專案或工作樹裡有沒提交的改動。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_idle": {
+          "title": "事項太久沒動",
+          "hint": "沒收尾的事項一直沒有變化。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_behind": {
+          "title": "分支落後",
+          "hint": "助手派出的任務分支落後目標分支，而且有衝突。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_repeat": {
+          "title": "重複的請求",
+          "hint": "30 天內相近的請求到第幾次時，提議做成例程。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_suggest": {
+          "title": "助手的建議",
+          "hint": "關掉後助手不再提建議；帶 suggest 的呼叫會被告知「你現在不收建議」。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_undo": {
+          "title": "撤銷得多的改動",
+          "hint": "週回顧裡：你撤銷了不少按你的話直接做的改動時，問你要不要改成「先給我看」。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_idle_bot": {
+          "title": "閒著的助手",
+          "hint": "週回顧裡：兩週都沒被叫醒的助手，問你要不要隱藏或刪掉。",
+          "on": "開",
+          "off": "關"
+        },
+        "rule_failed_hours": {
+          "title": "失敗沒人管：多少小時後出卡",
+          "hint": "失敗沒人管：多少小時後出卡"
+        },
+        "rule_review_hours": {
+          "title": "待驗收太久：多少小時後出卡",
+          "hint": "待驗收太久：多少小時後出卡"
+        },
+        "rule_session_minutes": {
+          "title": "工作階段一直等你：多少分鐘後出卡",
+          "hint": "工作階段一直等你：多少分鐘後出卡"
+        },
+        "rule_pr_review_days": {
+          "title": "PR 等你審查：多少天後出卡",
+          "hint": "PR 等你審查：多少天後出卡"
+        },
+        "rule_uncommitted_hours": {
+          "title": "改動沒提交：多少小時後出卡",
+          "hint": "改動沒提交：多少小時後出卡"
+        },
+        "rule_idle_days": {
+          "title": "事項太久沒動：多少天後出卡",
+          "hint": "事項太久沒動：多少天後出卡"
+        },
+        "rule_repeat_count": {
+          "title": "重複的請求：第幾次時提議",
+          "hint": "重複的請求：第幾次時提議"
+        },
+        "brief": {
+          "title": "晨報",
+          "hint": "主助手每天彙整需要你的事、上次晨報以來的進展和今天的安排，在你當天第一次出現時送到。",
+          "on": "開",
+          "off": "關"
+        },
+        "brief_time": {
+          "title": "什麼時候準備",
+          "hint": "無論哪種，都在你出現時送到。",
+          "hours": "依作息，通常開始前 15 分鐘",
+          "fixed": "固定時刻"
+        },
+        "brief_at": {
+          "title": "準備時刻",
+          "hint": "晨報在這個時刻準備。"
+        },
+        "brief_needs": {
+          "title": "需要你",
+          "hint": "所有等你的事：等了多久、為什麼需要你。",
+          "on": "開",
+          "off": "關"
+        },
+        "brief_night": {
+          "title": "夜裡的進展",
+          "hint": "完成或失敗的工作、有變化的 PR、例程報告、助手替你做的事，以及昨晚做的工作怎麼樣了。",
+          "on": "開",
+          "off": "關"
+        },
+        "brief_bots": {
+          "title": "各助手",
+          "hint": "每個助手一行：做完了什麼、在做什麼、卡在哪。隱藏的不列。",
+          "on": "開",
+          "off": "關"
+        },
+        "brief_schedule": {
+          "title": "今天的安排",
+          "hint": "今天還會到的提醒和例程。",
+          "on": "開",
+          "off": "關"
+        },
+        "brief_loose": {
+          "title": "沒收尾的事",
+          "hint": "一週沒動的事項、改動一天以上沒提交的工作樹、你沒收尾的會話。",
+          "on": "開",
+          "off": "關"
+        },
+        "brief_yesterday": {
+          "title": "昨天的你",
+          "hint": "昨天在哪些專案、用了哪些 agent、開了幾個會話。",
+          "on": "開",
+          "off": "關"
+        },
+        "brief_suggestions": {
+          "title": "建議條數",
+          "hint": "晨報裡最多給幾條建議，每條寫明為什麼；0 表示不要。"
+        },
+        "wrap": {
+          "title": "收尾",
+          "hint": "今天完成的、還在跑的、明天需要你的，以及今晚助手可以做的。隨時說「今天到這」也會出。",
+          "auto": "快收工時自動出",
+          "ask": "只在我說「今天到這」時",
+          "off": "關"
+        },
+        "wrap_tonight": {
+          "title": "「今晚我可以做」",
+          "hint": "收尾時把今晚能做的工作寫成卡片，你點了才做；第二天晨報彙報結果。",
+          "on": "開",
+          "off": "關"
+        },
+        "keep_awake": {
+          "title": "今晚做時防睡眠",
+          "hint": "你點了「今晚做」的工作在跑時，電腦不會自動睡眠；只在接著電源時生效。",
+          "on": "開",
+          "off": "關"
+        },
+        "menubar": {
+          "title": "選單列顯示忙碌中的助手",
+          "hint": "助手工作時，codeg 的選單列圖示換成它的臉，不時眨眨眼。圖示旁是有未讀的助手數；選單裡列出最近的 5 個助手。",
+          "on": "開",
+          "off": "關"
+        },
+        "dock_badge": {
+          "title": "Dock 標記",
+          "hint": "codeg Dock 或工作列圖示上的數字：有未讀的助手數，不算隱藏和靜音的。",
+          "on": "有未讀的助手數",
+          "off": "關"
+        },
+        "history_sessions": {
+          "title": "檢索全部對話",
+          "hint": "codeg 裡的每個對話也能搜到：你的輸入和每回合最後的回答。關掉後從索引裡刪除。",
+          "on": "開",
+          "off": "關"
+        },
+        "history_tasks": {
+          "title": "檢索看板任務",
+          "hint": "看板任務也能搜到：標題、要求和結果。關掉後從索引裡刪除。",
+          "on": "開",
+          "off": "關"
+        },
+        "reactions": {
+          "title": "記錄你對卡片的反應",
+          "hint": "codeg 記下你對每類卡片的處理方式。同一條提議卡你連續關掉 3 次，就降一級，週回顧裡會告訴你。關掉後不再降級，已降的恢復原級。",
+          "on": "開",
+          "off": "關"
+        },
+        "weekly_review": {
+          "title": "週回顧",
+          "hint": "用數字回顧一週：派出的活、替你代答的、按天和按助手的用量，以及 codeg 調整了什麼。",
+          "brief": "每週第一個工作日的晨報",
+          "wrap": "週五的收尾",
+          "off": "關"
+        },
+        "level_brief": {
+          "title": "晨報與收尾",
+          "hint": "晨報或收尾寫好了。"
+        },
+        "flush": {
+          "title": "壓縮前記要點",
+          "hint": "codeg 壓縮助手的上下文之前，先讓它把今天到現在的要點記進日誌，值得留下的不會遺失。最多兩分鐘，之後照常壓縮。",
+          "on": "開",
+          "off": "關"
+        },
+        "level_memory": {
+          "title": "記憶更新",
+          "hint": "助手改了它的記憶、人設或規則，包括夜間整理和流程技能。"
+        },
+        "plans": {
+          "title": "計畫",
+          "hint": "助手把大事拆成步驟的計畫。",
+          "auto": "拆好就開始",
+          "ask": "先給我看（按了「開始」才推進）"
+        },
+        "level_plan": {
+          "title": "計畫完成",
+          "hint": "一個計畫的步驟全部做完。"
+        },
+        "level_plan_stuck": {
+          "title": "計畫卡住",
+          "hint": "有一步失敗了，而且一直沒做成。"
+        },
+        "tidy": {
+          "title": "整理記憶與流程技能",
+          "hint": "每晚你停下之後，各助手整理自己的記憶、人設和規則；一串工作順利做完後，把做法寫成流程技能。",
+          "auto": "自動生效，出卡可撤銷",
+          "draft": "先給我看（出草稿卡，點了才生效）",
+          "off": "不做"
+        }
+      },
+      "workdir": {
+        "title": "工作目錄",
+        "hint": "它存放人設、規則和記憶的地方，用 git 管理。目前是：{current}。換目錄會新開一個會話，舊目錄原樣保留。",
+        "placeholder": "預設：在資料目錄裡",
+        "useDefault": "用預設",
+        "apply": "遷移",
+        "saved": "工作目錄已遷移。"
+      },
+      "changed": {
+        "on": "開",
+        "off": "關",
+        "default": "預設"
+      },
+      "brain": "大腦",
+      "about": {
+        "followSystem": "跟隨系統",
+        "followSystemZone": "跟隨系統（{zone}）",
+        "zoneSearch": "搜尋時區",
+        "zoneNoMatch": "沒有符合的時區。",
+        "zoneNow": "那裡現在是 {time}。",
+        "hoursTitle": "codeg 看到的作息（最近 {days} 天）",
+        "workday": "工作日",
+        "restday": "週末",
+        "span": "{start}–{end}",
+        "spanOvernight": "{start}–隔天 {end}",
+        "learnedFrom": "根據 {count} 天",
+        "stillLearning": "還在學，先用預設值",
+        "recordOff": "記錄已關：作息用預設值。",
+        "presentNow": "你現在在 codeg 裡。",
+        "lastActive": "最近一次操作：{time}。",
+        "notSeen": "codeg 啟動以來還沒看到你的操作。",
+        "note": "你此刻在不在仍會即時判斷（有焦點的視窗、最近兩分鐘有操作），用來決定什麼時候通知你；這個不會被記下。提醒上的「明天上午」依你一天通常開始的時間。",
+        "history": {
+          "title": "時光機",
+          "hint": "之前說過、做過的事都能搜：你在助手名字旁的搜尋裡搜，助手也會自己搜。各助手的對話和它們之間的訊息總能搜到。",
+          "rebuild": "重建索引",
+          "rebuilt": "正在重建索引…",
+          "reading": "正在讀取對話：已讀 {done}/{total} 個（共 {documents} 筆）。",
+          "ready": "已是最新：{total} 個對話，共 {documents} 筆。",
+          "readyNoSessions": "共 {documents} 筆。"
+        },
+        "setByYou": "你設的",
+        "change": "修改",
+        "backToLearned": "改回學到的（{span}）",
+        "backToLearning": "改回自動學習",
+        "start": "開始",
+        "end": "結束",
+        "save": "儲存",
+        "cancel": "取消",
+        "seen": {
+          "title": "codeg 看到的",
+          "hint": "來自 codeg 裡的對話（不含助手自己的），不讀對話內容。設為不關注的專案，不會告訴助手，在「需要你」裡排在後面。",
+          "projects": "專案（最近 7 / 30 天）",
+          "noProjects": "還沒有專案。",
+          "projectCounts": "{recent} / {all} 個對話",
+          "mind": "恢復關注",
+          "dontMind": "不關注",
+          "agents": "agent 佔比（最近 30 天）"
+        },
+        "reactions": {
+          "none": "最近 30 天沒有卡片。",
+          "off": "不記錄：卡片不會自動降級。",
+          "kind": "卡片",
+          "raised": "出現",
+          "acted": "處理",
+          "dismissed": "關掉",
+          "undone": "撤銷",
+          "wait": "用時",
+          "minutes": "{n} 分鐘",
+          "kinds": {
+            "proposal": "待確認的卡片",
+            "uncertain": "不確定的步驟",
+            "loop": "停下的往來",
+            "changed": "已改",
+            "choice": "選擇",
+            "reminder": "提醒",
+            "acceptance": "驗收",
+            "forge": "對外動作",
+            "pr": "PR",
+            "routine": "例程",
+            "rule": "提議",
+            "memory": "記憶",
+            "tidy": "整理記憶",
+            "skill": "流程技能"
+          }
+        },
+        "clear": {
+          "title": "清空學到的",
+          "hint": "忘掉記下的在場時間和自動降級；專案、agent 和卡片反應從現在起重新算。你自己設的保留。",
+          "clearedAt": "上次清空：{when}。",
+          "button": "清空…",
+          "confirmTitle": "清空 codeg 學到的？",
+          "confirmBody": "作息回到預設值，等 codeg 重新學（你設的作息保留）；自動降級的提議卡恢復原級。清空後無法復原。",
+          "cancel": "取消",
+          "confirm": "清空"
+        }
+      },
+      "notifyPage": {
+        "notify": "通知我",
+        "notifyHint": "做完事情或在等你時通知你",
+        "muted": "靜音",
+        "mutedHint": "不跳出它的系統通知；它說的照樣算未讀。",
+        "hidden": "隱藏",
+        "hiddenHint": "照常執行，但不通知你、不在名冊裡顯示、不計入徽章；名冊底部「已隱藏 N 個」點開能看。"
+      },
+      "grade": {
+        "firstPass": "一次過 {rate}%（{pass}/{settled}）",
+        "average": "平均 {time}",
+        "minutes": "{n} 分鐘",
+        "hours": "{h} 小時 {m} 分",
+        "apart": "按智能體和方式",
+        "byBot": "按助手和方式",
+        "someone": "早先的派工",
+        "unjudged": "派了 {count} 件，還沒有做完的"
+      },
+      "processSkillHint": "助手自己寫下的做事流程：你說要做這件事時，它照著走。你在這裡改的，儲存就生效；停用後不再載入。",
+      "skillOff": "已停用",
+      "skillTurnOn": "啟用",
+      "skillTurnOff": "停用",
+      "skillTurnedOn": "已啟用 {name}",
+      "skillTurnedOff": "已停用 {name}",
+      "deleteSkill": "刪除技能",
+      "confirmDeleteSkillHint": "刪除這個流程技能？它的資料夾會從工作目錄裡刪掉。",
+      "skillDeleted": "已刪除 {name}",
+      "personaUnwritten": "還沒寫人設。它會在自我介紹、你交代工作、每晚整理時自己補，你也可以直接寫。",
+      "projects": {
+        "about": "助手會在這些專案裡替你留意等你審查的 PR，第一次見面時也從這裡找能幫你做的事。",
+        "scope": "盯哪些專案",
+        "all": "所有專案",
+        "allHint": "以後新加的也算。",
+        "only": "只盯選中的專案",
+        "onlyHint": "新加的專案不會自動加入，要盯就在這裡勾上。",
+        "loading": "正在讀取你的專案…",
+        "empty": "codeg 裡還沒有專案。",
+        "openFolder": "開啟一個專案資料夾",
+        "onForge": "在 {forge} 上",
+        "noAccount": "在 {forge} 上，還沒連帳號",
+        "noForge": "沒有連著程式碼託管",
+        "connectAccount": "連接帳號",
+        "note": "關閉的專案不會被盯，重新開啟後自動回來。"
+      },
+      "workTitle": "做事用的智能體",
+      "workHint": "派給它的事——寫程式、跑指令——都在這個智能體上做。",
+      "workSame": "和大腦一樣",
+      "workOther": "另選",
+      "workSameHint": "照抄大腦的智能體和全部選項；之後兩邊各自獨立。",
+      "workUnavailable": "{agent} 用不了（沒裝或被停用）：另選一個。",
+      "instructionsTitle": "做事時的常駐指令",
+      "instructionsHint": "每次它開工作會話（派活、在一般會話裡被 @）時都會帶上；大腦看不到。",
+      "instructionsPlaceholder": "它做事時要遵守的約定、要檢查的事、要避開的坑……",
+      "instructionsTooLong": "常駐指令最多 {max} 個字。",
+      "noBrainYet": "它還沒有大腦：初始化主助手後，會照抄一份主助手的大腦。"
+    },
+    "statusWord": {
+      "idle": "閒置",
+      "replying": "正在回覆…",
+      "compacting": "正在整理上下文…",
+      "waiting": "等你確認",
+      "elsewhere": "在另一個程序執行（唯讀）",
+      "open": "查看狀態",
+      "noting": "記要點…"
+    },
+    "menu": {
+      "more": "更多",
+      "showPanel": "顯示輔助面板",
+      "hidePanel": "隱藏輔助面板",
+      "settings": "個人助理設定",
+      "viewSession": "查看底層工作階段",
+      "compact": "壓縮上下文",
+      "compactHint": "現在就壓縮工作階段的上下文",
+      "stopCompaction": "停止整理",
+      "stopReply": "停止回覆",
+      "newSession": "開啟新工作階段…",
+      "stopAll": "全部停下",
+      "stopAllHint": "停下回覆、它派出的工作，以及對方還沒開始處理的訊息",
+      "stoppedAll": "這個助手手上的事已全部停下"
+    },
+    "newSession": {
+      "title": "開啟新工作階段？",
+      "description": "你的下一則訊息會在一個新的底層工作階段裡繼續。人設、記憶、進行中的事項都會帶過去，這裡的對話照常保留。",
+      "cancel": "取消",
+      "confirm": "開啟新工作階段",
+      "queued": "下一則訊息會在新工作階段裡繼續。"
+    },
+    "time": {
+      "yesterday": "昨天 {time}"
+    },
+    "actions": {
+      "quote": "引用",
+      "copy": "複製",
+      "copySelection": "複製選取內容",
+      "copied": "已複製",
+      "copyFailed": "複製失敗",
+      "stop": "停止回覆",
+      "timeTook": "{time} · 用時 {took}"
+    },
+    "owner": {
+      "unread": "未讀",
+      "unfinished": "未處理完",
+      "resend": "重新傳送",
+      "resent": "已重新傳送",
+      "merged": "已併入進行中的回覆",
+      "received": "已收到",
+      "mentioned": "你提到了「{keyword}」——提醒：{text}"
+    },
+    "quote": {
+      "you": "你",
+      "dispatch": "派工：{title}",
+      "attachment": "[附件]",
+      "noText": "（沒有文字）",
+      "unavailable": "原訊息無法取得",
+      "jump": "跳到原訊息",
+      "dismiss": "取消引用",
+      "preview": "原訊息",
+      "previewHint": "被引用的訊息，時間太早，沒有載入到這裡。",
+      "reminder": "提醒：{summary}"
+    },
+    "step": {
+      "awaiting": "等你確認：{title}",
+      "anAction": "一項操作",
+      "thinking": "思考中…",
+      "compacting": "正在整理上下文…",
+      "plan": "更新計畫",
+      "planNamed": "計畫：{title}",
+      "own": {
+        "dispatch": "派出一項工作",
+        "dispatch_followup": "繼續一項工作",
+        "dispatch_wait": "等派出的工作回來",
+        "dispatch_stop": "停掉派出的工作",
+        "items": "整理進行中的事項",
+        "timeline_read": "翻看對話紀錄",
+        "project_list": "查看專案"
+      },
+      "kind": {
+        "read": "讀取檔案",
+        "edit": "修改檔案",
+        "delete": "刪除檔案",
+        "move": "移動檔案",
+        "search": "搜尋",
+        "execute": "執行命令",
+        "think": "思考中…",
+        "fetch": "開啟網頁",
+        "plan": "更新計畫",
+        "compact": "正在整理上下文…",
+        "question": "向你提問",
+        "other": "使用工具"
+      }
+    },
+    "reply": {
+      "starting": "開始處理",
+      "noteDispatched": "已派出 {count} 項工作",
+      "noteContinued": "已繼續 {count} 項工作",
+      "noteNothing": "已處理，沒有文字回覆",
+      "answeredPermission": "你選擇了：{option}",
+      "answeredQuestion": "你的回答：{answer}",
+      "answeredSkipped": "你跳過了這個問題",
+      "answeredPlan": {
+        "approve": "你核准了計畫",
+        "request_changes": "你要求修改計畫",
+        "abandon": "你放棄了計畫"
+      },
+      "stopped": "已停止",
+      "errorMidway": "回覆中途出錯：{error}",
+      "interrupted": "這次回覆沒有完成：{reason}",
+      "truncated": "回覆達到長度上限，被截斷了",
+      "nothingNew": "這次沒有新情況。按時執行時沒有新情況，就不打擾你。",
+      "preempted": "讓位給你的訊息",
+      "resend": "{count, plural, one {重新傳送這則訊息} other {重新傳送這 # 則訊息}}",
+      "why": {
+        "connection": "連線中斷了",
+        "overflow": "上下文滿了",
+        "rejected": "agent 拒絕了",
+        "error": "出錯了",
+        "restart": "codeg 重新啟動了",
+        "unknown": "意外停止了"
+      },
+      "requestInputs": "這一回合同時在處理幾件事：{list}"
+    },
+    "dispatchCard": {
+      "continue": "繼續：{title}",
+      "notSent": "沒送出",
+      "more": "還有 {count} 項",
+      "doneWhen": "驗收標準",
+      "check": "驗收檢查",
+      "checkRound": "驗收檢查 · 第 {round} 輪"
+    },
+    "event": {
+      "acceptanceEvidence": "驗收依據",
+      "someone": "職務助理",
+      "replacedBy": "已由「{title}」接手",
+      "more": "展開",
+      "less": "收合",
+      "source": "來源",
+      "showText": "展開原文",
+      "hideText": "收起原文",
+      "fold": "收合",
+      "makeRoutine": "設成例程…",
+      "note": {
+        "boot": "codeg 重新啟動了",
+        "lost": "工作階段連線中斷了",
+        "gone": "看板上的任務被刪除了"
+      },
+      "retry": {
+        "pending": "正在自動重試（第 {attempt}/{max} 次）…",
+        "retried": "已自動重試（第 {attempt}/{max} 次）",
+        "failed": "自動重試失敗：{error}",
+        "asked": "已問你要不要重試",
+        "exhausted": "已經自動重試 {max} 次，交給你決定"
+      }
+    },
+    "overview": {
+      "editBrain": "更換它執行的 agent",
+      "lastCompaction": "上次整理：{when}，{outcome}{range}",
+      "runLog": "執行紀錄",
+      "details": "執行詳情",
+      "command": "壓縮命令"
+    },
+    "runLog": {
+      "empty": "還沒有紀錄。",
+      "newSession": "在 {agent} 上換了新工作階段（{reason}）",
+      "pendingSwitch": "下一則訊息起換新工作階段（{reason}）",
+      "reconnected": "重新連上了原工作階段",
+      "optionsChanged": "選項變了",
+      "range": " · {before}% → {after}%",
+      "by": {
+        "auto": "（自動）",
+        "owner": "（你發起的）",
+        "agent": "（agent 自己）"
+      },
+      "compaction": {
+        "ok": "上下文已整理{who}{range}",
+        "failed": "整理上下文失敗{who}{range}",
+        "canceled": "整理上下文被停止{who}{range}"
+      },
+      "compactionPaused": "連續兩次整理都沒有作用，這個工作階段暫停了自動整理",
+      "overflowNewSession": "整理後上下文又溢出了，換了新工作階段",
+      "overflowCompact": "上下文溢出，已自動整理",
+      "turnStopped": "一次回覆被停止了",
+      "turnFailed": "一次回覆失敗了：{error}",
+      "turnInterrupted": "一次回覆沒有完成",
+      "turnPreempted": "一次回覆讓位給了你的訊息",
+      "workdirChanged": "工作目錄換到了 {path}",
+      "notesFirst": "（先記了要點）"
+    },
+    "matters": {
+      "noneOpen": "目前沒有進行中的事項。",
+      "origin": "跳到來源訊息"
+    },
+    "notice": {
+      "open": "提議 · 等你確認",
+      "acted": "已照這個提議做了",
+      "dismissed": "沒有採用這個提議",
+      "acting": "正在執行…",
+      "unknown": "不知道執行了沒有",
+      "unknownHint": "執行到一半被打斷了，codeg 不知道做成沒有；沒有自動再做。",
+      "followupOf": "繼續「{title}」",
+      "intent": {
+        "revise": "退回修改",
+        "continue": "接著做",
+        "question": "追問",
+        "verify": "自我檢查"
+      },
+      "accept": "照這個做",
+      "dismiss": "不用",
+      "again": "再執行一次",
+      "failed": "無法執行：{error}",
+      "uncertain": {
+        "open": "這一步不知道做成沒有",
+        "hint": "傳送這條續作時被打斷了，codeg 不知道執行者收到沒有；沒有自動重送。",
+        "look": "查看",
+        "again": "再送一次",
+        "dismiss": "不用",
+        "acting": "正在重送…",
+        "acted": "已重送",
+        "dismissed": "不再處理",
+        "resolved": "確認已送達"
+      },
+      "loop": {
+        "open": "往來已停下 · 等你處理",
+        "noProgress": "{a} 和 {b} 來回 {count} 則都沒有進展，codeg 讓它們停下了。",
+        "cycle": "{a} 傳給了 {b}，而 {b} 自己也在這條往來上等回覆：繞成了一圈，codeg 讓它停下了。",
+        "refused": "沒送出的：「{text}」",
+        "look": "查看往來",
+        "goOn": "讓它們繼續",
+        "mine": "我來處理",
+        "continued": "已讓它們繼續",
+        "takenOver": "交給你了"
+      },
+      "stopped": {
+        "this": "已停下，連同它帶起的事",
+        "all": "已全部停下",
+        "work": "停下了 {count} 件工作",
+        "messages": "收回了 {count} 則訊息",
+        "messageTo": "給 {name}：{text}",
+        "notStopped": "對方已經在處理，沒有停：",
+        "onIt": "{name} 已經在看「{text}」",
+        "stopToo": "也停下 {name} 的這一件",
+        "alsoStopped": "也停下了"
+      },
+      "confirm": {
+        "open": "等你確認",
+        "acted": "已確認，已送出",
+        "dismissed": "沒送出",
+        "accept": "確認，送出",
+        "dismiss": "不送了",
+        "messageTo": "傳給 {name} 的訊息"
+      },
+      "changed": {
+        "applied": "已按你的話改了",
+        "accepted": "已改",
+        "undone": "已復原",
+        "dismissed": "沒改",
+        "suggested": "建議改一項設定",
+        "show": "按你的話要改 · 等你確認",
+        "line": "{name} 按你的話改了",
+        "quote": "你說：「{quote}」",
+        "reason": "理由：{reason}",
+        "kept": "這幾項之後又改過，沒有復原：{items}",
+        "accept": "改成這樣",
+        "dismiss": "不用",
+        "undo": "復原",
+        "seeSettings": "去設定裡看",
+        "team": {
+          "of": "{name} · {field}",
+          "botField": {
+            "name": "名字",
+            "avatar": "頭像",
+            "brain": "大腦",
+            "notify": "通知我",
+            "muted": "靜音",
+            "hidden": "隱藏",
+            "persona": "人設",
+            "work_agent": "做事用的 agent"
+          },
+          "avatarOther": "自訂頭像",
+          "empty": "（空）",
+          "nothingSet": "未設定",
+          "personaNow": "現在",
+          "personaNew": "改成"
+        },
+        "uncheckedQuote": "主助手說是你說的：「{quote}」，但這一輪你沒打過"
+      },
+      "retryOf": "重試「{title}」",
+      "tonight": {
+        "open": "今晚我可以做",
+        "acted": "今晚做",
+        "dismissed": "今晚不做",
+        "accept": "今晚做",
+        "dismiss": "不用",
+        "awake": "電腦會保持喚醒到這些工作結束。"
+      }
+    },
+    "exchange": {
+      "sentTo": "已傳訊息給 <peer></peer>",
+      "from": "訊息來自 <peer></peer>",
+      "sentToName": "已傳訊息給 {name}",
+      "fromName": "訊息來自 {name}",
+      "exchanged": "與 {names} 往來 {count} 則訊息",
+      "state": {
+        "stopped": "已收回",
+        "looped": "因循環停下",
+        "canceled": "已取消"
+      },
+      "sheetTitle": "{a} ⇄ {b}",
+      "openPeer": "開啟{name}的對話",
+      "sheetHint": "這兩個助手在這條往來線上互相寫的全部訊息。",
+      "unavailable": "往來紀錄讀不出來：{error}"
+    },
+    "mirror": {
+      "question": "{name} 問你",
+      "permission": "{name} 請你核准",
+      "answered": "已回答",
+      "skipped": "已略過",
+      "withdrawn": "已不再需要",
+      "resolved": "已處理"
+    },
+    "bots": {
+      "new": "新增助手",
+      "copyName": "{name} 副本",
+      "copied": "已複製成 {name}",
+      "copy": "複製",
+      "deleteAction": "刪除",
+      "face": {
+        "shape": "形狀",
+        "color": "顏色",
+        "tooLarge": "圖片太大了。",
+        "unreadable": "這個檔案無法讀取成圖片。",
+        "shapes": {
+          "ring": "戒指",
+          "terminal": "終端機",
+          "braces": "大括號",
+          "shield": "盾牌",
+          "chip": "晶片",
+          "bug": "小蟲",
+          "cursor": "滑鼠指標",
+          "gear": "齒輪",
+          "file": "程式碼檔案",
+          "magnifier": "放大鏡",
+          "package": "包裹",
+          "rocket": "火箭",
+          "mug": "咖啡杯"
+        },
+        "colors": {
+          "black": "黑",
+          "brown": "棕",
+          "red": "紅",
+          "orange": "橙",
+          "yellow": "黃",
+          "green": "綠",
+          "teal": "青",
+          "blue": "藍",
+          "purple": "紫",
+          "magenta": "洋紅",
+          "gray": "灰"
+        },
+        "edit": "編輯頭像",
+        "reset": "重設",
+        "pages": {
+          "bot": "模型",
+          "make": "文字",
+          "upload": "上傳"
+        },
+        "dropHint": "拖曳或貼上圖片",
+        "or": "或",
+        "pickFile": "選擇本機圖片",
+        "dragHint": "拖動以調整位置",
+        "zoom": "縮放",
+        "zoomIn": "放大",
+        "zoomOut": "縮小",
+        "restart": "重新開始",
+        "setAvatar": "設定頭像",
+        "monogram": "名字首字",
+        "typeOne": "輸入一個字或表情符號",
+        "useIt": "用它"
+      },
+      "create": {
+        "title": "新增助手",
+        "description": "名字和幾句人設；大腦和主助手一樣。",
+        "name": "名字",
+        "namePlaceholder": "例如：程式碼審查",
+        "cancel": "取消",
+        "create": "建立",
+        "persona": "人設",
+        "personaPlaceholder": "比如：我負責程式碼審查，看改動對不對、測試夠不夠。",
+        "personaHint": "一兩句：它是誰、什麼事找它。留空也行，它會先做自我介紹，之後按你交代的和它做過的事自己補。",
+        "workSameHint": "大腦用主助手的；做事照抄一份大腦，選項全都一樣，之後各自獨立。兩樣都能在它的頁面裡改。"
+      },
+      "roster": {
+        "title": "助手",
+        "add": "新增助手",
+        "pinned": "置頂",
+        "others": "其他",
+        "muted": "已靜音",
+        "handWork": "手上的工作",
+        "awaiting": "在等回覆",
+        "nothing": "手上沒有工作",
+        "groupName": "群組名稱",
+        "newGroupTitle": "新群組",
+        "newGroupSave": "移過去",
+        "collapse": "收合 {name}",
+        "expand": "展開 {name}",
+        "menu": {
+          "pin": "置頂",
+          "unpin": "取消置頂",
+          "moveTo": "移到群組",
+          "newGroup": "新群組…",
+          "noGroup": "不分群組",
+          "hide": "隱藏",
+          "show": "取消隱藏",
+          "mute": "靜音",
+          "unmute": "取消靜音",
+          "markUnread": "標為未讀",
+          "markRead": "標為已讀",
+          "notifyOn": "通知我",
+          "copy": "複製…",
+          "stopAll": "全部停下",
+          "delete": "刪除…",
+          "details": "查看詳情"
+        },
+        "mergeable": "#{id} 可以合併了：{title}",
+        "prReady": "可以合併了：{text}",
+        "prFailed": "#{id} 檢查沒過：{title}",
+        "prStuck": "#{id} 有衝突：{title}",
+        "prChecks": "#{id} 等檢查 {passed}/{total}",
+        "resize": "調整助手列表寬度",
+        "dropNewGroup": "拖到這裡新增群組",
+        "switch": "切換助手",
+        "addShort": "新增助手",
+        "opening": "正在開啟 {name}…",
+        "noBrainLine": "初始化主助手後可以和它對話",
+        "hiddenMark": "已隱藏",
+        "setUpPrimary": "初始化主助手",
+        "filter": "篩選",
+        "showHidden": "顯示已隱藏的助手（{count}）"
+      },
+      "choice": {
+        "other": "其他",
+        "otherPlaceholder": "自己寫…",
+        "send": "傳送",
+        "answered": "你選了：{choice}",
+        "answeredOwn": "你寫了：{text}",
+        "noProjects": "codeg 裡還沒有開啟的專案。",
+        "from": {
+          "given": "照你說的",
+          "other_config": "沿用別的助手做事的設定",
+          "agent": "agent 自己的預設值"
+        },
+        "progress": "{at} / {total}",
+        "several": "可複選",
+        "back": "上一題",
+        "next": "下一題",
+        "submit": "提交",
+        "skip": "略過",
+        "noLongerAsked": "這個問題已不再等你回答",
+        "otherWrote": "其他：{text}"
+      },
+      "changed": {
+        "applied": "建好了一個助手",
+        "show": "要建這個助手嗎？（你要求這類改動先給你看）",
+        "suggested": "建議：新增一個助手",
+        "dismissed": "沒建立",
+        "undone": "已復原",
+        "open": "開啟",
+        "undoOne": "復原",
+        "undoneOne": "已復原",
+        "quote": "你說：「{quote}」",
+        "reason": "理由：{reason}",
+        "accept": "建立",
+        "dismiss": "不用",
+        "undo": "復原",
+        "undoAll": "全部復原",
+        "uncheckedQuote": "主助手說是你說的：「{quote}」，但這一輪你沒打過",
+        "persona": "人設",
+        "workFilled": "做事用 {agent}，補了 {count} 項選項",
+        "workOn": "做事用 {agent}"
+      },
+      "delete": {
+        "title": "刪除 {name}？",
+        "description": "它的記憶和對話會一起刪除。主助手不能刪除。",
+        "running": "它派出的 {count} 項工作還在執行：",
+        "handOver": "交給主助手接著跟進（建議）",
+        "stop": "停下",
+        "messages": "發給它的 {count} 則訊息還沒回覆：退回給發訊息的助手。",
+        "listJoiner": "、",
+        "dropWorkdir": "一起刪除它的工作目錄",
+        "workdirCustom": "這個目錄是你選的，codeg 不會動它。",
+        "cancel": "取消",
+        "confirm": "刪除",
+        "plans": "它的 {count} 個計畫會停下：{titles}。",
+        "planSteps": "別的計畫裡有 {count} 步交給了它：{steps}。輪到時，由那個計畫的助手另挑一個。"
+      },
+      "edit": {
+        "name": "名稱"
+      },
+      "personaUnwritten": "還沒寫人設"
+    },
+    "face": {
+      "idle": "閒著",
+      "thinking": "在想",
+      "working": "在忙",
+      "waiting": "等你",
+      "stuck": "等你好一陣子了",
+      "done": "剛做完",
+      "failed": "出了問題",
+      "sleeping": "在睡覺",
+      "unread": "有未讀",
+      "stale": "暫時無法取得狀態",
+      "label": "{name}，{state}",
+      "labelUnread": "{name}，{state}，有未讀"
+    },
+    "activity": {
+      "think0": "正在仔細想",
+      "think1": "正在琢磨",
+      "think2": "正在理清思路",
+      "work0": "正在推進",
+      "work1": "正在處理",
+      "work2": "正在搞定",
+      "work3": "正在一步步推進",
+      "work4": "正在收尾",
+      "reply": "正在寫回覆",
+      "read": "正在讀 {target}",
+      "readSome": "正在讀檔案",
+      "edit": "正在改 {target}",
+      "editSome": "正在改檔案",
+      "search": "正在找「{target}」",
+      "searchSome": "正在搜尋",
+      "fetch": "正在查資料",
+      "execute": "正在跑幾個命令",
+      "test": "正在跑測試",
+      "wait": "正在等結果",
+      "commit": "正在提交",
+      "plan": "正在擬計畫",
+      "compact": "正在整理上下文",
+      "dispatch": "正在交給 {target}",
+      "dispatchSome": "正在派工",
+      "followup": "正在跟進 #{id}",
+      "followupSome": "正在跟進",
+      "stop": "停掉 #{id}",
+      "stopSome": "停掉工作",
+      "message": "正在問 {target}",
+      "messageSome": "正在問其他助手",
+      "awaitingReply": "等 {name} 回覆",
+      "needsAnswer": "需要你回答",
+      "needsApproval": "需要你核准",
+      "workPrefix": "#{id} {title}：{activity}",
+      "notes": "壓縮前記要點"
+    },
+    "did": {
+      "edit": "改了 {target} +{added} −{removed}",
+      "editPlain": "改了 {target}",
+      "editSome": "改了檔案",
+      "test": "跑完測試，{passed} 項通過",
+      "testFailed": "跑完測試，{passed} 項通過，{failed} 項失敗",
+      "testExit": "跑完測試，結束代碼 {code}",
+      "testBad": "跑完測試，沒通過",
+      "testPlain": "跑完測試",
+      "execute": "跑了 {target}",
+      "executeExit": "跑了 {target}，結束代碼 {code}",
+      "executeBad": "跑了 {target}，失敗了",
+      "executeSome": "跑了一個命令",
+      "executeSomeBad": "跑了一個命令，失敗了",
+      "read": "讀了 {target}",
+      "readSome": "讀了檔案",
+      "search": "找了「{target}」",
+      "searchHits": "找了「{target}」，{hits} 筆結果",
+      "searchSome": "搜尋了一下",
+      "commit": "提交了：{target}",
+      "commitPlain": "提交了",
+      "dispatch": "交給了 {target}：#{id}",
+      "dispatchPlain": "派出了 #{id}",
+      "dispatchSome": "派出了工作",
+      "followup": "跟進了 #{id}",
+      "followupSome": "跟進了",
+      "stop": "停掉了 #{id}",
+      "stopSome": "停掉了工作",
+      "message": "已傳訊息給 {target}",
+      "messageSome": "傳了訊息",
+      "think": "想了想",
+      "reply": "寫了回覆",
+      "plan": "擬了計畫",
+      "compact": "整理了上下文",
+      "fetch": "查了資料",
+      "question": "問了你：{target}",
+      "questionSome": "問了你",
+      "other": "{target}",
+      "otherPlain": "做了一步",
+      "notes": "記下了今天的要點"
+    },
+    "needs": {
+      "answer": "需要你回答：{text}",
+      "approval": "需要你核准：{text}",
+      "you": "需要你處理：{text}",
+      "answerPlain": "需要你回答",
+      "approvalPlain": "需要你核准",
+      "youPlain": "需要你處理",
+      "acceptance": "驗收要你決定：{text}",
+      "acceptancePlain": "驗收要你決定"
+    },
+    "statusLine": {
+      "steps": "這一回合的步驟",
+      "loading": "正在讀取步驟…",
+      "empty": "還沒有步驟",
+      "fold": "收合步驟",
+      "openWork": "開啟這項工作",
+      "replied": "回覆完成",
+      "workDone": "工作完成",
+      "notFinished": "沒能完成"
+    },
+    "sending": {
+      "waking": "正在喚醒 {name}…",
+      "afterTurn": "等這一回合結束",
+      "yielding": "正在讓位"
+    },
+    "pills": {
+      "attention": "{count} 項需要你留意",
+      "dismissAttention": "先不提示，有新的需要留意時再顯示",
+      "newMessages": "新訊息",
+      "toBottom": "回到最新"
+    },
+    "detail": {
+      "title": "詳情",
+      "close": "收合詳情",
+      "tabs": {
+        "activity": "動態",
+        "output": "產出",
+        "workspace": "工作區",
+        "stats": "統計"
+      },
+      "sections": {
+        "today": "今日",
+        "matters": "事項",
+        "data": "資料",
+        "routines": "例程"
+      },
+      "notify": "通知我",
+      "notifyHint": "做完事情或在等你時通知你",
+      "item": {
+        "act": "到點去做"
+      },
+      "output": {
+        "allTitle": "全部產出",
+        "clear": "顯示全部",
+        "tasksSummary": "最近 {count} 個任務",
+        "outcomeDone": "已完成",
+        "outcomeFailed": "失敗",
+        "outcomeClosed": "已關閉",
+        "outcomeOpen": "待處理",
+        "files": "{count} 個檔案",
+        "moreFiles": "另有 {count} 個檔案",
+        "all": "全部",
+        "tasks": "任務",
+        "reports": "報告",
+        "docs": "文件",
+        "empty": "還沒有產出",
+        "doc": "文件"
+      },
+      "workspace": {
+        "empty": "目前沒有在跑的工作",
+        "viewSession": "查看工作階段",
+        "emptyHint": "派出去的工作在執行時，會顯示在這裡。",
+        "whose": "{name} 的工作區"
+      },
+      "notifyOn": "已開啟",
+      "notifyOff": "已關閉"
+    },
+    "ladder": {
+      "working": "在做",
+      "waiting_you": "等你處理",
+      "mergeable": "可合併",
+      "merging": "正在合併",
+      "pr_open": "已提 PR",
+      "merged": "已合併",
+      "done": "已完成",
+      "failed": "失敗",
+      "paused": "暫停",
+      "canceled": "已取消",
+      "handed_over": "已接手",
+      "checking": "檢查中",
+      "waiting_checks": "等檢查",
+      "waiting_checks_n": "等檢查 {passed}/{total}",
+      "checks_failed": "檢查沒過",
+      "stuck": "卡住",
+      "pr_closed": "PR 已關閉"
+    },
+    "taskCard": {
+      "diff": "<add>+{added}</add> <del>−{removed}</del>，{files} 個檔案",
+      "diffOnly": "<add>+{added}</add> <del>−{removed}</del>",
+      "viewPr": "檢視 PR",
+      "openSession": "開啟會話",
+      "stop": "停止",
+      "prOpened": "已提 PR",
+      "prNotTracked": "codeg 沒在看護它",
+      "pastStopping": "已經做完或正在合併，停不下來了",
+      "alreadyStopped": "已經停了——{who}",
+      "changed": "這一項剛有變化，已為你重新整理",
+      "boardRefused": "看板現在不能取消它的任務（正在合併或已完成）",
+      "prChecks": "檢查 {passed}/{total} 通過",
+      "prChecksFailed": "{n} 個沒過",
+      "prChecksRunning": "{n} 個在跑",
+      "prChecksUnknown": "檢查狀態未知",
+      "prNoChecks": "沒有設定檢查",
+      "prWaitsOnForge": "平台還不讓合併（{state}）",
+      "prNoConflict": "沒有衝突",
+      "prHead": "頭提交 {head}",
+      "prNotWatched": "已不再看護",
+      "prStale": "PR 狀態可能已過時（上次讀到 {time}）"
+    },
+    "ask": {
+      "heading": {
+        "question": "做事時遇到一個問題",
+        "plan": "做事時要你批准計畫"
+      },
+      "someone": "執行者",
+      "mirror": "來自 {name} 替你接手的工作",
+      "state": {
+        "asking": "{name} 正在代你回答…",
+        "forwarded": "等你回答",
+        "submitting": "正在送出…",
+        "withdrawn": "已撤回，不再等回答"
+      },
+      "why": {
+        "assistant": "{name} 拿不準，轉給了你",
+        "settings": "你的設定讓這類問題交給你",
+        "secret": "這是要填密鑰的問題",
+        "no_brain": "沒有可代答的助理",
+        "turn_ended": "{name} 這一回合結束了，沒有回答",
+        "turn_failed": "{name} 這一回合沒跑完就失敗了",
+        "timeout": "{name} 10 分鐘沒有回答",
+        "handed_over": "你接手了這件工作"
+      },
+      "suggestion": "{name} 傾向於：{suggestion}",
+      "reason": "依據：{reason}",
+      "openSession": "開啟工作階段",
+      "answer": {
+        "skipped": "略過",
+        "empty": "沒有回答",
+        "approved": "批准了計畫",
+        "revised": "要求修改計畫",
+        "revisedWith": "要求修改：{feedback}",
+        "abandoned": "放棄了計畫",
+        "approvedAs": "批准了計畫（{option}）",
+        "sentBackAs": "退回了計畫（{option}）"
+      },
+      "by": {
+        "assistant": "{name} 代答：{answer}",
+        "ownerSession": "你在工作階段裡回答了：{answer}",
+        "ownerPage": "你在助手頁面回答了：{answer}",
+        "owner": "你回答了：{answer}",
+        "channel": "從聊天頻道回答了：{answer}",
+        "policy": "由執行的策略回答了：{answer}",
+        "someone": "已回答：{answer}"
+      },
+      "toast": {
+        "already": "已經回答過了，卡片上記著採用的是誰的答案",
+        "withdrawn": "它已經不再等回答了"
+      },
+      "answeredForYou": "助理代答 {count} 次"
+    },
+    "card": {
+      "stripped": "已移除自動觸發的動作",
+      "cancel": "取消",
+      "confirm": "確定",
+      "notFound": "找不到了",
+      "replyAssistant": "回覆助手",
+      "reply": {
+        "title": "傳送這則訊息？",
+        "description": "卡片上的「{label}」會以你的名義送出這段話：",
+        "send": "傳送",
+        "toComposer": "放進輸入框"
+      },
+      "drop": {
+        "title": "放棄這件事？",
+        "description": "「{summary}」會從事項中移除。",
+        "confirm": "放棄"
+      }
+    },
+    "due": {
+      "tomorrow": "明天 {time}",
+      "yesterday": "昨天 {time}",
+      "dayTime": "{day} {time}",
+      "duration": {
+        "minutes": "{n} 分鐘",
+        "hours": "{n} 小時",
+        "hoursMinutes": "{h} 小時 {m} 分鐘",
+        "days": "{n} 天"
+      },
+      "repeat": {
+        "daily": "每天 {time}",
+        "weekdays": "每個工作日 {time}",
+        "weekly": "每{days} {time}",
+        "monthly": "每月 {day} 日 {time}",
+        "until": "{rule}，截至 {date}",
+        "sep": "、"
+      },
+      "dueAt": "{when} 到期",
+      "overdue": "已逾期 · {when} 到期",
+      "reminded": "已提醒 · {when} 到期",
+      "late": "晚了 {duration}",
+      "missed": "錯過了 {count} 次",
+      "inSentence": {
+        "today": "{time}",
+        "tomorrow": "明天 {time}",
+        "yesterday": "昨天 {time}",
+        "day": "{day} {time}",
+        "date": "{date} {time}"
+      }
+    },
+    "reminder": {
+      "title": "提醒",
+      "done": "完成",
+      "snooze15m": "15 分鐘後",
+      "snooze1h": "1 小時後",
+      "snoozeTomorrow": "明天上午",
+      "handOver": "交給{name}",
+      "handOverText": "幫我處理這個提醒：{summary}",
+      "state": {
+        "done": "已完成",
+        "snoozed": "延到 {when}",
+        "handed": "已交給助手",
+        "dropped": "已放棄",
+        "expired": "已過期（有了新的一次）",
+        "closed": "已處理",
+        "woke": "時間到了，已叫醒助手去做"
+      }
+    },
+    "notify": {
+      "open": "開啟"
+    },
+    "feed": {
+      "groups": {
+        "needs": "等你",
+        "watching": "進行中",
+        "next": "例程與提醒",
+        "done": "今天完成"
+      },
+      "empty": "沒有要你做的，也沒有在跑的。",
+      "failed": "暫時讀不到動態。",
+      "handed": "交給{name}了",
+      "checking": "驗收中 · 第 {round} 輪",
+      "queued": "已排隊合併",
+      "routineRunning": "在跑",
+      "routineLast": "上次：{outcome}",
+      "fold": "收起詳情",
+      "unfold": "展開詳情",
+      "viewReminder": "查看提醒",
+      "viewCheck": "查看驗收會話",
+      "openTask": "開啟任務",
+      "routineDeleted": "這個例程已經刪除了。"
+    },
+    "today": {
+      "title": "今日",
+      "empty": "今天沒有需要你的事",
+      "yours": "你自己的",
+      "open": "開啟",
+      "undo": "復原",
+      "more": "再顯示 {count} 項",
+      "groups": {
+        "needs": "需要你",
+        "watching": "在盯",
+        "schedule": "今天的安排",
+        "done": "今天完成"
+      },
+      "kind": {
+        "approval": "等你核准",
+        "forwarded": "在問你",
+        "question": "在問你",
+        "confirm": "等你確認",
+        "stuck": "不知道做成沒有",
+        "waiting": "派出的活在等你",
+        "proposal": "提議",
+        "failed": "失敗",
+        "reminder": "提醒",
+        "finished": "已完成",
+        "checked": "核對訊息",
+        "checkCanceled": "核對已停止",
+        "canceled": "已停止",
+        "answered": "替你答了",
+        "changed": "替你改了",
+        "undone": "改過，已復原",
+        "acceptance": "驗收要你決定",
+        "forge": "在 forge 上做的",
+        "pr_ready": "可以合併",
+        "pr_merged": "PR 已合併",
+        "pr": "看護的 PR",
+        "memory": "記住了",
+        "memoryUndone": "記住了，又撤銷了",
+        "plan_stuck": "計畫卡住",
+        "routine_paused": "例程已暫停",
+        "used_up": "退回幾輪仍不對"
+      },
+      "reason": {
+        "failed": "失敗",
+        "accepted_queued": "驗收已通過，排隊合併中",
+        "merge_queued": "排隊合併中",
+        "accepted_unchecked": "未核實就通過了，請你看一下",
+        "needs_delivery": "驗收已通過，待提交 PR",
+        "merge_ready": "驗收已通過，可以合併",
+        "review": "等你審閱",
+        "looking": "沒做成，{name}在看"
+      },
+      "go": {
+        "merge": "去合併",
+        "board": "去看板",
+        "review": "去審閱"
+      },
+      "session": {
+        "permission": "等你核准",
+        "question": "在問你",
+        "plan": "等你核准計畫"
+      },
+      "task": {
+        "awaiting_input": "等你輸入",
+        "review": "待驗收",
+        "failed": "失敗",
+        "preparing": "準備中",
+        "running": "進行中",
+        "merging": "合併中",
+        "checking": "檢查中"
+      },
+      "dispatch": {
+        "queued": "排隊中",
+        "running": "進行中",
+        "waiting_input": "助手正在替你答",
+        "review": "待驗收",
+        "handed_over": "已轉交"
+      },
+      "item": {
+        "notify": "{time} 提醒",
+        "act": "{time} 去做"
+      },
+      "pr": {
+        "waiting_checks": "等檢查",
+        "checks_failed": "檢查沒過",
+        "conflict": "有衝突",
+        "mergeable": "可以合併",
+        "no_conflict": "沒有衝突，檢查未知",
+        "open": "PR 進行中",
+        "merged": "已合併",
+        "closed": "已關閉"
+      },
+      "routine": {
+        "at": "{time} 例程",
+        "running": "例程在跑",
+        "asked": "例程等你確認",
+        "reported": "例程報告",
+        "silent": "例程：沒有變化"
+      },
+      "preparingBrief": "正在準備晨報…",
+      "preparingWrap": "正在準備收尾…",
+      "tidy": {
+        "acted": "整理了記憶",
+        "draft": "整理草稿等你看",
+        "applied": "整理已套用",
+        "undone": "整理已撤銷",
+        "discarded": "整理沒用",
+        "stale": "整理草稿已過時"
+      },
+      "skill": {
+        "acted": "流程技能",
+        "draft": "流程技能草稿等你看",
+        "applied": "流程技能已安裝",
+        "undone": "流程技能改動已撤銷",
+        "discarded": "流程技能沒裝",
+        "stale": "流程技能草稿已過時",
+        "deleted": "流程技能已刪除"
+      },
+      "apply": "套用",
+      "install": "安裝",
+      "notThis": "不用"
+    },
+    "meet": {
+      "name": {
+        "heading": "認識一下",
+        "call": "我該怎麼稱呼你？",
+        "name": "給我取個名字？",
+        "systemUser": "你在這台電腦上的使用者名稱",
+        "currentName": "我現在的名字",
+        "answered": "稱呼你「{call}」，我叫「{name}」",
+        "answeredName": "我叫「{name}」",
+        "skipped": "先跳過了稱呼"
+      },
+      "connect": {
+        "heading": "馬上幫你做一件事",
+        "about": "你的專案我都會幫你留意，有 PR 等你審查會告訴你。",
+        "aboutOnly": "你選的專案我都會幫你留意，有 PR 等你審查會告訴你。",
+        "noProjects": "codeg 裡還沒有專案，開啟一個之後我就能幫你留意。",
+        "ask": "要不要我現在就去找一件能幫你做的事？",
+        "settingsHint": "盯哪些專案，隨時可以在設定裡改。",
+        "settings": "設定",
+        "go": "現在就找",
+        "notNow": "先不用",
+        "openFolder": "開啟一個專案資料夾",
+        "accountHint": "連上 {forge} 帳號，我還能看 PR、CI 和議題。",
+        "connectAccount": "連接帳號",
+        "went": "好，去找了。",
+        "skipped": "先不找了。之後隨時叫我。",
+        "connected": "連上了：{projects}",
+        "joiner": "、"
+      },
+      "starter": {
+        "heading": "我能先幫你做這件",
+        "lookingHeading": "馬上找一件事",
+        "noneHeading": "現在沒有要你處理的",
+        "looking": "正在找一件能馬上幫你做的事…",
+        "none": "現在沒有紅的，我會替你盯著。",
+        "noMore": "現在沒有別的了，我會替你盯著。",
+        "handed": "交給我了：{what}",
+        "dismissed": "先不用：{what}",
+        "handIt": "交給我",
+        "next": "換一件",
+        "notNow": "先不用",
+        "lead": {
+          "pr_ci": "PR #{number} 的 CI 紅了（{checks}）— {project}：{title}",
+          "review": "PR #{number} 在等你審查 — {project}：{title}",
+          "issue": "議題 #{number} 指派給了你 — {project}：{title}",
+          "task": "看板任務「{title}」失敗了，還沒人處理",
+          "worktree": "工作樹 {title} 有變更一天多沒提交"
+        },
+        "hand": {
+          "pr_ci": "處理 {project} 的 PR #{number} 的 CI：{url}",
+          "review": "審查 {project} 的 PR #{number}：{url}",
+          "issue": "處理 {project} 的議題 #{number}：{url}",
+          "task": "處理失敗的看板任務「{title}」（#{task}）",
+          "worktree": "看看工作樹 {path} 裡沒提交的變更"
+        }
+      },
+      "promises": {
+        "heading": "我會主動做這些",
+        "intro": "你希望我多主動？下面這些預設都開著，想自己來的就關掉。",
+        "items": {
+          "proactive": {
+            "title": "有事需要你時告訴你",
+            "hint": "提問、審批、做完的工作和你設的提醒，一到就說。"
+          },
+          "brief": {
+            "title": "每天早上給你寫晨報",
+            "hint": "你一天開始時：等你的事、夜裡跑完的工作、今天的安排。"
+          },
+          "wrap": {
+            "title": "幫你收尾一天",
+            "hint": "你收工前：做完了什麼、還剩什麼、今晚可以接著跑什麼。"
+          },
+          "exec_questions": {
+            "title": "替你回答派出去的工作階段的提問",
+            "hint": "能答的我先答，拿不準的轉給你。"
+          },
+          "exec_plans": {
+            "title": "替你審批派出去的工作階段的計畫",
+            "hint": "我對照你的要求看計畫，說不清的轉給你。"
+          },
+          "followups": {
+            "title": "自己跟進和重試派出去的工作",
+            "hint": "派出去的工作需要再來一輪時，我直接接著做。"
+          },
+          "ci_failure": {
+            "title": "看護的 PR 檢查沒過時自動修",
+            "hint": "檢查失敗或有衝突的 PR，由它的任務一輪一輪修好。"
+          },
+          "interrupt_retry": {
+            "title": "重新啟動打斷的工作自動重試",
+            "hint": "codeg 停下時正在跑的工作，回來後重新開始。"
+          },
+          "presence": {
+            "title": "學你的作息",
+            "hint": "按你在 codeg 裡的時間，在合適的時候找你。"
+          },
+          "auto_accept": {
+            "title": "檢查並驗收派出去的改程式碼的工作",
+            "hint": "用做事的智能體唯讀檢查一遍，我對照你的要求下結論。"
+          }
+        },
+        "prefs": "調整偏好",
+        "pet": "把我放到桌面上",
+        "petFailed": "打不開桌面夥伴",
+        "done": "完成",
+        "folded": "我會主動做這些 · 打擾程度：{level}",
+        "collapse": "收起",
+        "list": "具體做哪些：開著 {on} 項，共 {total} 項",
+        "listShow": "展開",
+        "listHide": "收起",
+        "unavailable": "要在助手執行的那一端修改。"
+      }
+    },
+    "acceptance": {
+      "title": "驗收 · 第 {round} 輪",
+      "titleMax": "驗收 · 第 {round} 輪（最多 {max} 輪）",
+      "check": "檢查：",
+      "verdict": {
+        "pass": "通過",
+        "fail": "未通過",
+        "unverified": "無法驗證"
+      },
+      "unchecked": "未經獨立檢查",
+      "notVerified": "未經驗證",
+      "decision": {
+        "accept": "通過",
+        "revise": "退回修改",
+        "ask_owner": "問你"
+      },
+      "assistant": "助理：{decision}",
+      "assistantWhy": "助理：{decision}，理由：{reason}",
+      "fallback": "助理沒給結論，依檢查結論處理",
+      "owner": "你的決定：{decision}",
+      "result": "結果",
+      "why": "理由",
+      "by": {
+        "owner": "你決定的",
+        "assistant": "助理決定的"
+      },
+      "question": "問你：{question}",
+      "usedUp": "已經檢查了 {count} 輪，到了你允許的輪數",
+      "wouldSend": "退回時會送出的修改意見",
+      "revise": "依卡上的意見退回",
+      "accept": "算通過",
+      "recheck": "重新檢查",
+      "openTask": "打開任務",
+      "accepted": "已通過",
+      "revised": "已退回修改",
+      "void": "檢查期間工作樹被改動，這一輪作廢",
+      "changed": "工作樹在檢查後被改動，驗收已失效",
+      "changedAfterAccept": "驗收之後工作樹變了",
+      "superseded": "已重新檢查",
+      "stale": "已失效，沒有執行",
+      "merged": "已合併 {commit}",
+      "delivered": "已交付，頭提交 {head}",
+      "history": "之前幾輪",
+      "historyRevised": "第 {round} 輪：退回「{message}」",
+      "historyAccepted": "第 {round} 輪：通過",
+      "historyAsked": "第 {round} 輪：問你",
+      "historyChanged": "第 {round} 輪：通過後工作樹變了",
+      "historyOpen": "第 {round} 輪：進行中"
+    },
+    "forge": {
+      "heading": {
+        "approve": "等你批准",
+        "suggested": "建議，等你批准",
+        "cnb": "CNB 上的合併：一律由你批准",
+        "acting": "正在做…",
+        "done": "已在 {provider} 上完成",
+        "refused": "沒有做",
+        "notMerged": "沒有合併",
+        "failed": "沒有做成",
+        "unknown": "不知道做成沒有",
+        "not_run": "沒有執行：情況變了",
+        "dismissed": "沒有做"
+      },
+      "title": {
+        "comment": "在 {target} 上留言",
+        "close": "關閉 {target}",
+        "merge": "合併 {target}"
+      },
+      "merge": {
+        "head": "頭提交 {head}",
+        "method": {
+          "merge": "合併提交",
+          "squash": "壓縮合併",
+          "rebase": "變基合併"
+        },
+        "checks": {
+          "green": "檢查：全部通過",
+          "none": "檢查：沒有設定",
+          "unknown": "檢查：未知（CNB 讀不到檢查）"
+        },
+        "version": {
+          "accepted": "驗收通過的那個版本",
+          "green": "這個頭提交的檢查都通過了"
+        },
+        "unguaranteed": "版本未保證（這個平台的合併介面不帶頭提交）",
+        "commit": "合併提交 {commit}"
+      },
+      "code": {
+        "merged": "已經合併了",
+        "closed": "已經關閉",
+        "draft": "還是草稿",
+        "after_acceptance": "PR 有驗收之後的新提交",
+        "not_accepted": "驗收還沒有通過",
+        "not_delivered": "驗收通過的版本不是 codeg 交付到這個 PR 的",
+        "checks_unreadable": "codeg 讀不到它的檢查",
+        "checks_partial": "有些檢查讀不到",
+        "checks_running": "檢查還在跑",
+        "checks_failing": "有檢查沒通過"
+      },
+      "notRun": "沒有執行：{error}",
+      "failed": "平台拒絕了：{error}",
+      "unknown": "平台沒有回應：{error}。codeg 不會自己再做一次；再做之前會先去平台上核對。",
+      "reason": "理由：{reason}",
+      "approve": "批准",
+      "decline": "拒絕",
+      "look": "查看",
+      "again": "再做一次",
+      "letBe": "不用了",
+      "open": "打開"
+    },
+    "pr": {
+      "event": {
+        "checks_failed": "檢查沒過",
+        "checks_passed": "檢查又綠了",
+        "conflict": "和目標分支有衝突",
+        "mergeable": "可以合併了",
+        "no_conflict": "沒有衝突，檢查狀態未知",
+        "merged": "已合併",
+        "closed": "沒合併就關了",
+        "feedback": "評審意見"
+      },
+      "head": "頭提交 {head}",
+      "checks": {
+        "unknown": "檢查狀態未知",
+        "none": "沒有設定檢查",
+        "passed": "檢查 {passed}/{total} 通過",
+        "running": "{n} 個在跑",
+        "partial": "有些讀不到"
+      },
+      "more": "……還有 {n} 個",
+      "noConflictNote": "這個平台讀不到檢查，所以 codeg 不說它「可以合併」。",
+      "mergeState": "平台的說法：{state}",
+      "state": {
+        "later": "之後有了變化。",
+        "stopped": "已不再看護。"
+      },
+      "view": "查看 PR",
+      "gotIt": "知道了",
+      "unwatch": "不用再盯了",
+      "fix": {
+        "followup": {
+          "checks": "它的任務在修 —— 第 {n} 次，續作。",
+          "conflict": "它的任務在把目標分支合進來 —— 第 {n} 次，續作。"
+        },
+        "task": {
+          "checks": "在這個 PR 上開了新任務去修 —— 第 {n} 次。",
+          "conflict": "在這個 PR 上開了新任務把目標分支合進來 —— 第 {n} 次。"
+        },
+        "failed": "codeg 沒能開始修：{error}",
+        "none": "codeg 沒法自己修：{why}",
+        "busy": "這個 PR 上已經有一輪在進行，結束後 codeg 再看。",
+        "ask": {
+          "checks": "要讓它的任務去修嗎？",
+          "conflict": "要讓它的任務把目標分支合進來嗎？"
+        },
+        "told": "按你的設定，只告訴你。",
+        "off": "codeg 不自動修（設定裡是 0 次）。",
+        "gaveUpHeading": "修到上限了，還是沒過",
+        "gaveUp": "codeg 已經修了 {n} 次，接下來交給你。每次改了什麼：",
+        "round": "第 {n} 次",
+        "cause": {
+          "checks": "檢查沒過",
+          "conflict": "有衝突"
+        },
+        "lines": "{files} 個檔案，+{added} −{removed}",
+        "doChecks": "去修",
+        "doConflict": "把目標分支合進來"
+      },
+      "feedback": {
+        "kind": {
+          "changes": "要求修改",
+          "review": "評審",
+          "line": "行內意見",
+          "comment": "評論"
+        },
+        "someone": "有人",
+        "writer": "有寫權限",
+        "outsider": "沒有寫權限",
+        "forward": "交給任務",
+        "skip": "不用",
+        "forwarded": "已交給任務。",
+        "waiting": "等正在進行的這一輪結束後交給任務。"
+      },
+      "round": {
+        "checks": "修 CI —— 第 {n} 次",
+        "conflict": "解決衝突 —— 第 {n} 次",
+        "feedback": "處理評審意見"
+      },
+      "merge": {
+        "refused": "codeg 沒有自動合併：{why}",
+        "unread": "codeg 讀不到平台，沒能合併：{why}"
+      }
+    },
+    "routines": {
+      "zone": "（{zone}）",
+      "onEvent": "觸發：{event}",
+      "withLabel": "標籤 {label}",
+      "mineOnly": "只看它自己的工作",
+      "event": {
+        "dispatch_ended": "派出的工作結束",
+        "task_status": "看板任務狀態變化",
+        "session_waiting": "有工作階段在等你",
+        "pr_checks_failed": "看護的 PR 檢查沒過",
+        "pr_checks_passed": "看護的 PR 檢查又綠了",
+        "pr_conflict": "看護的 PR 有衝突",
+        "pr_mergeable": "看護的 PR 可以合併",
+        "pr_no_conflict": "看護的 PR 沒有衝突（檢查未知）",
+        "pr_merged": "看護的 PR 已合併",
+        "pr_closed": "看護的 PR 被關閉",
+        "pr_review": "看護的 PR 有新評審",
+        "forge_issue": "平台上有新的 issue 或 PR"
+      },
+      "precheck": {
+        "commits": "{branch} 有新提交才跑",
+        "forgeIssue": "有新 issue 才跑",
+        "forgePr": "有新 PR 才跑",
+        "itemsWaiting": "有事項等了超過 {hours} 小時才跑",
+        "changes": "工作樹有改動才跑"
+      },
+      "outcome": {
+        "running": "在跑",
+        "skipped": "跳過：沒有新情況",
+        "silent": "沒有變化",
+        "reported": "有報告",
+        "failed": "失敗",
+        "missed": "錯過",
+        "asked": "等你確認",
+        "declined": "沒有確認",
+        "stopped": "已停止"
+      },
+      "empty": "還沒有例程。可以在對話裡讓它幫你設一個。",
+      "new": "新增例程",
+      "kind": {
+        "brain": "叫醒助手看",
+        "dispatch": "直接派工作"
+      },
+      "paused": {
+        "owner": "已暫停"
+      },
+      "row": {
+        "when": "時間",
+        "trigger": "觸發",
+        "how": "方式",
+        "next": "下次",
+        "last": "上次",
+        "why": "原因",
+        "runs": "共 {n} 次"
+      },
+      "runNow": "立即跑",
+      "pause": "暫停",
+      "resume": "恢復",
+      "edit": "編輯",
+      "delete": "刪除",
+      "deleteTitle": "刪除這個例程？",
+      "deleteDescription": "「{title}」將不再執行。它已經派出的工作不受影響。",
+      "cancel": "取消",
+      "reply": "例程「{title}」· 第 {seq} 次",
+      "editor": {
+        "titleNew": "新增例程",
+        "titleEdit": "編輯例程",
+        "trialNote": "儲存後會立刻試跑一次，之後由 codeg 按時執行。",
+        "editNote": "改動從下一次執行起生效。",
+        "name": "名稱",
+        "what": "要做什麼",
+        "whatHint": "例如：看一下夜裡 CI 有沒有紅的，有就告訴我",
+        "kind": "怎麼跑",
+        "kindBrain": "叫醒助手",
+        "kindDispatch": "直接派工作",
+        "kindBrainHint": "它看完會告訴你；沒有值得說的就不出聲。",
+        "kindDispatchHint": "codeg 直接按下面的設定派工作，不叫醒助手；結果照常回來。",
+        "mode": "方式",
+        "modeTask": "看板任務",
+        "modeSession": "專案裡的工作階段",
+        "modeChat": "對話",
+        "deliverable": "交付",
+        "change": "改程式碼",
+        "report": "出報告",
+        "project": "專案",
+        "pickProject": "選一個專案",
+        "anyProject": "任意專案",
+        "when": "什麼時候",
+        "schedule": "定時",
+        "event": "有事件時",
+        "presetDaily": "每天 9:00",
+        "presetWeekdays": "工作日 9:00",
+        "presetWeekly": "每週一 9:00",
+        "custom": "自訂…",
+        "timezone": "時區",
+        "ownerZone": "跟你一樣（{zone}）",
+        "eventKind": "事件",
+        "issueOrPr": "issue 還是 PR",
+        "issues": "issue",
+        "prs": "PR",
+        "label": "標籤",
+        "states": "狀態（逗號分隔）",
+        "mine": "只看它自己的工作",
+        "precheck": "先看一眼",
+        "check": {
+          "none": "每次都跑",
+          "commits": "有新提交才跑",
+          "forge_new": "有新 issue 或 PR 才跑",
+          "items_waiting": "有事項等太久才跑",
+          "changes": "工作樹有改動才跑"
+        },
+        "branch": "分支（預設 HEAD）",
+        "hours": "小時",
+        "needTitle": "取個名字。",
+        "needWhat": "寫一下要做什麼。",
+        "needCron": "設一個時間。",
+        "made": "例程已建立，正在試跑",
+        "saved": "例程已儲存",
+        "cancel": "取消",
+        "save": "儲存",
+        "saveRun": "儲存並試跑一次"
+      },
+      "card": {
+        "made": "已建立例程",
+        "changed": "已修改例程",
+        "proposal": "建議的例程",
+        "proposalChange": "建議修改一個例程",
+        "repeat": "做成例程？",
+        "paused": "例程已暫停",
+        "undone": "已復原",
+        "dismissed": "先不了",
+        "resumed": "已恢復",
+        "madeNote": "已建立，在例程列表裡。",
+        "action": {
+          "pause": "暫停",
+          "resume": "恢復",
+          "delete": "刪除",
+          "run_now": "立即跑",
+          "edit": "修改"
+        },
+        "repeatBody": "30 天裡你第 {count} 次讓它做這類事。",
+        "pausedWorkAgent": "它做事用的智能體用不了：沒裝，或者被停用了。",
+        "pausedFailures": "連續失敗了 3 次。",
+        "trial": "已開始試跑。",
+        "reason": "依據：{reason}",
+        "undo": "復原",
+        "edit": "編輯",
+        "accept": "建立這個",
+        "acceptChange": "照這個改",
+        "dismiss": "不用",
+        "makeIt": "做成例程",
+        "resume": "恢復",
+        "open": "打開例程",
+        "confirm": "待確認的例程",
+        "confirmChange": "待確認的例程改動",
+        "setWorkAgent": "去選做事用的智能體"
+      },
+      "more": "更多操作"
+    },
+    "rules": {
+      "mute": "這類別再提",
+      "muted": "這類不會再提。",
+      "mutedRestore": "在偏好裡重新開啟",
+      "notNow": "不用",
+      "failed": "沒辦成：{error}",
+      "since": "自 {when}",
+      "lowered": "這類提議你連續 3 次都沒用，已不再發通知。",
+      "loweredNow": "已關掉。這類已經連續 3 次沒用，以後不再發通知（可在偏好裡改回）。",
+      "dismissed": "已關掉，一週內不再提。",
+      "expired": "已經不需要了：情況變了。",
+      "openPr": "開啟 PR",
+      "byAuthor": "{author} 提的",
+      "worktreeOf": "{project} 的工作樹",
+      "behindDetail": "{branch} 落後於 {base}，合併會有衝突。",
+      "heading": {
+        "failed": "失敗了，沒人處理",
+        "review": "等驗收很久了",
+        "session": "有工作階段在等你",
+        "pr_review": "PR 等你審查",
+        "uncommitted": "改動還沒提交",
+        "idle": "事項很久沒動了",
+        "behind": "分支落後且有衝突",
+        "undo": "你撤銷的改動",
+        "idle_bot": "閒著的助手"
+      },
+      "wait": {
+        "permission": "等你核准",
+        "question": "在問你",
+        "plan": "等你核准計畫"
+      },
+      "step": {
+        "failed": {
+          "retry": "重試",
+          "hand": "交給助手看看"
+        },
+        "review": {
+          "check": "讓助手先驗收",
+          "remind": "提醒我"
+        },
+        "session": {
+          "open": "開啟工作階段"
+        },
+        "pr_review": {
+          "summary": "先出一份審查摘要"
+        },
+        "uncommitted": {
+          "open": "開啟",
+          "hand": "交給助手整理提交"
+        },
+        "idle": {
+          "hand": "繼續跟",
+          "close": "關掉"
+        },
+        "behind": {
+          "rebase": "派人 rebase"
+        },
+        "undo": {
+          "ask_first": "改成「先給我看」"
+        },
+        "idle_bot": {
+          "hide": "隱藏",
+          "delete": "刪掉…"
+        }
+      },
+      "done": {
+        "handed": "已交給助手。",
+        "retried": "已重試。",
+        "checking": "已開始驗收，檢查完由助手下結論。",
+        "reminding": "明天上午提醒你。",
+        "opened": "已開啟。",
+        "closed": "事項已關掉。",
+        "rebasing": "已派人 rebase。",
+        "asking_first": "以後你要改的設定會先給你看，點了才改。",
+        "hidden": "已隱藏，在隱藏的助手裡還能找到。",
+        "deleted": "已刪掉。"
+      },
+      "hand": {
+        "failed": "「{title}」失敗了，一直沒人處理。幫我看看是怎麼回事，告訴我你的建議。",
+        "review": "看板任務「{title}」等驗收很久了。先幫我驗收：派人檢查改動，再告訴我結論。",
+        "remind": "驗收看板任務「{title}」",
+        "prReview": "{project} 的 PR #{number} 等我審查有一陣了，先幫我出一份審查摘要：{url}",
+        "uncommitted": "{name}（{path}）有未提交的改動有一陣了，幫我看看並整理提交。",
+        "idle": "事項「{summary}」很久沒動了，繼續跟一下。"
+      },
+      "prefs": {
+        "title": "提議卡",
+        "hint": "codeg 自己留意這些情況（不呼叫模型），發現了就出一張卡，寫明依據和下一步。每條都可以單獨關掉、改時間。",
+        "mutedMark": "在卡上點了「這類別再提」，已關掉。",
+        "loweredMark": "你連續 3 次都沒用，已不再發通知。",
+        "putBack": "改回",
+        "counts": "近 30 天：出了 {raised} 張，用了 {acted} 張，關掉 {dismissed} 張",
+        "unit": {
+          "hours": "小時",
+          "minutes": "分鐘",
+          "days": "天",
+          "times": "次"
+        },
+        "failed": {
+          "title": "失敗沒人管",
+          "hint": "派工作或看板任務失敗了一直沒人處理。卡片出在派出它的助手那裡。"
+        },
+        "review": {
+          "title": "待驗收太久",
+          "hint": "看板任務待驗收，這一輪還沒驗收過。"
+        },
+        "session": {
+          "title": "工作階段一直等你",
+          "hint": "任何工作階段等你核准或回答，而你不在那個工作階段裡。緊急。"
+        },
+        "pr_review": {
+          "title": "PR 等你審查",
+          "hint": "在你盯著的專案裡；從 codeg 第一次看到這個請求時算起。"
+        },
+        "uncommitted": {
+          "title": "改動沒提交",
+          "hint": "專案或工作樹裡有沒提交的改動。"
+        },
+        "idle": {
+          "title": "事項太久沒動",
+          "hint": "沒收尾的事項一直沒有變化。"
+        },
+        "behind": {
+          "title": "分支落後",
+          "hint": "助手派出的任務分支落後目標分支，而且有衝突。"
+        },
+        "repeat": {
+          "title": "重複的請求",
+          "hint": "30 天內相近的請求到第幾次時，提議做成例程。"
+        },
+        "suggest": {
+          "title": "助手的建議",
+          "hint": "關掉後助手不再提建議；帶 suggest 的呼叫會被告知「你現在不收建議」。"
+        },
+        "undo": {
+          "title": "撤銷得多的改動",
+          "hint": "週回顧裡：你撤銷了不少按你的話直接做的改動時，問你要不要改成「先給我看」。"
+        },
+        "idle_bot": {
+          "title": "閒著的助手",
+          "hint": "週回顧裡：兩週都沒被叫醒的助手，問你要不要隱藏或刪掉。"
+        }
+      },
+      "undoDetail": "最近兩週按你的話直接做的 {made} 處改動，你撤銷了 {undone} 處。",
+      "idleBotDetail": "已經兩週沒被叫醒了。",
+      "group": {
+        "count": "{count} 則",
+        "expand": "展開全部",
+        "collapse": "收起",
+        "more": "還有 {count} 則",
+        "mutedEntry": "已關掉，這類也不再提。"
+      }
+    },
+    "brief": {
+      "title": "晨報",
+      "byCodeg": "這份由 codeg 依記錄寫成——助手沒能寫。",
+      "part": {
+        "needs": "需要你",
+        "tonight": "昨晚做的",
+        "night": "上次晨報以來",
+        "running": "在盯",
+        "schedule": "今天的安排",
+        "bots": "各助手",
+        "loose": "沒收尾的事",
+        "yesterday": "昨天的你"
+      },
+      "more": "……還有 {count} 件",
+      "bot": {
+        "done": "做完 {count} 件（{titles}）",
+        "idle": "沒有做完的",
+        "doing": "在做 {what}",
+        "stuck": "{count} 件等你"
+      },
+      "loose": {
+        "item": "{days} 天沒動",
+        "worktree": "改動 {days} 天沒提交",
+        "session": "沒收尾"
+      },
+      "sessions": "{count} 個會話",
+      "nothing": "今天沒有需要你的事。",
+      "replyBrief": "晨報",
+      "replyWrap": "收尾",
+      "message": {
+        "to": "發給 {name}：",
+        "answered": "回覆：{text}",
+        "open": "還沒回覆"
+      },
+      "week": {
+        "title": "上週（{first} – {last}）",
+        "titleSoFar": "本週至今（{first} – {last}）",
+        "mode": {
+          "task": "看板",
+          "chat": "對話",
+          "session": "對話"
+        },
+        "work": "派活 {count} 件（{modes}）· 完成 {completed}，失敗 {failed} · 一次過 {firstPass}/{settled}",
+        "byBot": "按助手：{list}",
+        "doneForYou": "替你辦完的：驗收攔下 {caught} · 自動重試 {retried} · 自動修 CI {ciFixed} · 例程完成 {routines} · 合併 PR {merged}",
+        "asks": "執行對話的提問：{count} 次 · 助手代答 {answered} · 轉給你 {forwarded}",
+        "between": "助手之間：{messages} 則訊息，{threads} 條往來線 · 停下 {loops} 次",
+        "unblock": "你處理等你的事平均用 {minutes} 分鐘（{count} 次）",
+        "unblockBefore": "你處理等你的事平均用 {minutes} 分鐘（{count} 次；前一週 {before} 分鐘）",
+        "held": "替你擋下的打擾：合併 {merged} · 延後 {deferred} · 只進今日 {kept}",
+        "proposals": "提議：{count} 張 · 接受 {taken} · 不用 {dismissed}",
+        "undone": "撤銷：改動 {changesUndone}/{changes} · 記憶 {memoryUndone}/{memory}",
+        "reminders": "提醒：到點 {count} · 完成 {done} · 延後 {snoozed}",
+        "lowered": "codeg 降了級：{rules}",
+        "tokens": "用量：{total} tokens",
+        "botTokens": "{total}（自己 {own}，派出的活 {handed}）"
+      }
+    },
+    "memory": {
+      "title": "記住了",
+      "undoneTitle": "已撤銷這次記憶更新",
+      "added": "新增 {count} 條",
+      "updated": "更新 {count} 條",
+      "removed": "刪除 {count} 條",
+      "changedFile": "改了{file}",
+      "sep": "；",
+      "listSep": "、",
+      "file": {
+        "index": "記憶索引",
+        "user": "你的資料",
+        "soul": "人設",
+        "rules": "規則"
+      },
+      "status": {
+        "added": "新增",
+        "modified": "更新",
+        "deleted": "刪除"
+      },
+      "kept": "之後又改過、沒撤回：{files}",
+      "showDiff": "展開差異",
+      "hideDiff": "收起差異",
+      "diffCut": "只顯示了差異的開頭。",
+      "undo": "撤銷",
+      "used": "用到的記憶："
+    },
+    "history": {
+      "open": "搜尋歷史",
+      "title": "時光機",
+      "description": "搜之前說過、做過的：各助手的對話、助手之間的訊息、全部對話和看板任務。",
+      "placeholder": "例如：為什麼把 X 改成 Y",
+      "hint": "每個詞都要出現。一兩個字只搜最近 90 天。",
+      "none": "沒有找到。",
+      "short": "一兩個字：只搜了最近 90 天。",
+      "sessionsOff": "未檢索全部對話（在「了解你」裡設定）。",
+      "tasksOff": "未檢索看板任務（在「了解你」裡設定）。",
+      "reading": "還在讀取對話（{done}/{total}）：較早的可能暫時搜不到。",
+      "untitled": "對話 #{id}",
+      "task": "任務 #{id}",
+      "message": "{from} → {to}",
+      "timeline": "與{name}的對話",
+      "handedOut": "{name}派出",
+      "matches": "{count} 處符合",
+      "role": {
+        "owner": "你",
+        "assistant": "助手",
+        "agent": "智能體"
+      },
+      "scope": {
+        "all": "全部",
+        "timeline": "助手對話",
+        "sessions": "對話",
+        "tasks": "看板任務",
+        "messages": "助手訊息"
+      }
+    },
+    "plan": {
+      "title": "計畫",
+      "progress": "{done}/{total} 步",
+      "sep": "、",
+      "after": "在第 {steps} 步之後",
+      "doneWhen": "驗收標準：",
+      "changes": "改動",
+      "undo": "撤銷",
+      "undone": "已撤銷",
+      "undoneKept": "已撤銷——第 {steps} 步已經開始，保留了這次改動",
+      "state": {
+        "draft": "等你開始",
+        "running": "進行中",
+        "stuck": "卡住了",
+        "stopped": "已停止",
+        "done": "已完成",
+        "canceled": "已結束"
+      },
+      "step": {
+        "pending": "等前面的步驟",
+        "ready": "馬上派出",
+        "confirm": "等你確認",
+        "running": "在做",
+        "done": "已完成",
+        "failed": "失敗",
+        "canceled": "已取消",
+        "stopped": "沒開始"
+      },
+      "hint": {
+        "draft": "按「開始」之前什麼都不派；開始後，codeg 按依賴一步步派出。",
+        "stopped": "已停止：不再派新的步驟，在跑的照常跑完。",
+        "stuck": "卡在第 {seq} 步「{title}」：它失敗了，助手也沒能接著做下去。不依賴它的步驟照常推進。",
+        "stuckCanceled": "第 {seq} 步「{title}」已取消：依賴它的步驟不會開始。"
+      },
+      "act": {
+        "start": "開始",
+        "change": "改一下",
+        "cancel": "取消",
+        "stop": "停止",
+        "resume": "繼續",
+        "end": "結束計畫",
+        "open": "打開",
+        "confirm": "確認",
+        "cancelStep": "取消"
+      },
+      "change": {
+        "added": "加了第 {seq} 步「{title}」",
+        "removed": "刪了第 {seq} 步「{title}」",
+        "retry": "第 {seq} 步「{title}」重新來",
+        "changed": "改了第 {seq} 步「{title}」：{fields}",
+        "title": "改名為「{title}」",
+        "goal": "改了目標"
+      },
+      "field": {
+        "title": "標題",
+        "who": "交給誰",
+        "mode": "方式",
+        "project": "專案",
+        "deliverable": "交付物",
+        "prompt": "要求",
+        "done_when": "驗收標準",
+        "depends_on": "依賴",
+        "kind": "工作的種類"
+      },
+      "self": "自己"
+    },
+    "tidy": {
+      "title": {
+        "acted": "整理了記憶（{day}）",
+        "draft": "{day} 的整理（草稿）",
+        "applied": "{day} 的整理（已套用）",
+        "undone": "{day} 的整理（已整次撤銷）",
+        "discarded": "{day} 的整理（沒用）",
+        "stale": "{day} 的整理（已過時）"
+      },
+      "note": {
+        "draft": "整理結果先存成了草稿，現在的記憶沒變；點「套用」才生效。",
+        "applied": "已套用：記憶按這次整理改好了。",
+        "discarded": "沒有用這次整理，記憶保持原樣。",
+        "stale": "草稿之後記憶又改過，合不進來了；下一晚會重新整理。",
+        "notAside": "沒能先存成草稿（{why}），已經生效；可以整次撤銷。"
+      },
+      "undoAll": "整次撤銷",
+      "apply": "套用",
+      "dismiss": "不用",
+      "lines": "昨晚整理",
+      "view": "查看",
+      "line": {
+        "done": "{name}整理了記憶",
+        "draft": "{name}整理了記憶（草稿）"
+      },
+      "state": {
+        "applied": "已套用",
+        "undone": "已整次撤銷",
+        "discarded": "沒有用",
+        "stale": "已過時，今晚重新整理"
+      }
+    },
+    "skill": {
+      "heading": {
+        "added": "新的流程技能",
+        "modified": "流程技能有改動",
+        "deleted": "流程技能刪掉了",
+        "draft": "流程技能草稿"
+      },
+      "line": {
+        "learned": "我把「{title}」整理成了流程技能，下次你要做這件事，我就照這個走。",
+        "changed": "我改了流程技能「{title}」，已經生效。",
+        "removed": "我刪掉了流程技能「{title}」。",
+        "draft": "我寫了流程技能「{title}」，你點「安裝」才生效。"
+      },
+      "when": "什麼時候用：{text}",
+      "note": {
+        "off": "已停用：不再載入。",
+        "draft": "現在還是原來的樣子。",
+        "applied": "已安裝。",
+        "undone": "已撤銷這次改動。",
+        "discarded": "沒有裝，保持原樣。",
+        "stale": "之後又改過，這份草稿裝不上了。",
+        "deleted": "已刪除。",
+        "notAside": "沒能先存成草稿（{why}），先停用了：點「啟用」才載入。",
+        "notAsideOn": "沒能先存成草稿（{why}），也沒能停用：已經生效，可以停用或撤銷。"
+      },
+      "show": "看內容",
+      "hide": "收起",
+      "view": "查看",
+      "disable": "停用",
+      "enable": "啟用",
+      "undo": "撤銷",
+      "delete": "刪除",
+      "confirmDelete": "確定刪除",
+      "cancel": "取消",
+      "install": "安裝",
+      "dismiss": "不用"
+    },
+    "botPage": {
+      "primary": "主助手",
+      "worker": "助手",
+      "chat": "和它聊天"
+    },
+    "workRanOn": "用 {agent} 做",
+    "workOff": "{agent}（它做事用的智能體）用不了：沒裝或被停用，它暫時不能自己做事。",
+    "setWork": "去另選一個",
+    "noBrain": {
+      "title": "{name} 還沒有大腦",
+      "body": "它是從協作設定遷移來的助手。初始化主助手後，它會照抄一份主助手的大腦，就可以和它對話了。在這之前，一般會話裡照樣可以 @ 它。",
+      "setUp": "初始化主助手"
+    },
+    "matter": {
+      "act": {
+        "done": "完成",
+        "doneThis": "完成本次",
+        "doneEarly": "提前完成",
+        "skipThis": "跳過本次",
+        "merged": "已合併",
+        "ack": "知道了",
+        "snooze": "延後",
+        "setTime": "設時間",
+        "in15m": "15 分鐘後",
+        "in1h": "1 小時後",
+        "tomorrow": "明天上午",
+        "handOver": "交給{name}",
+        "answer": "去回答",
+        "drop": "不用了",
+        "stop": "不再提醒",
+        "undo": "復原"
+      },
+      "hint": {
+        "doneNext": "這次完成，之後照常：{rule}",
+        "skipNext": "這次跳過，之後照常：{rule}",
+        "snoozeNotify": "時間到再提醒你",
+        "snoozeAct": "時間到{name}再去做",
+        "setTimeNotify": "到你選的時間提醒你",
+        "setTimeAct": "時間到{name}去做",
+        "handOver": "讓{name}去處理這件事",
+        "answer": "到{name}的對話裡回答",
+        "drop": "從清單裡移除，{name}不再跟進",
+        "dropQuestion": "這個問題不用回答了，會告訴{name}",
+        "dropMessage": "撤回這則訊息；撤不回的話，{name}就不再等{peer}回覆",
+        "stop": "以後都不再提醒",
+        "merged": "告訴{name}這個 PR 已經合併了",
+        "ack": "從清單裡移除"
+      },
+      "toast": {
+        "done": "已完成：{title}",
+        "doneNext": "這次已完成，下次 {when}",
+        "doneEnded": "已完成，這個提醒到此結束",
+        "skipNext": "已跳過這次，下次 {when}",
+        "skipEnded": "已跳過，這個提醒到此結束",
+        "snoozeNotify": "會在 {when} 提醒你",
+        "snoozeAct": "{name}會在 {when} 去做",
+        "dropped": "已移除：{title}",
+        "withdrawn": "已撤回傳給{peer}的訊息",
+        "notWithdrawn": "訊息沒有撤回，{name}不再等{peer}回覆",
+        "stopped": "以後不再提醒：{title}",
+        "handed": "已交給{name}",
+        "undone": "已復原",
+        "undoneSkip": "你撤回了跳過",
+        "notRefreshed": "重新整理失敗，請稍後再試。"
+      },
+      "meta": {
+        "reminds": "{name}提醒你 · {when} 到點",
+        "remindsLate": "{name}提醒你 · {when} 到點，已過 {late}",
+        "willRemind": "{name}會在 {when} 提醒你",
+        "willDo": "{name}會在 {when} 去做",
+        "repeats": "{name}提醒你：{rule} · 下次 {when}",
+        "asks": "{name}想問你 · 已等 {wait}",
+        "asked": "{name}想問你",
+        "answered": "你已回答 · 等{name}看",
+        "interrupted": "{name}沒有處理完，可能沒讀到你的回答 · 需要的話再答一次",
+        "needsYou": "{name}需要你處理 · 已等 {wait}",
+        "following": "{name}在跟進 · 已等 {wait}",
+        "external": "{name}在等外部結果 · 已等 {wait}",
+        "message": "{name}在等{peer}回覆 · 已等 {wait}",
+        "setAside": "已擱置 · 沒定時間",
+        "mention": "你提到{words}時{name}會提醒你 · 已提醒 {times}/{max} 次 · 到 {until}",
+        "justNow": "剛剛",
+        "someone": "對方"
+      },
+      "closed": {
+        "done": "你完成了 · {time}",
+        "stopped": "你停了這項工作 · {time}",
+        "skippedLast": "你跳過了最後一次 · {time}",
+        "dropped": "你移除了 · {time}",
+        "withdrawn": "你撤回了傳給{peer}的訊息 · {time}",
+        "stoppedWaiting": "你不再等{peer}回覆 · {time}",
+        "agentDone": "{name}完成了 · {time}",
+        "agentDropped": "{name}不再跟進了 · {time}",
+        "agentStopped": "{name} 停了這項工作 · {time}",
+        "answered": "{name}看到了你的回答 · {time}",
+        "replied": "{peer}回覆了 · {time}",
+        "gone": "{peer}已被刪除，不再等回覆 · {time}",
+        "planCanceled": "計畫取消了，{name}不再等{peer}回覆 · {time}",
+        "usedUp": "提到時提醒已用完 · {time}",
+        "expired": "提到時提醒已到期 · {time}",
+        "ended": "已結束 · {time}"
+      }
+    },
+    "matterErrors": {
+      "gone": "這件事已經不在了",
+      "settled": "這件事已經結束了",
+      "changed": "這件事剛有了新變化，請再看一眼",
+      "workRunning": "這項工作還在進行，要停下請在它的卡片上按「停止」",
+      "workNoTime": "派出去的工作不能按時間延後",
+      "messageNoTime": "這則在等{peer}回覆，不能按時間延後",
+      "mentionNoTime": "這則會在你提到時出現，不按時間提醒",
+      "notEarlier": "這件事本來就定在 {when}，延後只能往後",
+      "hasTime": "這件事已經定在 {when} 了",
+      "inOtherHands": "這件事在{bot}手裡，不能按時間延後",
+      "waitsOutside": "這件事在等外部的回應，不能延到某個時間",
+      "skipNotRepeating": "只有重複的提醒才能跳過一次",
+      "badTime": "沒看懂這個時間",
+      "undoNone": "這次操作無法復原",
+      "undoExpired": "超過 10 分鐘了，無法復原",
+      "undoFired": "剛剛提醒過你了，無法復原",
+      "undoChanged": "這件事剛有了新變化，無法復原了",
+      "undoReplied": "{peer}已經回覆了，無法復原",
+      "undoPeerGone": "{peer}已被刪除，無法復原",
+      "undoAnswerRead": "{bot}已經處理過你的回答，無法復原",
+      "answerChanged": "這個問題剛有了變化，訊息沒有送出，內容還在輸入框裡",
+      "answerQueued": "這題已排隊交給{bot}處理。要補充的話，可以去掉「回答」後直接送出",
+      "reminderAnswered": "這個提醒已經處理過了"
+    },
+    "answer": {
+      "bar": "回答：{question}",
+      "dismiss": "不作為回答送出",
+      "label": "回答：{question}",
+      "ended": "這個問題已經結束了，不用再回答",
+      "alreadyAnswered": "這個問題已經在等{name}看了，不用再回答"
+    },
+    "stopped": {
+      "owner": "你停了它",
+      "inSession": "你在它的對話裡停了它",
+      "onBoard": "你在看板上停了它",
+      "agent": "{name} 停了它：{reason}",
+      "agentPlain": "{name} 停了它"
+    }
+  },
+  "MessageCheck": {
+    "action": "讓助手核查",
+    "selection": "核查",
+    "verdict": {
+      "true": "屬實",
+      "false": "不屬實",
+      "partly": "部分屬實",
+      "unsure": "無法判斷"
+    },
+    "checking": "核查中…",
+    "unfinished": "沒核查完",
+    "mark": "助手核查：{verdict}",
+    "markQuote": "核查「{quote}」：{verdict}",
+    "again": "重新核查",
+    "inAssistant": "在助手對話裡看",
+    "process": "看核查過程",
+    "openConversation": "打開原會話",
+    "sentNoName": "已開始核查，結果會顯示在這則訊息下面",
+    "startFailed": "沒能開始核查：{message}",
+    "evidence": "證據",
+    "noEvidence": "沒有給出證據。",
+    "checkedMessage": "被核查的訊息",
+    "checkedSentence": "被核查的一句",
+    "asked": "它回答的是",
+    "note": {
+      "no_verdict": "核查沒給出結論。",
+      "no_evidence": "核查給了結論卻沒給證據，按無法判斷算。",
+      "restarted": "codeg 重新啟動時打斷了它。",
+      "stopped": "它被停掉了。",
+      "taken_over": "你接手了它的會話。",
+      "failed": "它失敗了：{error}"
+    },
+    "heading": {
+      "checking": "正在核查",
+      "done": "核查結論",
+      "failed": "沒核查完"
+    },
+    "cardLine": {
+      "checking": "正在核查{title}裡的一則訊息",
+      "checkingSentence": "正在核查{title}裡的一句話",
+      "done": "核查了{title}裡的一則訊息：{verdict}",
+      "doneSentence": "核查了{title}裡的一句話：{verdict}",
+      "failed": "{title}裡的一則訊息沒核查完",
+      "failedSentence": "{title}裡的一句話沒核查完"
+    },
+    "titleQuoted": "「{title}」",
+    "untitled": "一個會話",
+    "expand": "展開",
+    "collapse": "收起"
+  },
   "SrnAccount": {
     "name": "SRN",
     "trigger": {
@@ -9897,7 +13317,7 @@
       "exchangeFailed": "登入未能完成，請重新開始。",
       "accessDenied": "已在瀏覽器中拒絕連線。",
       "expired": "瀏覽器返回前登入已逾時，請重新開始。",
-      "accountChanged": "SRN 確認的不是登入的帳號，所以沒有保存。",
+      "accountChanged": "SRN 確認的不是登入的帳號，所以沒有儲存。",
       "keychainRead": "無法讀取鑰匙圈中儲存的登入。",
       "keychainWrite": "鑰匙圈未能儲存登入，所以登入沒有完成。",
       "keychainDelete": "鑰匙圈未能刪除登入，所以沒有登出任何帳號。",

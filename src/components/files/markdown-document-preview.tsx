@@ -1,6 +1,10 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import type { Nodes } from "mdast"
+import remarkGfm from "remark-gfm"
+import remarkParse from "remark-parse"
+import { unified } from "unified"
 import { Streamdown } from "streamdown"
 import { readFileBase64 } from "@/lib/api"
 import { normalizeMathDelimiters } from "@/components/ai-elements/message"
@@ -15,20 +19,114 @@ import {
 import { isUncPath, normalizeAbsPath } from "@/lib/file-open-target"
 import { cn } from "@/lib/utils"
 
-function resolveRelativePath(base: string, relative: string): string {
-  // Strip URL fragment (e.g. #gh-light-mode-only) and query string
-  const cleaned = relative.replace(/[#?].*$/, "")
-  // Preserve leading "/" for absolute paths, filter empty segments
-  const isAbsolute = base.startsWith("/")
-  const parts = base.split("/").filter(Boolean)
-  for (const seg of cleaned.split("/")) {
-    if (seg === "..") {
-      if (parts.length > 0) parts.pop()
-    } else if (seg !== "." && seg !== "") {
-      parts.push(seg)
+/**
+ * rehype-harden percent-encodes non-ASCII characters in URLs (a document in
+ * `docs/04-方案设计/` references `架构图.svg`, but the rendered `src` is
+ * `04-%E6%96%B9%E6%A1%88%E8%AE%BE%E8%AE%A1/.../%E6%9E%B6%E6%9E%84%E5%9B%BE.svg`).
+ * The backend wants a real filesystem path, not a URL, so decode it — one
+ * segment at a time. A segment that would decode into a separator (`%2F`,
+ * `%5C`) stays encoded: decoding must never add path structure, or
+ * "/%2Fhost/share/x.png" would turn into the network path "//host/share/x.png"
+ * after the remote-URL guard has already passed it as local. A segment with a
+ * malformed `%` sequence is left untouched rather than throwing.
+ */
+function decodeLocalPath(path: string): string {
+  return path
+    .split("/")
+    .map((segment) => {
+      try {
+        const decoded = decodeURIComponent(segment)
+        return /[/\\]/.test(decoded) ? segment : decoded
+      } catch {
+        return segment
+      }
+    })
+    .join("/")
+}
+
+/**
+ * One segment of a filesystem path, escaped for insertion into a Markdown /
+ * HTML URL. Everything URL-significant is encoded — `%` (a directory literally
+ * named "Design%20Notes" must not decode into "Design Notes"), spaces and
+ * parentheses (they end a Markdown destination), quotes (they end a raw HTML
+ * attribute), `#`/`?` (they start a fragment/query) — and `decodeLocalPath`
+ * reverses it exactly.
+ */
+function encodePathSegment(segment: string): string {
+  return encodeURIComponent(segment).replace(
+    /[!'()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`
+  )
+}
+
+/**
+ * `relative` (already decoded, so a `#` or `?` in it is part of a file name)
+ * under the absolute directory `base`. Not `${base}/…`: under the POSIX root
+ * that reads `//…`, a network share.
+ */
+function joinUnder(base: string, relative: string): string {
+  const prefix = base.endsWith("/") ? base : `${base}/`
+  return normalizeAbsPath(prefix + relative.replace(/^\/+/, ""))
+}
+
+/**
+ * Take the document's code — fenced and indented code blocks, inline code — out
+ * of the path rewrites below, returning the masked text and the inverse. The
+ * spans come from a real CommonMark parse (the parser family Streamdown renders
+ * with), not a line scanner: only a parser knows where a fence inside a list
+ * item or blockquote ends, that a `~~~` mentioned in prose or inside an HTML
+ * comment opens nothing, and that a ```` fence wrapping a ``` example is one
+ * block (same reasoning as `unescapeComposerText` in lib/composer-copy-text.ts).
+ * GFM is on because Streamdown renders with it: without it an indented second
+ * paragraph of a footnote reads as an indented code block.
+ * On a parse failure nothing is masked — the pre-masking behavior.
+ */
+const documentParser = unified().use(remarkParse).use(remarkGfm)
+
+function maskDocumentCode(content: string): {
+  masked: string
+  restore: (rewritten: string) => string
+} {
+  const ranges: Array<[number, number]> = []
+  // The parser drops a leading byte-order mark before counting offsets.
+  const shift = content.startsWith("\uFEFF") ? 1 : 0
+  const walk = (node: Nodes) => {
+    if (node.type === "code" || node.type === "inlineCode") {
+      const start = node.position?.start.offset
+      const end = node.position?.end.offset
+      if (start !== undefined && end !== undefined) {
+        ranges.push([start + shift, end + shift])
+      }
+      return
     }
+    if ("children" in node) for (const child of node.children) walk(child)
   }
-  return (isAbsolute ? "/" : "") + parts.join("/")
+  try {
+    walk(documentParser.parse(content))
+  } catch {
+    return { masked: content, restore: (rewritten) => rewritten }
+  }
+  ranges.sort((x, y) => x[0] - y[0])
+
+  // NUL-delimited, so no rewrite below can produce or match a placeholder.
+  const saved: string[] = []
+  let masked = ""
+  let cursor = 0
+  for (const [start, end] of ranges) {
+    if (start < cursor) continue
+    masked += content.slice(cursor, start) + `\0MDCODE${saved.length}\0`
+    saved.push(content.slice(start, end))
+    cursor = end
+  }
+  masked += content.slice(cursor)
+  return {
+    masked,
+    restore: (rewritten) =>
+      rewritten.replace(
+        /\0MDCODE(\d+)\0/g,
+        (_m, i: string) => saved[Number(i)]
+      ),
+  }
 }
 
 /**
@@ -39,12 +137,26 @@ function resolveRelativePath(base: string, relative: string): string {
  * becomes "/images/a.png" instead of "/docs/images/a.png").
  *
  * `fileDir` is the document's ABSOLUTE directory, so relative references
- * resolve to absolute filesystem paths. Author-written root-relative
+ * resolve to absolute filesystem paths. Author-written root-relative LINK
  * references ("/assets/x.png") resolve against `previewRoot` (the owning
  * workspace folder, or the document directory for files outside every
  * folder) so they also come out absolute — downstream consumers (image
  * loader, link opener) treat every local target as an absolute path.
  * The "./" prefix survives rehype-harden, which re-roots it to "/…".
+ *
+ * Image destinations with a leading "/" are deliberately left alone: in a
+ * local document that is far more often a real absolute filesystem path
+ * (a screenshot in /tmp, an asset in another workspace) than a project-root
+ * ref. Re-rooting it against `previewRoot` silently produced a nonexistent
+ * path such as "/repo/data/workspace/d.png" and a broken image. The image
+ * loader tries the literal path first and falls back to the preview root.
+ *
+ * Fenced code blocks and inline code are masked first: their bytes are what
+ * the author means to show (and what Copy Code hands out), not references.
+ * The rewrites themselves are a source-level pass, not a Markdown parser:
+ * code inside raw HTML (`<pre><code>`) and multi-line reference definitions
+ * are not recognized, so those keep the pre-existing behavior (rewritten, or
+ * for a protocol-relative destination, host-stripped by rehype-harden).
  *
  * Known limitation: documents living under a Windows UNC root
  * ("//server/share/…") lose the double-slash prefix in this pipeline (the
@@ -58,8 +170,10 @@ function preprocessMarkdownPaths(
   fileDir: string,
   previewRoot: string | null
 ): string {
+  // `base` is a filesystem path and `pathPart` is the author's URL text:
+  // escape the former so the consumer's single decode restores both exactly.
   const resolveAgainst = (base: string, pathPart: string): string => {
-    const parts = base.split("/").filter(Boolean)
+    const parts = base.split("/").filter(Boolean).map(encodePathSegment)
     for (const seg of pathPart.split("/")) {
       if (seg === "..") {
         if (parts.length > 0) parts.pop()
@@ -70,15 +184,23 @@ function preprocessMarkdownPaths(
     return parts.join("/")
   }
 
-  const resolveUrl = (url: string): string => {
-    // Skip remote URLs, protocol-relative URLs, and anchors
-    if (/^https?:\/\/|^data:|^blob:|^#|^\/\//.test(url)) return url
+  const resolveUrl = (url: string, kind: "image" | "link"): string => {
+    // Protocol-relative "//host/…" is a WEB address. Pin it to https here:
+    // rehype-harden would otherwise strip the host and hand the renderer a
+    // bare "/…", which the image loader and link opener take for a local path.
+    if (url.startsWith("//")) return `https:${url}`
+    // Skip remote URLs and anchors
+    if (/^https?:\/\/|^data:|^blob:|^#/.test(url)) return url
     // Separate fragment/query from path
     const fragIdx = url.search(/[#?]/)
     const pathPart = fragIdx >= 0 ? url.slice(0, fragIdx) : url
     const fragment = fragIdx >= 0 ? url.slice(fragIdx) : ""
     if (pathPart.startsWith("/")) {
-      // Root-relative: the author means "from the project root".
+      // A leading slash is ambiguous in a local document: it can be a real
+      // absolute filesystem path or a project-root-relative ref. Keep images
+      // as-is (the loader tries the literal path, then the preview root); only
+      // links keep the historical project-root interpretation.
+      if (kind === "image") return url
       if (!previewRoot) return url
       return "./" + resolveAgainst(previewRoot, pathPart) + fragment
     }
@@ -86,11 +208,13 @@ function preprocessMarkdownPaths(
     return "./" + resolveAgainst(fileDir, pathPart) + fragment
   }
 
+  const { masked, restore } = maskDocumentCode(content)
+
   // Pre-resolve image paths: ![alt](url) or ![alt](url "title")
-  let result = content.replace(
+  let result = masked.replace(
     /!\[([^\]]*)\]\(([^)\s"']+)([^)]*)\)/g,
     (match, alt, url, rest) => {
-      const resolved = resolveUrl(url)
+      const resolved = resolveUrl(url, "image")
       if (resolved === url) return match
       return `![${alt}](${resolved}${rest})`
     }
@@ -100,7 +224,7 @@ function preprocessMarkdownPaths(
   result = result.replace(
     /\[(!\[[^\]]*\]\([^)]*\))\]\(([^)\s"']+)([^)]*)\)/g,
     (match, imgPart, url, rest) => {
-      const resolved = resolveUrl(url)
+      const resolved = resolveUrl(url, "link")
       if (resolved === url) return match
       return `[${imgPart}](${resolved}${rest})`
     }
@@ -110,23 +234,31 @@ function preprocessMarkdownPaths(
   result = result.replace(
     /(?<!!)\[([^\]]*)\]\(([^)\s"']+)([^)]*)\)/g,
     (match, text, url, rest) => {
-      const resolved = resolveUrl(url)
+      const resolved = resolveUrl(url, "link")
       if (resolved === url) return match
       return `[${text}](${resolved}${rest})`
     }
   )
 
-  // Pre-resolve HTML <a href="..."> and <img src="..."> tags
+  // Reference definitions: [id]: url — used by images and links alike, so
+  // only the kind-independent rewrite applies (protocol-relative → https).
   result = result.replace(
-    /<(a\s[^>]*?href|img\s[^>]*?src)=(["'])([^"']+)\2/gi,
-    (match, prefix, quote, url) => {
-      const resolved = resolveUrl(url)
+    /^( {0,3}\[[^\]]+\]:[ \t]*<?)(\/\/[^\s>]+)/gm,
+    (_match, head, url) => `${head}https:${url}`
+  )
+
+  // Pre-resolve HTML <a href="..."> and <img src="..."> tags. The attribute
+  // name must start after whitespace, so `data-src` / `data-href` are skipped.
+  result = result.replace(
+    /<(a\s(?:[^>]*?\s)?href|img\s(?:[^>]*?\s)?src)(\s*=\s*)(["'])([^"']+)\3/gi,
+    (match, prefix, eq, quote, url) => {
+      const resolved = resolveUrl(url, /^img/i.test(prefix) ? "image" : "link")
       if (resolved === url) return match
-      return `<${prefix}=${quote}${resolved}${quote}`
+      return `<${prefix}${eq}${quote}${resolved}${quote}`
     }
   )
 
-  return result
+  return restore(result)
 }
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -138,11 +270,14 @@ const MIME_BY_EXT: Record<string, string> = {
   webp: "image/webp",
   bmp: "image/bmp",
   ico: "image/x-icon",
+  avif: "image/avif",
 }
 
 function useLocalImageSrc(
   src: string | undefined,
-  fileDir: string | null
+  baseDir: string | null,
+  previewRoot: string | null,
+  enabled: boolean
 ): string | undefined {
   const [dataUrl, setDataUrl] = useState<string | undefined>(undefined)
 
@@ -150,51 +285,81 @@ function useLocalImageSrc(
   // against the page protocol) — never route them into local file IO, where
   // "//Users/…" would otherwise read an unintended local path.
   const isLocal =
-    src && fileDir && !/^https?:\/\/|^data:|^blob:|^\/\//.test(src)
+    enabled && src && !/^https?:\/\/|^data:|^blob:|^\/\//.test(src)
 
   useEffect(() => {
-    if (!isLocal || !src || !fileDir) return
+    if (!isLocal || !src) return
     let cancelled = false
-    // preprocessMarkdownPaths resolved every local reference against the
-    // document's ABSOLUTE directory (or the preview root), and
-    // rehype-harden re-roots "./x" to "/x" — so a "/"-prefixed src already
-    // IS the absolute filesystem path. Anything else (raw HTML that
-    // slipped past preprocessing) resolves against the document directory.
-    const absPath = src.startsWith("/")
-      ? normalizeAbsPath(src.replace(/[#?].*$/, ""))
-      : resolveRelativePath(fileDir, src)
-    const ext = absPath.split(".").pop()?.toLowerCase() ?? ""
+    const cleaned = decodeLocalPath(src.replace(/[#?].*$/, ""))
+
+    // preprocessMarkdownPaths resolves relative references against `baseDir`
+    // and rehype-harden re-roots "./x" to "/x", so a "/"-prefixed src is
+    // normally already the absolute filesystem path. It can ALSO be a
+    // project-root-relative ref ("/assets/x.png"): try the literal path
+    // first, then the owning folder root as a fallback.
+    const candidates: string[] = []
+    if (cleaned.startsWith("/")) {
+      const absolute = normalizeAbsPath(cleaned)
+      candidates.push(absolute)
+      // A drive-letter path is already fully qualified; only a "/"-rooted one
+      // can also mean "from the project root".
+      if (previewRoot && !/^[a-zA-Z]:\//.test(absolute)) {
+        const prefix = previewRoot.endsWith("/")
+          ? previewRoot
+          : `${previewRoot}/`
+        if (!absolute.startsWith(prefix)) {
+          candidates.push(joinUnder(previewRoot, absolute))
+        }
+      }
+    } else if (baseDir) {
+      candidates.push(joinUnder(baseDir, cleaned))
+    }
+
+    const ext = (candidates[0] ?? cleaned).split(".").pop()?.toLowerCase() ?? ""
     const mime = MIME_BY_EXT[ext] ?? "image/png"
 
-    readFileBase64(absPath)
-      .then((b64) => {
-        if (!cancelled) {
-          setDataUrl(`data:${mime};base64,${b64}`)
+    void (async () => {
+      let lastError: unknown = null
+      for (const candidate of candidates) {
+        // Unmounted or src changed: don't keep issuing reads for a stale ref.
+        if (cancelled) return
+        try {
+          const b64 = await readFileBase64(candidate)
+          if (!cancelled) setDataUrl(`data:${mime};base64,${b64}`)
+          return
+        } catch (err) {
+          // Try the next interpretation of this destination.
+          lastError = err
         }
-      })
-      .catch((err) => {
+      }
+      if (!cancelled) {
         console.error(
-          `[PreviewImage] readFileBase64 failed for "${absPath}":`,
-          typeof err === "object" ? JSON.stringify(err) : err
+          `[PreviewImage] readFileBase64 failed for "${cleaned}" (tried ${candidates.join(", ") || "nothing"}):`,
+          typeof lastError === "object" ? JSON.stringify(lastError) : lastError
         )
-      })
+      }
+    })()
     return () => {
       cancelled = true
     }
-  }, [isLocal, src, fileDir])
+  }, [isLocal, src, baseDir, previewRoot])
 
   if (!isLocal) return src
   return dataUrl
 }
 
 function PreviewImage({
-  fileDir,
+  baseDir,
+  previewRoot,
+  enabled,
   ...props
 }: React.ComponentProps<"img"> & {
-  fileDir: string | null
+  baseDir: string | null
+  previewRoot: string | null
+  enabled: boolean
 }) {
   const src = typeof props.src === "string" ? props.src : undefined
-  const resolvedSrc = useLocalImageSrc(src, fileDir)
+  const resolvedSrc = useLocalImageSrc(src, baseDir, previewRoot, enabled)
 
   // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text
   return <img {...props} src={resolvedSrc} />
@@ -240,18 +405,29 @@ export function MarkdownDocumentPreview({
   // stay relative (harden externalizes them harmlessly) and the image
   // loader / link opener treat nothing as a local path.
   const localRefsEnabled = !fileDir || !isUncPath(fileDir)
+  // A document whose own directory is unknown still has a preview root (the
+  // owning registered folder). Resolve against that instead of handing the
+  // browser a raw relative <img src>: the server has no media route, so such
+  // a request falls through to the SPA and returns HTML, not the image.
+  const baseDir = localRefsEnabled ? (fileDir ?? previewRoot) : null
+  const effectivePreviewRoot = localRefsEnabled ? previewRoot : null
   // Pre-resolve relative AND root-relative paths before Streamdown /
   // rehype-harden mangles them: relative ones against the document's own
-  // directory, root-relative ones ("/assets/x.png") against the preview
+  // directory, root-relative LINK ones ("/assets/x.png") against the preview
   // root (owning folder when inside the workspace, else the directory).
   // Deliberately NOT `escapeWindowsPathSeparators` (see
   // ai-elements/windows-path-escape.ts): this renders a real Markdown
   // DOCUMENT, where `\.` → `.` is correct CommonMark and the author's escapes
   // are theirs to keep. That transform is for agent-authored chat text only.
-  const preprocessed = normalizeMathDelimiters(
-    localRefsEnabled
-      ? preprocessMarkdownPaths(content, fileDir ?? "", previewRoot)
-      : content
+  // Memoized: the pass parses the document once to find its code spans.
+  const preprocessed = useMemo(
+    () =>
+      normalizeMathDelimiters(
+        localRefsEnabled
+          ? preprocessMarkdownPaths(content, baseDir ?? "", previewRoot)
+          : content
+      ),
+    [content, baseDir, previewRoot, localRefsEnabled]
   )
   const plugins = useStreamdownPlugins(preprocessed)
   // Web links go through the app's link decision like every other click on
@@ -278,7 +454,9 @@ export function MarkdownDocumentPreview({
           img: ({ node, ...imgProps }) => (
             <PreviewImage
               {...imgProps}
-              fileDir={localRefsEnabled ? fileDir : null}
+              enabled={localRefsEnabled}
+              baseDir={baseDir}
+              previewRoot={effectivePreviewRoot}
             />
           ),
           // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -301,9 +479,9 @@ export function MarkdownDocumentPreview({
                     // rehype-harden, local hrefs ARE absolute
                     // filesystem paths like "/repo/docs/foo.md" —
                     // open directly; no folder involved.
-                    const target = href
-                      .replace(/[#?].*$/, "")
-                      .replace(/\/\/+/g, "/")
+                    const target = decodeLocalPath(
+                      href.replace(/[#?].*$/, "")
+                    ).replace(/\/\/+/g, "/")
                     void openFilePreview(target)
                   }}
                 >

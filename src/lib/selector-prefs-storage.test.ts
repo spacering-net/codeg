@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest"
 
 import {
+  clearConnectSelection,
   getSavedModeId,
   getSavedPrefsForConnect,
   saveConfigPreference,
   saveModePreference,
+  setConnectSelection,
 } from "./selector-prefs-storage"
 
 const STORAGE_KEY = "codeg:selector-prefs"
@@ -186,6 +188,60 @@ describe("selector-prefs-storage", () => {
     expect(getSavedPrefsForConnect("kiro")).toEqual({
       modeId: null,
       configValues: { model: "claude-sonnet-5" },
+    })
+  })
+
+  describe("one-off connect selections", () => {
+    beforeEach(() => clearConnectSelection("ask-1"))
+
+    it("lays a surface's own selection over the saved default", () => {
+      saveModePreference("codex", {
+        current_mode_id: "plan",
+        available_modes: [],
+      })
+      saveConfigPreference("codex", "model", "gpt-5.3-codex")
+      saveConfigPreference("codex", "effort", "high")
+      setConnectSelection("ask-1", "codex", { model: "gpt-6.2" })
+
+      expect(getSavedPrefsForConnect("codex", "ask-1")).toEqual({
+        modeId: "plan",
+        configValues: { model: "gpt-6.2", effort: "high" },
+      })
+      // Other surfaces still start from the default, which is untouched.
+      expect(getSavedPrefsForConnect("codex", "tab-2").configValues).toEqual({
+        model: "gpt-5.3-codex",
+        effort: "high",
+      })
+      expect(getSavedPrefsForConnect("codex").configValues).toEqual({
+        model: "gpt-5.3-codex",
+        effort: "high",
+      })
+    })
+
+    it("applies with no saved default at all", () => {
+      setConnectSelection("ask-1", "claude_code", { model: "opus" })
+      expect(getSavedPrefsForConnect("claude_code", "ask-1")).toEqual({
+        modeId: null,
+        configValues: { model: "opus" },
+      })
+    })
+
+    it("is ignored for another agent, and gone once cleared", () => {
+      setConnectSelection("ask-1", "claude_code", { model: "opus" })
+      expect(getSavedPrefsForConnect("codex", "ask-1").configValues).toBeNull()
+
+      clearConnectSelection("ask-1")
+      expect(
+        getSavedPrefsForConnect("claude_code", "ask-1").configValues
+      ).toBeNull()
+    })
+
+    it("treats an empty selection as none", () => {
+      setConnectSelection("ask-1", "claude_code", { model: "opus" })
+      setConnectSelection("ask-1", "claude_code", {})
+      expect(
+        getSavedPrefsForConnect("claude_code", "ask-1").configValues
+      ).toBeNull()
     })
   })
 })

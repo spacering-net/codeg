@@ -109,17 +109,19 @@ export function SessionSettingsPicker({
         <PopoverTrigger asChild>
           <Button
             variant="ghost"
-            size="xs"
+            // `sm` (32px tall): level with the "+" and the send button on the
+            // composer's bottom bar. `text-xs` keeps the summary at the size
+            // it had as an `xs` chip.
+            size="sm"
             aria-label={label}
             // A pill tinted with the theme color chosen in Appearance
             // settings (`--primary`), translucent so it also sits over a
             // workspace background image. Hover and the open popover deepen
             // it.
-            // An `xs` Button draws every SVG without a `size-*` class at 12px.
-            // The agent's mark is one, so it would shrink inside its 14px
-            // AgentIcon box, off the line the values are centered on. Hold
-            // such SVGs at the box's size.
-            className="max-w-full min-w-0 shrink gap-1 bg-primary/10 px-2 text-muted-foreground hover:bg-primary/15 hover:text-foreground aria-expanded:bg-primary/15 aria-expanded:text-foreground dark:hover:bg-primary/15 [&_svg:not([class*='size-'])]:size-3.5"
+            // The agent's mark is an SVG without a `size-*` class inside its
+            // 16px AgentIcon box; hold such SVGs at the box's size so the mark
+            // stays on the line the values are centered on.
+            className="max-w-full min-w-0 shrink gap-1.5 bg-primary/10 px-2.5 text-xs text-muted-foreground hover:bg-primary/15 hover:text-foreground aria-expanded:bg-primary/15 aria-expanded:text-foreground dark:hover:bg-primary/15 [&_svg:not([class*='size-'])]:size-4"
           >
             <TriggerIcon agentType={agentType} />
             {/* `overflow-hidden`: when even the shortest form of every value
@@ -151,7 +153,7 @@ export function SessionSettingsPicker({
                 </Fragment>
               ))}
             </span>
-            <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
+            <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
           </Button>
         </PopoverTrigger>
       </SelectorTooltip>
@@ -218,15 +220,15 @@ export function SessionSettingsPicker({
 
 function TriggerIcon({ agentType }: { agentType: AgentType | null }) {
   return agentType ? (
-    <AgentIcon agentType={agentType} className="size-3.5" />
+    <AgentIcon agentType={agentType} className="size-4" />
   ) : (
-    <Cog className="size-3.5 shrink-0" />
+    <Cog className="size-4 shrink-0" />
   )
 }
 
 /**
  * Stand-in for the chip while the session is still being established. It holds
- * the row open at the chip's height and fill (`h-6`, like `Button size="xs"`)
+ * the row open at the chip's height and fill (`h-8`, like `Button size="sm"`)
  * so nothing jumps when the settings arrive, and it is visible where they will
  * be: opening a historical conversation spends seconds in exactly this state,
  * and showing nothing there made a live, still-connecting composer look like a
@@ -247,7 +249,7 @@ function SettingsPlaceholder({
       title={label}
       // The Button's transparent border and padding-box fill too, so the two
       // pills are the same size.
-      className="flex h-6 shrink-0 items-center gap-1.5 rounded-4xl border border-transparent bg-primary/10 bg-clip-padding px-2"
+      className="flex h-8 shrink-0 items-center gap-1.5 rounded-4xl border border-transparent bg-primary/10 bg-clip-padding px-2.5"
     >
       <TriggerIcon agentType={agentType} />
       {/* Neutral ink, not the Skeleton's own `bg-muted` (lighter than the
@@ -446,6 +448,8 @@ function ListSetting({
           currentValue={setting.currentValue}
           recommendedValue={setting.recommendedValue}
           recommendedLabel={t("recommendedBadge")}
+          asides={setting.effortRanges}
+          asideTitle={(range) => t("effortRange", { range })}
           onSelect={commit}
           searchPlaceholder={
             setting.isModel ? t("searchModel") : t("searchOptions")
@@ -481,6 +485,7 @@ function PlainList({
   recommendedLabel: string
   onPick: (value: string) => void
 }) {
+  const t = useTranslations("Folder.chat.messageInput")
   const rows = flattenModelGroups(setting.groups)
   const options = rows.flatMap((row) => (row.kind === "option" ? [row] : []))
   const roving = useRovingFocus(
@@ -521,6 +526,7 @@ function PlainList({
             }
             const { option } = row
             const selected = option.value === setting.currentValue
+            const effortRange = setting.effortRanges?.get(option.value) ?? null
             return (
               <button
                 key={row.key}
@@ -551,6 +557,14 @@ function PlainList({
                       >
                         {recommendedLabel}
                       </Badge>
+                    ) : null}
+                    {effortRange ? (
+                      <span
+                        className="ml-auto shrink-0 pl-2 text-xs text-muted-foreground"
+                        title={t("effortRange", { range: effortRange })}
+                      >
+                        {effortRange}
+                      </span>
                     ) : null}
                   </span>
                   {option.description ? (

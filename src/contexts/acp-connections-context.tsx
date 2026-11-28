@@ -40,6 +40,7 @@ import {
   acpPrompt,
   acpSetMode,
   acpSetConfigOption,
+  acpSetComposerMode,
   acpGoalControl,
   acpCancel,
   acpRespondPermission,
@@ -50,6 +51,7 @@ import {
   acpGetSessionSnapshot,
   acpFindConnectionForConversation,
   openSettingsWindow,
+  type PromptRewindTarget,
 } from "@/lib/api"
 import { denormalizeSnapshot } from "@/lib/snapshot-denormalize"
 import { buildDelegationSeedEnvelopes } from "@/lib/delegation-seed"
@@ -61,10 +63,16 @@ import {
   getConversationIdByExternalIdFromStore,
   useConversationRuntimeStore,
 } from "@/stores/conversation-runtime-store"
+import {
+  delegatesPermission,
+  delegatesPlan,
+  delegatesQuestion,
+} from "@/lib/ask-delegate"
 import type {
   AgentType,
   AcpAgentStatus,
   AcpEvent,
+  AskDelegate,
   ActiveDelegationState,
   AsyncTaskDelta,
   AsyncTaskRecord,
@@ -83,6 +91,7 @@ import type {
   PlanApprovalAnswer,
   SessionConfigKindInfo,
   SessionConfigOptionInfo,
+  SessionConfigSelectOptionInfo,
   SessionFailureRecord,
   SessionModeStateInfo,
   SessionUsageUpdateInfo,
@@ -159,10 +168,17 @@ import {
 } from "@/lib/window-attention"
 import {
   getSavedPrefsForConnect,
-  saveModePreference,
   saveConfigPreference,
 } from "@/lib/selector-prefs-storage"
 import { rememberAdvertisedCommands } from "@/lib/advertised-commands-store"
+import { blockingPrompts } from "@/lib/blocking-prompts"
+import {
+  buildAttentionIndex,
+  EMPTY_ATTENTION_INDEX,
+  sameAttentionIndex,
+  type AttentionCandidate,
+  type AttentionIndex,
+} from "@/lib/conversation-attention"
 import { rememberModelLabels } from "@/lib/model-label-store"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 
@@ -343,7 +359,24 @@ export interface ConnectionState {
   status: ConnectionStatus
   promptCapabilities: PromptCapabilitiesInfo
   supportsFork: boolean
+  /** Whether a sent message can be edited and resent in place
+   *  (`_session/rewind`; see the `rewind_supported` event). */
+  supportsRewind: boolean
   selectorsReady: boolean
+  /**
+   * The composer's pending mode pick on this connection (codeg#1179): a mode
+   * the user picked for a persisted conversation, which the tab applies at
+   * its next send. Recorded by the backend (`acp_set_composer_mode`), carried
+   * on the snapshot, cleared by the backend once the agent's mode reached it.
+   * Absent / `null` when there is none.
+   */
+  composerModeId?: string | null
+  /**
+   * True while a draft's first send is being admitted (`beginFirstSend` →
+   * `releaseFirstSend`): the surfaces disable the mode / option selectors so
+   * the prompt runs with exactly what was showing at submit.
+   */
+  selectorsLocked?: boolean
   sessionId: string | null
   modes: SessionModeStateInfo | null
   configOptions: SessionConfigOptionInfo[] | null
@@ -363,7 +396,8 @@ export interface ConnectionState {
    * phone for as long as the agent CLI runs. Set by `remote_control`, cleared
    * by its `null`, by a fork (codeg closes the session it leaves) and when the
    * connection goes. While it is set the idle sweep leaves the connection
-   * alone. The backend keeps the same value for the snapshot.
+   * alone — unless it started with the session on its own (`at_startup`,
+   * 0.113.0). The backend keeps the same value for the snapshot.
    */
   remoteControl: RemoteControlInfo | null
   liveMessage: LiveMessage | null
@@ -395,6 +429,12 @@ export interface ConnectionState {
    *  blocked on). Set from a `plan_approval_request` event or a snapshot's
    *  `pending_plan_approval`; cleared on `plan_approval_resolved` or turn end. */
   pendingPlanApproval: PendingPlanApprovalState | null
+  /** What the assistant that dispatched this session answers here for the
+   *  owner (personal agent 7.3.1): its questions and plan approvals are not
+   *  notified here — one forwarded to the owner (`ask_forwarded`) is the
+   *  assistant's own notification (1.13). Set from an `ask_delegate` event
+   *  or a snapshot's `ask_delegate`. */
+  askDelegate?: AskDelegate | null
   claudeApiRetry: ClaudeApiRetryState | null
   /** AIR typed session failure table (see `lib/session-failures.ts` for the
    *  merge/settle contract). Retained resolved — entries double as per-id
@@ -802,6 +842,11 @@ type Action =
        *  late `plan_approval_resolved` from wiping a freshly-raised approval). */
       approvalId?: string
     }
+  | {
+      type: "SET_ASK_DELEGATE"
+      contextKey: string
+      askDelegate: AskDelegate | null
+    }
   | { type: "SESSION_STARTED"; contextKey: string; sessionId: string }
   | {
       type: "SESSION_MODES"
@@ -837,7 +882,18 @@ type Action =
       contextKey: string
       supported: boolean
     }
+  | {
+      type: "REWIND_SUPPORTED"
+      contextKey: string
+      supported: boolean
+    }
   | { type: "MODE_CHANGED"; contextKey: string; modeId: string }
+  | {
+      type: "COMPOSER_MODE_CHANGED"
+      contextKey: string
+      modeId: string | null
+    }
+  | { type: "SELECTORS_LOCKED"; contextKey: string; locked: boolean }
   | {
       type: "CONFIG_OPTION_CHANGED"
       contextKey: string
@@ -866,6 +922,9 @@ type Action =
       message: string
       /** The agent's own words, as opposed to codeg's verdict. */
       fromAgent: boolean
+      /** `message` also streamed as reply text, which the line replaces
+       *  (`SessionFailureRecord.echoed_in_reply`). */
+      echoedInReply?: boolean
     }
   | {
       type: "CLAUDE_API_RETRY"
@@ -1523,6 +1582,87 @@ function samePlanEntries(a: PlanEntryInfo[], b: PlanEntryInfo[]): boolean {
   return true
 }
 
+/**
+ * One select entry against another, everything rendered included: a model
+ * entry's `reasoning_efforts` sets the effort range on its row, and an agent
+ * can change it without touching anything else (a codex catalog refresh that
+ * gives an unselected model another level) — a push swallowed here would leave
+ * the row's range stale.
+ */
+function sameSelectEntry(
+  a: SessionConfigSelectOptionInfo,
+  b: SessionConfigSelectOptionInfo
+): boolean {
+  if (
+    a.value !== b.value ||
+    a.name !== b.name ||
+    a.description !== b.description
+  ) {
+    return false
+  }
+  const left = a.reasoning_efforts ?? null
+  const right = b.reasoning_efforts ?? null
+  if (left === right) return true
+  if (!left || !right) return false
+  return (
+    (left.recommended ?? null) === (right.recommended ?? null) &&
+    left.values.length === right.values.length &&
+    left.values.every((level, index) => level === right.values[index])
+  )
+}
+
+/**
+ * The session modes once they follow the agent's mode selector (a `select`
+ * under the `mode` category or id), when that selector names one of the
+ * session's own modes — the live twin of the backend's `SessionState`
+ * handling of `SessionConfigOptions`. Antigravity 1.5.2 answers a mode pick
+ * made through the selector without a `current_mode_update` (#1309). Grok's
+ * effort list shares the category, but its values are no mode, so it never
+ * moves one. Returns `modes` itself when nothing changes.
+ */
+function isModeOption(option: SessionConfigOptionInfo): boolean {
+  return option.category === "mode" || option.id === "mode"
+}
+
+/**
+ * The options with every mode selector that lists `modeId` pointed at it —
+ * the live twin of `SessionState`'s handling of `ModeChanged`: Antigravity
+ * 1.5.2 answers `session/set_mode` with `{}` and pushes no option list
+ * (#1309). Returns `options` itself when nothing changes.
+ */
+export function modeOptionsPointedAt(
+  options: SessionConfigOptionInfo[],
+  modeId: string
+): SessionConfigOptionInfo[] {
+  let next: SessionConfigOptionInfo[] | null = null
+  options.forEach((option, i) => {
+    if (!isModeOption(option) || option.kind.type !== "select") return
+    const kind = option.kind
+    const listed =
+      kind.options.some((o) => o.value === modeId) ||
+      kind.groups.some((g) => g.options.some((o) => o.value === modeId))
+    if (!listed || kind.current_value === modeId) return
+    next ??= [...options]
+    next[i] = { ...option, kind: { ...kind, current_value: modeId } }
+  })
+  return next ?? options
+}
+
+export function modesFollowingModeOption(
+  modes: SessionModeStateInfo | null,
+  options: SessionConfigOptionInfo[]
+): SessionModeStateInfo | null {
+  if (!modes) return modes
+  for (const option of options) {
+    if (!isModeOption(option) || option.kind.type !== "select") continue
+    const value = option.kind.current_value
+    if (!modes.available_modes.some((mode) => mode.id === value)) continue
+    if (value === modes.current_mode_id) return modes
+    return { ...modes, current_mode_id: value }
+  }
+  return modes
+}
+
 function sameConfigOptions(
   a: SessionConfigOptionInfo[] | null,
   b: SessionConfigOptionInfo[]
@@ -1569,13 +1709,7 @@ function sameConfigOptions(
     if (leftKind.groups.length !== rightKind.groups.length) return false
 
     for (let j = 0; j < leftKind.options.length; j += 1) {
-      const lo = leftKind.options[j]
-      const ro = rightKind.options[j]
-      if (
-        lo.value !== ro.value ||
-        lo.name !== ro.name ||
-        lo.description !== ro.description
-      ) {
+      if (!sameSelectEntry(leftKind.options[j], rightKind.options[j])) {
         return false
       }
     }
@@ -1586,15 +1720,7 @@ function sameConfigOptions(
       if (lg.group !== rg.group || lg.name !== rg.name) return false
       if (lg.options.length !== rg.options.length) return false
       for (let k = 0; k < lg.options.length; k += 1) {
-        const lgo = lg.options[k]
-        const rgo = rg.options[k]
-        if (
-          lgo.value !== rgo.value ||
-          lgo.name !== rgo.name ||
-          lgo.description !== rgo.description
-        ) {
-          return false
-        }
+        if (!sameSelectEntry(lg.options[k], rg.options[k])) return false
       }
     }
   }
@@ -1693,6 +1819,42 @@ function ensureLiveMessage(prev: LiveMessage | null): LiveMessage {
     content: [],
     startedAt: Date.now(),
   }
+}
+
+/**
+ * `content` without the failure account `message` a reply chunk told (see
+ * `SessionFailureRecord.echoed_in_reply`): its LAST occurrence in the last
+ * main-thread text block is cut out — anything the agent appended after it
+ * (Antigravity's citation notice) stays — and the block goes once nothing is
+ * left. Returned as is (same reference) when there is no such occurrence.
+ *
+ * The backend's `drop_echoed_failure_text` (`acp/session_state.rs`) is the
+ * same rule, so a snapshot and a watching client agree; keep them in step.
+ */
+export function dropEchoedFailureText(
+  content: LiveContentBlock[],
+  message: string
+): LiveContentBlock[] {
+  const account = message.trim()
+  if (!account) return content
+  let index = -1
+  for (let i = content.length - 1; i >= 0; i--) {
+    const block = content[i]
+    if (block.type === "text" && block.parentToolUseId === undefined) {
+      index = i
+      break
+    }
+  }
+  if (index < 0) return content
+  const block = content[index] as Extract<LiveContentBlock, { type: "text" }>
+  const at = block.text.lastIndexOf(account)
+  if (at < 0) return content
+  const before = block.text.slice(0, at).trimEnd()
+  const after = block.text.slice(at + account.length).trimStart()
+  const rest = before && after ? `${before}\n\n${after}` : before || after
+  return rest
+    ? content.map((b, i) => (i === index ? { ...block, text: rest } : b))
+    : content.filter((_, i) => i !== index)
 }
 
 /** Shared empty `steeredMessageIds`, so a turn that steers nothing (almost all
@@ -2005,6 +2167,7 @@ function connectionsReducer(
           embedded_context: false,
         },
         supportsFork: false,
+        supportsRewind: false,
         selectorsReady: false,
         sessionId: null,
         modes: null,
@@ -2073,6 +2236,7 @@ function connectionsReducer(
           embedded_context: false,
         },
         supportsFork: false,
+        supportsRewind: false,
         selectorsReady: true,
         sessionId: null,
         modes: null,
@@ -2147,6 +2311,8 @@ function connectionsReducer(
         action.patch.selectorsReady || current.selectorsReady
       const mergedSupportsFork =
         action.patch.supportsFork || current.supportsFork
+      const mergedSupportsRewind =
+        action.patch.supportsRewind || current.supportsRewind
       const mergedModes = current.modes ?? action.patch.modes
       const mergedConfigOptions =
         current.configOptions ?? action.patch.configOptions
@@ -2216,6 +2382,7 @@ function connectionsReducer(
         if (
           mergedSelectorsReady === current.selectorsReady &&
           mergedSupportsFork === current.supportsFork &&
+          mergedSupportsRewind === current.supportsRewind &&
           mergedModes === current.modes &&
           mergedConfigOptions === current.configOptions &&
           mergedAvailableCommands === current.availableCommands &&
@@ -2236,6 +2403,7 @@ function connectionsReducer(
           promptCapabilities: mergedPromptCapabilities,
           selectorsReady: mergedSelectorsReady,
           supportsFork: mergedSupportsFork,
+          supportsRewind: mergedSupportsRewind,
           hasPrompted: mergedHasPrompted,
           sessionFailures: mergedSessionFailures,
           toolApprovals: mergedToolApprovals,
@@ -2291,10 +2459,14 @@ function connectionsReducer(
         pendingPermission: hydratedPendingPermission,
         pendingAskQuestion: action.patch.pendingAskQuestion,
         pendingPlanApproval: action.patch.pendingPlanApproval,
+        askDelegate: action.patch.askDelegate ?? null,
         pendingUserMessage: action.patch.pendingUserMessage,
         promptCapabilities: mergedPromptCapabilities,
         selectorsReady: mergedSelectorsReady,
+        // Current state like `status`: the backend's recorded composer pick.
+        composerModeId: action.patch.composerModeId,
         supportsFork: mergedSupportsFork,
+        supportsRewind: mergedSupportsRewind,
         hasPrompted: mergedHasPrompted,
         // Staleness is a current-state field (like status): apply the snapshot's
         // value on the fresh path. `configStaleDismissed` is client-local and
@@ -2917,6 +3089,17 @@ function connectionsReducer(
       return next
     }
 
+    case "SET_ASK_DELEGATE": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      const next = new Map(state)
+      next.set(action.contextKey, {
+        ...conn,
+        askDelegate: action.askDelegate,
+      })
+      return next
+    }
+
     case "CLEAR_PLAN_APPROVAL": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
@@ -2976,12 +3159,17 @@ function connectionsReducer(
     case "SESSION_CONFIG_OPTIONS": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
-      if (sameConfigOptions(conn.configOptions, action.configOptions)) {
+      const modes = modesFollowingModeOption(conn.modes, action.configOptions)
+      if (
+        modes === conn.modes &&
+        sameConfigOptions(conn.configOptions, action.configOptions)
+      ) {
         return state
       }
       const next = new Map(state)
       next.set(action.contextKey, {
         ...conn,
+        modes,
         configOptions: action.configOptions,
       })
       return next
@@ -3064,10 +3252,48 @@ function connectionsReducer(
       return next
     }
 
+    case "REWIND_SUPPORTED": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      if (conn.supportsRewind === action.supported) return state
+      const next = new Map(state)
+      next.set(action.contextKey, {
+        ...conn,
+        supportsRewind: action.supported,
+      })
+      return next
+    }
+
+    case "COMPOSER_MODE_CHANGED": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      if ((conn.composerModeId ?? null) === action.modeId) return state
+      const next = new Map(state)
+      next.set(action.contextKey, { ...conn, composerModeId: action.modeId })
+      return next
+    }
+
+    case "SELECTORS_LOCKED": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      if ((conn.selectorsLocked ?? false) === action.locked) return state
+      const next = new Map(state)
+      next.set(action.contextKey, { ...conn, selectorsLocked: action.locked })
+      return next
+    }
+
     case "MODE_CHANGED": {
       const conn = state.get(action.contextKey)
       if (!conn?.modes) return state
-      if (conn.modes.current_mode_id === action.modeId) return state
+      const configOptions = conn.configOptions
+        ? modeOptionsPointedAt(conn.configOptions, action.modeId)
+        : conn.configOptions
+      if (
+        conn.modes.current_mode_id === action.modeId &&
+        configOptions === conn.configOptions
+      ) {
+        return state
+      }
       const next = new Map(state)
       next.set(action.contextKey, {
         ...conn,
@@ -3075,6 +3301,7 @@ function connectionsReducer(
           ...conn.modes,
           current_mode_id: action.modeId,
         },
+        configOptions,
       })
       return next
     }
@@ -3205,13 +3432,19 @@ function connectionsReducer(
           return state
         }
       }
+      // The account already streamed as reply text (Antigravity tells a dead
+      // executor as an ordinary reply chunk, and only its trajectory says it
+      // ended the turn): the line takes those words' place, as on reload.
+      const content = action.echoedInReply
+        ? dropEchoedFailureText(prev.content, message)
+        : prev.content
       const next = new Map(state)
       next.set(action.contextKey, {
         ...conn,
         liveMessage: {
           ...prev,
           content: [
-            ...prev.content.filter((block) => block.type !== "turn_error"),
+            ...content.filter((block) => block.type !== "turn_error"),
             {
               type: "turn_error" as const,
               message,
@@ -3370,7 +3603,8 @@ function connectionsReducer(
         (before === null && after === null) ||
         (before !== null &&
           after !== null &&
-          before.session_url === after.session_url)
+          before.session_url === after.session_url &&
+          !before.at_startup === !after.at_startup)
       ) {
         return state
       }
@@ -3445,6 +3679,13 @@ interface InternalStore {
   activeKey: string | null
   keyListeners: Map<string, Set<() => void>>
   activeKeyListeners: Set<() => void>
+  /** Which persisted conversations are parked on the user right now, folded
+   *  from every connection this window holds (see `conversation-attention`).
+   *  Derived, never persisted: it is a property of live connections, not of the
+   *  conversation row. Kept here rather than recomputed per subscriber because
+   *  the sidebar asks about every row it draws. */
+  attention: AttentionIndex
+  attentionListeners: Set<() => void>
 }
 
 // ── Store API for consumers ──
@@ -3462,6 +3703,19 @@ export interface ConnectionStoreApi {
   getActiveKey(): string | null
   subscribeKey(key: string, cb: () => void): () => void
   subscribeActiveKey(cb: () => void): () => void
+  /**
+   * Which persisted conversations are parked on a decision the user has to make
+   * (see `conversation-attention`), for a surface that marks a whole list at
+   * once (the sidebar). Reference-stable between changes, so it is safe as a
+   * `useSyncExternalStore` snapshot; subscribe ONCE at the list level and pass
+   * each row the boolean it needs rather than subscribing per row.
+   *
+   * Only conversations this window holds a connection for are in it. A session
+   * started by an automation or `codeg-cli` in another process, never opened
+   * here, is unknown to this client and never marked.
+   */
+  getAttention(): AttentionIndex
+  subscribeAttention(cb: () => void): () => void
 }
 
 const ConnectionStoreContext = createContext<ConnectionStoreApi | null>(null)
@@ -3536,7 +3790,7 @@ export interface AcpActionsValue {
    * reason and the agent process may still be alive. Callers that report a
    * restart to the user gate on it; fire-and-forget teardowns ignore it.
    */
-  disconnect(contextKey: string): Promise<boolean>
+  disconnect(contextKey: string, onlyIfIdle?: boolean): Promise<boolean>
   /**
    * Release a connection whose SURFACE went away on its own (a preview tab
    * replaced by the next single-click in the sidebar) — never a user-intent
@@ -3555,14 +3809,39 @@ export interface AcpActionsValue {
       folderId?: number | null
       conversationId?: number | null
       clientMessageId?: string | null
+      rewind?: PromptRewindTarget | null
     }
-  ): Promise<void>
+  ): Promise<boolean>
   setMode(contextKey: string, modeId: string): Promise<void>
+  /**
+   * Apply a config option pick. `saveAsDefault` also records it as the
+   * new-conversation default — only an explicit pick in a DRAFT does that
+   * (codeg#1179); a pick in an existing conversation is persisted on its row
+   * by the backend and never touches the default.
+   */
   setConfigOption(
     contextKey: string,
     configId: string,
-    valueId: string
+    valueId: string,
+    opts?: { saveAsDefault?: boolean }
   ): Promise<void>
+  /**
+   * Record the composer's pending mode pick for a persisted conversation
+   * (optimistic; rolled back when the backend refuses or vetoes it).
+   * `initial` = a draft's one-time hand-over at its first send. Resolves to
+   * whether the backend applied it.
+   */
+  setComposerMode(
+    contextKey: string,
+    modeId: string | null,
+    opts?: { initial?: boolean }
+  ): Promise<boolean>
+  /** Lock the selectors at `contextKey` for a draft's first send. Returns
+   *  the token `releaseFirstSend` needs. */
+  beginFirstSend(contextKey: string): number
+  /** Release a first-send lock. Idempotent and token-specific: a stale token
+   *  never unlocks a newer attempt. */
+  releaseFirstSend(contextKey: string, token: number): void
   cancel(contextKey: string): Promise<void>
   respondPermission(
     contextKey: string,
@@ -3938,6 +4217,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     activeKey: null,
     keyListeners: new Map(),
     activeKeyListeners: new Set(),
+    attention: EMPTY_ATTENTION_INDEX,
+    attentionListeners: new Set(),
   })
 
   // connectionId → the contextKeys whose events are routed from the legacy
@@ -4074,6 +4355,106 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   const reconnectRef = useRef<AcpActionsValue["reconnect"] | null>(null)
 
   /**
+   * Rebuild the `conversation → blocking prompt` index from every connection
+   * this window holds, and wake the whole-list subscribers only when the marks
+   * actually changed.
+   *
+   * Called from `dispatch` after each accepted action, so it covers every route
+   * a prompt appears or clears by — the live `question_request` /
+   * `permission_request` / `plan_approval_request` events, their resolutions, a
+   * turn end that clears them, and a snapshot hydrate that arrives while one is
+   * open (the only way a client attaching mid-turn learns of it).
+   *
+   * The conversation id comes off `lastConnectParamsRef`, NOT off an open tab:
+   * a connection outlives its tab (closing a tab whose agent is still busy
+   * keeps it running), and that background case is the whole point. The ref
+   * holds the id `connect()` was given plus the one a first send linked
+   * (`conversation_linked`), both remembered past the surface.
+   */
+  const refreshAttention = useCallback(() => {
+    const store = storeRef.current
+    // Backend connection id → the store key it lives under, so a delegated
+    // child (keyed by its own connection id) can be walked up to the top-level
+    // connection whose conversation the user actually has to open. Several keys
+    // can share one connection id (a tab viewing a work task's connection and
+    // that task's transcript dialog, attached as a self-parented child), so a
+    // top-level entry wins over a child one: the walk must land on a row, not
+    // loop back into the viewer.
+    const keyByConnectionId = new Map<string, string>()
+    for (const [key, conn] of store.connections) {
+      const existing = keyByConnectionId.get(conn.connectionId)
+      if (
+        existing === undefined ||
+        (!conn.isDelegationChild &&
+          store.connections.get(existing)?.isDelegationChild)
+      ) {
+        keyByConnectionId.set(conn.connectionId, key)
+      }
+    }
+    const candidates: AttentionCandidate[] = []
+    for (const [key, conn] of store.connections) {
+      // A connection known to be gone can no longer be answered. Leaving a turn
+      // clears the question and plan cards, but a permission survives the
+      // settle to `disconnected` (the liveness fallback dispatches the status
+      // alone), and marking it would point the user at a prompt that is dead.
+      if (conn.status === "disconnected" || conn.status === "error") continue
+      const prompts = blockingPrompts(conn)
+      let ownerKey: string | undefined = key
+      if (conn.isDelegationChild) {
+        // A sub-agent's prompt is answered from the PARENT conversation's
+        // delegation card (the live-runs chip already reads it as "awaiting
+        // you"), so it marks the parent's row. Skip the walk when the child
+        // waits on nobody — the common case on every dispatch.
+        if (!prompts) continue
+        // A self-parented child is a work-task transcript VIEWER, not a
+        // sub-agent: it answers to no parent row, and when a tab shares its
+        // connection the tab's own entry already carries the prompt. Its
+        // copy is also never settled by the liveness sweep, so routing it
+        // through the tab could revive a mark the tab's settle just dropped.
+        if (conn.parentConnectionId === conn.connectionId) continue
+        // Nested delegations chain child → child → root; the guard only stops
+        // a malformed cycle from spinning.
+        let cursor: ConnectionState = conn
+        const seen = new Set<string>()
+        while (cursor.isDelegationChild && ownerKey !== undefined) {
+          if (seen.has(ownerKey)) {
+            ownerKey = undefined
+            break
+          }
+          seen.add(ownerKey)
+          const parentKey: string | undefined = cursor.parentConnectionId
+            ? keyByConnectionId.get(cursor.parentConnectionId)
+            : undefined
+          const parent =
+            parentKey !== undefined
+              ? store.connections.get(parentKey)
+              : undefined
+          ownerKey = parent ? parentKey : undefined
+          if (parent) cursor = parent
+        }
+        // A child whose parent this window does not hold has no row to mark,
+        // and one whose root has gone has no live card to answer it from.
+        if (
+          ownerKey === undefined ||
+          cursor.status === "disconnected" ||
+          cursor.status === "error"
+        ) {
+          continue
+        }
+      }
+      candidates.push({
+        conversationId:
+          lastConnectParamsRef.current.get(ownerKey)?.conversationId,
+        prompts,
+      })
+    }
+    const next = buildAttentionIndex(candidates)
+    if (sameAttentionIndex(store.attention, next)) return
+    store.attention = next
+    for (const cb of store.attentionListeners) cb()
+  }, [])
+
+  /**
    * Fold backend-resolved identity into the remembered connect params.
    *
    * `connect()` records what the CALLER asked for, and for a new conversation
@@ -4096,8 +4477,13 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       const remembered = lastConnectParamsRef.current.get(contextKey)
       if (!remembered) return
       lastConnectParamsRef.current.set(contextKey, { ...remembered, ...patch })
+      // A connection that was parked on a prompt before its conversation id was
+      // known (a brand-new conversation answers a question in its first turn)
+      // becomes markable exactly now — no `dispatch` follows this event, so
+      // nothing else would fold it in.
+      if (patch.conversationId != null) refreshAttention()
     },
-    []
+    [refreshAttention]
   )
 
   /**
@@ -4388,6 +4774,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
 
       storeRef.current.connections = next
 
+      // Fold the new state into the attention index. A streaming batch moves
+      // no prompt (the deltas touch prose, not the cards), so the two hot paths
+      // skip the walk; every other accepted action may have added, moved or
+      // cleared one.
+      if (
+        action.type !== "STREAM_BATCH" &&
+        action.type !== "BATCH_TOOL_CALL_UPDATES"
+      ) {
+        refreshAttention()
+      }
+
       // Mirror a changed liveMessage into the runtime store OUTSIDE React, so
       // the keep-alive conversation panel no longer has to re-render per
       // streaming token just to run a mirror effect. Fires only when the
@@ -4497,7 +4894,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [discardStreamingKey, notifyKeyListeners, notifyAllKeyListeners]
+    [
+      discardStreamingKey,
+      notifyKeyListeners,
+      notifyAllKeyListeners,
+      refreshAttention,
+    ]
   )
 
   // ── setActiveKey ──
@@ -4553,6 +4955,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         storeRef.current.activeKeyListeners.add(cb)
         return () => {
           storeRef.current.activeKeyListeners.delete(cb)
+        }
+      },
+      getAttention() {
+        return storeRef.current.attention
+      },
+      subscribeAttention(cb: () => void) {
+        const { attentionListeners } = storeRef.current
+        attentionListeners.add(cb)
+        return () => {
+          attentionListeners.delete(cb)
         }
       },
     }
@@ -5492,12 +5904,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           })
           // A blocked agent is exactly what a notification is for — the sound
           // path had covered this one since it shipped. Body names the agent
-          // only: the question text is the agent's own prose.
+          // only: the question text is the agent's own prose. One the
+          // dispatching assistant answers for the owner waits until it is
+          // forwarded to them (`ask_forwarded`).
           {
             const nc = quiet
               ? null
               : storeRef.current.connections.get(contextKey)
-            if (nc) {
+            if (nc && !delegatesQuestion(nc.askDelegate, e.questions)) {
               void notifyDesktop(
                 "question_request",
                 sessionNotification(contextKey, {
@@ -5539,11 +5953,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // asks under that event's switches rather than a row of its own,
           // and every plan approval reads the same whichever agent raised it.
           // Body names the agent only: the plan is the agent's own prose.
+          // Held back while the dispatching assistant answers it.
           {
             const nc = quiet
               ? null
               : storeRef.current.connections.get(contextKey)
-            if (nc) {
+            if (nc && !delegatesPlan(nc.askDelegate)) {
               void notifyDesktop(
                 "permission_request",
                 sessionNotification(contextKey, {
@@ -5555,6 +5970,20 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               void requestWindowAttention("permission_request")
             }
           }
+          break
+        case "ask_delegate":
+          dispatch({
+            type: "SET_ASK_DELEGATE",
+            contextKey,
+            askDelegate: e.delegate ?? null,
+          })
+          break
+        case "ask_forwarded":
+          // A question or plan approval the dispatching assistant was
+          // answering is the owner's now. The assistant tells them itself
+          // (1.13): an urgent notification under its own name, routed by
+          // the backend (`personal-agent://notify`) — one here as well
+          // would be the same news twice. The card is already up.
           break
         case "plan_approval_resolved":
           // The approval was answered (this or another window) or canceled.
@@ -5733,12 +6162,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             options: e.options,
             queued: e.queued,
           })
-          // Send OS notification when permission approval is needed
+          // Send OS notification when permission approval is needed — except
+          // a plan approval the dispatching assistant answers for the owner.
           {
             const nc = quiet
               ? null
               : storeRef.current.connections.get(contextKey)
-            if (nc) {
+            if (
+              nc &&
+              !delegatesPermission(nc.askDelegate, e.tool_call, e.options)
+            ) {
               const agentLabel = getAgentLabel(nc.agentType)
               // No redacted variant: the body is a fixed localized string
               // plus the agent's name, and names nothing of the user's. (The
@@ -5906,12 +6339,28 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             supported: e.supported,
           })
           break
+        case "rewind_supported":
+          flushStreamingQueue(contextKey)
+          dispatch({
+            type: "REWIND_SUPPORTED",
+            contextKey,
+            supported: e.supported,
+          })
+          break
         case "mode_changed":
           flushStreamingQueue(contextKey)
           dispatch({
             type: "MODE_CHANGED",
             contextKey,
             modeId: e.mode_id,
+          })
+          break
+        case "composer_mode_changed":
+          flushStreamingQueue(contextKey)
+          dispatch({
+            type: "COMPOSER_MODE_CHANGED",
+            contextKey,
+            modeId: e.mode_id ?? null,
           })
           break
         case "plan_update":
@@ -5955,6 +6404,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                 own ||
                 tFailure(sessionFailureCategoryLabelKey(e.record.category)),
               fromAgent: own.length > 0,
+              echoedInReply:
+                own.length > 0 && e.record.echoed_in_reply === true,
             })
           }
           if (quiet || !failureConn) break
@@ -6505,7 +6956,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             type: "REMOTE_CONTROL",
             contextKey,
             remoteControl: e.remote_control
-              ? { session_url: e.remote_control.session_url ?? null }
+              ? {
+                  session_url: e.remote_control.session_url ?? null,
+                  ...(e.remote_control.at_startup ? { at_startup: true } : {}),
+                }
               : null,
           })
           break
@@ -7144,15 +7598,25 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       }
 
       for (const { contextKey, connectionId } of toDisconnect) {
-        acpDisconnect(connectionId).catch(() => {})
-        releaseConnectionRoute(connectionId, contextKey)
-        teardownAttachSubscription(contextKey)
-        lastActivityRef.current.delete(contextKey)
-        pendingUnmappedEventsRef.current.delete(connectionId)
-        // Reclaimed for idleness, not closed: the tab is still open and its
-        // Reconnect button must resume this session, not start a new one.
-        captureIdentityBeforeRemoval(contextKey)
-        dispatch({ type: "CONNECTION_REMOVED", contextKey })
+        void acpDisconnect(connectionId, true)
+          .catch((error: unknown) => isConnectionGoneError(error))
+          .then((released) => {
+            if (
+              released === false ||
+              storeRef.current.connections.get(contextKey)?.connectionId !==
+                connectionId
+            )
+              return
+            releaseConnectionRoute(connectionId, contextKey)
+            teardownAttachSubscription(contextKey)
+            lastActivityRef.current.delete(contextKey)
+            pendingUnmappedEventsRef.current.delete(connectionId)
+            // Reclaimed for idleness, not closed: the tab is still open and its
+            // Reconnect button must resume this session, not start a new one.
+            captureIdentityBeforeRemoval(contextKey)
+            dispatch({ type: "CONNECTION_REMOVED", contextKey })
+          })
+          .catch(() => {})
       }
     }, IDLE_SWEEP_INTERVAL_MS)
 
@@ -7210,7 +7674,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // its work settles — the same rule as a closed tab.
           if (conn && isConnectionBusy(conn)) busy = true
         }
-        if (owned && !busy) acpDisconnect(connectionId).catch(() => {})
+        if (owned && !busy) acpDisconnect(connectionId, true).catch(() => {})
       }
       for (const [, sub] of attachSubs) {
         try {
@@ -7740,9 +8204,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         // need this gate, but the wait is a fast no-op once the initial
         // subscribe resolves.
         await waitForListenerReady()
-        // Ship the user's saved selector preferences (mode + per-config
-        // values, persisted per agentType in localStorage) up to the backend
-        // at connect time. The backend applies them on the freshly-attached
+        // Ship the new-conversation default (mode + per-config values,
+        // persisted per agentType in localStorage) up to the backend at
+        // connect time, with the conversation's id when it is an existing one:
+        // the backend then replays that conversation's OWN stored selection
+        // instead, and uses the default only for a draft or (once) a legacy
+        // conversation that never recorded one (codeg#1179).
+        //
+        // Previously: ship the user's saved selector preferences up to the
+        // backend at connect time. The backend applies them on the freshly-attached
         // session before emitting `session_modes` / `session_config_options`,
         // so by the time the frontend sees those events (or a snapshot frame
         // on the Subscribe-with-Snapshot attach), `current_mode_id` and
@@ -7752,13 +8222,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         // regressed when the snapshot path replaced the event path on tab
         // re-open (the snapshot frame doesn't carry a `session_modes` event,
         // so the apply-on-event hook never fired).
-        const savedPrefs = getSavedPrefsForConnect(agentType)
+        // With any one-off selection this surface was opened with (the ask
+        // composer's pick, `setConnectSelection`) laid over the default.
+        const savedPrefs = getSavedPrefsForConnect(agentType, contextKey)
         const connectionId = await acpConnect(
           agentType,
           workingDir,
           sessionId,
           savedPrefs.modeId,
-          savedPrefs.configValues
+          savedPrefs.configValues,
+          conversationId != null && conversationId > 0 ? conversationId : null
         )
 
         // If disconnect was requested while connect was in flight, tear down
@@ -7976,7 +8449,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   )
 
   const disconnect = useCallback(
-    async (contextKey: string): Promise<boolean> => {
+    async (contextKey: string, onlyIfIdle = false): Promise<boolean> => {
       pendingConnectRequestsRef.current.delete(contextKey)
       // Whatever the surface does next — close, switch agent, reconnect — the
       // last attempt's failure no longer describes it.
@@ -8039,11 +8512,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // the follow-up connect can re-attach to the process it believed it had
       // replaced. Report which happened and let the caller decide.
       let tornDown = true
-      await acpDisconnect(conn.connectionId).catch((error: unknown) => {
+      const released = await (
+        onlyIfIdle
+          ? acpDisconnect(conn.connectionId, true)
+          : acpDisconnect(conn.connectionId)
+      ).catch((error: unknown) => {
         if (isConnectionGoneError(error)) return
         console.warn("[Acp] backend teardown failed, releasing locally:", error)
         tornDown = false
       })
+      if (released === false) return false
       releaseConnectionRoute(conn.connectionId, contextKey)
       teardownAttachSubscription(contextKey)
       lastActivityRef.current.delete(contextKey)
@@ -8076,7 +8554,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // acpDisconnects), and leaving one attached would leak its subscription
       // — the idle sweep skips viewers.
       if (conn && !conn.isViewer && isConnectionBusy(conn)) return
-      await disconnect(contextKey)
+      await disconnect(contextKey, true)
     },
     [disconnect]
   )
@@ -8300,6 +8778,35 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     teardownAttachSubscription,
   ])
 
+  // The newest setter still in flight per contextKey and selector. A
+  // setter's IPC returns once its command is enqueued on the connection, and
+  // the prompt goes through the same queue — so a prompt issued after the
+  // newest pick of every selector was enqueued runs with what the composer
+  // showed (codeg#1179). Only the NEWEST per selector is waited for: waiting
+  // for a superseded one too would hold the prompt until that stale request
+  // landed. Setters are issued at once, as before; the row records whatever
+  // the session ends up running with.
+  const inflightSettersRef = useRef(
+    new Map<string, Map<string, Promise<unknown>>>()
+  )
+  const trackSetter = useCallback(
+    <T,>(contextKey: string, selector: string, p: Promise<T>): Promise<T> => {
+      let bySelector = inflightSettersRef.current.get(contextKey)
+      if (!bySelector) {
+        bySelector = new Map()
+        inflightSettersRef.current.set(contextKey, bySelector)
+      }
+      const tracked = Promise.resolve(p).finally(() => {
+        const cur = inflightSettersRef.current.get(contextKey)
+        if (cur?.get(selector) === tracked) cur.delete(selector)
+        if (cur && cur.size === 0) inflightSettersRef.current.delete(contextKey)
+      })
+      bySelector.set(selector, tracked)
+      return tracked
+    },
+    []
+  )
+
   const sendPrompt = useCallback(
     async (
       contextKey: string,
@@ -8308,10 +8815,25 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         folderId?: number | null
         conversationId?: number | null
         clientMessageId?: string | null
+        rewind?: PromptRewindTarget | null
       }
     ) => {
+      // Cut-off taken synchronously: only the setters already in flight.
+      const pendingSetters = [
+        ...(inflightSettersRef.current.get(contextKey)?.values() ?? []),
+      ]
+      if (pendingSetters.length > 0) {
+        await Promise.allSettled(pendingSetters)
+      }
       const conn = storeRef.current.connections.get(contextKey)
-      if (!conn) return
+      // Resolves whether the prompt went out: `false` when there is no
+      // connection to send it on (a reconnect removed it meanwhile).
+      if (!conn) {
+        // An edited message must know it did not go out: its caller would
+        // otherwise cut the view for a rewind that never happened.
+        if (opts?.rewind) throw new Error("The connection is gone; try again")
+        return false
+      }
       lastActivityRef.current.set(contextKey, Date.now())
       try {
         await acpPrompt(
@@ -8319,7 +8841,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           blocks,
           opts?.folderId ?? null,
           opts?.conversationId ?? null,
-          opts?.clientMessageId ?? null
+          opts?.clientMessageId ?? null,
+          opts?.rewind ?? null
         )
       } catch (e) {
         // Same reasoning as `cancel`: the backend disowning this id proves the
@@ -8331,28 +8854,35 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         }
         throw e
       }
+      return true
     },
     [markConnectionGone]
   )
 
-  const setMode = useCallback(async (contextKey: string, modeId: string) => {
-    const conn = storeRef.current.connections.get(contextKey)
-    if (!conn) return
-    // Persist user's mode selection to localStorage
-    const modes =
-      conn.modes ?? selectorsCache.get(conn.agentType)?.modes ?? null
-    if (modes) {
-      saveModePreference(conn.agentType, {
-        ...modes,
-        current_mode_id: modeId,
-      })
-    }
-    lastActivityRef.current.set(contextKey, Date.now())
-    await acpSetMode(conn.connectionId, modeId)
-  }, [])
+  // Never writes the new-conversation default: this mostly runs as a send's
+  // catch-up for the composer's mode, and the default is the draft
+  // surfaces' to write at pick time (codeg#1179).
+  const setMode = useCallback(
+    async (contextKey: string, modeId: string) => {
+      const conn = storeRef.current.connections.get(contextKey)
+      if (!conn) return
+      lastActivityRef.current.set(contextKey, Date.now())
+      await trackSetter(
+        contextKey,
+        "mode",
+        acpSetMode(conn.connectionId, modeId)
+      )
+    },
+    [trackSetter]
+  )
 
   const setConfigOption = useCallback(
-    async (contextKey: string, configId: string, valueId: string) => {
+    async (
+      contextKey: string,
+      configId: string,
+      valueId: string,
+      opts?: { saveAsDefault?: boolean }
+    ) => {
       const conn = storeRef.current.connections.get(contextKey)
       if (!conn) return
       dispatch({
@@ -8361,11 +8891,80 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         configId,
         valueId,
       })
-      // Persist user selection to localStorage so the next `acp_connect`
-      // can ship it back to the backend as a preferred config value.
-      saveConfigPreference(conn.agentType, configId, valueId)
+      // Only an explicit pick in a draft becomes the new-conversation
+      // default; an existing conversation's pick is stored on its own row by
+      // the backend.
+      if (opts?.saveAsDefault) {
+        saveConfigPreference(conn.agentType, configId, valueId)
+      }
       lastActivityRef.current.set(contextKey, Date.now())
-      await acpSetConfigOption(conn.connectionId, configId, valueId)
+      await trackSetter(
+        contextKey,
+        `config:${configId}`,
+        acpSetConfigOption(conn.connectionId, configId, valueId)
+      )
+    },
+    [dispatch, trackSetter]
+  )
+
+  const setComposerMode = useCallback(
+    async (
+      contextKey: string,
+      modeId: string | null,
+      opts?: { initial?: boolean }
+    ): Promise<boolean> => {
+      const conn = storeRef.current.connections.get(contextKey)
+      if (!conn) return false
+      const previous = conn.composerModeId ?? null
+      dispatch({ type: "COMPOSER_MODE_CHANGED", contextKey, modeId })
+      lastActivityRef.current.set(contextKey, Date.now())
+      const rollback = () => {
+        const cur = storeRef.current.connections.get(contextKey)
+        if (
+          cur?.connectionId === conn.connectionId &&
+          (cur.composerModeId ?? null) === modeId
+        ) {
+          dispatch({
+            type: "COMPOSER_MODE_CHANGED",
+            contextKey,
+            modeId: previous,
+          })
+        }
+      }
+      try {
+        const applied = await acpSetComposerMode(
+          conn.connectionId,
+          modeId,
+          opts?.initial ?? false
+        )
+        if (!applied) rollback()
+        return applied
+      } catch (e) {
+        rollback()
+        throw e
+      }
+    },
+    [dispatch]
+  )
+
+  // First-send locks by contextKey (survives a canvas card replacement).
+  const firstSendTokenRef = useRef(new Map<string, number>())
+  const firstSendSeqRef = useRef(0)
+  const beginFirstSend = useCallback(
+    (contextKey: string) => {
+      firstSendSeqRef.current += 1
+      const token = firstSendSeqRef.current
+      firstSendTokenRef.current.set(contextKey, token)
+      dispatch({ type: "SELECTORS_LOCKED", contextKey, locked: true })
+      return token
+    },
+    [dispatch]
+  )
+  const releaseFirstSend = useCallback(
+    (contextKey: string, token: number) => {
+      if (firstSendTokenRef.current.get(contextKey) !== token) return
+      firstSendTokenRef.current.delete(contextKey)
+      dispatch({ type: "SELECTORS_LOCKED", contextKey, locked: false })
     },
     [dispatch]
   )
@@ -8643,6 +9242,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       sendPrompt,
       setMode,
       setConfigOption,
+      setComposerMode,
+      beginFirstSend,
+      releaseFirstSend,
       cancel,
       goalControl,
       respondPermission,
@@ -8665,6 +9267,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       registerSessionFailureActions,
     }),
     [
+      setComposerMode,
+      beginFirstSend,
+      releaseFirstSend,
       connect,
       disconnect,
       disconnectIfIdle,

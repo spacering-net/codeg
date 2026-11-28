@@ -156,6 +156,42 @@ export function restampSkillPrefixes(
 }
 
 /**
+ * Re-stamp every expert badge that knows its expert's own id (`meta.expertId`)
+ * with the name the current agent sees that expert under (`nameOf`): a badge
+ * inserted for an agent that has the expert from a Harness plugin installed
+ * whole (`superpowers:brainstorming`) and then sent to another must carry that
+ * other agent's name. A badge `nameOf` has no answer for (`null`: not known
+ * yet) is left as it is. Attrs-only, kept out of the undo history. Returns
+ * true if anything changed.
+ */
+export function restampExpertNames(
+  editor: Editor,
+  nameOf: (expertId: string) => string | null
+): boolean {
+  const updates: { pos: number; attrs: ReferenceAttrs }[] = []
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name !== "reference") return true
+    const attrs = node.attrs as ReferenceAttrs
+    const expertId = attrs.meta?.expertId
+    if (attrs.refType === "skill" && expertId) {
+      const name = nameOf(expertId)
+      if (name !== null && name !== attrs.id) {
+        updates.push({ pos, attrs: { ...attrs, id: name } })
+      }
+    }
+    return true
+  })
+  if (updates.length === 0) return false
+  const tr = editor.state.tr
+  for (const { pos, attrs } of updates) {
+    tr.setNodeMarkup(pos, undefined, attrs)
+  }
+  tr.setMeta("addToHistory", false)
+  editor.view.dispatch(tr)
+  return true
+}
+
+/**
  * Replay a previously-sent `PromptInputBlock[]` (a queued message's draft) back
  * into the editor: prose + reference badges in order, returning the out-of-band
  * attachments (images / embedded resources / non-composer links) for the host to

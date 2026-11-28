@@ -70,6 +70,12 @@ pub(crate) struct ManifestEntry {
     /// commit happened.
     #[serde(default)]
     pub op: String,
+    /// A plugin's member skill (in the plugin's own store, `skills::owned`):
+    /// the plugin's install name. `item_id`, `ref`, `revision` … are then
+    /// the plugin's, and the plugins record — not this entry — is what
+    /// updates and uninstalls go by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
     /// What a newer Codeg added.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -113,11 +119,13 @@ pub(crate) fn path(store: &Path) -> PathBuf {
 }
 
 impl Manifest {
-    /// The item `item_id`'s entry: (install name, entry).
+    /// The item `item_id`'s entry: (install name, entry). A plugin's member
+    /// skill is never one (it carries the plugin's item id, and is the
+    /// plugin's to change).
     pub fn find_item(&self, item_id: &str) -> Option<(&String, &ManifestEntry)> {
         self.skills
             .iter()
-            .find(|(_, entry)| entry.item_id == item_id)
+            .find(|(_, entry)| entry.plugin.is_none() && entry.item_id == item_id)
     }
 }
 

@@ -56,6 +56,9 @@ pub mod harness;
 /// Installing MCP servers from Harness, and the record of what was installed
 /// (both runtimes).
 pub mod harness_mcp;
+/// Installing plugins from Harness, updating, switching and repairing them
+/// (both runtimes).
+pub mod harness_plugins;
 /// Installing skills from Harness through the skills engine (both
 /// runtimes).
 pub mod harness_skills;
@@ -78,6 +81,8 @@ pub mod office_tools;
 /// runtimes).
 pub mod opencode_credentials;
 pub mod open_in;
+/// The personal agent's page (both runtimes).
+pub mod personal_agent;
 #[cfg(feature = "tauri-runtime")]
 pub mod notification;
 pub mod pet;

@@ -368,11 +368,14 @@ async fn async_main(
         chat_authoring_config,
         browser_tools_config,
         computer_tools_config,
-    ) = codeg_lib::app_state::build_delegation_stack(
-        &connection_manager,
-        db.conn.clone(),
-        data_dir.clone(),
-    );
+    ) = {
+        codeg_lib::personal_agent::host::pin_data_dir(data_dir.clone());
+        codeg_lib::app_state::build_delegation_stack(
+            &connection_manager,
+            db.conn.clone(),
+            data_dir.clone(),
+        )
+    };
     let state = Arc::new(AppState {
         db,
         connection_manager,
@@ -674,6 +677,19 @@ async fn async_main(
         state.data_dir.clone(),
     ) {
         tokio::spawn(codeg_lib::work_task::run_task_engine(engine));
+        // The personal agent (mirrors lib.rs setup): next to the task engine
+        // whose tasks it dispatches.
+        if let Some(host) = codeg_lib::personal_agent::host::build(
+            codeg_lib::db::AppDatabase {
+                conn: state.db.conn.clone(),
+            },
+            state.connection_manager.clone_ref(),
+            state.emitter.clone(),
+            state.acp_event_bus.clone(),
+            state.data_dir.clone(),
+        ) {
+            tokio::spawn(codeg_lib::personal_agent::host::run(host));
+        }
         // Repository-panel auto-processing (mirrors lib.rs setup): only where
         // the task engine runs, since it mints tasks unattended.
         if let Some(processor) = codeg_lib::forge::auto::build(
@@ -708,9 +724,10 @@ async fn async_main(
     }
 
     // The Harness update check (mirrors lib.rs setup): daily, in the
-    // background, only tells; not started under CODEG_HARNESS=off.
+    // background, only tells (but switches off a plugin's autorun parts SRN
+    // no longer vouches for); not started under CODEG_HARNESS=off.
     if let Some(checker) =
-        codeg_lib::harness::updates::build(&state.data_dir, state.emitter.clone())
+        codeg_lib::harness::updates::build(&state.data_dir, state.emitter.clone(), &state.db)
     {
         tokio::spawn(codeg_lib::harness::updates::run(checker));
     }

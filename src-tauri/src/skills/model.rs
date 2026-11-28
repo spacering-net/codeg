@@ -39,6 +39,9 @@ pub mod codes {
     pub const ID_TAKEN: &str = "id_taken";
     /// The id belongs to one of Codeg's skill packs.
     pub const ID_RESERVED: &str = "id_reserved";
+    /// The entry is a Harness plugin's member skill (`detail` = the plugin's
+    /// install name): only the plugin, as a whole, changes it.
+    pub const PLUGIN_OWNED: &str = "plugin_owned";
 
     // ── Linking ──────────────────────────────────────────────────────────
     /// A real folder or file is where the link would go.
@@ -329,6 +332,9 @@ pub struct SkillCell {
     /// The other agents that see this same entry (it is in a shared
     /// directory).
     pub shared_with: Vec<AgentType>,
+    /// The deciding entry is a Harness plugin's member skill: the plugin's
+    /// install name (it provides the name to this agent; "provided by").
+    pub plugin: Option<String>,
     /// Everything under the skill's name in the agent's directories.
     pub entries: Vec<CellEntry>,
 }
@@ -338,6 +344,8 @@ pub struct HarnessSkillInfo {
     #[serde(rename = "ref")]
     pub item_ref: Option<String>,
     pub version: Option<String>,
+    /// A plugin's member skill: the plugin's install name ("belongs to").
+    pub plugin: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -353,6 +361,11 @@ pub struct StoreSkill {
     pub harness: Option<HarnessSkillInfo>,
     /// How many backups of it there are (`skills_backups`).
     pub backups: usize,
+    /// A Harness plugin's member skill, in the plugin's own store: the
+    /// plugin's install name. It has no actions of its own (the plugin is
+    /// managed as a whole); its `id` is the name agents see it under, which
+    /// a skill in Codeg's store may have too.
+    pub plugin: Option<String>,
     pub cells: Vec<SkillCell>,
 }
 
@@ -383,6 +396,10 @@ pub struct SkillsInventory {
     pub store: String,
     pub agents: Vec<SkillsAgent>,
     pub skills: Vec<StoreSkill>,
+    /// The member skills of Harness plugins installed as skills only, each
+    /// with its `plugin`; listed apart from `skills`, whose ids they may
+    /// share.
+    pub plugin_skills: Vec<StoreSkill>,
     pub name_taken: Vec<NameTaken>,
     pub broken_links: Vec<BrokenLink>,
     pub problems: Vec<SkillsIssue>,
