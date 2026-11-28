@@ -12096,6 +12096,8 @@
       },
       "empty": "Rien à faire pour vous, et rien en cours.",
       "suggestions": "{count, plural, one {# autre suggestion} other {# autres suggestions}}",
+      "ignore": "Ignorer",
+      "ignoreHint": "Le masquer ; il réapparaît si quelque chose change",
       "failed": "L’activité n’a pas pu être lue pour l’instant.",
       "handed": "Confié à {name}",
       "checking": "En vérification · tour {round}",

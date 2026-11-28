@@ -111,7 +111,7 @@ export function WorkRow({
       className={cn(
         "group/work flex w-full min-w-0 items-center gap-2.5 text-start transition-colors focus-visible:outline-none disabled:cursor-default",
         flat
-          ? "px-3.5 py-3"
+          ? "px-3 py-3"
           : "py-2.5 ps-2.5 pe-2 focus-visible:bg-(--pa-object-hover)",
         !flat && INSET_SURFACE,
         onOpen && (flat ? SHEET_ROW_HOVER : INSET_HOVER)
@@ -192,7 +192,7 @@ function WorkRowWithControls({
       <span
         className={cn(
           "pointer-events-none relative flex w-full min-w-0 items-center gap-2.5",
-          flat ? "px-3.5 py-3" : "py-2.5 ps-2.5 pe-2"
+          flat ? "px-3 py-3" : "py-2.5 ps-2.5 pe-2"
         )}
       >
         <WorkGlyph mode={mode} size={AVATAR_SIZE} />

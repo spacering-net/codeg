@@ -127,6 +127,7 @@ import { PersonalAgentWorkDrawer } from "./work-drawer"
 import { RoutineEditor } from "./routine-editor"
 import { StatusLine } from "./status-line"
 import { useAssistantShortcuts } from "./use-assistant-shortcuts"
+import { AUX_MIN_SIZE, MAIN_MIN_SIZE, useAuxWidth } from "./use-aux-width"
 
 export { PersonalAgentChromeActions } from "./chrome-actions"
 
@@ -371,6 +372,13 @@ export function PersonalAgentPage() {
   const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
   // A page over the conversation: the panel stands aside for it.
   const pageOver = settingsOpen || botPageOpen
+  // The panel as wide as the owner last left it.
+  const {
+    groupRef: auxGroupRef,
+    containerRef: pageRef,
+    share: auxShare,
+    onDragging: onAuxDragging,
+  } = useAuxWidth(auxOpen && !pageOver && !isMobile)
   const [sessionOpen, setSessionOpen] = useState(false)
   const [confirmNew, setConfirmNew] = useState(false)
   const [quoting, setQuotingRow] = useState<number | null>(null)
@@ -694,11 +702,12 @@ export function PersonalAgentPage() {
   return (
     <PageScopeContext.Provider value={scope}>
       <SessionLinkOpenerContext.Provider value={openSession}>
-        <div data-pa-page className="flex h-full min-h-0">
+        <div ref={pageRef} data-pa-page className="flex h-full min-h-0">
           {isMobile ? (
             <div className="min-w-0 flex-1">{conversation}</div>
           ) : (
             <ResizablePanelGroup
+              ref={auxGroupRef}
               direction="horizontal"
               className="min-h-0 flex-1"
             >
@@ -708,19 +717,19 @@ export function PersonalAgentPage() {
                 // Alone — the panel closed, or a page over the
                 // conversation — the whole width: the group warns of a
                 // layout short of 100%.
-                defaultSize={auxOpen && !pageOver ? 70 : 100}
-                minSize={45}
+                defaultSize={auxOpen && !pageOver ? 100 - auxShare : 100}
+                minSize={MAIN_MIN_SIZE}
               >
                 {conversation}
               </ResizablePanel>
               {auxOpen && !pageOver ? (
                 <>
-                  <ResizableHandle />
+                  <ResizableHandle onDragging={onAuxDragging} />
                   <ResizablePanel
                     id="personal-agent-aux"
                     order={2}
-                    defaultSize={30}
-                    minSize={22}
+                    defaultSize={auxShare}
+                    minSize={AUX_MIN_SIZE}
                   >
                     {aux}
                   </ResizablePanel>

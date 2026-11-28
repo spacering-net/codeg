@@ -12096,6 +12096,8 @@
       },
       "empty": "할 일도, 실행 중인 것도 없습니다.",
       "suggestions": "제안 {count}개 더",
+      "ignore": "무시",
+      "ignoreHint": "숨깁니다. 변화가 생기면 다시 표시됩니다",
       "failed": "지금은 활동을 읽을 수 없습니다.",
       "handed": "{name}에게 맡겼습니다",
       "checking": "검수 중 · {round}차",

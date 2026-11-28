@@ -418,7 +418,7 @@ export function MatterActions({
       hint,
       <Button
         key={key}
-        size="sm"
+        size="xs"
         variant={opts.main ? "default" : opts.quiet ? "ghost" : "outline"}
         className={opts.quiet ? "text-muted-foreground" : undefined}
         disabled={busy}
@@ -451,7 +451,7 @@ export function MatterActions({
             <TooltipTrigger asChild>
               <DropdownMenuTrigger asChild>
                 <Button
-                  size="sm"
+                  size="xs"
                   variant="outline"
                   disabled={busy}
                   aria-describedby={`${hintId}-${key}`}

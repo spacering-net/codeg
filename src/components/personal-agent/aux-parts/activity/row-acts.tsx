@@ -95,7 +95,7 @@ export function useRowActs(
   ) => (
     <Button
       key={key}
-      size="sm"
+      size="xs"
       variant={main ? "default" : "outline"}
       disabled={busy}
       onClick={(e) => {

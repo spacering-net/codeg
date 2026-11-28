@@ -12096,6 +12096,8 @@
       },
       "empty": "No hay nada que hacer ni nada en marcha.",
       "suggestions": "{count, plural, one {# sugerencia más} other {# sugerencias más}}",
+      "ignore": "Ignorar",
+      "ignoreHint": "Ocultarlo; volverá a aparecer si algo cambia",
       "failed": "No se pudo leer la actividad ahora mismo.",
       "handed": "Pasado a {name}",
       "checking": "En revisión · ronda {round}",

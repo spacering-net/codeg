@@ -57,6 +57,7 @@ import {
   stripEmbeddedReferences,
 } from "@/components/chat/composer/reference-uri"
 import { useComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
+import type { InputAttachment } from "@/components/chat/message-input-attachments"
 import { useComposerChromeFocus } from "@/components/chat/composer/use-composer-chrome-focus"
 import { useComposerMentionLabels } from "@/components/chat/composer/use-composer-mention-labels"
 import { useReferenceSearch } from "@/components/chat/composer/use-reference-search"
@@ -151,6 +152,30 @@ let lastRequest = 0
  *  sent it was, and lets it go once it went. */
 const outgoing = new Map<string, Set<() => void>>()
 
+/** What each assistant's box had attached, by draft key, for the window's
+ *  life: the box goes when the owner leaves the page or switches
+ *  assistants, and its pictures come back with its text when it opens
+ *  again. Kept here rather than with the text draft — pictures are too big
+ *  for it, as the conversation box's are never saved either. One still
+ *  uploading is not kept: its upload lands in a box that is gone. */
+const draftAttachments = new Map<string, InputAttachment[]>()
+
+/** How each draft key's last send ended (`true`: it went): a box opened
+ *  again meanwhile lets go of its attachments only if they went — an
+ *  image-only send leaves no text draft to tell by. */
+const lastSendWent = new Map<string, boolean>()
+
+/** Whether `kept` is what `sent` held (by each attachment's own id): the
+ *  pictures that went, not ones attached since. */
+function sameAttachments(
+  kept: readonly InputAttachment[] | undefined,
+  sent: readonly InputAttachment[]
+): boolean {
+  if (!kept) return false
+  const ids = new Set(sent.map((a) => a.id))
+  return kept.every((a) => ids.has(a.id))
+}
+
 export function PersonalAgentComposer({
   agent,
   agentName,
@@ -209,6 +234,26 @@ export function PersonalAgentComposer({
     defaultPath: agent.workdir,
     logLabel: "PersonalAgentComposer",
   })
+
+  // Its attachments kept as they change — not before the kept ones are back
+  // (`attachmentsBack`), which would drop them — and put back once.
+  const attachmentsBack = useRef(false)
+  useEffect(() => {
+    if (!attachmentsBack.current) return
+    const kept = attach.attachments.filter(
+      (a) => !(a.type === "image" && a.uploading)
+    )
+    if (kept.length > 0) draftAttachments.set(draftKey, kept)
+    else draftAttachments.delete(draftKey)
+  }, [attach.attachments, draftKey])
+  const { setAttachments } = attach
+  useEffect(() => {
+    const kept = draftAttachments.get(draftKey)
+    if (kept) setAttachments(kept)
+    attachmentsBack.current = true
+    // Once, for the box's own assistant (the page keys the box by it).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   /** The bytes behind every pasted-file badge still in the document. */
   const embeddedBlocks = useCallback((): PromptInputBlock[] => {
@@ -326,6 +371,7 @@ export function PersonalAgentComposer({
         setText("")
         setWrapped(false)
       }
+      if (lastSendWent.get(draftKey)) setAttachments([])
       setAwaiting(false)
     }
     const waiting = outgoing.get(draftKey)
@@ -336,7 +382,7 @@ export function PersonalAgentComposer({
       live = false
       waiting?.delete(settle)
     }
-  }, [awaiting, draftKey, writeDraft])
+  }, [awaiting, draftKey, writeDraft, setAttachments])
 
   // While it sends, the box is locked — the text, the attachments, a card's
   // "put in the box" — so what it clears on return is exactly what went:
@@ -375,6 +421,9 @@ export function PersonalAgentComposer({
     writeDraft()
     const sentDraft = JSON.stringify(loadMessageInputDraftV2(draftKey))
     const blocks = [...embeddedBlocks(), ...attach.imagePromptBlocks()]
+    // What it went with: the box is locked meanwhile, so what is kept for
+    // it when it goes is this.
+    const sentAttachments = attach.attachments
     // What this send settles, taken now — not read again from the page
     // when it returns.
     const sentAnswer = answering
@@ -388,6 +437,8 @@ export function PersonalAgentComposer({
       containerRef.current?.contains(document.activeElement) ?? false
     setSending(true)
     outgoing.set(draftKey, new Set())
+    lastSendWent.delete(draftKey)
+    let went = false
     try {
       await personalAgentSend(
         body,
@@ -399,6 +450,7 @@ export function PersonalAgentComposer({
       )
       // The answer's bar goes even when the box is gone meanwhile (the
       // owner switched assistants): it is this assistant's, and answered.
+      went = true
       ui.clearAnswerSending(bot, requestId)
       if (sentAnswer) ui.clearPendingAnswer(bot, sentAnswer.itemId)
       if (!mounted.current) {
@@ -407,6 +459,9 @@ export function PersonalAgentComposer({
         // written over since (from another window).
         if (JSON.stringify(loadMessageInputDraftV2(draftKey)) === sentDraft) {
           clearMessageInputDraftV2(draftKey)
+        }
+        if (sameAttachments(draftAttachments.get(draftKey), sentAttachments)) {
+          draftAttachments.delete(draftKey)
         }
         return
       }
@@ -444,6 +499,7 @@ export function PersonalAgentComposer({
       toast.error(errorText(e))
     } finally {
       setSending(false)
+      lastSendWent.set(draftKey, went)
       const waiting = outgoing.get(draftKey)
       outgoing.delete(draftKey)
       waiting?.forEach((settle) => settle())

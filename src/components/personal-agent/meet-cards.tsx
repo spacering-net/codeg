@@ -698,7 +698,7 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
   const groups = account ? (
     <>
       <SettingCard
-        className={cn(FLAT_GROUP, "[&>*]:px-3.5")}
+        className={cn(FLAT_GROUP, "[&>*]:px-3")}
         data-pa-surface
         data-pa-meet-level
       >
@@ -721,7 +721,7 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
           type="button"
           onClick={() => setListOpen((o) => !o)}
           aria-expanded={listOpen}
-          className="flex w-full items-center gap-2 px-3.5 py-3 text-start text-sm leading-5 transition-colors outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          className="flex w-full items-center gap-2 px-3 py-3 text-start text-sm leading-5 transition-colors outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           data-pa-meet-promises-toggle
         >
           <ListChecks
@@ -750,7 +750,7 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
               return (
                 <div key={key} data-pa-promise={key}>
                   <SettingRow
-                    className="px-3.5"
+                    className="px-3"
                     icon={PREF_ICONS[key]}
                     title={t(`items.${key}.title` as "items.proactive.title")}
                     description={t(

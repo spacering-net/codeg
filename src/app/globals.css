@@ -1167,8 +1167,8 @@
      first; without it, milliseconds. A glyph none of these has still falls
      back to the system's. */
   --font-emoji:
-    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Segoe UI Symbol",
-    system-ui;
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji",
+    "Segoe UI Symbol", system-ui;
   --color-activity-rail: var(--activity-rail);
   --color-activity-ring: var(--activity-ring);
   --color-activity-ring-done: var(--activity-ring-done);
@@ -4861,6 +4861,64 @@ div.monaco-diff-editor.side-by-side .editor.modified {
     [aria-expanded="true"]
   ) {
   background-color: var(--pa-tonal-hover);
+}
+
+/* Personal agent: a card's own buttons and icon tiles in the conversation
+   (a json-render card, a card codeg draws: `data-pa-surface`) take the
+   card's neutral steps of the text's colour, as the card itself does —
+   not the theme's tinted secondary, outline and muted, a coloured patch on
+   a grey card under a colourful theme. Secondary a soft patch, outline a
+   hairline, ghost the patch under the pointer; each a step deeper under
+   it. The theme's colour stays the main button's, and [Stop] keeps its
+   red. In every theme: the steps are of its own text colour. */
+[data-pa-list] {
+  --pa-tonal-card: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --pa-tonal-card-hover: color-mix(
+    in oklab,
+    var(--foreground) 10%,
+    transparent
+  );
+  --pa-hairline-card: color-mix(in oklab, var(--foreground) 14%, transparent);
+}
+.dark [data-pa-list] {
+  --pa-tonal-card: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --pa-tonal-card-hover: color-mix(
+    in oklab,
+    var(--foreground) 14%,
+    transparent
+  );
+  --pa-hairline-card: color-mix(in oklab, var(--foreground) 16%, transparent);
+}
+[data-pa-list]
+  :is([data-slot="card"], [data-pa-surface])
+  :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"] {
+  background-color: var(--pa-tonal-card);
+  color: var(--foreground);
+}
+[data-pa-list]
+  :is([data-slot="card"], [data-pa-surface])
+  :is(
+    [data-slot="button"],
+    [data-slot$="-trigger"]
+  )[data-variant="outline"]:not([data-pa-task-act="stop"]) {
+  border-color: var(--pa-hairline-card);
+  background-color: transparent;
+}
+[data-pa-list]
+  :is([data-slot="card"], [data-pa-surface])
+  :is([data-slot="button"], [data-slot$="-trigger"]):is(
+    [data-variant="outline"],
+    [data-variant="ghost"]
+  ):is(:hover, [aria-expanded="true"]):not([data-pa-task-act="stop"]) {
+  background-color: var(--pa-tonal-card);
+}
+[data-pa-list]
+  :is([data-slot="card"], [data-pa-surface])
+  :is(
+    [data-slot="button"],
+    [data-slot$="-trigger"]
+  )[data-variant="secondary"]:is(:hover, [aria-expanded="true"]) {
+  background-color: var(--pa-tonal-card-hover);
 }
 
 /* Personal agent: a choice on a card — a new assistant's opening question,

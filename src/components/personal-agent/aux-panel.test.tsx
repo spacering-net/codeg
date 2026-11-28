@@ -796,7 +796,7 @@ describe("the activity", () => {
     const row = error.closest<HTMLElement>("[data-pa-activity-row]")!
     // What it runs on, what done looks like, the whole error: unfolded.
     expect(within(row).queryByText("The login works on Safari")).toBeNull()
-    fireEvent.click(within(row).getByRole("button", { name: "Show details" }))
+    fireEvent.click(row.querySelector<HTMLElement>("[data-pa-item-open]")!)
     const details = row.querySelector<HTMLElement>("[data-pa-row-details]")!
     expect(details.textContent).toContain("Ran on Codex")
     expect(details.textContent).toContain("my-app")
@@ -1032,7 +1032,7 @@ describe("the activity", () => {
     const row = screen
       .getByText("Stand-up notes")
       .closest<HTMLElement>("[data-pa-activity-row]")!
-    fireEvent.click(within(row).getByRole("button", { name: "Show details" }))
+    fireEvent.click(row.querySelector<HTMLElement>("[data-pa-item-open]")!)
     expect(row.querySelector("[data-pa-item-on-done]")!.textContent).toContain(
       "Post them in #team"
     )
@@ -1163,9 +1163,7 @@ describe("the activity", () => {
     )
     // What happens once handed-out work is done is its assistant's to know,
     // not said here (B5).
-    fireEvent.click(
-      within(review).getByRole("button", { name: "Show details" })
-    )
+    fireEvent.click(review.querySelector<HTMLElement>("[data-pa-item-open]")!)
     expect(review.querySelector("[data-pa-item-on-done]")).toBeNull()
     expect(review.textContent).not.toContain("Tell the team")
     // Delivered as a pull request: not stoppable, its matter the owner's to
@@ -1294,12 +1292,15 @@ describe("an activity card of a task", () => {
     expect(
       card.querySelector("[data-pa-task-strip] [data-pa-task-act=stop]")
     ).toBeNull()
-    // Its › before its buttons; unfolded, its details after them.
-    const unfold = within(card).getByRole("button", { name: "Show details" })
+    // The button at its head's end before its buttons; pressed, it unfolds,
+    // its details after them.
+    const head = card.querySelector<HTMLElement>(
+      "[data-pa-row-open], [data-pa-unfold]"
+    )!
     expect(
-      unfold.compareDocumentPosition(merge) & Node.DOCUMENT_POSITION_FOLLOWING
+      head.compareDocumentPosition(merge) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
-    fireEvent.click(unfold)
+    fireEvent.click(card.querySelector<HTMLElement>("[data-pa-item-open]")!)
     const details = card.querySelector("[data-pa-row-details]")!
     expect(
       merge.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING

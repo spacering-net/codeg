@@ -3455,6 +3455,9 @@ export interface ActivityRow {
   task?: RowTask
   /** What it asks the owner, answered on the row (7.5). */
   ask?: RowAsk
+  /** A row waiting on the owner: what [Ignore] sends back — the row as it
+   *  stands. Ignored, it is out of every list until it moves on. */
+  dismiss?: string
 }
 
 /** Whose commands answer a row's ask: the assistant's own request

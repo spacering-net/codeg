@@ -1001,6 +1001,7 @@ async fn activity_in(
         facts,
         live_work,
         routines,
+        dismissed: crate::personal_agent::activity_dismiss::load(&db.conn).await,
         as_of: now,
     });
     view.dispatches = dispatch_infos(db, rows).await?;
@@ -1568,6 +1569,22 @@ pub async fn personal_agent_message_nudge_core(
         .nudge_matter(item_id)
         .await
         .map_err(refusal)
+}
+
+/// [Ignore] on a row waiting on the owner (the activity): `mark`, the row
+/// as it stood ([`crate::personal_agent::activity_view::dismiss_mark`]),
+/// left out of every list until it moves on.
+pub async fn personal_agent_activity_dismiss_core(
+    db: &AppDatabase,
+    mark: String,
+) -> Result<(), AppCommandError> {
+    let mark = mark.trim();
+    if mark.is_empty() {
+        return Err(AppCommandError::invalid_input("nothing to ignore"));
+    }
+    crate::personal_agent::activity_dismiss::dismiss(&db.conn, mark)
+        .await
+        .map_err(AppCommandError::from)
 }
 
 /// "Stop everything": all the assistant has going.
@@ -2199,6 +2216,15 @@ pub async fn personal_agent_activity(
     bot_id: Option<i32>,
 ) -> Result<crate::personal_agent::activity_view::ActivityView, AppCommandError> {
     personal_agent_activity_core(&db, &manager, bot_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_activity_dismiss(
+    db: State<'_, AppDatabase>,
+    mark: String,
+) -> Result<(), AppCommandError> {
+    personal_agent_activity_dismiss_core(&db, mark).await
 }
 
 #[cfg(feature = "tauri-runtime")]

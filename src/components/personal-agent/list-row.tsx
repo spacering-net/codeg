@@ -82,7 +82,10 @@ export function RowIcon({
   return (
     <span
       className={cn(
-        "flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground",
+        // In the conversation the card's own neutral step (globals.css
+        // `--pa-tonal-card`), not the theme's muted: a tinted tile on a
+        // grey card under a colourful theme.
+        "flex size-8 shrink-0 items-center justify-center rounded-lg bg-[var(--pa-tonal-card,var(--muted))] text-muted-foreground",
         className
       )}
     >

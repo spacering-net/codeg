@@ -437,8 +437,9 @@ const CardDepth = createContext(0)
  *  the card's gap), so it reads as that part's. A card inside it is one
  *  thing on it: the list items' wash, tighter, with a smaller title. */
 const OUTER_CARD = cn(
-  "gap-4 py-4",
-  "[&>[data-slot=card-header]]:px-4 [&>[data-slot=card-content]]:px-4",
+  // A bubble's room (`p-3`) from its edges, so it lines up with one.
+  "gap-3 py-3",
+  "[&>[data-slot=card-header]]:px-3 [&>[data-slot=card-content]]:px-3",
   // Its title band as `CARD_TITLE_BAND` draws one (a card under a brief,
   // last night's tidy-ups): as much room over the title as under it — the
   // header a column, not the library's two-row grid whose empty second

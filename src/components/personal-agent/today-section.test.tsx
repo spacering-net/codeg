@@ -745,12 +745,15 @@ describe("the activity's list", () => {
       }),
       { inDrawer: true }
     )
-    const open = (key: string) =>
+    // What a row opens: the button at its head's end when it has more to
+    // unfold where it is pressed, else the row itself.
+    const open = (key: string) => {
+      const el = document.querySelector(`[data-key="${key}"]`) as HTMLElement
       fireEvent.click(
-        within(
-          document.querySelector(`[data-key="${key}"]`) as HTMLElement
-        ).getAllByRole("button")[0]
+        el.querySelector<HTMLElement>("[data-pa-row-open]") ??
+          within(el).getAllByRole("button")[0]
       )
+    }
     open("card:1:9")
     let ui = usePersonalAgentUi.getState()
     expect(ui.viewBot).toBeNull()
@@ -923,13 +926,14 @@ describe("the activity's list", () => {
     await waitFor(() => expect(feed.refresh).toHaveBeenCalled())
     // Its [Put off] too: the matter's whole menu (its own tests elsewhere).
     expect(within(el).getByRole("button", { name: "Put off" })).toBeTruthy()
-    // The row opens the message it came from; its card unfolded.
-    fireEvent.click(within(el).getAllByRole("button")[0])
+    // The row unfolds where it is pressed; the message it came from opens
+    // from its head's end; its card unfolded.
+    fireEvent.click(el.querySelector<HTMLElement>("[data-pa-row-open]")!)
     expect(usePersonalAgentUi.getState().pendingJump).toEqual({
       bot: 1,
       row: 3,
     })
-    fireEvent.click(within(el).getByRole("button", { name: "Show details" }))
+    fireEvent.click(el.querySelector<HTMLElement>("[data-pa-item-open]")!)
     fireEvent.click(
       within(el).getByRole("button", { name: "View the reminder" })
     )
@@ -983,7 +987,7 @@ describe("the activity's list", () => {
     const task = document.querySelector('[data-key="task:9"]') as HTMLElement
     expect(task.textContent).toContain("Being checked · round 2")
     // Its check's session, unfolded.
-    fireEvent.click(within(task).getByRole("button", { name: "Show details" }))
+    fireEvent.click(task.querySelector<HTMLElement>("[data-pa-item-open]")!)
     fireEvent.click(
       within(task).getByRole("button", { name: "View the acceptance session" })
     )
@@ -992,9 +996,9 @@ describe("the activity's list", () => {
       '[data-key="acceptance:5"]'
     ) as HTMLElement
     expect(acceptance.textContent).toContain("queued to merge")
-    // Its board task, unfolded: the row itself opens the card.
+    // Its board task, unfolded: the row's head opens the card.
     fireEvent.click(
-      within(acceptance).getByRole("button", { name: "Show details" })
+      acceptance.querySelector<HTMLElement>("[data-pa-item-open]")!
     )
     fireEvent.click(
       within(acceptance).getByRole("button", { name: "Open the task" })

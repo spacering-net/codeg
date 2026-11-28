@@ -536,6 +536,10 @@ pub fn build_router_with_srn(
             post(handlers::personal_agent::personal_agent_activity),
         )
         .route(
+            "/personal_agent_activity_dismiss",
+            post(handlers::personal_agent::personal_agent_activity_dismiss),
+        )
+        .route(
             "/notification_prefs_sync",
             post(handlers::personal_agent::notification_prefs_sync),
         )

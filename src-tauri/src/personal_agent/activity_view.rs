@@ -199,6 +199,9 @@ pub struct Inputs {
     /// for input): what a row under way is stopped by must be among it.
     pub live_work: HashSet<i32>,
     pub routines: Vec<RoutineView>,
+    /// The rows waiting on the owner they ignored ([`dismiss_mark`]): left
+    /// out, and not counted.
+    pub dismissed: HashSet<String>,
     pub as_of: DateTime<Utc>,
 }
 
@@ -411,6 +414,25 @@ pub struct ActivityRow {
     /// What it asks, answered on it (7.5).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ask: Option<RowAsk>,
+    /// A row waiting on the owner: what [Ignore] on it sends back — the row
+    /// as it stands now ([`dismiss_mark`]). Ignored, it is out of the list
+    /// until something moves it on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dismiss: Option<String>,
+}
+
+/// What ignoring a row waiting on the owner holds to: the thing it is, and
+/// when it last moved — the same thing moving on (stuck again, failed
+/// again, a new question) shows again. A reminder is held to its matter as
+/// it last changed: the same matter is "today"'s `reminder:` row on the day
+/// it came due and the matter's own row once that day is over.
+pub fn dismiss_mark(row: &ActivityRow) -> String {
+    let at = match (&row.item, &row.today) {
+        (Some(i), None) => i.updated_at,
+        (Some(i), Some(t)) if t.kind == "reminder" => i.updated_at,
+        _ => moved(row),
+    };
+    format!("{}@{}", row.thing, at.timestamp_millis())
 }
 
 /// A board task as a row read it.
@@ -497,6 +519,7 @@ fn blank(key: String, bot_id: Option<i32>) -> ActivityRow {
         run: None,
         task: None,
         ask: None,
+        dismiss: None,
     }
 }
 
@@ -1065,6 +1088,7 @@ pub fn merge(inp: Inputs) -> ActivityView {
         facts,
         live_work,
         routines,
+        dismissed,
         as_of,
     } = inp;
     // A work assistant's page has its own rows of "today"; the primary's,
@@ -1370,9 +1394,18 @@ pub fn merge(inp: Inputs) -> ActivityView {
     watch.sort_by_key(|r| std::cmp::Reverse(moved(r)));
 
     // The suggestions: the owner's, one line (5.2).
-    let (suggestions, mut needs): (Vec<_>, Vec<_>) = needs.into_iter().partition(is_suggestion);
+    let (mut suggestions, mut needs): (Vec<_>, Vec<_>) =
+        needs.into_iter().partition(is_suggestion);
     fold_messages([&mut needs, &mut running, &mut watch], &item_messages, &works);
     debug_assert!(running.iter().all(|r| r.stop.is_some()), "{running:#?}");
+    // Each the owner can ignore as it stands — a suggestion too; one they
+    // ignored so, out — the tab's count and the pill without it.
+    for row in needs.iter_mut().chain(suggestions.iter_mut()) {
+        row.dismiss = Some(dismiss_mark(row));
+    }
+    let kept = |r: &ActivityRow| r.dismiss.as_ref().is_none_or(|m| !dismissed.contains(m));
+    needs.retain(kept);
+    suggestions.retain(kept);
 
     // Its routines, coming up with the rest.
     next.extend(routines.into_iter().map(|r| {
@@ -1493,6 +1526,7 @@ mod tests {
             // test says otherwise.
             live_work: (1..=200).collect(),
             routines: Vec::new(),
+            dismissed: HashSet::new(),
             as_of: Utc::now(),
         }
     }
@@ -2250,6 +2284,76 @@ mod tests {
         assert!(!all(&v).iter().any(|r| r.key == "routine_run:1"));
         let done: Vec<&str> = v.groups.done.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(done, vec!["pr_merged:2", "routine_report:6", "finished:10"]);
+    }
+
+    /// A row waiting on the owner carries what ignoring it holds to; ignored
+    /// as it stands, it is out of the list and its count — the same row
+    /// moved on since shows again. Rows elsewhere have nothing to ignore.
+    #[test]
+    fn an_ignored_row_waiting_on_the_owner_is_left_out_until_it_moves() {
+        // Each read the same rows, as they stood then.
+        let t0 = Utc::now();
+        let at = |key: &str, kind: &'static str| {
+            let mut r = trow(key, kind);
+            r.at = t0;
+            r
+        };
+        let today = || TodayView {
+            needs: vec![
+                at("approval:1", "approval"),
+                at("session:2", "session"),
+                at("proposal:9", "proposal"),
+            ],
+            watching: vec![at("dispatch:3", "dispatch")],
+            ..TodayView::default()
+        };
+        let v = with(today(), vec![], Facts::default());
+        invariants(&v);
+        let (_, row) = find(&v, "approval:1");
+        let mark = row.dismiss.clone().expect("a row waiting on the owner");
+        assert!(mark.starts_with(&format!("{}@", row.thing)), "{mark}");
+        assert!(find(&v, "dispatch:3").1.dismiss.is_none());
+        // A suggestion is ignored the same way.
+        let (g, suggestion) = find(&v, "proposal:9");
+        assert_eq!(g, "suggestions");
+        let suggested = suggestion.dismiss.clone().expect("a suggestion");
+
+        let mut inp = inputs(2, false, today(), vec![]);
+        inp.dismissed.insert(mark.clone());
+        inp.dismissed.insert(suggested);
+        let v = merge(inp);
+        invariants(&v);
+        let keys: Vec<&str> = v.groups.needs.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys, vec!["session:2"]);
+        assert!(v.groups.suggestions.is_empty());
+        assert_eq!((v.groups.waiting, v.waiting), (1, 1));
+
+        // Moved on since: shown again.
+        let mut moved = today();
+        moved.needs[0].at += chrono::Duration::seconds(5);
+        let mut inp = inputs(2, false, moved, vec![]);
+        inp.dismissed.insert(mark);
+        let v = merge(inp);
+        invariants(&v);
+        assert_eq!(find(&v, "approval:1").0, "needs");
+    }
+
+    /// A reminder ignored on the day it came due stays ignored once that day
+    /// is over and it stands as its matter's own row — until the matter
+    /// changes.
+    #[test]
+    fn an_ignored_reminder_is_the_same_mark_after_its_day() {
+        let matter = item(5, Some(WaitsFor::Owner), None);
+        let mut due = blank("reminder:5".into(), Some(2));
+        due.thing = "item:5".into();
+        due.today = Some(trow("reminder:5", "reminder"));
+        due.item = Some(matter.clone());
+        let mut after = blank("item:5".into(), Some(2));
+        after.item = Some(matter.clone());
+        assert_eq!(dismiss_mark(&due), dismiss_mark(&after));
+        let mut changed = after.clone();
+        changed.item.as_mut().unwrap().updated_at += chrono::Duration::seconds(1);
+        assert_ne!(dismiss_mark(&after), dismiss_mark(&changed));
     }
 
     /// A message its receiver ended its turn on without an answer waits on

@@ -250,7 +250,7 @@ function UndoAction({ row }: { row: TodayRow }) {
   const [acting, setActing] = useState(false)
   return (
     <Button
-      size="sm"
+      size="xs"
       variant="outline"
       disabled={acting || row.notice_id == null}
       onClick={() => {
@@ -284,7 +284,7 @@ function DraftActions({ row }: { row: TodayRow }) {
   return (
     <>
       <Button
-        size="sm"
+        size="xs"
         disabled={acting || row.notice_id == null}
         onClick={() => act("apply")}
         data-pa-today-act="apply"
@@ -292,7 +292,7 @@ function DraftActions({ row }: { row: TodayRow }) {
         {row.kind === "skill" ? t("install") : t("apply")}
       </Button>
       <Button
-        size="sm"
+        size="xs"
         variant="ghost"
         disabled={acting || row.notice_id == null}
         onClick={() => act("dismiss")}
@@ -396,7 +396,7 @@ export function useTodayRowProps({
       <>
         {go ? (
           <Button
-            size="sm"
+            size="xs"
             variant="outline"
             onClick={onOpen ?? undefined}
             data-pa-today-act={`go-${row.reason}`}

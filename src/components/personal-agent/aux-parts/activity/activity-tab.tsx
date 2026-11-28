@@ -47,8 +47,8 @@ import {
 import {
   PanelGroup,
   PanelIcon,
+  PanelFootRow,
   PanelItem,
-  PanelMoreRow,
   PanelStack,
   type PanelTone,
 } from "../../panel-section"
@@ -367,7 +367,7 @@ export function ActivityList({
             action={
               readOnly ? null : (
                 <Button
-                  size="sm"
+                  size="xs"
                   variant="outline"
                   onClick={newRoutine}
                   data-pa-routine-new
@@ -390,16 +390,19 @@ export function ActivityList({
         const rows = rowsOf(g)
         const whole = all[g] ?? false
         // The suggestions: one line, uncounted, at the end of "needs you".
+        // A band of the card's own after its rows, a hairline over it — and
+        // under it while they show, each a row of the card as the rest.
         const offered =
           g === "needs" && suggestions.length > 0 ? (
-            <div className="flex min-w-0 flex-col" data-pa-activity-suggestions>
-              <PanelMoreRow
+            <>
+              <PanelFootRow
                 onClick={() => setSuggestionsOpen((o) => !o)}
                 aria-expanded={suggestionsOpen}
+                className="border-b border-border/50 last:border-b-0"
                 data-pa-activity-suggestions-toggle
               >
                 {t("suggestions", { count: suggestions.length })}
-              </PanelMoreRow>
+              </PanelFootRow>
               {suggestionsOpen
                 ? suggestions.map((row) => (
                     <ActivityRowView
@@ -411,7 +414,7 @@ export function ActivityList({
                     />
                   ))
                 : null}
-            </div>
+            </>
           ) : null
         return (
           <PanelGroup
@@ -438,12 +441,12 @@ export function ActivityList({
             }
             more={
               !whole && rows.length > GROUP_SHOWN ? (
-                <PanelMoreRow
+                <PanelFootRow
                   onClick={() => setAll((a) => ({ ...a, [g]: true }))}
                   data-pa-activity-more={g}
                 >
                   {tt("more", { count: rows.length - GROUP_SHOWN })}
-                </PanelMoreRow>
+                </PanelFootRow>
               ) : null
             }
             className="scroll-mt-3"

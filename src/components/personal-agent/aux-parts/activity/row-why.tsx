@@ -131,7 +131,7 @@ export function RowStopButton({
     if (!cancelTask) return null
     return (
       <Button
-        size="sm"
+        size="xs"
         variant="outline"
         className={cn(red, className)}
         onClick={() => cancelTask(stop.id, stop.run_seq)}
@@ -145,7 +145,7 @@ export function RowStopButton({
   const { bot, batch } = stop
   return (
     <Button
-      size="sm"
+      size="xs"
       variant="outline"
       className={cn(red, className)}
       disabled={stopping}

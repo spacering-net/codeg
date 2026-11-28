@@ -12096,6 +12096,8 @@
       },
       "empty": "沒有要你做的，也沒有在跑的。",
       "suggestions": "還有 {count} 條建議",
+      "ignore": "忽略",
+      "ignoreHint": "不再顯示；有新變化時會重新出現",
       "failed": "暫時讀不到動態。",
       "handed": "交給{name}了",
       "checking": "驗收中 · 第 {round} 輪",

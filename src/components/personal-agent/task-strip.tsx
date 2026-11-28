@@ -264,7 +264,7 @@ export function TaskStrip({
       : null
   const prButton = task.pr_url ? (
     <Button
-      size="sm"
+      size={compact ? "xs" : "sm"}
       variant="outline"
       data-pa-task-act="pr"
       onClick={() => {
@@ -477,7 +477,8 @@ export function WorkStopButton({
   }
   return (
     <Button
-      size="sm"
+      // The side panel's buttons a size down.
+      size={from === "activity" ? "xs" : "sm"}
       variant="outline"
       data-pa-task-act="stop"
       disabled={stopping || settle.waiting}

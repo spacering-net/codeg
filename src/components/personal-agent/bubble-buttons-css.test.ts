@@ -35,6 +35,28 @@ describe("the bubble's buttons", () => {
     expect(body).toContain("--pa-object-edge: transparent;")
   })
 
+  it("draws a card's own buttons in the card's neutral steps, not the theme's tint", () => {
+    // Its steps of the text's colour, in each theme.
+    expect(css).toMatch(
+      /\[data-pa-list\] \{\s*--pa-tonal-card: color-mix\(in oklab, var\(--foreground\)/
+    )
+    expect(css).toMatch(
+      /\.dark \[data-pa-list\] \{\s*--pa-tonal-card: color-mix\(in oklab, var\(--foreground\)/
+    )
+    const rule = (variant: string, tail = " {") => {
+      const at = css.indexOf(`[data-variant="${variant}"]${tail}`)
+      expect(at).toBeGreaterThan(-1)
+      return css.slice(at, css.indexOf("}", at))
+    }
+    expect(rule("secondary")).toContain(
+      "background-color: var(--pa-tonal-card);"
+    )
+    // [Stop] keeps its red.
+    expect(rule("outline", ':not([data-pa-task-act="stop"]) {')).toContain(
+      "border-color: var(--pa-hairline-card);"
+    )
+  })
+
   it("leaves a table in the conversation no colour of its own", () => {
     expect(css).not.toContain("--pa-table")
     expect(css).toMatch(

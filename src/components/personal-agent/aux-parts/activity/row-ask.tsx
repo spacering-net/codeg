@@ -177,7 +177,7 @@ export function RowAskActions({
           {options.map((o) => (
             <Button
               key={o.option_id}
-              size="sm"
+              size="xs"
               variant={o === main ? "default" : "outline"}
               disabled={busy}
               onClick={(e) =>
@@ -236,7 +236,7 @@ export function RowAskActions({
           {q.options.map((o, i) => (
             <Button
               key={o.label}
-              size="sm"
+              size="xs"
               variant={i === 0 ? "default" : "outline"}
               disabled={busy}
               title={o.description || undefined}
@@ -309,7 +309,7 @@ export function RowAskActions({
           {revising ? (
             <>
               <Button
-                size="sm"
+                size="xs"
                 disabled={busy || note.trim().length === 0}
                 onClick={sendBack}
                 data-pa-row-ask="send-back"
@@ -317,7 +317,7 @@ export function RowAskActions({
                 {t("planReviseSend")}
               </Button>
               <Button
-                size="sm"
+                size="xs"
                 variant="ghost"
                 disabled={busy}
                 onClick={() => setRevising(false)}
@@ -328,7 +328,7 @@ export function RowAskActions({
           ) : (
             <>
               <Button
-                size="sm"
+                size="xs"
                 disabled={busy}
                 onClick={(e) => run(() => answer("approve"), e)}
                 data-pa-row-ask="approve-plan"
@@ -337,7 +337,7 @@ export function RowAskActions({
               </Button>
               {more ? (
                 <Button
-                  size="sm"
+                  size="xs"
                   variant="outline"
                   onClick={() => setWholePlan((w) => !w)}
                   data-pa-row-ask="whole-plan"
@@ -346,7 +346,7 @@ export function RowAskActions({
                 </Button>
               ) : null}
               <Button
-                size="sm"
+                size="xs"
                 variant="ghost"
                 disabled={busy}
                 onClick={() => setRevising(true)}
@@ -365,7 +365,7 @@ export function RowAskActions({
           {ask.options.map((o, i) => (
             <Button
               key={o.key}
-              size="sm"
+              size="xs"
               variant={i === 0 ? "default" : "outline"}
               disabled={busy}
               onClick={(e) =>

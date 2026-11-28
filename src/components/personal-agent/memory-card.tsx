@@ -263,7 +263,7 @@ export function MemoryCard({ item }: { item: NoticeItem }) {
           <div className="min-w-0" data-pa-memory-diff>
             <CompactDiff diffText={diff} />
             {cut ? (
-              <p className="border-t border-border/50 px-3.5 py-1.5 text-[0.6875rem] text-muted-foreground">
+              <p className="border-t border-border/50 px-3 py-1.5 text-[0.6875rem] text-muted-foreground">
                 {t("diffCut")}
               </p>
             ) : null}

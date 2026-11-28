@@ -2820,6 +2820,14 @@ export async function personalAgentActivity(
   return getTransport().call("personal_agent_activity", { botId: bot ?? null })
 }
 
+/** [Ignore] on a row waiting on the owner: `mark` (`ActivityRow.dismiss`),
+ *  the row as it stood, out of every list until it moves on. */
+export async function personalAgentActivityDismiss(
+  mark: string
+): Promise<void> {
+  return getTransport().call("personal_agent_activity_dismiss", { mark })
+}
+
 /** An assistant's routines, with their latest runs (6.9). */
 export async function personalAgentRoutines(
   bot?: number | null

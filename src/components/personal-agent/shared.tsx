@@ -257,7 +257,7 @@ export const SHEET_ROW_HOVER =
  *  — as much room over it as under it — a hairline under it. An
  *  assistant's card draws its title so too (`OUTER_CARD`). */
 export const CARD_TITLE_BAND =
-  "flex min-w-0 items-center gap-1.5 border-b border-border/60 px-4 py-3 text-sm leading-5 font-semibold"
+  "flex min-w-0 items-center gap-1.5 border-b border-border/60 px-3 py-3 text-sm leading-5 font-semibold"
 
 /** A card's body on a bubble: what a native card says and its buttons on
  *  one white sheet under its heading, as an assistant's own card is drawn —
@@ -311,7 +311,7 @@ export function SheetHead({
     <div
       data-pa-sheet-head
       className={cn(
-        "flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 px-3.5 py-2.5 text-xs leading-4 text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0",
+        "flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 px-3 py-2.5 text-xs leading-4 text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0",
         className
       )}
       {...props}
@@ -329,7 +329,7 @@ export function SheetNote({
     <div
       data-pa-sheet-note
       className={cn(
-        "flex min-w-0 flex-col gap-1 px-3.5 py-2.5 text-xs",
+        "flex min-w-0 flex-col gap-1 px-3 py-2.5 text-xs",
         className
       )}
       {...props}
@@ -337,8 +337,9 @@ export function SheetNote({
   )
 }
 
-/** A band of a card: the room every part keeps from the card's edge. */
-export const SHEET_PART = "min-w-0 px-3.5 py-3"
+/** A band of a card: the room every part keeps from the card's edge —
+ *  a bubble's own (`p-3`), so a card under a bubble lines up with it. */
+export const SHEET_PART = "min-w-0 px-3 py-3"
 
 export function SheetPart({
   className,

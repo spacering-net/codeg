@@ -12096,6 +12096,8 @@
       },
       "empty": "Nothing for you to do, and nothing running.",
       "suggestions": "{count, plural, one {# more suggestion} other {# more suggestions}}",
+      "ignore": "Ignore",
+      "ignoreHint": "Hide it; it shows again if anything changes",
       "failed": "The activity could not be read just now.",
       "handed": "Handed to {name}",
       "checking": "Being checked · round {round}",

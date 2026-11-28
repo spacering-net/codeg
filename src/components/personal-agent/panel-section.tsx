@@ -150,6 +150,17 @@ export function PanelSection({
   )
 }
 
+/** The rounding of a group's card inside its hairline: its bar's top
+ *  corners, and its bottom ones while it is folded to that bar — so the
+ *  bar's focus ring, drawn inside it, follows the card's corners instead
+ *  of being cut off at them. */
+const BAR_ROUND =
+  "rounded-t-[max(0px,calc(var(--radius-2xl)-1px))] data-[state=closed]:rounded-b-[max(0px,calc(var(--radius-2xl)-1px))]"
+/** ... a bar with a button of its own, whose ring its folding button's
+ *  `::after` draws over the whole bar. */
+const BAR_AFTER_ROUND =
+  "after:rounded-t-[max(0px,calc(var(--radius-2xl)-1px))] group-data-[state=closed]/fold:after:rounded-b-[max(0px,calc(var(--radius-2xl)-1px))]"
+
 /** The bar across a card's top: what the card is, on a tint, a hairline
  *  under it. */
 export const PANEL_BAR =
@@ -221,7 +232,7 @@ export function PanelGroup({
   titled?: boolean
   /** At the bar's end, before the chevron: the way to add one. */
   action?: ReactNode
-  /** Under the list: the way to show the rest of it (`PanelMoreRow`). */
+  /** Under the list: the way to show the rest of it (`PanelFootRow`). */
   more?: ReactNode
   /** Its rows: `PanelItem`s. */
   children: ReactNode
@@ -303,7 +314,10 @@ export function PanelGroup({
             {heading(
               <CollapsibleTrigger
                 data-pa-fold
-                className="flex min-w-0 items-center gap-2 text-start outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-ring/50 focus-visible:after:ring-inset"
+                className={cn(
+                  "flex min-w-0 items-center gap-2 text-start outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-ring/50 focus-visible:after:ring-inset",
+                  BAR_AFTER_ROUND
+                )}
               >
                 {name}
               </CollapsibleTrigger>
@@ -322,6 +336,7 @@ export function PanelGroup({
               className={cn(
                 PANEL_BAR,
                 "group/fold w-full text-start transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset",
+                BAR_ROUND,
                 TONE[tone].text
               )}
             >
@@ -333,9 +348,7 @@ export function PanelGroup({
         <CollapsibleContent className="flex min-w-0 flex-col border-t border-border/60">
           <PanelStack flush>{children}</PanelStack>
           {more ? (
-            <div className="flex min-w-0 border-t border-border/50 px-4 py-1">
-              {more}
-            </div>
+            <div className="flex min-w-0 border-t border-border/50">{more}</div>
           ) : null}
         </CollapsibleContent>
       </section>
@@ -410,6 +423,35 @@ export function PanelMoreRow({ children, ...props }: ComponentProps<"button">) {
     >
       {children}
       <ChevronDown className="size-3.5 shrink-0" aria-hidden />
+    </button>
+  )
+}
+
+/** A band across a group's card that shows more of it — the rest of its
+ *  rows at its foot, its suggestions after its rows: the card's width, its
+ *  words where its rows' leads start, a chevron after them that turns as
+ *  it opens (`aria-expanded`), quiet until hovered. */
+export function PanelFootRow({
+  className,
+  children,
+  ...props
+}: ComponentProps<"button">) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "group/foot flex h-9 w-full min-w-0 shrink-0 items-center gap-1 px-4 text-start text-xs font-medium text-muted-foreground transition-colors outline-none hover:bg-muted/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset",
+        // At the card's foot, its ring follows the card's corners.
+        "last:rounded-b-[max(0px,calc(var(--radius-2xl)-1px))]",
+        className
+      )}
+      {...props}
+    >
+      <span className="min-w-0 truncate">{children}</span>
+      <ChevronDown
+        aria-hidden
+        className="size-3.5 shrink-0 transition-transform group-aria-expanded/foot:rotate-180"
+      />
     </button>
   )
 }
@@ -514,6 +556,9 @@ export interface PanelItemProps extends Omit<ComponentProps<"div">, "title"> {
   actions?: ReactNode
   /** One button at its end: a row keeps it there. */
   action?: ReactNode
+  /** Its [Ignore], at its foot's end — a card's last band, a row's end —
+   *  apart from what settles it. */
+  dismiss?: ReactNode
   /** At its head's end, after everything there: the › that unfolds
    *  `details`. */
   unfold?: ReactNode
@@ -585,6 +630,7 @@ function StackItem({
   extra,
   actions,
   action,
+  dismiss,
   unfold,
   details,
   flush,
@@ -690,6 +736,11 @@ function StackItem({
             {action}
           </span>
         ) : null}
+        {!card && dismiss ? (
+          <span className="relative z-10 -me-1 flex shrink-0 items-center">
+            {dismiss}
+          </span>
+        ) : null}
       </div>
       {card && callout ? (
         <Callout tone={callout.tone} mono={callout.mono}>
@@ -700,10 +751,15 @@ function StackItem({
       {card && extra ? (
         <div className="relative z-10 min-w-0">{extra}</div>
       ) : null}
-      {card && (actions || action) ? (
-        <div className="relative z-10 flex flex-wrap items-center gap-2">
+      {card && (actions || action || dismiss) ? (
+        <div className="relative z-10 flex flex-wrap items-center gap-1.5">
           {actions}
           {action}
+          {dismiss ? (
+            <span className="-me-1 ms-auto flex shrink-0 items-center">
+              {dismiss}
+            </span>
+          ) : null}
         </div>
       ) : null}
       {details ? (
@@ -731,12 +787,15 @@ function ListItem({
   extra,
   actions,
   action,
+  dismiss,
   unfold,
   details,
   inList,
   className,
   ...props
 }: PanelItemProps & { inList: boolean }) {
+  // Nothing on a brief's rows is settled: no [Ignore] there.
+  void dismiss
   // No boxes here: what one says is a note.
   const allNotes = callout ? [callout.text, ...notes] : notes
   return (

@@ -12096,6 +12096,8 @@
       },
       "empty": "Nada para você fazer, e nada em execução.",
       "suggestions": "{count, plural, one {Mais # sugestão} other {Mais # sugestões}}",
+      "ignore": "Ignorar",
+      "ignoreHint": "Ocultar; volta a aparecer se algo mudar",
       "failed": "Não foi possível ler a atividade agora.",
       "handed": "Entregue a {name}",
       "checking": "Em verificação · rodada {round}",

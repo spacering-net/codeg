@@ -79,7 +79,7 @@ export function TidyLines({
         />
         {t("lines")}
       </h4>
-      <div className={cn("flex min-w-0 flex-col", framed && "px-4")}>
+      <div className={cn("flex min-w-0 flex-col", framed && "px-3")}>
         {rows.map((r) => (
           <TidyLine key={r.key} row={r} />
         ))}

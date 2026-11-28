@@ -25,6 +25,7 @@
 pub mod acceptance;
 pub mod activity;
 pub mod activity_acts;
+pub mod activity_dismiss;
 pub mod activity_facts;
 pub mod activity_view;
 pub mod asks;

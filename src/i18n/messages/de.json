@@ -12096,6 +12096,8 @@
       },
       "empty": "Nichts für dich zu tun, und nichts läuft.",
       "suggestions": "{count, plural, one {# weiterer Vorschlag} other {# weitere Vorschläge}}",
+      "ignore": "Ignorieren",
+      "ignoreHint": "Ausblenden; erscheint wieder, sobald sich etwas ändert",
       "failed": "Die Aktivität konnte gerade nicht gelesen werden.",
       "handed": "An {name} übergeben",
       "checking": "Wird geprüft · Runde {round}",

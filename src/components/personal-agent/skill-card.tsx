@@ -211,7 +211,7 @@ export function SkillCard({ item }: { item: NoticeItem }) {
           <div className="min-w-0" data-pa-skill-diff>
             <CompactDiff diffText={diff} />
             {data?.diff_cut === true ? (
-              <p className="border-t border-border/50 px-3.5 py-1.5 text-[0.6875rem] text-muted-foreground">
+              <p className="border-t border-border/50 px-3 py-1.5 text-[0.6875rem] text-muted-foreground">
                 {tm("diffCut")}
               </p>
             ) : null}

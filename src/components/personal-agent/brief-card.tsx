@@ -469,10 +469,7 @@ export function BriefCard({ item }: { item: NoticeItem }) {
       >
         {shown ? (
           // Its parts on the card, as an assistant's brief is drawn.
-          <SheetPart
-            data-pa-brief-body
-            className="flex flex-col gap-5 pt-3 pb-3.5"
-          >
+          <SheetPart data-pa-brief-body className="flex flex-col gap-5">
             {parts.map((p) => (
               <RowsPart
                 key={p.name}

@@ -12096,6 +12096,8 @@
       },
       "empty": "没有要你做的，也没有在跑的。",
       "suggestions": "还有 {count} 条建议",
+      "ignore": "忽略",
+      "ignoreHint": "不再显示；有新变化时会重新出现",
       "failed": "暂时读不到动态。",
       "handed": "交给{name}了",
       "checking": "验收中 · 第 {round} 轮",

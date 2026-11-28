@@ -111,6 +111,7 @@ vi.mock("@/components/chat/composer/use-composer-attachments", () => ({
     hasUploadingImage: false,
     imagePromptBlocks: () => [],
     clearAttachments: () => {},
+    setAttachments: () => {},
     containerDragProps: {},
     isDragActive: false,
     showNativePaperclip: true,

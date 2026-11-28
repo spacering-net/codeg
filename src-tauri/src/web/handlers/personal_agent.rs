@@ -560,6 +560,19 @@ pub async fn personal_agent_activity(
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ActivityDismissParams {
+    pub mark: String,
+}
+
+pub async fn personal_agent_activity_dismiss(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ActivityDismissParams>,
+) -> Result<Json<()>, AppCommandError> {
+    pa::personal_agent_activity_dismiss_core(&state.db, params.mark).await?;
+    Ok(Json(()))
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationPrefsSyncParams {
     pub enabled: bool,

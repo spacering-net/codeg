@@ -3,12 +3,14 @@
 /** The activity's rows (C1, C3): one for each thing — "today"'s row of it,
  *  the matter it stands for, or a routine — in one shape: who or what it is,
  *  its title, one line of where it stands and when, at most one box (why it
- *  failed, why it waits on the owner), the buttons that settle it, and a ›
- *  at its end that unfolds the rest of it in place. */
+ *  failed, why it waits on the owner), the buttons that settle it. Pressed,
+ *  a row with more to it unfolds the rest in place; what it opens (its
+ *  session, its task, its card) is the button at its head's end. */
 
 import { useState, type ReactNode } from "react"
 import { useLocale, useTranslations } from "next-intl"
 import {
+  ArrowUpRight,
   Bell,
   Ear,
   Forward,
@@ -73,6 +75,7 @@ import {
 } from "./matter-actions"
 import { useActSettle } from "./act-settle"
 import { useRowActs } from "./row-acts"
+import { DismissButton } from "./row-dismiss"
 import { RowStopButton, WhyChip } from "./row-why"
 
 /** A piece of work's glyph leading a row, in px at 100% zoom: as a kind's
@@ -234,7 +237,7 @@ function useDetails({
     links.push(
       <Button
         key="reminder"
-        size="sm"
+        size="xs"
         variant="outline"
         onClick={() => jumpTo(bot, card)}
         data-pa-row-link="reminder"
@@ -250,7 +253,7 @@ function useDetails({
       links.push(
         <Button
           key="check"
-          size="sm"
+          size="xs"
           variant="outline"
           onClick={() => openWork(target)}
           data-pa-row-link="check"
@@ -266,7 +269,7 @@ function useDetails({
     links.push(
       <Button
         key="task"
-        size="sm"
+        size="xs"
         variant="outline"
         onClick={() => open(id)}
         data-pa-row-link="task"
@@ -376,15 +379,29 @@ function ThingRow({
         {matterActs}
       </>
     ) : undefined
+  // A row with more to it unfolds where it is pressed; what it opens — its
+  // session, its task — is the button at its head's end (`finish`).
+  const tf = useTranslations("PersonalAgent.feed")
+  const toggle = details ? () => onOpenChange(!open) : null
+  const toggleLabel = open ? tf("fold") : tf("unfold")
   const unfold = details ? (
     <UnfoldButton open={open} onOpenChange={onOpenChange} />
   ) : null
+  // What waits on the owner can be let go of here, as it stands (its
+  // [Ignore]); nothing else is.
+  const dismiss =
+    group === "needs" ? (
+      <DismissButton row={row} scope={scope} group={group} />
+    ) : null
   const props = {
     open: open && details != null,
     details,
     unfold,
     flash,
     dispatch,
+    dismiss,
+    toggle,
+    toggleLabel,
   }
   const shell = { ...props, row, scope, actions, notes: folded.notes }
   if (today?.kind === "matter_closed")
@@ -410,15 +427,23 @@ function finish(
     dispatch,
     scope,
     notes,
+    dismiss,
+    toggle,
+    toggleLabel,
   }: {
     row: ActivityRow
     open: boolean
     details: ReactNode
+    /** The › that unfolds it: at its head's end when it opens nothing. */
     unfold: ReactNode
+    /** Unfolds or folds it: what pressing it does, when it has more to it. */
+    toggle: (() => void) | null
+    toggleLabel: string
     flash: boolean
     dispatch: DispatchInfo | null
     scope: RowScope
     notes: ReactNode[]
+    dismiss: ReactNode
   }
 ): PanelItemProps {
   const buttons = props.actions != null
@@ -471,14 +496,31 @@ function finish(
   // itself.
   const chip =
     scope.mode === "v2" && row.why ? <WhyChip why={row.why} /> : props.chip
+  // More to it: pressed, it unfolds in place, and what it opens — its
+  // session, its task, its card — is the button at its head's end. Nothing
+  // more: pressed, it opens that, as before.
+  const opens = props.onOpen ?? null
+  const head: Partial<PanelItemProps> = toggle
+    ? {
+        onOpen: toggle,
+        expanded: open,
+        openLabel: toggleLabel,
+        unfold: opens ? (
+          <OpenThingButton onOpen={opens} label={props.openLabel} />
+        ) : (
+          (unfold ?? undefined)
+        ),
+      }
+    : { unfold: unfold ?? undefined }
   return {
     ...props,
+    ...head,
     chip,
     actions,
-    unfold: unfold ?? undefined,
     notes: notes.length > 0 ? [...(props.notes ?? []), ...notes] : props.notes,
     details: open ? details : undefined,
     extra: strip ?? undefined,
+    dismiss: dismiss ?? undefined,
     className: cn(
       "scroll-mt-12 transition-colors",
       flash && "bg-primary/10",
@@ -498,6 +540,35 @@ interface ShellProps {
   flash: boolean
   dispatch: DispatchInfo | null
   notes: ReactNode[]
+  dismiss: ReactNode
+  toggle: (() => void) | null
+  toggleLabel: string
+}
+
+/** What a row that unfolds where it is pressed opens — its session, its
+ *  task, its card — at its head's end, where its › was. */
+function OpenThingButton({
+  onOpen,
+  label,
+}: {
+  onOpen: () => void
+  label?: string
+}) {
+  const t = useTranslations("PersonalAgent.today")
+  const name = label ?? t("open")
+  return (
+    <Button
+      size="icon-xs"
+      variant="ghost"
+      className="text-muted-foreground hover:text-foreground"
+      title={name}
+      aria-label={name}
+      onClick={onOpen}
+      data-pa-row-open
+    >
+      <ArrowUpRight aria-hidden className="size-4 rtl:-scale-x-100" />
+    </Button>
+  )
 }
 
 /** The rows of its chain a row stands for (`folded`): a message its sender
@@ -839,7 +910,7 @@ function MatterClosedShell({ today, ...p }: ShellProps & { today: TodayRow }) {
   const action =
     !p.scope.readOnly && undo != null && itemId != null ? (
       <Button
-        size="sm"
+        size="xs"
         variant="outline"
         disabled={acting || settle.waiting}
         onClick={() => {
