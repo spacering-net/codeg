@@ -44,60 +44,218 @@ pub async fn open_in_code(path: String) -> Result<(), AppCommandError> {
 /// plugin's `open_path` is scope-checked against `$HOME`, which a workspace on
 /// another drive fails, and raising that scope to `**` would hand every other
 /// renderer path — agent markdown included — the same reach plus a free choice
-/// of `with` program. Here the errand is exactly one path, `with` is never
-/// passed, and the path must be an existing local file or directory.
+/// of `with` program. Here the errand is exactly one path, no program is ever
+/// chosen, and the path must be an existing local regular file.
+///
+/// `async` so the launch runs off the main thread: a synchronous command runs
+/// on it, and the metadata lookup (a network drive) or the launcher can stall.
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
-pub fn open_local_file(
-    app: tauri::AppHandle,
-    path: String,
-) -> Result<(), AppCommandError> {
+pub async fn open_local_file(path: String) -> Result<(), AppCommandError> {
     let target = validate_open_local_file_path(&path)?;
-    use tauri_plugin_opener::OpenerExt;
-    app.opener()
-        .open_path(target.to_string_lossy().into_owned(), None::<&str>)
-        .map_err(|err| {
-            AppCommandError::external_command("Failed to open the file", err.to_string())
-        })
+    launch_default_app(&target).await
 }
 
-/// Reject anything that is not a plain, existing absolute filesystem path.
+#[cfg(any(feature = "tauri-runtime", all(test, not(windows))))]
+const OPEN_LOCAL_FILE_FAILED: &str = "Failed to open the file";
+
+/// Windows: `ShellExecuteEx` (the opener plugin's path) answers synchronously,
+/// and a type with no association gets the shell's own "Open with" chooser.
+#[cfg(all(feature = "tauri-runtime", windows))]
+async fn launch_default_app(target: &Path) -> Result<(), AppCommandError> {
+    tauri_plugin_opener::open_path(target, None::<&str>).map_err(|err| {
+        AppCommandError::external_command(
+            OPEN_LOCAL_FILE_FAILED,
+            format!("{}: {err}", target.display()),
+        )
+    })
+}
+
+/// macOS `open` / Linux `xdg-open`, run by codeg rather than the opener plugin:
+/// the plugin spawns them detached and drops their exit status, so a type with
+/// no registered application (`open` exits 1, `xdg-open` 3/4) would do nothing
+/// at all; and its `xdg-open` inherits an AppImage's bundled environment, which
+/// breaks the host's `gio` (see `appimage_env`) — `tokio_command` restores it.
+#[cfg(all(feature = "tauri-runtime", not(windows)))]
+async fn launch_default_app(target: &Path) -> Result<(), AppCommandError> {
+    // `open` hands the file to LaunchServices and never runs the application
+    // itself, so its stderr is safe to read: it says why ("No application
+    // knows how to open …").
+    #[cfg(target_os = "macos")]
+    let (mut command, launcher) = (
+        tokio_command("/usr/bin/open"),
+        DefaultAppLauncher::CapturesStderr,
+    );
+    // `xdg-open`'s fallbacks can run the application in the foreground, where
+    // it inherits the launcher's stderr — a pipe codeg reads would SIGPIPE it
+    // once codeg quits. So nothing is captured; the exit code says why. A host
+    // without `xdg-open` gets `gio open`, the opener plugin's next try.
+    #[cfg(not(target_os = "macos"))]
+    let (mut command, launcher) = {
+        use crate::commands::acp::resolve_command_on_path;
+        if resolve_command_on_path("xdg-open").is_none() && resolve_command_on_path("gio").is_some()
+        {
+            let mut command = tokio_command("gio");
+            command.arg("open");
+            (command, DefaultAppLauncher::Silent)
+        } else {
+            (tokio_command("xdg-open"), DefaultAppLauncher::XdgOpen)
+        }
+    };
+    command.arg(target);
+    run_default_app_launcher(command, launcher, target, DEFAULT_APP_LAUNCHER_VERDICT).await
+}
+
+/// How long a launcher gets to say it failed. Both normally exit within a
+/// second of handing the file over; a few `xdg-open` fallbacks instead run the
+/// application in the foreground, which then is the file open — success.
+#[cfg(all(feature = "tauri-runtime", not(windows)))]
+const DEFAULT_APP_LAUNCHER_VERDICT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Most of a launcher's stderr kept for the error: its first lines say why.
+#[cfg(all(any(feature = "tauri-runtime", test), not(windows)))]
+const LAUNCHER_STDERR_KEPT: usize = 2048;
+
+/// What a launcher's failure is told by.
+#[cfg(all(any(feature = "tauri-runtime", test), not(windows)))]
+// Each platform builds only its own launcher.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DefaultAppLauncher {
+    /// Its stderr (it never runs the application in its own process tree).
+    CapturesStderr,
+    /// `xdg-open`: its documented exit codes.
+    XdgOpen,
+    /// Its exit status alone.
+    Silent,
+}
+
+#[cfg(all(any(feature = "tauri-runtime", test), not(windows)))]
+fn describe_launcher_exit(
+    launcher: DefaultAppLauncher,
+    status: std::process::ExitStatus,
+) -> String {
+    let reason = match (launcher, status.code()) {
+        (DefaultAppLauncher::XdgOpen, Some(2)) => Some("the file does not exist"),
+        (DefaultAppLauncher::XdgOpen, Some(3)) => Some("a tool xdg-open needs could not be found"),
+        (DefaultAppLauncher::XdgOpen, Some(4)) => {
+            Some("no application could open it (none may be registered for this type)")
+        }
+        _ => None,
+    };
+    match reason {
+        Some(reason) => format!("{reason} ({status})"),
+        None => status.to_string(),
+    }
+}
+
+/// Run `command` and report its failure: a non-zero exit within `verdict`,
+/// told by `launcher`. A launcher still running at `verdict` is left to run:
+/// tokio's orphan queue reaps it, and a captured stderr goes on being drained
+/// by a task that outlives this call, so the pipe is never closed under it.
+#[cfg(all(any(feature = "tauri-runtime", test), not(windows)))]
+async fn run_default_app_launcher(
+    mut command: tokio::process::Command,
+    launcher: DefaultAppLauncher,
+    target: &Path,
+    verdict: std::time::Duration,
+) -> Result<(), AppCommandError> {
+    use std::sync::{Arc, Mutex};
+    use tokio::io::AsyncReadExt;
+
+    let capture = launcher == DefaultAppLauncher::CapturesStderr;
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(if capture {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
+    let failed = |why: String| {
+        AppCommandError::external_command(
+            OPEN_LOCAL_FILE_FAILED,
+            format!("{}: {why}", target.display()),
+        )
+    };
+    let mut child = command.spawn().map_err(|err| failed(err.to_string()))?;
+    let kept = Arc::new(Mutex::new(Vec::new()));
+    let drain = child.stderr.take().map(|mut stderr| {
+        let kept = Arc::clone(&kept);
+        tokio::spawn(async move {
+            let mut buf = [0u8; 1024];
+            while let Ok(n) = stderr.read(&mut buf).await {
+                if n == 0 {
+                    break;
+                }
+                let mut kept = kept.lock().unwrap_or_else(|e| e.into_inner());
+                let room = LAUNCHER_STDERR_KEPT.saturating_sub(kept.len());
+                kept.extend_from_slice(&buf[..n.min(room)]);
+            }
+        })
+    });
+    let status = match tokio::time::timeout(verdict, child.wait()).await {
+        Err(_) => return Ok(()),
+        Ok(status) => status.map_err(|err| failed(err.to_string()))?,
+    };
+    if status.success() {
+        return Ok(());
+    }
+    // The launcher has exited, so what it wrote is in the pipe already.
+    if let Some(drain) = drain {
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(250), drain).await;
+    }
+    let said = String::from_utf8_lossy(&kept.lock().unwrap_or_else(|e| e.into_inner()))
+        .trim()
+        .to_string();
+    Err(failed(if said.is_empty() {
+        describe_launcher_exit(launcher, status)
+    } else {
+        said
+    }))
+}
+
+/// Reject anything that is not one existing regular file at an absolute path.
 ///
 /// The renderer resolves paths itself (line suffixes stripped, `~` expanded,
-/// dot segments collapsed), so a leftover scheme means the target was never a
-/// file — handing `https://…` or `file://…` to the OS handler would be a
-/// different errand than the one this command promises.
+/// dot segments collapsed), so what arrives is taken as is — not trimmed, since
+/// a file name may begin or end with a space. A URL (`https://…`, `file://…`)
+/// is not absolute and is refused by that check. A directory, or a macOS `.app`
+/// bundle, is the file manager row's errand, not "open this file".
 ///
 /// `test` is in the cfg so the unit tests can reach it in a server-mode build,
 /// where the command itself does not exist.
 #[cfg(any(test, feature = "tauri-runtime"))]
 fn validate_open_local_file_path(path: &str) -> Result<PathBuf, AppCommandError> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
+    if path.trim().is_empty() {
         return Err(AppCommandError::invalid_input(
             "path is required to open a file",
         ));
     }
-    if trimmed.contains(['\n', '\r', '\0']) {
+    if path.contains(['\n', '\r', '\0']) {
         return Err(AppCommandError::invalid_input(
             "path must not contain control characters",
         ));
     }
-    if trimmed.contains("://") {
-        return Err(AppCommandError::invalid_input(
-            "path must be a local filesystem path",
-        ));
-    }
-    let target = PathBuf::from(trimmed);
+    let target = PathBuf::from(path);
     if !target.is_absolute() {
-        return Err(AppCommandError::invalid_input("path must be absolute"));
-    }
-    if !target.exists() {
-        return Err(AppCommandError::not_found(format!(
-            "path does not exist: {trimmed}"
+        return Err(AppCommandError::invalid_input(format!(
+            "path must be an absolute local filesystem path: {path}"
         )));
     }
-    Ok(target)
+    match std::fs::metadata(&target) {
+        // `absolute` turns the renderer's slash-normalized `F:/repo/a.pdf`
+        // back into the native `F:\repo\a.pdf` the Windows shell expects (and
+        // leaves a POSIX path as it is), without the `\\?\` form canonicalize
+        // would give.
+        Ok(meta) if meta.is_file() => std::path::absolute(&target).map_err(AppCommandError::io),
+        Ok(_) => Err(AppCommandError::invalid_input(format!(
+            "not a file: {path}"
+        ))),
+        Err(_) => Err(AppCommandError::not_found(format!(
+            "path does not exist: {path}"
+        ))),
+    }
 }
 
 fn validate_open_in_code_path(path: &str) -> Result<PathBuf, AppCommandError> {
@@ -465,8 +623,7 @@ mod tests {
     /// through here would aim the OS handler at something else entirely.
     #[test]
     fn local_file_rejects_urls() {
-        let err = validate_open_local_file_path("https://example.com/a.md")
-            .expect_err("url");
+        let err = validate_open_local_file_path("https://example.com/a.md").expect_err("url");
         assert!(err.message.contains("local filesystem path"), "{err:?}");
     }
 
@@ -477,8 +634,8 @@ mod tests {
         // where the rejection would come from the wrong check.
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("does-not-exist.md");
-        let err = validate_open_local_file_path(missing.to_str().expect("utf8"))
-            .expect_err("missing");
+        let err =
+            validate_open_local_file_path(missing.to_str().expect("utf8")).expect_err("missing");
         assert!(err.message.contains("does not exist"), "{err:?}");
     }
 
@@ -489,10 +646,116 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let file = dir.path().join("方案 a.md");
         fs::write(&file, "x").expect("write file");
-        let resolved = validate_open_local_file_path(
-            file.to_str().expect("utf8"),
-        )
-        .expect("existing file");
+        let resolved =
+            validate_open_local_file_path(file.to_str().expect("utf8")).expect("existing file");
         assert_eq!(resolved, file);
+    }
+
+    /// A directory (or a macOS `.app` bundle) is the file manager row's
+    /// errand; a name that begins or ends with a space is still that file.
+    #[test]
+    fn local_file_refuses_a_directory_and_keeps_the_name_as_given() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = validate_open_local_file_path(dir.path().to_str().expect("utf8"))
+            .expect_err("directory");
+        assert!(err.message.contains("not a file"), "{err:?}");
+
+        let spaced = dir.path().join(" notes .md ");
+        fs::write(&spaced, "x").expect("write file");
+        let resolved = validate_open_local_file_path(spaced.to_str().expect("utf8"))
+            .expect("existing file with surrounding spaces");
+        assert_eq!(resolved, spaced);
+    }
+
+    /// A launcher stub: `body` is the shell script after the shebang.
+    #[cfg(not(windows))]
+    fn launcher_stub(dir: &Path, body: &str) -> tokio::process::Command {
+        let stub = dir.join("launcher");
+        crate::process::write_test_script(&stub, &format!("#!/bin/sh\n{body}\n"));
+        tokio::process::Command::new(stub)
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn launcher_failure_reports_what_it_said() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let command = launcher_stub(
+            dir.path(),
+            "echo 'No application knows how to open it.' >&2\nexit 1",
+        );
+        let err = run_default_app_launcher(
+            command,
+            DefaultAppLauncher::CapturesStderr,
+            Path::new("/repo/a.xyz"),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect_err("non-zero exit");
+        assert!(err.message.contains("default application"), "{err:?}");
+        let detail = err.detail.unwrap_or_default();
+        assert!(detail.contains("/repo/a.xyz"), "{detail}");
+        assert!(detail.contains("No application knows"), "{detail}");
+    }
+
+    /// `xdg-open`'s stderr is not read (an application it runs in the
+    /// foreground inherits it); its documented exit code says why instead.
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn xdg_open_failure_is_told_by_its_exit_code() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let command = launcher_stub(dir.path(), "echo unread >&2\nexit 4");
+        let err = run_default_app_launcher(
+            command,
+            DefaultAppLauncher::XdgOpen,
+            Path::new("/a.xyz"),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect_err("non-zero exit");
+        let detail = err.detail.unwrap_or_default();
+        assert!(detail.contains("no application could open it"), "{detail}");
+        assert!(!detail.contains("unread"), "{detail}");
+
+        let command = launcher_stub(dir.path(), "exit 1");
+        let err = run_default_app_launcher(
+            command,
+            DefaultAppLauncher::Silent,
+            Path::new("/a.xyz"),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect_err("non-zero exit");
+        assert!(
+            err.detail.as_deref().unwrap_or_default().contains('1'),
+            "{err:?}"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn launcher_success_and_a_still_running_launcher_both_open() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let command = launcher_stub(dir.path(), "exit 0");
+        run_default_app_launcher(
+            command,
+            DefaultAppLauncher::CapturesStderr,
+            Path::new("/a"),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("exit 0");
+
+        // An `xdg-open` fallback running the application in the foreground.
+        let command = launcher_stub(dir.path(), "sleep 5");
+        let started = Instant::now();
+        run_default_app_launcher(
+            command,
+            DefaultAppLauncher::XdgOpen,
+            Path::new("/a"),
+            Duration::from_millis(200),
+        )
+        .await
+        .expect("still running at the verdict");
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 }
