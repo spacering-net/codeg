@@ -2499,6 +2499,9 @@ pub fn build_router_with_srn(
         )
         .route("/terminal_kill", post(handlers::terminal::terminal_kill))
         .route("/terminal_list", post(handlers::terminal::terminal_list))
+        .route("/host_plugins_list", post(handlers::host_plugins::list))
+        .route("/host_plugins_apply", post(handlers::host_plugins::apply))
+        .route("/host_plugins_activity", post(handlers::host_plugins::activity))
         .route(
             "/cli_access_status",
             post(handlers::cli_access::cli_access_status),
