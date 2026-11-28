@@ -574,6 +574,16 @@ const RUNNABLE_EXTENSIONS: &[&str] = &[
     "mdimporter",
     "kext",
     "osax",
+    // Windows programs: a registered Wine / CrossOver runs them on "open",
+    // execute bit or not.
+    "exe",
+    "msi",
+    "com",
+    "bat",
+    "cmd",
+    "scr",
+    "pif",
+    "lnk",
 ];
 
 #[cfg(all(any(test, feature = "tauri-runtime"), unix, not(target_os = "macos")))]
@@ -588,6 +598,16 @@ const RUNNABLE_EXTENSIONS: &[&str] = &[
     "flatpak",
     "snap",
     "url",
+    // Windows programs: a registered Wine / CrossOver runs them on "open",
+    // execute bit or not.
+    "exe",
+    "msi",
+    "com",
+    "bat",
+    "cmd",
+    "scr",
+    "pif",
+    "lnk",
 ];
 
 fn validate_open_in_code_path(path: &str) -> Result<PathBuf, AppCommandError> {
