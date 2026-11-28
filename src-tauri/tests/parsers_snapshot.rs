@@ -1688,6 +1688,189 @@ fn hermes_summary_end_is_the_newest_message_not_the_adapter_exit() {
     assert_eq!(by_id("unusable"), None);
 }
 
+/// A conversation's token total is its whole spend: its own columns, the
+/// sessions it delegated to and the ones a compression continued it in (each
+/// down every generation), plus each one's auxiliary calls, which Hermes keeps
+/// only in `session_model_usage` under a non-empty `task`. A branch of it is a
+/// conversation of its own and adds nothing.
+#[test]
+fn hermes_session_total_spans_delegates_compressions_and_auxiliary_calls() {
+    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+
+    let temp = tempfile::tempdir().expect("create tempdir");
+    let base = temp.path().to_path_buf();
+    let db_path = base.join("state.db");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    rt.block_on(async {
+        let conn = Database::connect(format!("sqlite:{}?mode=rwc", db_path.display()))
+            .await
+            .expect("open sqlite");
+        for ddl in [
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, model TEXT, \
+             model_config TEXT, parent_session_id TEXT, started_at REAL, ended_at REAL, \
+             end_reason TEXT, cwd TEXT, title TEXT, archived INTEGER DEFAULT 0, \
+             input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, \
+             cache_write_tokens INTEGER)",
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, \
+             role TEXT, content TEXT, tool_call_id TEXT, tool_calls TEXT, tool_name TEXT, \
+             reasoning TEXT, reasoning_content TEXT, timestamp REAL, finish_reason TEXT, \
+             active INTEGER DEFAULT 1)",
+            "CREATE TABLE session_model_usage (session_id TEXT NOT NULL, model TEXT NOT NULL, \
+             task TEXT NOT NULL DEFAULT '', input_tokens INTEGER NOT NULL DEFAULT 0, \
+             output_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL \
+             DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0)",
+        ] {
+            conn.execute(Statement::from_string(DatabaseBackend::Sqlite, ddl))
+                .await
+                .expect("create table");
+        }
+        // (id, source, model_config, parent, end_reason, input, output, read, write)
+        let sessions: [(&str, &str, &str, &str, &str, i64, i64, i64, i64); 6] = [
+            ("root", "acp", "{}", "", "compression", 1000, 10, 100, 1),
+            // Delegated by the root.
+            (
+                "delegate",
+                "acp",
+                r#"{"_delegate_from":"root"}"#,
+                "root",
+                "",
+                200,
+                2,
+                20,
+                0,
+            ),
+            // Delegated in turn by the delegate.
+            (
+                "nested",
+                "acp",
+                r#"{"_delegate_from":"delegate"}"#,
+                "delegate",
+                "",
+                30,
+                3,
+                0,
+                0,
+            ),
+            // Where the root went on after its compression; it inherits the
+            // root's own delegator marker, which names someone else.
+            (
+                "continued",
+                "acp",
+                r#"{"_delegate_from":"elsewhere"}"#,
+                "root",
+                "",
+                400,
+                4,
+                40,
+                0,
+            ),
+            // A branch of the root is its own conversation.
+            (
+                "branch",
+                "acp",
+                r#"{"_branched_from":"root"}"#,
+                "root",
+                "",
+                9000,
+                90,
+                0,
+                0,
+            ),
+            // A tool-sourced child of a compressed session is not a continuation.
+            ("tooled", "tool", "{}", "root", "", 8000, 80, 0, 0),
+        ];
+        for (id, source, model_config, parent, end_reason, input, output, read, write) in sessions {
+            hermes_exec(
+                &conn,
+                "INSERT INTO sessions (id, source, model, model_config, parent_session_id, \
+                 started_at, ended_at, end_reason, cwd, title, archived, input_tokens, \
+                 output_tokens, cache_read_tokens, cache_write_tokens) \
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                vec![
+                    id.into(),
+                    source.into(),
+                    "gpt-5.5".into(),
+                    model_config.into(),
+                    parent.into(),
+                    1_791_629_998.0_f64.into(),
+                    1_791_630_998.0_f64.into(),
+                    end_reason.into(),
+                    "/tmp/work".into(),
+                    id.into(),
+                    0i64.into(),
+                    input.into(),
+                    output.into(),
+                    read.into(),
+                    write.into(),
+                ],
+            )
+            .await;
+        }
+        for (session, task, input, output) in [
+            // Restates the root's columns: not added again.
+            ("root", "", 1000i64, 10i64),
+            ("root", "title_generation", 92, 55),
+            // A voice turn's calls are in the columns already.
+            ("root", "voice_chat", 600, 60),
+            ("delegate", "compression", 7, 1),
+            ("branch", "title_generation", 5000, 50),
+        ] {
+            hermes_exec(
+                &conn,
+                "INSERT INTO session_model_usage (session_id, model, task, input_tokens, \
+                 output_tokens) VALUES (?,?,?,?,?)",
+                vec![
+                    session.into(),
+                    "gpt-5.5".into(),
+                    task.into(),
+                    input.into(),
+                    output.into(),
+                ],
+            )
+            .await;
+        }
+        hermes_ins_msg(
+            &conn,
+            "root",
+            "user",
+            "hi".to_string(),
+            "",
+            "",
+            "",
+            "",
+            1_791_629_999.0,
+            "",
+            1,
+        )
+        .await;
+    });
+
+    let total = HermesParser::with_base_dir(base)
+        .get_conversation("root")
+        .expect("get conversation")
+        .session_stats
+        .and_then(|stats| stats.total_usage)
+        .expect("a session total");
+    assert_eq!(
+        (
+            total.input_tokens,
+            total.output_tokens,
+            total.cache_read_input_tokens,
+            total.cache_creation_input_tokens,
+        ),
+        (
+            1000 + 200 + 30 + 400 + 92 + 7,
+            10 + 2 + 3 + 4 + 55 + 1,
+            100 + 20 + 40,
+            1,
+        )
+    );
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Kimi Code
 // ────────────────────────────────────────────────────────────────────────────

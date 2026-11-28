@@ -15,10 +15,11 @@ use crate::models::{
     MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
 };
 use crate::parsers::{
-    backfill_turn_durations, compute_session_stats, folder_name_from_path,
-    infer_context_window_max_tokens, latest_turn_total_usage_tokens, merge_context_window_stats,
-    relocate_orphaned_tool_results, resolve_patch_line_numbers, structurize_read_tool_output,
-    title_from_user_text, truncate_str, AgentEnv, AgentParser, ParseError,
+    add_unplaced_usage_to_total, add_usage_to_turn_current_at, backfill_turn_durations,
+    compute_session_stats, folder_name_from_path, infer_context_window_max_tokens,
+    latest_turn_total_usage_tokens, merge_context_window_stats, relocate_orphaned_tool_results,
+    resolve_patch_line_numbers, structurize_read_tool_output, title_from_user_text, truncate_str,
+    AgentEnv, AgentParser, ParseError,
 };
 
 /// Resolve the `pi` coding agent's sessions directory, honoring (highest
@@ -411,6 +412,23 @@ impl PiParser {
         backfill_turn_durations(&mut turns, &[]);
 
         let used_tokens = latest_turn_total_usage_tokens(&turns);
+        // After the window occupancy was read: none of this spend occupied the
+        // active branch's prompt.
+        let mut unplaced = TurnUsage::default();
+        for (at, usage) in &parsed.spend_elsewhere {
+            if !add_usage_to_turn_current_at(&mut turns, *at, usage) {
+                unplaced = TurnUsage {
+                    input_tokens: unplaced.input_tokens.saturating_add(usage.input_tokens),
+                    output_tokens: unplaced.output_tokens.saturating_add(usage.output_tokens),
+                    cache_creation_input_tokens: unplaced
+                        .cache_creation_input_tokens
+                        .saturating_add(usage.cache_creation_input_tokens),
+                    cache_read_input_tokens: unplaced
+                        .cache_read_input_tokens
+                        .saturating_add(usage.cache_read_input_tokens),
+                };
+            }
+        }
         // Ask Pi what the provider declared first; only then guess by name.
         // Self-hosted model ids are absent from the built-in table, so guessing
         // alone drops the context meter entirely.
@@ -420,8 +438,11 @@ impl PiParser {
             parsed.model.as_deref(),
         )
         .or_else(|| infer_context_window_max_tokens(parsed.model.as_deref()));
-        let session_stats =
-            merge_context_window_stats(compute_session_stats(&turns), used_tokens, max_tokens);
+        let session_stats = merge_context_window_stats(
+            add_unplaced_usage_to_total(compute_session_stats(&turns), &unplaced),
+            used_tokens,
+            max_tokens,
+        );
 
         let folder_name = parsed.cwd.as_deref().map(folder_name_from_path);
         let summary = ConversationSummary {
@@ -546,6 +567,9 @@ struct SessionParse {
     message_count: u32,
     /// Number of content-bearing records — decides whether the session is listed.
     content_events: u32,
+    /// Spend no rendered assistant message carries: `(recorded at, usage)`.
+    /// See [`spend_off_the_rendered_path`].
+    spend_elsewhere: Vec<(Option<DateTime<Utc>>, TurnUsage)>,
 }
 
 /// One parsed line of a session file, kept with its original line index so the
@@ -638,7 +662,53 @@ fn parse_session(path: &Path) -> SessionParse {
         }
     }
 
+    sp.spend_elsewhere
+        .extend(spend_off_the_rendered_path(&entries, active.as_ref()));
     sp
+}
+
+/// Every spend a session's file records beyond what its rendered assistant
+/// messages carry: `(recorded at, usage)`.
+///
+/// pi's own session total (`getSessionStats`, "aggregates over ALL session
+/// entries … so token/cost totals reflect what was actually billed") sums,
+/// over every entry of the file — not just the active branch:
+///
+/// * each assistant message's `usage` — rendered ones carry theirs, so only
+///   those off the active branch (left by `/tree` or a re-edit) are added;
+/// * `usage` entries (cache warming, or any other `kind`), which pi hides from
+///   the conversation;
+/// * a `compaction`'s or `branch_summary`'s `usage`, what generating the
+///   summary cost;
+/// * a `toolResult`'s `usage`, nested model work a tool did.
+///
+/// codeg counted only the first, and only on the active branch.
+fn spend_off_the_rendered_path(
+    entries: &[SessionRecord],
+    active: Option<&HashSet<usize>>,
+) -> Vec<(Option<DateTime<Utc>>, TurnUsage)> {
+    entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| {
+            let value = &record.value;
+            let usage = match value.get("type").and_then(Value::as_str) {
+                Some("usage" | "compaction" | "branch_summary") => value.get("usage"),
+                Some("message") => {
+                    let message = value.get("message")?;
+                    match message.get("role").and_then(Value::as_str) {
+                        Some("toolResult") => message.get("usage"),
+                        Some("assistant") if !keeps_record(active, index, record) => {
+                            message.get("usage")
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            Some((record_iso_ts(value), usage_from_object(usage)?))
+        })
+        .collect()
 }
 
 /// The session's display name, ported from pi's `getSessionName()`:
@@ -992,6 +1062,10 @@ fn parse_message_record(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>,
                 blocks.push(ContentBlock::Text { text: error });
             }
             if blocks.is_empty() {
+                // Nothing to render, but the call was billed all the same.
+                if let Some(usage) = usage_from_object(message.get("usage")) {
+                    sp.spend_elsewhere.push((Some(ts), usage));
+                }
                 return;
             }
             sp.content_events += 1;
@@ -2485,6 +2559,100 @@ mod tests {
             detail.summary.message_count, 4,
             "counts follow the active branch too"
         );
+    }
+
+    /// Spend counts the way pi's own session total counts it: every entry of
+    /// the file, not just the rendered branch — abandoned replies, `usage`
+    /// entries, summary generation, tools' nested model work, and calls that
+    /// rendered nothing.
+    #[test]
+    fn every_billed_call_in_the_file_counts_as_pi_counts_it() {
+        let id = "spend-0001";
+        let usage = |input: u64| json!({"input":input,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":input});
+        let detail = parse_one(
+            &[
+                header(id),
+                json!({"type":"message","id":"u1","parentId":null,"timestamp":"2026-06-27T10:00:01.000Z",
+                       "message":{"role":"user","content":"first question"}}),
+                json!({"type":"message","id":"a1","parentId":"u1","timestamp":"2026-06-27T10:00:02.000Z",
+                       "message":{"role":"assistant","model":"m","content":[{"type":"text","text":"first answer"}],"usage":usage(100)}}),
+                // ── abandoned branch off a1 ──────────────────────────────────
+                json!({"type":"message","id":"u2a","parentId":"a1","timestamp":"2026-06-27T10:00:03.000Z",
+                       "message":{"role":"user","content":"abandoned question"}}),
+                json!({"type":"message","id":"a2a","parentId":"u2a","timestamp":"2026-06-27T10:00:04.000Z",
+                       "message":{"role":"assistant","model":"m","content":[{"type":"text","text":"abandoned answer"}],"usage":usage(20)}}),
+                // Cache warming, hidden from the conversation.
+                json!({"type":"usage","id":"w1","parentId":"a1","timestamp":"2026-06-27T10:00:04.500Z",
+                       "kind":"cache_warm","provider":"anthropic","model":"m",
+                       "usage":{"input":0,"output":0,"cacheRead":5000,"cacheWrite":0,"totalTokens":5000}}),
+                // ── the branch the user kept, also off a1 ────────────────────
+                json!({"type":"message","id":"u2b","parentId":"a1","timestamp":"2026-06-27T10:00:05.000Z",
+                       "message":{"role":"user","content":"kept question"}}),
+                json!({"type":"message","id":"a2b","parentId":"u2b","timestamp":"2026-06-27T10:00:06.000Z",
+                       "message":{"role":"assistant","model":"m","usage":usage(13),
+                                  "content":[{"type":"toolCall","id":"c1","name":"classify","arguments":{}}]}}),
+                json!({"type":"message","id":"t1","parentId":"a2b","timestamp":"2026-06-27T10:00:07.000Z",
+                       "message":{"role":"toolResult","toolCallId":"c1","toolName":"classify","isError":false,
+                                  "content":[{"type":"text","text":"done"}],"usage":usage(7)}}),
+                json!({"type":"compaction","id":"k1","parentId":"t1","timestamp":"2026-06-27T10:00:08.000Z",
+                       "summary":"so far","firstKeptEntryId":"u2b","tokensBefore":900,"usage":usage(3)}),
+                // A call that left nothing to render.
+                json!({"type":"message","id":"a3","parentId":"k1","timestamp":"2026-06-27T10:00:09.000Z",
+                       "message":{"role":"assistant","model":"m","content":[],"usage":usage(9)}}),
+                json!({"type":"message","id":"a4","parentId":"a3","timestamp":"2026-06-27T10:00:10.000Z",
+                       "message":{"role":"assistant","model":"m","content":[{"type":"text","text":"kept answer"}],"usage":usage(11)}}),
+            ],
+            id,
+        );
+        assert!(
+            !text_blocks(&detail).iter().any(|t| t.contains("abandoned")),
+            "precondition: the abandoned branch is not rendered"
+        );
+        let total: u64 = detail
+            .turns
+            .iter()
+            .filter_map(|t| t.usage.as_ref())
+            .map(|u| {
+                u.input_tokens
+                    + u.output_tokens
+                    + u.cache_read_input_tokens
+                    + u.cache_creation_input_tokens
+            })
+            .sum();
+        assert_eq!(total, 100 + 20 + 5000 + 13 + 7 + 3 + 9 + 11);
+    }
+
+    /// Rewound to the first prompt with a summary: the summary is the only
+    /// rendered turn and no assistant reply exists to carry the spend, which
+    /// still reaches the session total the stats fall back to.
+    #[test]
+    fn spend_with_no_reply_to_carry_it_lands_in_the_session_total() {
+        let id = "spend-0002";
+        let usage = |input: u64| json!({"input":input,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":input});
+        let detail = parse_one(
+            &[
+                header(id),
+                json!({"type":"message","id":"u1","parentId":null,"timestamp":"2026-06-27T10:00:01.000Z",
+                       "message":{"role":"user","content":"first question"}}),
+                json!({"type":"message","id":"a1","parentId":"u1","timestamp":"2026-06-27T10:00:02.000Z",
+                       "message":{"role":"assistant","model":"m","content":[{"type":"text","text":"abandoned answer"}],"usage":usage(100)}}),
+                json!({"type":"branch_summary","id":"b1","parentId":null,"timestamp":"2026-06-27T10:00:03.000Z",
+                       "fromId":"a1","summary":"Tried the first approach.","usage":usage(50)}),
+            ],
+            id,
+        );
+        assert!(
+            !detail
+                .turns
+                .iter()
+                .any(|t| matches!(t.role, TurnRole::Assistant)),
+            "precondition: no assistant turn is rendered"
+        );
+        let total = detail
+            .session_stats
+            .and_then(|stats| stats.total_usage)
+            .expect("the spend survives as the session total");
+        assert_eq!(total.input_tokens, 150);
     }
 
     /// A v1 (pre-tree) session has no `id`/`parentId` at all. There is no leaf to

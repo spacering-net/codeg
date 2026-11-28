@@ -1323,6 +1323,25 @@ describe("syncTurnMetadata transcript-lag polling", () => {
     expect(mockGet).toHaveBeenCalledTimes(5)
   })
 
+  it("keeps polling for a completion clock the read did not carry", async () => {
+    vi.useFakeTimers()
+    // Tokens arrived, the end-marker has not: the old gate stopped here and the
+    // footer stayed timeless until a reload.
+    seedBatch()
+    const clockless = windowedDetail(BOUNDARY, {
+      turns: parsed.map((t) => ({ ...t, completed_at: null })),
+      turns_total: BOUNDARY + parsed.length,
+    })
+    mockGet
+      .mockResolvedValueOnce(clockless)
+      .mockResolvedValueOnce(clockless)
+      .mockResolvedValue(parseWindow(4))
+    actions().syncTurnMetadata(CID)
+    await vi.advanceTimersByTimeAsync(40_000)
+    expect(mockGet).toHaveBeenCalledTimes(3)
+    expect(session()?.localTurns[3]?.completed_at).toBe(ts(9))
+  })
+
   it("cancelling stops the poll mid-schedule", async () => {
     vi.useFakeTimers()
     seedBatch()

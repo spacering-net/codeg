@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 
 use crate::models::{
     AgentExecutionStats, AgentType, ContentBlock, ConversationDetail, ConversationSummary,
-    MessageRole, MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
+    MessageRole, MessageTurn, TurnUsage, UnifiedMessage,
 };
 use crate::parsers::claude::{
     api_error_text, capture_title_record, extract_assistant_content, extract_usage,
@@ -17,10 +17,11 @@ use crate::parsers::claude::{
     is_meta_message, is_synthetic_assistant, slash_command_display, ClaudeRecordAccumulator,
 };
 use crate::parsers::{
-    backfill_turn_durations, compute_session_stats, folder_name_from_path,
-    infer_context_window_max_tokens, latest_turn_prompt_usage_tokens, merge_context_window_stats,
-    relocate_orphaned_tool_results, resolve_patch_line_numbers, structurize_read_tool_output,
-    title_from_user_text, with_reported_context_percent, AgentEnv, AgentParser, ParseError,
+    add_usage_to_turn_current_at, backfill_turn_durations, compute_session_stats,
+    folder_name_from_path, infer_context_window_max_tokens, latest_turn_prompt_usage_tokens,
+    merge_context_window_stats, relocate_orphaned_tool_results, resolve_patch_line_numbers,
+    structurize_read_tool_output, subagent_transcript_paths, title_from_user_text,
+    with_reported_context_percent, AgentEnv, AgentParser, ParseError,
 };
 
 /// Resolve Qoder's global config dir the way Qoder itself does.
@@ -1616,8 +1617,9 @@ fn attach_subagent_tool_calls(turns: &mut [MessageTurn], session_path: &Path) {
 /// transcripts Qoder writes beside it.
 ///
 /// Every delegated run gets `<sessionId>/subagents/agent-<agentId>.jsonl` —
-/// the same layout Claude Code uses (`parsers::claude::attribute_subagent_usage`)
-/// — and it is the unit of truth here for the same reasons: the run's own
+/// the same layout Claude Code uses (`parsers::claude::attribute_subagent_usage`),
+/// walked to any depth the same way ([`subagent_transcript_paths`]) — and it is
+/// the unit of truth here for the same reasons: the run's own
 /// counters ride its assistant records (Anthropic FIELD NAMES over Qoder's
 /// OpenAI SEMANTICS, so [`qoder_turn_usage`] splits the cached prefix out),
 /// while the alternative — the run's segment log under
@@ -1647,51 +1649,10 @@ fn attach_subagent_tool_calls(turns: &mut [MessageTurn], session_path: &Path) {
 /// Runs AFTER the context-window occupancy was read: a sub-agent's context is
 /// its own and never occupied the parent's window.
 fn attribute_subagent_usage(turns: &mut [MessageTurn], session_path: &Path) {
-    let dir = session_path.with_extension("").join("subagents");
-    let Ok(entries) = fs::read_dir(&dir) else {
-        return;
-    };
-    let mut transcripts: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
-        .collect();
-    // Directory order is filesystem-defined; sort so attribution is identical
-    // on every parse of the same session.
-    transcripts.sort();
-
-    for transcript in transcripts {
+    for transcript in subagent_transcript_paths(session_path) {
         for (recorded_at, usage) in subagent_call_usage(&transcript) {
-            // The turn that was speaking when this call happened. Falling back
-            // to the last assistant turn keeps the tokens in the session even
-            // when the record carries no usable timestamp.
-            let target = recorded_at
-                .and_then(|ts| {
-                    turns
-                        .iter()
-                        .rposition(|t| matches!(t.role, TurnRole::Assistant) && t.timestamp <= ts)
-                })
-                .or_else(|| {
-                    turns
-                        .iter()
-                        .rposition(|t| matches!(t.role, TurnRole::Assistant))
-                });
-            let Some(turn) = target.and_then(|i| turns.get_mut(i)) else {
-                continue;
-            };
-            turn.usage = Some(match turn.usage.take() {
-                Some(own) => TurnUsage {
-                    input_tokens: own.input_tokens.saturating_add(usage.input_tokens),
-                    output_tokens: own.output_tokens.saturating_add(usage.output_tokens),
-                    cache_creation_input_tokens: own
-                        .cache_creation_input_tokens
-                        .saturating_add(usage.cache_creation_input_tokens),
-                    cache_read_input_tokens: own
-                        .cache_read_input_tokens
-                        .saturating_add(usage.cache_read_input_tokens),
-                },
-                None => usage,
-            });
+            // The turn that was speaking when this call happened.
+            add_usage_to_turn_current_at(turns, recorded_at, &usage);
         }
     }
 }

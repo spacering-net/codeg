@@ -8,8 +8,9 @@ use regex::Regex;
 
 use crate::models::*;
 use crate::parsers::{
-    folder_name_from_path, is_safe_subagent_id, title_from_user_text, truncate_str, AgentEnv,
-    AgentParser, ParseError,
+    add_usage_to_turn_current_at, folder_name_from_path, is_safe_subagent_id,
+    subagent_transcript_paths, title_from_user_text, truncate_str, AgentEnv, AgentParser,
+    ParseError,
 };
 
 /// Regex that matches Claude Code system-injected XML tags and their content.
@@ -3676,10 +3677,13 @@ fn extract_agent_execution_stats(tur: &serde_json::Value) -> AgentExecutionStats
 /// assistant messages with tool_use blocks, followed by user messages
 /// with tool_result blocks. We pair them by tool_use_id and produce
 /// a compact list of `AgentToolCall` records.
-/// Fold what this session's `Task` sub-agents spent into its own messages.
+/// Fold what this session's sub-agents spent into its own messages.
 ///
 /// A sub-agent runs its own conversation with the model and writes it to
-/// `<session>/subagents/agent-<id>.jsonl`. Session discovery only globs the
+/// `<session>/subagents/agent-<id>.jsonl` — or, for a Workflow run's agents,
+/// `<session>/subagents/workflows/<runId>/agent-<id>.jsonl`, which is why the
+/// directory is walked to any depth (see [`subagent_transcript_paths`]).
+/// Session discovery only globs the
 /// session-level transcripts, so those files are never a conversation anyone
 /// can open — and their tokens were counted nowhere at all: 4.9 % of all Claude
 /// spend in a real transcript tree, concentrated in exactly the sessions that
@@ -3708,54 +3712,11 @@ fn extract_agent_execution_stats(tur: &serde_json::Value) -> AgentExecutionStats
 /// window has been read: delegated tokens are this session's *spend*, but they
 /// never occupied this session's prompt.
 fn attribute_subagent_usage(session_path: &Path, turns: &mut [MessageTurn]) {
-    let subagent_dir = session_path.with_extension("").join("subagents");
-    let Ok(entries) = fs::read_dir(&subagent_dir) else {
-        return;
-    };
-
-    let mut transcripts: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
-        .collect();
-    // Directory order is filesystem-defined; sort so attribution is identical
-    // on every parse of the same session.
-    transcripts.sort();
-
-    for transcript in transcripts {
+    for transcript in subagent_transcript_paths(session_path) {
         let (_, _, usage, started_at, _) = parse_subagent_tool_calls(&transcript);
         let Some(extra) = usage else { continue };
-
-        // The turn that was speaking when the sub-agent began. Falling back to
-        // the last assistant message keeps the tokens in the session even when
-        // the transcript carries no usable timestamp.
-        let target = started_at
-            .and_then(|start| {
-                turns
-                    .iter()
-                    .rposition(|t| matches!(t.role, TurnRole::Assistant) && t.timestamp <= start)
-            })
-            .or_else(|| {
-                turns
-                    .iter()
-                    .rposition(|t| matches!(t.role, TurnRole::Assistant))
-            });
-        let Some(launcher) = target.and_then(|i| turns.get_mut(i)) else {
-            continue;
-        };
-        launcher.usage = Some(match launcher.usage {
-            Some(ref own) => TurnUsage {
-                input_tokens: own.input_tokens.saturating_add(extra.input_tokens),
-                output_tokens: own.output_tokens.saturating_add(extra.output_tokens),
-                cache_creation_input_tokens: own
-                    .cache_creation_input_tokens
-                    .saturating_add(extra.cache_creation_input_tokens),
-                cache_read_input_tokens: own
-                    .cache_read_input_tokens
-                    .saturating_add(extra.cache_read_input_tokens),
-            },
-            None => extra,
-        });
+        // The turn that was speaking when the sub-agent began.
+        add_usage_to_turn_current_at(turns, started_at, &extra);
     }
 }
 
@@ -7730,7 +7691,12 @@ mod tests {
         let dir = stem.join("subagents");
         fs::create_dir_all(&dir).expect("create subagents dir");
         for (agent_id, agent_lines) in subagents {
-            let mut f = fs::File::create(dir.join(format!("agent-{agent_id}.jsonl")))
+            // `workflows/<runId>/<id>` files the transcript in a subdirectory,
+            // the way Claude Code lays out a Workflow run's agents.
+            let (subdir, agent_id) = agent_id.rsplit_once('/').unwrap_or(("", agent_id));
+            let agent_dir = dir.join(subdir);
+            fs::create_dir_all(&agent_dir).expect("create subagent subdir");
+            let mut f = fs::File::create(agent_dir.join(format!("agent-{agent_id}.jsonl")))
                 .expect("create subagent jsonl");
             for line in agent_lines {
                 writeln!(f, "{line}").unwrap();
@@ -7815,6 +7781,36 @@ mod tests {
             )],
         );
         assert_eq!(total_usage_tokens(&detail), 8_000);
+    }
+
+    #[test]
+    fn a_workflow_runs_agents_in_nested_subdirectories_are_counted() {
+        // Claude Code files a Workflow run's agents under
+        // `subagents/workflows/<runId>/`, not flat in `subagents/` — reading
+        // only the top level dropped all of their spend.
+        let detail = parse_with_subagents(
+            &session_launching("abc", 1),
+            &[
+                (
+                    "abc",
+                    vec![subagent_line(
+                        "s1",
+                        "msg_sub",
+                        "2026-03-01T10:02:00Z",
+                        7_000,
+                    )],
+                ),
+                (
+                    "workflows/wf_run1/w1",
+                    vec![subagent_line("w1", "msg_w1", "2026-03-01T10:03:00Z", 300)],
+                ),
+                (
+                    "workflows/wf_run1/w2",
+                    vec![subagent_line("w2", "msg_w2", "2026-03-01T10:04:00Z", 20)],
+                ),
+            ],
+        );
+        assert_eq!(total_usage_tokens(&detail), 8_320);
     }
 
     #[test]

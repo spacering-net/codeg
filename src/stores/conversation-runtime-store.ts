@@ -5385,6 +5385,11 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
             // reports usage at all (Cursor) from polling out the full schedule
             // on every single turn.
             //
+            // The completion clock is judged on its own, not as a rider on
+            // usage: a reply whose tokens landed but whose end-marker did not
+            // would otherwise end the schedule on the spot and leave the
+            // footer's time empty for good (first-write-wins never reopens it).
+            //
             // A SURPLUS — the parser split the reply, or an out-of-turn record
             // landed — is deliberately not a retry signal: it leaves turns
             // unnamed for the rest of the session however long we poll, and it
@@ -5396,10 +5401,13 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
               lastLocalAssistantIndex === undefined
                 ? undefined
                 : after?.localTurns[lastLocalAssistantIndex]
-            if (newest != null && newest.usage == null) {
+            if (
+              newest != null &&
+              (newest.usage == null || newest.completed_at == null)
+            ) {
               if (newest.completed_at == null) {
                 if (!windowUnverifiableForGood) scheduleNext(attempt)
-              } else if (usageOnlyRounds < 1) {
+              } else if (newest.usage == null && usageOnlyRounds < 1) {
                 usageOnlyRounds += 1
                 scheduleNext(attempt)
               }

@@ -364,32 +364,41 @@ impl HermesParser {
     /// would under-report; the session columns are the authoritative totals. The
     /// cumulative `input_tokens` is NOT a valid "current context window used", so
     /// that field is left `None` (only the model-inferred max is surfaced).
+    ///
+    /// The total is the conversation's whole spend (see
+    /// [`Self::lineage_usage`]), falling back to the session's own columns on a
+    /// `state.db` too old to carry what that reads.
     async fn build_session_stats(
         &self,
         conn: &DatabaseConnection,
         conversation_id: &str,
         model: Option<&str>,
     ) -> Result<Option<SessionStats>, ParseError> {
-        let row = conn
-            .query_one(Statement::from_sql_and_values(
-                DbBackend::Sqlite,
-                r#"
+        let (input, output, cache_read, cache_write) =
+            match self.lineage_usage(conn, conversation_id).await {
+                Ok(totals) => totals,
+                Err(e) => {
+                    tracing::debug!(
+                        conversation_id,
+                        error = %e,
+                        "[hermes] lineage usage unavailable; reading the session's own columns"
+                    );
+                    let row = conn
+                        .query_one(Statement::from_sql_and_values(
+                            DbBackend::Sqlite,
+                            r#"
                 SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
                 FROM sessions WHERE id = ? LIMIT 1
                 "#,
-                [conversation_id.into()],
-            ))
-            .await?;
-
-        let (input, output, cache_read, cache_write) = match row {
-            Some(r) => (
-                get_u64(&r, "input_tokens"),
-                get_u64(&r, "output_tokens"),
-                get_u64(&r, "cache_read_tokens"),
-                get_u64(&r, "cache_write_tokens"),
-            ),
-            None => (0, 0, 0, 0),
-        };
+                            [conversation_id.into()],
+                        ))
+                        .await?;
+                    match row {
+                        Some(r) => usage_columns(&r),
+                        None => (0, 0, 0, 0),
+                    }
+                }
+            };
 
         let total = input
             .saturating_add(output)
@@ -413,6 +422,122 @@ impl HermesParser {
         let max = super::infer_context_window_max_tokens(model);
         Ok(super::merge_context_window_stats(Some(base), None, max))
     }
+}
+
+/// The sessions a conversation's spend spans: the session itself, every
+/// session it DELEGATED to, and every session a compression continued it in —
+/// recursively, by Hermes's own ownership rule (`tools/delegate_tool_sessions.py`,
+/// `_delegated_from` / `_continues`):
+///
+/// * a delegate child names its parent in `model_config._delegate_from`;
+/// * a compression continuation's parent ended `end_reason = 'compression'`,
+///   and the child is neither tool-sourced nor a branch / delegate / reset of
+///   that parent (`_branched_from` / `_delegate_from` / `_reset_from`).
+///
+/// Both kinds have a parent, so neither is ever imported as a conversation of
+/// its own; branches and resets are separate conversations and stay out.
+/// `UNION` (not `UNION ALL`) ends a malformed cycle.
+const LINEAGE_CTE: &str = r#"
+    WITH RECURSIVE lineage(id) AS (
+        SELECT id FROM sessions WHERE id = ?
+        UNION
+        SELECT c.id
+        FROM sessions c
+        JOIN lineage t ON c.parent_session_id = t.id
+        JOIN sessions p ON p.id = t.id
+        WHERE (CASE WHEN json_valid(c.model_config)
+                    THEN json_extract(c.model_config, '$._delegate_from') END) = t.id
+           OR (p.end_reason = 'compression'
+               AND COALESCE(c.source, '') <> 'tool'
+               AND t.id NOT IN (
+                   COALESCE(CASE WHEN json_valid(c.model_config)
+                                 THEN json_extract(c.model_config, '$._branched_from') END, ''),
+                   COALESCE(CASE WHEN json_valid(c.model_config)
+                                 THEN json_extract(c.model_config, '$._delegate_from') END, ''),
+                   COALESCE(CASE WHEN json_valid(c.model_config)
+                                 THEN json_extract(c.model_config, '$._reset_from') END, '')))
+    )
+"#;
+
+impl HermesParser {
+    /// A conversation's whole spend: `(input, output, cache read, cache write)`.
+    ///
+    /// The `sessions` token columns hold only the session's OWN agent calls.
+    /// Two kinds of spend sit elsewhere, and were counted nowhere:
+    ///
+    /// * the sessions it spans beyond itself ([`LINEAGE_CTE`]) — a delegated
+    ///   task runs in a child session with columns of its own, and after a
+    ///   compression the conversation goes on in a child session;
+    /// * its auxiliary calls (title generation, compression, vision,
+    ///   background review), which Hermes records only in
+    ///   `session_model_usage` under a non-empty `task` and deliberately keeps
+    ///   off the session row. That table's `task = ''` rows restate the
+    ///   columns, and so do its `voice_chat` rows — a per-turn route
+    ///   (`agent/voice_turn_route.py`) whose calls count in the session
+    ///   totals as well (`update_token_counts`'s `task`) — so only the others
+    ///   are added.
+    ///
+    /// An error means the database predates what this reads (no `end_reason`
+    /// column, say); the caller falls back to the session's own columns. A
+    /// missing `session_model_usage` alone just means no auxiliary rows.
+    async fn lineage_usage(
+        &self,
+        conn: &DatabaseConnection,
+        conversation_id: &str,
+    ) -> Result<(u64, u64, u64, u64), ParseError> {
+        let own = conn
+            .query_one(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                format!(
+                    "{LINEAGE_CTE}
+                    SELECT COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                           COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                           COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+                           COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens
+                    FROM sessions WHERE id IN (SELECT id FROM lineage)"
+                ),
+                [conversation_id.into()],
+            ))
+            .await?;
+        let auxiliary = conn
+            .query_one(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                format!(
+                    "{LINEAGE_CTE}
+                    SELECT COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                           COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                           COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+                           COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens
+                    FROM session_model_usage
+                    WHERE task NOT IN ('', 'voice_chat')
+                      AND session_id IN (SELECT id FROM lineage)"
+                ),
+                [conversation_id.into()],
+            ))
+            .await
+            .unwrap_or(None);
+        let (a, b) = (
+            own.as_ref().map(usage_columns).unwrap_or_default(),
+            auxiliary.as_ref().map(usage_columns).unwrap_or_default(),
+        );
+        Ok((
+            a.0.saturating_add(b.0),
+            a.1.saturating_add(b.1),
+            a.2.saturating_add(b.2),
+            a.3.saturating_add(b.3),
+        ))
+    }
+}
+
+/// `(input, output, cache read, cache write)` off a row carrying Hermes's four
+/// token column names.
+fn usage_columns(row: &QueryResult) -> (u64, u64, u64, u64) {
+    (
+        get_u64(row, "input_tokens"),
+        get_u64(row, "output_tokens"),
+        get_u64(row, "cache_read_tokens"),
+        get_u64(row, "cache_write_tokens"),
+    )
 }
 
 impl AgentParser for HermesParser {

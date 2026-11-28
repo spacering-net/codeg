@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -280,6 +280,31 @@ impl CodexParser {
     /// because the parser latches `parent_id` from the FIRST header it sees and
     /// the child's is the one that declares the lineage.
     fn rollout_lines(&self, path: &Path) -> Result<Vec<String>, ParseError> {
+        Ok(self
+            .rollout_lines_tagged(path)?
+            .into_iter()
+            .map(|(line, _)| line)
+            .collect())
+    }
+
+    /// [`Self::rollout_lines`], each line tagged with whether it was inherited
+    /// from ANOTHER thread's rollout — a fork's copy of the history it forked
+    /// from.
+    ///
+    /// That history's spend belongs to the thread that made it, whose own
+    /// conversation counts it; the fork's counter even continues from it (a
+    /// fork whose base read 14,939 reports 29,896 after its first call of
+    /// ~15k). So its `token_count`s still set the baseline but are no spend of
+    /// the fork's — counted as such they billed the fork for its base again.
+    /// A revert's inherited rollout is the SAME thread's earlier file, its own
+    /// history, and is not tagged. Neither is anything when a thread id cannot
+    /// be read from the file name.
+    fn rollout_lines_tagged(&self, path: &Path) -> Result<Vec<(String, bool)>, ParseError> {
+        let own_thread = RolloutFileName::parse(path).map(|name| name.thread_id.to_string());
+        let foreign = |file: &Path| match (&own_thread, RolloutFileName::parse(file)) {
+            (Some(own), Some(name)) => name.thread_id != own,
+            _ => false,
+        };
         let read = |path: &Path| -> Result<Vec<String>, ParseError> {
             let own = BufReader::new(fs::File::open(path)?)
                 .lines()
@@ -289,8 +314,10 @@ impl CodexParser {
         };
 
         let mut lines = read(path)?;
-        // Newest first: every rollout that continues another, with its header's
-        // index and the cut into the one it continues.
+        let mut lines_foreign = false;
+        // Newest first: every rollout that continues another, with whether it
+        // is another thread's, its header's index and the cut into the one it
+        // continues.
         let mut continuations = Vec::new();
         let mut visited: HashSet<String> = RolloutFileName::parse(path)
             .map(|name| name.rollout_id.to_string())
@@ -312,38 +339,48 @@ impl CodexParser {
                 break;
             };
             let base = read(&base_path)?;
-            continuations.push((std::mem::replace(&mut lines, base), header_idx, cut));
+            let base_foreign = foreign(&base_path);
+            continuations.push((
+                std::mem::replace(&mut lines, base),
+                std::mem::replace(&mut lines_foreign, base_foreign),
+                header_idx,
+                cut,
+            ));
         }
         if continuations.is_empty() {
-            return Ok(lines);
+            return Ok(lines.into_iter().map(|line| (line, false)).collect());
         }
 
         // Oldest first from here, each record's ordinal read once however many
         // splices it passes through.
-        let with_ordinals = |lines: Vec<String>| -> Vec<(Option<u64>, String)> {
-            lines
-                .into_iter()
-                .map(|line| (codex_line_ordinal(&line), line))
-                .collect()
-        };
-        let mut assembled = with_ordinals(lines);
-        for (own, header_idx, cut) in continuations.into_iter().rev() {
-            let mut own = with_ordinals(own);
+        let with_ordinals =
+            |lines: Vec<String>, foreign: bool| -> Vec<(Option<u64>, String, bool)> {
+                lines
+                    .into_iter()
+                    .map(|line| (codex_line_ordinal(&line), line, foreign))
+                    .collect()
+            };
+        let mut assembled = with_ordinals(lines, lines_foreign);
+        for (own, own_foreign, header_idx, cut) in continuations.into_iter().rev() {
+            let mut own = with_ordinals(own, own_foreign);
             let header = own.remove(header_idx);
             let mut spliced = Vec::with_capacity(assembled.len() + own.len() + 1);
             spliced.push(header);
             spliced.extend(
                 assembled
                     .into_iter()
-                    .filter(|(ord, _)| ord.is_none_or(|ord| ord < cut)),
+                    .filter(|(ord, _, _)| ord.is_none_or(|ord| ord < cut)),
             );
             spliced.extend(
                 own.into_iter()
-                    .filter(|(ord, _)| ord.is_none_or(|ord| ord >= cut)),
+                    .filter(|(ord, _, _)| ord.is_none_or(|ord| ord >= cut)),
             );
             assembled = spliced;
         }
-        Ok(assembled.into_iter().map(|(_, line)| line).collect())
+        Ok(assembled
+            .into_iter()
+            .map(|(_, line, foreign)| (line, foreign))
+            .collect())
     }
 
     /// Every rollout file under the sessions root, in traversal order.
@@ -392,6 +429,202 @@ impl CodexParser {
             })
             .max_by(|(a, _), (b, _)| a.cmp(b))
             .map(|(_, path)| path)
+    }
+
+    /// Fold what this thread's sub-agents spent into its turns.
+    ///
+    /// A codex sub-agent (`spawn_agent`) runs as a thread of its own with a
+    /// rollout of its own, which declares this thread as its parent and is
+    /// never a conversation — import refuses anything with a parent — so its
+    /// spend was counted nowhere: a real session that delegated to three
+    /// workers recorded 111.5M tokens while the workers spent another 79M.
+    ///
+    /// `spawned` is every thread id this thread's own records name as one it
+    /// spawned. Each is read from its current rollout, but only if that
+    /// rollout's header names THIS thread as its parent — an id from a copied
+    /// history, or one that resolves elsewhere, contributes nothing. A child's
+    /// counter is its own: the parent history codex seeds it with carries no
+    /// `token_count` (none of 66 on-disk sub-agent rollouts has one before its
+    /// `subagent_history_start_ordinal`, and every child's counter starts
+    /// fresh), and [`Self::rollout_lines_tagged`] drops that seed regardless.
+    /// The workers a child spawned are followed the same way, each thread
+    /// read at most once.
+    ///
+    /// Every round lands on the assistant turn current at its own timestamp,
+    /// so a worker that keeps going while the parent moves on is billed
+    /// beside the parent's work at the time, and on the right day.
+    fn attribute_subagent_usage(
+        &self,
+        turns: &mut [MessageTurn],
+        thread_id: &str,
+        spawned: BTreeSet<String>,
+    ) {
+        if spawned.is_empty() {
+            return;
+        }
+        // One walk names every thread's current rollout, however many
+        // generations the lookups below go.
+        let mut current: HashMap<String, ((String, String), PathBuf)> = HashMap::new();
+        for path in self.rollout_paths() {
+            let Some(name) = RolloutFileName::parse(&path) else {
+                continue;
+            };
+            let recency = (name.timestamp.to_string(), name.rollout_id.to_string());
+            let thread = name.thread_id.to_string();
+            match current.get(&thread) {
+                Some((best, _)) if *best >= recency => {}
+                _ => {
+                    current.insert(thread, (recency, path));
+                }
+            }
+        }
+
+        let mut seen: HashSet<String> = HashSet::from([thread_id.to_string()]);
+        let mut pending: Vec<(String, String)> = spawned
+            .into_iter()
+            .map(|child| (thread_id.to_string(), child))
+            .collect();
+        while let Some((parent, child)) = pending.pop() {
+            if seen.contains(&child) {
+                continue;
+            }
+            let Some((_, path)) = current.get(&child) else {
+                continue;
+            };
+            let Some(rollout) = self.child_rollout(path) else {
+                continue;
+            };
+            // Seen only once accepted: a legacy child that replays its parent
+            // inline names its siblings too, and that copied edge — rejected
+            // here — must not shadow the real one still waiting in the list.
+            if rollout.parent.as_deref() != Some(parent.as_str()) {
+                continue;
+            }
+            seen.insert(child.clone());
+            for (at, usage) in &rollout.rounds {
+                super::add_usage_to_turn_current_at(turns, *at, usage);
+            }
+            pending.extend(
+                rollout
+                    .spawned
+                    .iter()
+                    .map(|grandchild| (child.clone(), grandchild.clone())),
+            );
+        }
+    }
+
+    /// [`read_child_rollout`] for `path`, from a cache that holds while the
+    /// file's length and modification time do: the session viewer re-reads a
+    /// running parent every couple of seconds, and a busy worker's rollout runs
+    /// to tens of megabytes.
+    fn child_rollout(&self, path: &Path) -> Option<std::sync::Arc<CodexChildRollout>> {
+        type Cache = HashMap<
+            PathBuf,
+            (
+                u64,
+                Option<std::time::SystemTime>,
+                std::sync::Arc<CodexChildRollout>,
+            ),
+        >;
+        static CACHE: OnceLock<std::sync::Mutex<Cache>> = OnceLock::new();
+        /// Plenty for every sub-agent a machine keeps; past it the cache just
+        /// starts over rather than track recency.
+        const MAX_ENTRIES: usize = 4096;
+
+        let meta = fs::metadata(path).ok()?;
+        let token = (meta.len(), meta.modified().ok());
+        let cache = CACHE.get_or_init(Default::default);
+        if let Ok(guard) = cache.lock() {
+            if let Some((len, modified, hit)) = guard.get(path) {
+                if (*len, *modified) == token {
+                    return Some(hit.clone());
+                }
+            }
+        }
+        let read = std::sync::Arc::new(self.read_child_rollout(path).ok()?);
+        if let Ok(mut guard) = cache.lock() {
+            if guard.len() >= MAX_ENTRIES {
+                guard.clear();
+            }
+            guard.insert(path.to_path_buf(), (token.0, token.1, read.clone()));
+        }
+        Some(read)
+    }
+
+    /// What a sub-agent's rollout contributes to its parent's accounting: the
+    /// parent its header declares, what each of its own round-trips spent
+    /// (metered exactly as a thread's own, see [`CodexRoundMeter`]), and the
+    /// threads it spawned in turn.
+    fn read_child_rollout(&self, path: &Path) -> Result<CodexChildRollout, ParseError> {
+        let mut read = CodexChildRollout::default();
+        let mut meter = CodexRoundMeter::default();
+        let mut header_seen = false;
+        let mut spawn_calls: HashSet<String> = HashSet::new();
+        for (line, inherited) in self.rollout_lines_tagged(path)? {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            let Some(payload) = value.get("payload") else {
+                continue;
+            };
+            match value.get("type").and_then(serde_json::Value::as_str) {
+                Some("session_meta") if !header_seen => {
+                    header_seen = true;
+                    read.parent = codex_parent_thread_id(payload);
+                }
+                Some("event_msg") => {
+                    let payload_type = payload
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    if let Some(activity) = codex_subagent_activity_record(payload_type, payload) {
+                        if !inherited {
+                            read.spawned.insert(activity.thread_id.to_string());
+                        }
+                    }
+                    if payload_type != "token_count" {
+                        continue;
+                    }
+                    let Some(info) = payload.get("info").filter(|info| !info.is_null()) else {
+                        continue;
+                    };
+                    let round = meter.round(info);
+                    if !inherited && !codex_usage_is_zero(&round) {
+                        read.rounds.push((parse_codex_timestamp(&value), round));
+                    }
+                }
+                Some("response_item") if !inherited => {
+                    let call_id = || {
+                        payload
+                            .get("call_id")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    };
+                    match payload.get("type").and_then(serde_json::Value::as_str) {
+                        Some("function_call")
+                            if payload.get("name").and_then(serde_json::Value::as_str)
+                                == Some("spawn_agent") =>
+                        {
+                            spawn_calls.extend(call_id());
+                        }
+                        Some("function_call_output")
+                            if call_id().is_some_and(|id| spawn_calls.contains(&id)) =>
+                        {
+                            if let Some(agent_id) = parse_codex_json_output(payload)
+                                .as_ref()
+                                .and_then(|output| output.get("agent_id"))
+                                .and_then(serde_json::Value::as_str)
+                            {
+                                read.spawned.insert(agent_id.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(read)
     }
 
     /// Load Codex's append-only session title index. The transcript remains the
@@ -447,6 +680,9 @@ impl CodexParser {
         let mut first_timestamp: Option<DateTime<Utc>> = None;
         let mut last_timestamp: Option<DateTime<Utc>> = None;
         let mut message_count: u32 = 0;
+        // The `/compact` prompts the detail parser restores (see
+        // `CompactPromptTasks`), counted the same way.
+        let mut compact_prompts = CompactPromptTasks::default();
         // Mirror the detail parser's leading-`/goal` fallback in the lightweight
         // list path: newer codex records `/goal` only as `thread_goal_updated` (no
         // `user_message`), so without this the sidebar/import entry is titleless
@@ -501,6 +737,7 @@ impl CodexParser {
 
             let record_ordinal =
                 promotion.note_record(msg_type, promotion_payload_type(msg_type, &value));
+            compact_prompts.note_record(msg_type, &value);
 
             if let Some(ts_str) = value.get("timestamp").and_then(|t| t.as_str()) {
                 if let Ok(ts) = ts_str.parse::<DateTime<Utc>>() {
@@ -838,6 +1075,7 @@ impl CodexParser {
         if goal_opens_session {
             message_count += 1;
         }
+        message_count += compact_prompts.into_prompts().len() as u32;
 
         let id = conversation_id.unwrap_or_else(|| {
             path.file_stem()
@@ -3275,7 +3513,7 @@ impl CodexParser {
         path: &Path,
         conversation_id: &str,
     ) -> Result<ConversationDetail, ParseError> {
-        let lines = self.rollout_lines(path)?;
+        let lines = self.rollout_lines_tagged(path)?;
 
         let mut messages = Vec::new();
         let mut cwd: Option<String> = None;
@@ -3346,15 +3584,21 @@ impl CodexParser {
         let mut context_window_max_tokens: Option<u64> = None;
         let mut latest_total_usage: Option<TurnUsage> = None;
         let mut latest_total_tokens: Option<u64> = None;
-        // Cumulative `total_token_usage` as of the previous `token_count`, so
-        // each event can be reduced to what its own round-trip added.
-        let mut previous_total_usage: Option<TurnUsage> = None;
-        // Previous `last_token_usage`, used only by the no-total fallback to
-        // recognize a restated event.
-        let mut previous_last_usage: Option<TurnUsage> = None;
+        // Reduces each `token_count` to what its own round-trip added.
+        let mut round_meter = CodexRoundMeter::default();
+        // Whether another thread's counter was spliced in (a fork's base), so
+        // the session total cannot be the counter's last reading.
+        let mut inherited_counter = false;
+        // Thread ids of the sub-agents this thread spawned, whose own rollouts
+        // hold their spend (see `attribute_subagent_usage`).
+        let mut spawned_threads: BTreeSet<String> = BTreeSet::new();
         // Round-trip spend recorded before any assistant message existed to
         // carry it; flushed onto the first one that appears.
         let mut pending_round_usage: Option<TurnUsage> = None;
+        // Where the current task's messages and held records begin (see
+        // `bill_codex_round`): a round waits for a message of its own task
+        // rather than land on the task before.
+        let mut task_floor: (usize, usize) = (0, 0);
         // Everything every round-trip reported, kept independently of which
         // message ended up carrying it — see `reconcile_turn_usage`.
         let mut recorded_round_usage = TurnUsage::default();
@@ -3517,11 +3761,12 @@ impl CodexParser {
         // Index in `messages` of the compaction divider the next
         // `item_completed.ContextCompaction` names (see the `compacted` arm).
         let mut unnamed_compaction_divider: Option<usize> = None;
+        let mut compact_prompts = CompactPromptTasks::default();
         let mut completed_agent = None;
         // By-reference forks replay ancestor headers before the child's own records.
         let mut source_threads = HashSet::from([conversation_id.to_owned()]);
 
-        for line in lines {
+        for (line, inherited_from_another_thread) in lines {
             if line.trim().is_empty() {
                 continue;
             }
@@ -3540,6 +3785,7 @@ impl CodexParser {
             // are all positional properties of the raw stream.
             let record_ordinal =
                 promotion.note_record(msg_type, promotion_payload_type(msg_type, &value));
+            compact_prompts.note_record(msg_type, &value);
 
             if let Some(ts_str) = value.get("timestamp").and_then(|t| t.as_str()) {
                 if let Ok(ts) = ts_str.parse::<DateTime<Utc>>() {
@@ -3644,6 +3890,17 @@ impl CodexParser {
                                 pending_reasoning_ts,
                             );
                         }
+                        // What a task still owes settles as it closes — its
+                        // reasoning run was just flushed — before the next
+                        // task's messages can claim it.
+                        if matches!(payload_type, "task_complete" | "turn_aborted") {
+                            settle_codex_round(
+                                &mut messages,
+                                &mut pending_promotions,
+                                task_floor,
+                                &mut pending_round_usage,
+                            );
+                        }
 
                         // codex 0.147 stopped returning the sub-agent's id from
                         // `spawn_agent` (its output is empty, or just
@@ -3658,6 +3915,9 @@ impl CodexParser {
                         if let Some(activity) =
                             codex_subagent_activity_record(payload_type, payload)
                         {
+                            if !inherited_from_another_thread {
+                                spawned_threads.insert(activity.thread_id.to_string());
+                            }
                             if let Some(path) = activity.agent_path {
                                 agent_path_to_thread_id
                                     .insert(path.to_string(), activity.thread_id.to_string());
@@ -3708,6 +3968,14 @@ impl CodexParser {
                                     push_turn_start(&mut task_start_markers, ts);
                                 }
                                 context_readings.turn_started();
+                                // A task that never closed settles here.
+                                settle_codex_round(
+                                    &mut messages,
+                                    &mut pending_promotions,
+                                    task_floor,
+                                    &mut pending_round_usage,
+                                );
+                                task_floor = (messages.len(), pending_promotions.len());
                                 current_turn_id = payload
                                     .get("turn_id")
                                     .and_then(|id| id.as_str())
@@ -4196,55 +4464,15 @@ impl CodexParser {
                                     }
 
                                     if !info.is_null() {
-                                        // What this round-trip spent. Preferred
-                                        // as the rise in the session's own
-                                        // cumulative counter; `last_token_usage`
-                                        // is the fallback for transcripts that
-                                        // report no total, and there a repeat of
-                                        // the previous event is dropped since it
-                                        // restates one call rather than adding
-                                        // another.
-                                        let round = match info.get("total_token_usage") {
-                                            Some(total_payload) => {
-                                                let total = codex_usage_counters(total_payload);
-                                                let round = codex_round_usage(
-                                                    previous_total_usage.as_ref(),
-                                                    &total,
-                                                );
-                                                previous_total_usage = Some(total);
-                                                round
-                                            }
-                                            None => match info.get("last_token_usage") {
-                                                Some(last_payload) => {
-                                                    let last = codex_usage_counters(last_payload);
-                                                    let repeated = previous_last_usage
-                                                        .as_ref()
-                                                        .is_some_and(|prev| prev == &last);
-                                                    previous_last_usage = Some(last.clone());
-                                                    if repeated {
-                                                        TurnUsage::default()
-                                                    } else {
-                                                        // Carry this round into the
-                                                        // cumulative baseline too.
-                                                        // A transcript that mixes
-                                                        // both shapes would
-                                                        // otherwise count it twice:
-                                                        // once here, and again
-                                                        // inside the next
-                                                        // total-bearing event's
-                                                        // delta, which is measured
-                                                        // from a baseline that
-                                                        // never learned about it.
-                                                        let base = previous_total_usage
-                                                            .clone()
-                                                            .unwrap_or_default();
-                                                        previous_total_usage =
-                                                            Some(codex_usage_add(&base, &last));
-                                                        last
-                                                    }
-                                                }
-                                                None => TurnUsage::default(),
-                                            },
+                                        let round = round_meter.round(info);
+                                        // Another thread's history (a fork's
+                                        // base): it moved the baseline above,
+                                        // but its spend is that thread's.
+                                        let round = if inherited_from_another_thread {
+                                            inherited_counter = true;
+                                            TurnUsage::default()
+                                        } else {
+                                            round
                                         };
 
                                         if !codex_usage_is_zero(&round) {
@@ -4275,23 +4503,17 @@ impl CodexParser {
                                         // Attaching now would bill the round to the
                                         // previous turn, so let it keep waiting for
                                         // the card the run is still gathering.
-                                        let last_assistant = if grouped_reasoning.is_empty()
+                                        if grouped_reasoning.is_empty()
                                             && pending_reasoning.is_empty()
                                         {
-                                            messages.iter_mut().rev().find(|m| bills_codex_usage(m))
-                                        } else {
-                                            None
-                                        };
-                                        if let (Some(pending), Some(last_msg)) =
-                                            (pending_round_usage.clone(), last_assistant)
-                                        {
-                                            last_msg.usage = Some(match last_msg.usage {
-                                                Some(ref existing) => {
-                                                    codex_usage_add(existing, &pending)
-                                                }
-                                                None => pending,
-                                            });
-                                            pending_round_usage = None;
+                                            if let Some(pending) = pending_round_usage.take() {
+                                                pending_round_usage = bill_codex_round(
+                                                    &mut messages,
+                                                    &mut pending_promotions,
+                                                    task_floor,
+                                                    pending,
+                                                );
+                                            }
                                         }
                                     }
                                 }
@@ -4862,6 +5084,9 @@ impl CodexParser {
                                             output_obj.get("agent_id").and_then(|v| v.as_str()),
                                             tool_use_id.as_ref(),
                                         ) {
+                                            if !inherited_from_another_thread {
+                                                spawned_threads.insert(agent_id.to_string());
+                                            }
                                             agent_id_to_spawn_call_id
                                                 .insert(agent_id.to_string(), call_id.clone());
                                         }
@@ -5298,6 +5523,8 @@ impl CodexParser {
                                     title_candidate,
                                     closed_reasoning_card: closed_reasoning_card
                                         .filter(|_| !is_user),
+                                    usage: None,
+                                    denied_handoff: false,
                                 });
                             }
                             "image_generation_call" => {
@@ -5388,9 +5615,11 @@ impl CodexParser {
                         pending_reasoning_ts,
                     );
                     let summary = codex_compacted_summary(value.get("payload"));
-                    let handoff = promotion
-                        .deny_compaction_summary(summary)
-                        .and_then(|index| pending_promotions.get(index));
+                    // Adjacency denies a handoff even when the record restates
+                    // no summary to confirm it by (and so names none below).
+                    let adjacent_handoff = promotion.adjacent_summary;
+                    let handoff_index = promotion.deny_compaction_summary(summary);
+                    let handoff = handoff_index.and_then(|index| pending_promotions.get(index));
                     // What the compaction's own model call thought before it
                     // wrote the handoff: codex publishes no item for it, so live
                     // never shows it, and kept here it read as the last thought
@@ -5406,24 +5635,39 @@ impl CodexParser {
                                     [ContentBlock::Thinking { .. }]
                                 )
                         });
+                    // The compaction's own model call, billed to the card or the
+                    // handoff — neither of which shows. It belongs to its task:
+                    // a reply the task already gave, else one still to come
+                    // (codex also compacts at the START of a task, ahead of
+                    // its prompt).
+                    let mut compaction_spent = None;
                     if let Some(card) = compaction_thinking.and_then(|_| messages.pop()) {
-                        // Its round was already billed to it; hand that to the
-                        // reply it would have been shown with.
                         if let Some(spent) = card.usage {
-                            match messages.iter_mut().rev().find(|m| bills_codex_usage(m)) {
-                                Some(owner) => {
-                                    owner.usage = Some(match owner.usage {
-                                        Some(ref existing) => codex_usage_add(existing, &spent),
-                                        None => spent,
-                                    });
-                                }
-                                None => {
-                                    pending_round_usage = Some(match pending_round_usage {
-                                        Some(ref pending) => codex_usage_add(pending, &spent),
-                                        None => spent,
-                                    });
-                                }
+                            add_codex_usage(&mut compaction_spent, spent);
+                        }
+                    }
+                    for index in [handoff_index, adjacent_handoff].into_iter().flatten() {
+                        let Some(handoff) = pending_promotions.get_mut(index) else {
+                            continue;
+                        };
+                        handoff.denied_handoff = true;
+                        // A record of an earlier task the summary text matched
+                        // keeps what its own task spent: it settles there at
+                        // EOF (`rebill_unshown_records`).
+                        if index >= task_floor.1 {
+                            if let Some(spent) = handoff.usage.take() {
+                                add_codex_usage(&mut compaction_spent, spent);
                             }
+                        }
+                    }
+                    if let Some(spent) = compaction_spent {
+                        if let Some(unbilled) = bill_codex_round(
+                            &mut messages,
+                            &mut pending_promotions,
+                            task_floor,
+                            spent,
+                        ) {
+                            add_codex_usage(&mut pending_round_usage, unbilled);
                         }
                     }
                     messages.push(codex_compaction_divider(
@@ -5433,6 +5677,9 @@ impl CodexParser {
                         timestamp,
                     ));
                     unnamed_compaction_divider = Some(messages.len() - 1);
+                    if let Some(divider) = messages.last() {
+                        compact_prompts.note_divider(&divider.id);
+                    }
                 }
                 _ => {}
             }
@@ -5452,15 +5699,12 @@ impl CodexParser {
         // ended before the next `token_count` could hand it to one (a run's card
         // was only just flushed above, or the model went straight to a tool call
         // and never spoke again). Bill it here rather than discard it.
-        if let (Some(pending), Some(last_msg)) = (
-            pending_round_usage.take(),
-            messages.iter_mut().rev().find(|m| bills_codex_usage(m)),
-        ) {
-            last_msg.usage = Some(match last_msg.usage {
-                Some(ref existing) => codex_usage_add(existing, &pending),
-                None => pending,
-            });
-        }
+        settle_codex_round(
+            &mut messages,
+            &mut pending_promotions,
+            task_floor,
+            &mut pending_round_usage,
+        );
 
         // Fill in subagent tool call stats (and, only as a fallback, the result)
         // on each spawn execution capsule.
@@ -5546,6 +5790,7 @@ impl CodexParser {
         //      (message, block) indices from whatever vector it is handed.
         let survivors = promotion.resolve();
         let promoted_user_ordinal = promotion.first_surviving_user_ordinal(&survivors);
+        rebill_unshown_records(&mut messages, &mut pending_promotions, &survivors);
         let mut kept: Vec<PendingPromotedMessage> = pending_promotions
             .into_iter()
             .zip(&survivors)
@@ -5584,7 +5829,7 @@ impl CodexParser {
                     },
                     content: pending.blocks,
                     timestamp: pending.timestamp,
-                    usage: None,
+                    usage: pending.usage,
                     duration_ms: None,
                     model: None,
                     completed_at: Some(pending.timestamp),
@@ -5592,6 +5837,38 @@ impl CodexParser {
                 })
                 .collect();
             messages.splice(insert_at..insert_at, group);
+        }
+
+        // The `/compact` a compaction-only task answered (see
+        // `CompactPromptTasks`). By id, after the splice above, which moves
+        // every index past its insertion points.
+        for (divider_id, asked_at) in compact_prompts.into_prompts() {
+            let Some(divider_id) = divider_id else {
+                continue;
+            };
+            let Some(at) = messages
+                .iter()
+                .position(|m| m.id == divider_id && is_codex_compaction_divider(&m.content))
+            else {
+                continue;
+            };
+            let timestamp = asked_at.unwrap_or(messages[at].timestamp);
+            messages.insert(
+                at,
+                UnifiedMessage {
+                    id: format!("codex-compact-prompt-{divider_id}"),
+                    role: MessageRole::User,
+                    content: vec![ContentBlock::Text {
+                        text: CODEX_COMPACT_COMMAND.to_string(),
+                    }],
+                    timestamp,
+                    usage: None,
+                    duration_ms: None,
+                    model: None,
+                    completed_at: Some(timestamp),
+                    agent_message_id: None,
+                },
+            );
         }
 
         // A promoted user that PRECEDES the goal means the goal did not open the
@@ -5672,6 +5949,8 @@ impl CodexParser {
         }
         let mut turns = group_into_turns(messages);
         reconcile_turn_usage(&mut turns, &recorded_round_usage);
+        // After the reconcile, whose invariant is the thread's OWN counter.
+        self.attribute_subagent_usage(&mut turns, conversation_id, spawned_threads);
         super::relocate_orphaned_tool_results(&mut turns);
         super::structurize_read_tool_output(&mut turns);
         super::resolve_patch_line_numbers(&mut turns, cwd.as_deref());
@@ -5679,6 +5958,25 @@ impl CodexParser {
         // timeline into per-reply durations before stats aggregate them.
         super::backfill_turn_durations(&mut turns, turn_starts);
         let mut session_stats = super::compute_session_stats(&turns);
+        // A fork's counter continues from its base's, so its last reading
+        // includes spend that is the base's. Its total is instead what its
+        // turns carry (its own rounds plus its workers'), or — when no turn
+        // carries any — its own rounds, which is also what `facts_from_detail`
+        // records then: an idle fork would otherwise bill its base again.
+        if inherited_counter {
+            let turns_carry_usage = session_stats
+                .as_ref()
+                .is_some_and(|stats| stats.total_usage.is_some());
+            latest_total_usage = (!turns_carry_usage
+                && !codex_usage_is_zero(&recorded_round_usage))
+            .then(|| recorded_round_usage.clone());
+            latest_total_tokens = latest_total_usage.as_ref().map(|u| {
+                u.input_tokens
+                    .saturating_add(u.output_tokens)
+                    .saturating_add(u.cache_creation_input_tokens)
+                    .saturating_add(u.cache_read_input_tokens)
+            });
+        }
         session_stats =
             merge_codex_total_usage_stats(session_stats, latest_total_usage, latest_total_tokens);
         session_stats = merge_codex_context_window_stats(
@@ -5785,6 +6083,71 @@ fn codex_usage_counters(usage: &serde_json::Value) -> TurnUsage {
         output_tokens: field("output_tokens"),
         cache_creation_input_tokens: cache_write,
         cache_read_input_tokens: cache_read,
+    }
+}
+
+/// What a sub-agent's rollout contributes to its parent's accounting (see
+/// `CodexParser::read_child_rollout`).
+#[derive(Default)]
+struct CodexChildRollout {
+    /// The parent thread its header declares.
+    parent: Option<String>,
+    /// Each of its own round-trips: when, and what it spent.
+    rounds: Vec<(Option<DateTime<Utc>>, TurnUsage)>,
+    /// The threads it spawned.
+    spawned: BTreeSet<String>,
+}
+
+/// Reduces a thread's `token_count` events to what each round-trip spent.
+///
+/// Preferred as the rise in the thread's own cumulative counter
+/// (`total_token_usage`, see [`codex_round_usage`]); `last_token_usage` is the
+/// fallback for transcripts that report no total, and there a repeat of the
+/// previous event is dropped since it restates one call rather than adding
+/// another.
+#[derive(Default)]
+struct CodexRoundMeter {
+    /// Cumulative `total_token_usage` as of the previous `token_count`.
+    previous_total: Option<TurnUsage>,
+    /// Previous `last_token_usage`, used only by the no-total fallback to
+    /// recognize a restated event.
+    previous_last: Option<TurnUsage>,
+}
+
+impl CodexRoundMeter {
+    /// What the round-trip a `token_count`'s non-null `info` reports added.
+    fn round(&mut self, info: &serde_json::Value) -> TurnUsage {
+        match info.get("total_token_usage") {
+            Some(total_payload) => {
+                let total = codex_usage_counters(total_payload);
+                let round = codex_round_usage(self.previous_total.as_ref(), &total);
+                self.previous_total = Some(total);
+                round
+            }
+            None => match info.get("last_token_usage") {
+                Some(last_payload) => {
+                    let last = codex_usage_counters(last_payload);
+                    let repeated = self
+                        .previous_last
+                        .as_ref()
+                        .is_some_and(|prev| prev == &last);
+                    self.previous_last = Some(last.clone());
+                    if repeated {
+                        TurnUsage::default()
+                    } else {
+                        // Carry this round into the cumulative baseline too. A
+                        // transcript that mixes both shapes would otherwise
+                        // count it twice: once here, and again inside the next
+                        // total-bearing event's delta, which is measured from a
+                        // baseline that never learned about it.
+                        let base = self.previous_total.clone().unwrap_or_default();
+                        self.previous_total = Some(codex_usage_add(&base, &last));
+                        last
+                    }
+                }
+                None => TurnUsage::default(),
+            },
+        }
     }
 }
 
@@ -6863,6 +7226,149 @@ struct PendingPromotedMessage {
     /// closed. Read only if the record turns out to be a compaction's handoff,
     /// whose reasoning that card then is.
     closed_reasoning_card: Option<usize>,
+    /// Model rounds billed to this record while it was held back (see
+    /// [`bill_codex_round`]).
+    usage: Option<TurnUsage>,
+    /// A compaction's handoff, which never shows: no round is billed to it.
+    denied_handoff: bool,
+}
+
+fn add_codex_usage(slot: &mut Option<TurnUsage>, extra: TurnUsage) {
+    *slot = Some(match slot.take() {
+        Some(existing) => codex_usage_add(&existing, &extra),
+        None => extra,
+    });
+}
+
+/// Bill one model round to the newest message that may carry it, or hand it
+/// back when there is none yet. Only messages and held records at or past
+/// `floor` — where the current task's began, as `(messages, held)` lengths —
+/// may; `(0, 0)` lets any.
+///
+/// The held-back `response_item` messages count, in the place the splice will
+/// give them. Codex 0.171 writes a reply's prose ONLY as a `response_item`, so
+/// while the file is being read the reply its `token_count` paid for is not in
+/// `messages` yet — looking there alone billed the round to whatever came
+/// before it, the previous reply's last tool call as often as not. Across 600
+/// recent local rollouts that left 42 of 704 rounds with no usage and heaped
+/// theirs on others; counting held records, all 704 match their task's spend.
+fn bill_codex_round(
+    messages: &mut [UnifiedMessage],
+    held: &mut [PendingPromotedMessage],
+    floor: (usize, usize),
+    round: TurnUsage,
+) -> Option<TurnUsage> {
+    let shown = messages
+        .iter()
+        .rposition(bills_codex_usage)
+        .filter(|&index| index >= floor.0);
+    // A held record sits BEFORE `messages[insert_at]`, so it is the newer of
+    // the two only past the shown one.
+    let held_reply = held
+        .iter_mut()
+        .enumerate()
+        .rev()
+        .find(|(_, pending)| !pending.is_user && !pending.denied_handoff)
+        .filter(|(index, _)| *index >= floor.1)
+        .map(|(_, pending)| pending)
+        .filter(|pending| shown.is_none_or(|index| pending.insert_at > index));
+    match (held_reply, shown) {
+        (Some(pending), _) => add_codex_usage(&mut pending.usage, round),
+        (None, Some(index)) => add_codex_usage(&mut messages[index].usage, round),
+        (None, None) => return Some(round),
+    }
+    None
+}
+
+/// Bill what is still waiting for a message, as a task ends (or the file
+/// does): to the task's own newest message, else — it gave none — to the
+/// newest before it, rather than to the next task's.
+fn settle_codex_round(
+    messages: &mut [UnifiedMessage],
+    held: &mut [PendingPromotedMessage],
+    floor: (usize, usize),
+    pending: &mut Option<TurnUsage>,
+) {
+    if let Some(round) = pending.take() {
+        *pending = bill_codex_round(messages, held, floor, round)
+            .and_then(|round| bill_codex_round(messages, held, (0, 0), round));
+    }
+}
+
+/// Hand the rounds billed to held records that will not be shown to the
+/// nearest message that will and may carry them, in the order the splice will
+/// give everything: within the record's own round first — before it, else
+/// after it, never across a prompt (a steer opens a round inside one task) —
+/// and only then the nearest anywhere, earlier ahead of later. Its event-channel
+/// twin, when it had one, sits right beside it. With nowhere to go at all,
+/// `reconcile_turn_usage` still accounts for them.
+fn rebill_unshown_records(
+    messages: &mut [UnifiedMessage],
+    held: &mut [PendingPromotedMessage],
+    survivors: &[bool],
+) {
+    #[derive(Clone, Copy)]
+    enum Slot {
+        Shown(usize),
+        Held(usize),
+    }
+    let survives = |index: usize| survivors.get(index).copied().unwrap_or(false);
+    // A held record sits before `messages[insert_at]`, after the held records
+    // written before it.
+    let mut order = Vec::with_capacity(messages.len() + held.len());
+    let mut next_held = 0;
+    for shown in 0..=messages.len() {
+        while next_held < held.len() && held[next_held].insert_at.min(messages.len()) <= shown {
+            order.push(Slot::Held(next_held));
+            next_held += 1;
+        }
+        if shown < messages.len() {
+            order.push(Slot::Shown(shown));
+        }
+    }
+    let opens_round = |slot: &Slot, messages: &[UnifiedMessage], held: &[PendingPromotedMessage]| {
+        match *slot {
+            Slot::Shown(index) => matches!(messages[index].role, MessageRole::User),
+            Slot::Held(index) => survives(index) && held[index].is_user,
+        }
+    };
+    let carries = |slot: &Slot, messages: &[UnifiedMessage], held: &[PendingPromotedMessage]| {
+        match *slot {
+            Slot::Shown(index) => bills_codex_usage(&messages[index]),
+            Slot::Held(index) => survives(index) && !held[index].is_user,
+        }
+    };
+    for (at, slot) in order.iter().enumerate() {
+        let Slot::Held(dropped) = *slot else {
+            continue;
+        };
+        if survives(dropped) {
+            continue;
+        }
+        let Some(spent) = held[dropped].usage.take() else {
+            continue;
+        };
+        let (before, after) = (&order[..at], &order[at + 1..]);
+        let target = before
+            .iter()
+            .rev()
+            .take_while(|slot| !opens_round(slot, messages, held))
+            .find(|slot| carries(slot, messages, held))
+            .or_else(|| {
+                after
+                    .iter()
+                    .take_while(|slot| !opens_round(slot, messages, held))
+                    .find(|slot| carries(slot, messages, held))
+            })
+            .or_else(|| before.iter().rev().find(|slot| carries(slot, messages, held)))
+            .or_else(|| after.iter().find(|slot| carries(slot, messages, held)))
+            .copied();
+        match target {
+            Some(Slot::Shown(index)) => add_codex_usage(&mut messages[index].usage, spent),
+            Some(Slot::Held(index)) => add_codex_usage(&mut held[index].usage, spent),
+            None => {}
+        }
+    }
 }
 
 /// Decides which `response_item.payload.type == "message"` records may be
@@ -7184,6 +7690,125 @@ fn codex_compaction_divider(
         model: None,
         completed_at: Some(timestamp),
         agent_message_id: None,
+    }
+}
+
+/// The slash command a compaction-only task answered. codex records the task
+/// without the prompt, and nothing else in it names the command.
+const CODEX_COMPACT_COMMAND: &str = "/compact";
+
+/// The `/compact` prompts codex leaves out of its rollout.
+///
+/// A `/compact` runs as a task of its own, and codex writes that task with no
+/// user record at all: `task_started`, the compaction's handoff and the
+/// `compacted` record, then `task_complete`. Live, the prompt that asked for it
+/// IS a user turn — the composer's own send, or codeg's (the work-task and
+/// personal-assistant engines send one before resuming a session whose context
+/// is filling up), broadcast to every open tab as a user message. Read back
+/// without it, the history has one round fewer than the tab that watched it,
+/// so every reply after it in that tab pairs with the round before its own:
+/// the newest one with nothing, which left its footer empty and its fork point
+/// unnamed until the conversation was reopened (`computeTurnMetadataPatches`
+/// pairs rounds from the start). The Claude parser places the echo of its
+/// `/compact` at the divider for the same reason.
+///
+/// Only a task that CLOSES with a compaction and nothing that started it
+/// qualifies. codex also compacts at the start of an ordinary turn, before
+/// writing that turn's prompt, and the prompt then follows within milliseconds
+/// in the same task; that compaction belongs to the prompt's round. A task
+/// still open when the file ends is left alone for the same reason. And a
+/// turn another agent's message started has no user record either, yet may
+/// compact when it reaches the context limit: codex 0.171 stamps every such
+/// regular turn with a `turn_attribution` (a `/compact` task carries none —
+/// 12 of 12 in the local corpus), and older versions write the message that
+/// started it as a `response_item.agent_message`, which no `/compact` task
+/// holds.
+#[derive(Default)]
+struct CompactPromptTasks {
+    open: Option<CompactPromptTask>,
+    /// Per qualifying task: the divider the detail parser drew for its
+    /// compaction (`None` where nothing draws one — the summary pass), and
+    /// when the task started.
+    found: Vec<(Option<String>, Option<DateTime<Utc>>)>,
+}
+
+struct CompactPromptTask {
+    started_at: Option<DateTime<Utc>>,
+    /// A user record, another agent's message, or codex's own attribution
+    /// of a regular turn: something other than a `/compact` started it.
+    started_by_input: bool,
+    compacted: bool,
+    divider: Option<String>,
+}
+
+impl CompactPromptTasks {
+    /// Fed every record, before the parser's own handling of it.
+    fn note_record(&mut self, msg_type: &str, value: &serde_json::Value) {
+        let payload = value.get("payload");
+        let payload_type = payload
+            .and_then(|p| p.get("type"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        match (msg_type, payload_type) {
+            ("event_msg", "task_started") => {
+                self.close();
+                let attributed = payload
+                    .and_then(|p| p.get("turn_attribution"))
+                    .is_some_and(|attribution| !attribution.is_null());
+                self.open = Some(CompactPromptTask {
+                    started_at: parse_codex_timestamp(value),
+                    started_by_input: attributed,
+                    compacted: false,
+                    divider: None,
+                });
+            }
+            ("event_msg", "task_complete" | "turn_aborted") => self.close(),
+            ("event_msg", "user_message") | ("response_item", "agent_message") => {
+                self.saw_input()
+            }
+            ("response_item", "message")
+                if payload
+                    .and_then(|p| p.get("role"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("user") =>
+            {
+                self.saw_input()
+            }
+            ("compacted", _) => {
+                if let Some(task) = self.open.as_mut() {
+                    task.compacted = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn saw_input(&mut self) {
+        if let Some(task) = self.open.as_mut() {
+            task.started_by_input = true;
+        }
+    }
+
+    /// The divider the detail parser just drew for the open task's
+    /// `compacted` record. Its first one is where the prompt goes.
+    fn note_divider(&mut self, id: &str) {
+        if let Some(task) = self.open.as_mut() {
+            if task.divider.is_none() {
+                task.divider = Some(id.to_string());
+            }
+        }
+    }
+
+    fn close(&mut self) {
+        if let Some(task) = self.open.take() {
+            if task.compacted && !task.started_by_input {
+                self.found.push((task.divider, task.started_at));
+            }
+        }
+    }
+
+    fn into_prompts(self) -> Vec<(Option<String>, Option<DateTime<Utc>>)> {
+        self.found
     }
 }
 
@@ -8343,6 +8968,239 @@ mod tests {
             .get_conversation(child)
             .expect("fork parses");
         assert_eq!(rendered_texts(&detail), vec!["p1", "c3"]);
+    }
+
+    /// A `token_count` at `ord` whose session counter reads `input` / `output`.
+    fn token_count_line(ord: u64, input: u64, output: u64) -> String {
+        event_line(
+            &format!("2026-09-21T02:00:{ord:02}.500Z"),
+            ord,
+            serde_json::json!({"type": "token_count", "info": {"total_token_usage": {
+                "input_tokens": input, "cached_input_tokens": 0, "output_tokens": output
+            }}}),
+        )
+    }
+
+    fn agent_line(ord: u64, text: &str) -> String {
+        event_line(
+            &format!("2026-09-21T02:00:{ord:02}.000Z"),
+            ord,
+            serde_json::json!({"type": "agent_message", "message": text}),
+        )
+    }
+
+    /// A sub-agent's rollout never becomes a conversation, so its spend only
+    /// counts if the thread that spawned it folds it in — down every
+    /// generation, and only for rollouts whose header names that thread.
+    #[test]
+    fn a_sub_agents_own_spend_is_counted_against_the_thread_that_spawned_it() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let parent = "01a0e500-0000-7000-8000-000000000001";
+        let child = "01a0e501-0000-7000-8000-000000000002";
+        let grandchild = "01a0e502-0000-7000-8000-000000000003";
+        let stranger = "01a0e503-0000-7000-8000-000000000004";
+        // Read before `child` (the list pops the highest id first), and its
+        // replayed copy of the parent's history names `child` too.
+        let sibling = "01a0e504-0000-7000-8000-000000000005";
+
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-00-{parent}.jsonl"),
+            &[
+                header_line(0, parent, serde_json::json!({})),
+                prompt_line(1, "split the work"),
+                agent_line(2, "spawning"),
+                token_count_line(3, 1000, 10),
+                // 0.147+ names the child only through `SubAgentActivity`.
+                event_line(
+                    "2026-09-21T02:00:04.000Z",
+                    4,
+                    serde_json::json!({"type": "item_completed", "item": {
+                        "type": "SubAgentActivity", "id": "call-1",
+                        "agent_thread_id": child, "kind": "started"
+                    }}),
+                ),
+                // An id whose rollout belongs to another parent counts nothing.
+                event_line(
+                    "2026-09-21T02:00:05.000Z",
+                    5,
+                    serde_json::json!({"type": "sub_agent_activity", "event_id": "call-2",
+                        "agent_thread_id": stranger, "kind": "started"}),
+                ),
+                event_line(
+                    "2026-09-21T02:00:06.000Z",
+                    6,
+                    serde_json::json!({"type": "sub_agent_activity", "event_id": "call-3",
+                        "agent_thread_id": sibling, "kind": "started"}),
+                ),
+            ],
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-08-{sibling}.jsonl"),
+            &[
+                header_line(1, sibling, serde_json::json!({"parent_thread_id": parent})),
+                event_line(
+                    "2026-09-21T02:00:04.000Z",
+                    4,
+                    serde_json::json!({"type": "sub_agent_activity", "event_id": "call-1",
+                        "agent_thread_id": child, "kind": "started"}),
+                ),
+                token_count_line(7, 6_000, 600),
+            ],
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-04-{child}.jsonl"),
+            &[
+                header_line(0, child, serde_json::json!({"parent_thread_id": parent})),
+                token_count_line(1, 300, 3),
+                token_count_line(2, 500, 5),
+                // A pre-0.147 spawn names its child in the call's output.
+                paginated_line(
+                    "2026-09-21T02:00:03.000Z",
+                    3,
+                    "response_item",
+                    serde_json::json!({"type": "function_call", "call_id": "s1",
+                        "name": "spawn_agent", "arguments": "{}"}),
+                ),
+                paginated_line(
+                    "2026-09-21T02:00:04.000Z",
+                    4,
+                    "response_item",
+                    serde_json::json!({"type": "function_call_output", "call_id": "s1",
+                        "output": serde_json::json!({"agent_id": grandchild}).to_string()}),
+                ),
+            ],
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-06-{grandchild}.jsonl"),
+            &[
+                header_line(
+                    0,
+                    grandchild,
+                    serde_json::json!({"source": {"subagent": {"thread_spawn": {
+                        "parent_thread_id": child
+                    }}}}),
+                ),
+                token_count_line(1, 70, 7),
+            ],
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-07-{stranger}.jsonl"),
+            &[
+                header_line(
+                    0,
+                    stranger,
+                    serde_json::json!({"parent_thread_id": "someone-else"}),
+                ),
+                token_count_line(1, 9_000, 999),
+            ],
+        );
+
+        let detail = CodexParser::with_base_dir(sessions_dir)
+            .get_conversation(parent)
+            .expect("parent parses");
+        assert_eq!(turn_usage_total(&detail), 1_010 + 505 + 77 + 6_600);
+    }
+
+    /// A fork's copy of the history it forked from carries that thread's
+    /// counter, and the fork's own counter continues from it: only what the
+    /// fork added is its spend.
+    #[test]
+    fn a_fork_is_not_billed_for_the_history_it_inherited() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let base = "01a0e600-0000-7000-8000-000000000001";
+        let fork = "01a0e601-0000-7000-8000-000000000002";
+
+        let base_lines = vec![
+            header_line(0, base, serde_json::json!({})),
+            prompt_line(1, "p1"),
+            agent_line(2, "a1"),
+            token_count_line(3, 14_000, 939),
+            prompt_line(4, "p2, after the fork point"),
+            agent_line(5, "a2"),
+            token_count_line(6, 29_000, 1_000),
+        ];
+        let fork_lines = vec![
+            header_line(
+                4,
+                fork,
+                serde_json::json!({
+                    "forked_from_id": base,
+                    "history_base": history_base(base, &base_lines, 4)
+                }),
+            ),
+            prompt_line(5, "f1"),
+            agent_line(6, "fa1"),
+            token_count_line(7, 28_900, 996),
+        ];
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-00-{base}.jsonl"),
+            &base_lines,
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-01-00-{fork}.jsonl"),
+            &fork_lines,
+        );
+
+        let parser = CodexParser::with_base_dir(sessions_dir);
+        let forked = parser.get_conversation(fork).expect("fork parses");
+        assert_eq!(rendered_texts(&forked), vec!["p1", "a1", "f1", "fa1"]);
+        assert_eq!(turn_usage_total(&forked), (28_900 + 996) - (14_000 + 939));
+        // The base still counts its own, all of it.
+        let original = parser.get_conversation(base).expect("base parses");
+        assert_eq!(turn_usage_total(&original), 30_000);
+    }
+
+    /// A fork that has done nothing yet spent nothing — not even through the
+    /// session total that stands in when no turn reports usage.
+    #[test]
+    fn an_idle_fork_reports_no_spend_of_its_own() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let base = "01a0e700-0000-7000-8000-000000000001";
+        let fork = "01a0e701-0000-7000-8000-000000000002";
+
+        let base_lines = vec![
+            header_line(0, base, serde_json::json!({})),
+            prompt_line(1, "p1"),
+            agent_line(2, "a1"),
+            token_count_line(3, 14_000, 939),
+        ];
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-00-{base}.jsonl"),
+            &base_lines,
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-01-00-{fork}.jsonl"),
+            &[header_line(
+                4,
+                fork,
+                serde_json::json!({
+                    "forked_from_id": base,
+                    "history_base": history_base(base, &base_lines, 4)
+                }),
+            )],
+        );
+
+        let forked = CodexParser::with_base_dir(sessions_dir)
+            .get_conversation(fork)
+            .expect("fork parses");
+        assert_eq!(turn_usage_total(&forked), 0);
+        assert_eq!(
+            forked.session_stats.and_then(|s| s.total_usage),
+            None,
+            "the base's counter is not the fork's total"
+        );
     }
 
     /// Nothing caps the chain: a thread edited over and over is a long lineage,
@@ -17101,9 +17959,11 @@ mod tests {
             vec![
                 ("user", Some("look at /private/tmp".into())),
                 ("assistant", Some("It holds 40 stale folders.".into())),
+                ("user", Some("/compact".into())),
                 ("assistant", None),
             ],
-            "the handoff is no reply; the divider stands where live drew it"
+            "the handoff is no reply; the divider stands where live drew it, \
+             under the `/compact` that asked for it"
         );
         // Named by the item codex-acp names the live divider by, and opening
         // onto the handoff without the framing codex addressed to its model.
@@ -17113,9 +17973,9 @@ mod tests {
         );
         // Every token the rollout reported is still billed to a reply.
         assert_eq!(turn_usage_total(&detail), 2580);
-        // The sidebar entry counts what the conversation renders: the prompt
-        // and the reply, not the handoff.
-        assert_eq!(summary_of("compaction-handoff-sum", &content).message_count, 2);
+        // The sidebar entry counts what the conversation renders: the prompt,
+        // the reply and the `/compact`, not the handoff.
+        assert_eq!(summary_of("compaction-handoff-sum", &content).message_count, 3);
     }
 
     /// An automatic compaction mid-turn. The compaction's own model call thinks
@@ -17987,6 +18847,474 @@ mod tests {
             .collect();
         assert!(rendered.contains(directive), "{rendered}");
         assert!(!rendered.contains("[a.txt]("), "{rendered}");
+    }
+
+    /// What each round's replies report, summed, in order (a round opens at
+    /// each user turn).
+    fn round_spend(detail: &crate::models::ConversationDetail) -> Vec<u64> {
+        let mut rounds: Vec<u64> = Vec::new();
+        for turn in &detail.turns {
+            match turn.role {
+                crate::models::TurnRole::User => rounds.push(0),
+                crate::models::TurnRole::Assistant => {
+                    if let (Some(round), Some(usage)) = (rounds.last_mut(), &turn.usage) {
+                        *round += usage.input_tokens
+                            + usage.output_tokens
+                            + usage.cache_creation_input_tokens
+                            + usage.cache_read_input_tokens;
+                    }
+                }
+                _ => {}
+            }
+        }
+        rounds
+    }
+
+    /// codex 0.171 writes a reply's prose ONLY as a `response_item`, which the
+    /// parser holds back until the whole file is read. Each round's
+    /// `token_count` still belongs to that reply — before, it went to whatever
+    /// was already shown, the previous round's tool call here, so a reloaded
+    /// round could show no usage while the one before it showed both.
+    #[test]
+    fn each_round_keeps_its_own_usage_when_its_reply_is_held_back() {
+        let ts = |at: &str| format!("2026-11-25T09:{at}.000Z");
+        let event = |at: &str, payload: serde_json::Value| record(&ts(at), "event_msg", payload);
+        let item = |at: &str, payload: serde_json::Value| record(&ts(at), "response_item", payload);
+        let user = |at: &str, text: &str| {
+            item(
+                at,
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}),
+            )
+        };
+        let records = vec![
+            record(
+                &ts("00:00"),
+                "session_meta",
+                serde_json::json!({"id": "held-usage", "cwd": "/w", "cli_version": "0.171.0"}),
+            ),
+            event("00:00", serde_json::json!({"type": "task_started", "turn_id": "t1"})),
+            user("00:01", "look around"),
+            assistant_item(&ts("00:02"), "On it."),
+            item(
+                "00:03",
+                serde_json::json!({"type": "function_call", "name": "shell", "call_id": "call_1", "arguments": "{\"command\":[\"ls\"]}"}),
+            ),
+            item(
+                "00:04",
+                serde_json::json!({"type": "function_call_output", "call_id": "call_1", "output": "a.txt"}),
+            ),
+            token_count(&ts("00:05"), 100, 10),
+            assistant_item(&ts("00:06"), "Found a.txt."),
+            token_count(&ts("00:07"), 300, 20),
+            event("00:08", serde_json::json!({"type": "task_complete", "turn_id": "t1"})),
+            event("01:00", serde_json::json!({"type": "task_started", "turn_id": "t2"})),
+            user("01:01", "anything else?"),
+            assistant_item(&ts("01:02"), "Nothing else."),
+            token_count(&ts("01:03"), 600, 25),
+            event("01:04", serde_json::json!({"type": "task_complete", "turn_id": "t2"})),
+        ];
+        let detail = parse_rollout("held-usage", &jsonl(&records), "held-usage");
+        // Round 1: 110, then 210 more; round 2: 305.
+        assert_eq!(round_spend(&detail), vec![320, 305], "{:?}", turn_texts(&detail));
+        // And on the replies themselves, not only somewhere in the round.
+        let last = detail.turns.last().expect("a reply");
+        assert_eq!(
+            last.usage.as_ref().map(|u| u.input_tokens + u.output_tokens),
+            Some(305)
+        );
+    }
+
+    /// A round still waiting for its message when its task ends — here its
+    /// reasoning run was open when `token_count` came, and the turn was
+    /// interrupted — is its own task's, not the next task's reply.
+    #[test]
+    fn a_round_left_waiting_settles_in_its_own_task() {
+        let ts = |at: &str| format!("2026-11-25T09:{at}.000Z");
+        let event = |at: &str, payload: serde_json::Value| record(&ts(at), "event_msg", payload);
+        let user = |at: &str, text: &str| {
+            record(
+                &ts(at),
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}),
+            )
+        };
+        let records = vec![
+            record(
+                &ts("00:00"),
+                "session_meta",
+                serde_json::json!({"id": "settle-usage", "cwd": "/w", "cli_version": "0.171.0"}),
+            ),
+            event("00:00", serde_json::json!({"type": "task_started", "turn_id": "t1"})),
+            user("00:01", "think first"),
+            record(
+                &ts("00:02"),
+                "response_item",
+                serde_json::json!({"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "**Weighing it**\n\nBody."}]}),
+            ),
+            token_count(&ts("00:03"), 90, 10),
+            event("00:04", serde_json::json!({"type": "turn_aborted", "turn_id": "t1", "reason": "interrupted"})),
+            event("01:00", serde_json::json!({"type": "task_started", "turn_id": "t2"})),
+            user("01:01", "go on"),
+            assistant_item(&ts("01:02"), "Second."),
+            token_count(&ts("01:03"), 150, 10),
+            event("01:04", serde_json::json!({"type": "task_complete", "turn_id": "t2"})),
+        ];
+        let detail = parse_rollout("settle-usage", &jsonl(&records), "settle-usage");
+        assert_eq!(round_spend(&detail), vec![100, 60], "{:?}", turn_texts(&detail));
+    }
+
+    /// A compaction codex runs at the START of a task, ahead of its prompt,
+    /// is that task's spend — whether its `token_count` lands before the
+    /// handoff or after, and whether the `compacted` record restates the
+    /// handoff or adjacency alone identifies it — not the previous task's.
+    #[test]
+    fn a_compaction_opening_a_task_bills_that_task() {
+        let ts = |at: &str| format!("2026-11-25T09:{at}.000Z");
+        let event = |at: &str, payload: serde_json::Value| record(&ts(at), "event_msg", payload);
+        let user = |at: &str, text: &str| {
+            record(
+                &ts(at),
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}),
+            )
+        };
+        for (spend_before_handoff, restated) in [(true, true), (false, true), (false, false)] {
+            let compaction_spend = token_count(&ts("01:02"), 130, 10);
+            let handoff = assistant_item(&ts("01:03"), "Handoff: the user said hello.");
+            let mut records = vec![
+                record(
+                    &ts("00:00"),
+                    "session_meta",
+                    serde_json::json!({"id": "pre-turn-usage", "cwd": "/w", "cli_version": "0.171.0"}),
+                ),
+                event("00:00", serde_json::json!({"type": "task_started", "turn_id": "t1"})),
+                user("00:01", "hello"),
+                assistant_item(&ts("00:02"), "Hi."),
+                token_count(&ts("00:03"), 90, 10),
+                event("00:04", serde_json::json!({"type": "task_complete", "turn_id": "t1"})),
+                event("01:00", serde_json::json!({"type": "task_started", "turn_id": "t2"})),
+            ];
+            if spend_before_handoff {
+                records.extend([compaction_spend, handoff]);
+            } else {
+                records.extend([handoff, compaction_spend]);
+            }
+            records.extend([
+                if restated {
+                    compacted(&ts("01:04"), "Handoff: the user said hello.")
+                } else {
+                    record(&ts("01:04"), "compacted", serde_json::json!({}))
+                },
+                user("01:05", "hello again"),
+                assistant_item(&ts("01:06"), "Hi again."),
+                token_count(&ts("01:07"), 190, 10),
+                event("01:08", serde_json::json!({"type": "task_complete", "turn_id": "t2"})),
+            ]);
+            let detail = parse_rollout("pre-turn-usage", &jsonl(&records), "pre-turn-usage");
+            assert_eq!(
+                round_spend(&detail),
+                vec![100, 100],
+                "spend before handoff: {spend_before_handoff}, restated: {restated}; {:?}",
+                turn_texts(&detail)
+            );
+        }
+    }
+
+    /// A compaction whose restated summary matches a record of an EARLIER
+    /// task (here the held twin of that task's reply) leaves that task's spend
+    /// where it was.
+    #[test]
+    fn a_compaction_matching_an_earlier_task_leaves_its_spend_there() {
+        let ts = |at: &str| format!("2026-11-25T09:{at}.000Z");
+        let event = |at: &str, payload: serde_json::Value| record(&ts(at), "event_msg", payload);
+        let records = vec![
+            record(
+                &ts("00:00"),
+                "session_meta",
+                serde_json::json!({"id": "earlier-match", "cwd": "/w", "cli_version": "0.160.0"}),
+            ),
+            event("00:00", serde_json::json!({"type": "task_started", "turn_id": "t1"})),
+            event("00:01", serde_json::json!({"type": "user_message", "message": "hello"})),
+            event("00:02", serde_json::json!({"type": "agent_message", "message": "Hi there."})),
+            assistant_item(&ts("00:03"), "Hi there."),
+            token_count(&ts("00:04"), 90, 10),
+            event("00:05", serde_json::json!({"type": "task_complete", "turn_id": "t1"})),
+            event("01:00", serde_json::json!({"type": "task_started", "turn_id": "t2"})),
+            compacted(&ts("01:01"), "Hi there."),
+            event("01:02", serde_json::json!({"type": "user_message", "message": "again"})),
+            event("01:03", serde_json::json!({"type": "agent_message", "message": "Again."})),
+            token_count(&ts("01:04"), 150, 10),
+            event("01:05", serde_json::json!({"type": "task_complete", "turn_id": "t2"})),
+        ];
+        let detail = parse_rollout("earlier-match", &jsonl(&records), "earlier-match");
+        assert_eq!(round_spend(&detail), vec![100, 60], "{:?}", turn_texts(&detail));
+    }
+
+    /// The same, when the matched record's own round holds another reply that
+    /// shows: the spend stays in that round rather than crossing its prompt
+    /// back to the round before.
+    #[test]
+    fn a_matched_record_of_an_earlier_task_bills_a_reply_of_its_round() {
+        let ts = |at: &str| format!("2026-11-25T09:{at}.000Z");
+        let event = |at: &str, payload: serde_json::Value| record(&ts(at), "event_msg", payload);
+        let user = |at: &str, text: &str| {
+            record(
+                &ts(at),
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}),
+            )
+        };
+        let records = vec![
+            record(
+                &ts("00:00"),
+                "session_meta",
+                serde_json::json!({"id": "same-task", "cwd": "/w", "cli_version": "0.171.0"}),
+            ),
+            event("00:00", serde_json::json!({"type": "task_started", "turn_id": "t1"})),
+            user("00:01", "hello"),
+            assistant_item(&ts("00:02"), "Hi."),
+            token_count(&ts("00:03"), 15, 5),
+            event("00:04", serde_json::json!({"type": "task_complete", "turn_id": "t1"})),
+            event("01:00", serde_json::json!({"type": "task_started", "turn_id": "t2"})),
+            user("01:01", "build it"),
+            assistant_item(&ts("01:02"), "Working"),
+            token_count(&ts("01:03"), 110, 10),
+            assistant_item(&ts("01:04"), "Done"),
+            event("01:05", serde_json::json!({"type": "task_complete", "turn_id": "t2"})),
+            event("02:00", serde_json::json!({"type": "task_started", "turn_id": "t3"})),
+            compacted(&ts("02:01"), "Working"),
+            event("02:02", serde_json::json!({"type": "task_complete", "turn_id": "t3"})),
+        ];
+        let detail = parse_rollout("same-task", &jsonl(&records), "same-task");
+        assert_eq!(round_spend(&detail), vec![20, 100, 0], "{:?}", turn_texts(&detail));
+    }
+
+    /// A steer opens a round inside one task: a matched record's spend stays
+    /// in its own round (here on the tool call before it), not carried past
+    /// the steered prompt onto the next round's reply.
+    #[test]
+    fn a_matched_record_keeps_its_spend_within_a_steered_round() {
+        let ts = |at: &str| format!("2026-11-25T09:{at}.000Z");
+        let event = |at: &str, payload: serde_json::Value| record(&ts(at), "event_msg", payload);
+        let item = |at: &str, payload: serde_json::Value| record(&ts(at), "response_item", payload);
+        let user = |at: &str, text: &str| {
+            item(
+                at,
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}),
+            )
+        };
+        let shell = |at: &str, call: &str| {
+            [
+                item(
+                    at,
+                    serde_json::json!({"type": "function_call", "name": "shell", "call_id": call, "arguments": "{\"command\":[\"ls\"]}"}),
+                ),
+                item(
+                    at,
+                    serde_json::json!({"type": "function_call_output", "call_id": call, "output": "a.txt"}),
+                ),
+            ]
+        };
+        let mut records = vec![
+            record(
+                &ts("00:00"),
+                "session_meta",
+                serde_json::json!({"id": "steered", "cwd": "/w", "cli_version": "0.171.0"}),
+            ),
+            event("00:00", serde_json::json!({"type": "task_started", "turn_id": "t1"})),
+            user("00:01", "build it"),
+        ];
+        records.extend(shell("00:02", "call_1"));
+        records.extend([assistant_item(&ts("00:03"), "Working"), token_count(&ts("00:04"), 90, 10)]);
+        records.push(user("00:05", "also run the tests"));
+        records.extend(shell("00:06", "call_2"));
+        records.extend([
+            assistant_item(&ts("00:07"), "Done"),
+            token_count(&ts("00:08"), 140, 20),
+            event("00:09", serde_json::json!({"type": "task_complete", "turn_id": "t1"})),
+            event("01:00", serde_json::json!({"type": "task_started", "turn_id": "t2"})),
+            compacted(&ts("01:01"), "Working"),
+            event("01:02", serde_json::json!({"type": "task_complete", "turn_id": "t2"})),
+        ]);
+        let detail = parse_rollout("steered", &jsonl(&records), "steered");
+        assert_eq!(round_spend(&detail), vec![100, 60, 0], "{:?}", turn_texts(&detail));
+    }
+
+    /// The records codex 0.171 (codex-acp 2.10.0) writes for one round,
+    /// recorded live: its task, the prompt, the reply and the task's close.
+    fn prompted_task(at: &str, turn: &str, prompt: &str, reply: &str) -> Vec<serde_json::Value> {
+        let ts = |ms: &str| format!("2026-11-25T08:{at}.{ms}Z");
+        vec![
+            record(&ts("100"), "event_msg", serde_json::json!({"type": "task_started", "turn_id": turn})),
+            record(&ts("110"), "turn_context", serde_json::json!({"turn_id": turn, "cwd": "/w", "model": "gpt-5.5"})),
+            record(
+                &ts("120"),
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": prompt}]}),
+            ),
+            assistant_item(&ts("300"), reply),
+            token_count(&ts("310"), 1000, 10),
+            record(
+                &ts("320"),
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": turn, "last_agent_message": reply}),
+            ),
+        ]
+    }
+
+    /// The task codex 0.171 writes for a `/compact` (codex-acp 2.10.0,
+    /// recorded live): no user record at all, the compaction's handoff, the
+    /// `compacted` record and the task's close.
+    fn compact_task(at: &str, turn: &str, closed: bool) -> Vec<serde_json::Value> {
+        let ts = |ms: &str| format!("2026-11-25T08:{at}.{ms}Z");
+        let mut records = vec![
+            record(&ts("700"), "event_msg", serde_json::json!({"type": "task_started", "turn_id": turn})),
+            token_count(&ts("871"), 1000, 10),
+            assistant_item(&ts("937"), "Handoff: the user said hello."),
+            compacted(&ts("950"), "Handoff: the user said hello."),
+            record(&ts("952"), "turn_context", serde_json::json!({"turn_id": turn, "cwd": "/w", "model": "gpt-5.5"})),
+            record(
+                &ts("978"),
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": turn, "item": {"type": "ContextCompaction", "id": format!("cc-{turn}")}}),
+            ),
+        ];
+        if closed {
+            records.push(record(
+                &ts("990"),
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": turn, "last_agent_message": null}),
+            ));
+        }
+        records
+    }
+
+    /// A `/compact` reads back as the prompt the user (or codeg's task engine)
+    /// sent, above its divider — the round the live tab drew for it. codex
+    /// writes the task without it, and history one round short paired every
+    /// later reply in an open tab with the round before its own: the newest
+    /// reply's footer stayed empty and its fork point unnamed.
+    #[test]
+    fn a_compact_task_reads_back_with_the_prompt_that_asked_for_it() {
+        let mut records = vec![record(
+            "2026-11-25T08:52:13.000Z",
+            "session_meta",
+            serde_json::json!({"id": "compact-1", "cwd": "/w", "cli_version": "0.171.0"}),
+        )];
+        records.extend(prompted_task("52:13", "t1", "hello one", "Reply 1: done."));
+        records.extend(compact_task("58:00", "t2", true));
+        records.extend(prompted_task("58:47", "t3", "hello five", "Reply 10: done."));
+        let detail = parse_rollout("compact-task", &jsonl(&records), "compact-1");
+
+        let shape: Vec<(&str, Option<String>)> = turn_texts(&detail);
+        assert_eq!(
+            shape,
+            vec![
+                ("user", Some("hello one".into())),
+                ("assistant", Some("Reply 1: done.".into())),
+                ("user", Some("/compact".into())),
+                ("assistant", None),
+                ("user", Some("hello five".into())),
+                ("assistant", Some("Reply 10: done.".into())),
+            ],
+            "{shape:?}"
+        );
+        // Above its divider, stamped when codex began the task.
+        assert!(super::is_codex_compaction_divider(&detail.turns[3].blocks));
+        assert_eq!(
+            detail.turns[2].timestamp,
+            "2026-11-25T08:58:00.700Z".parse::<DateTime<Utc>>().unwrap()
+        );
+    }
+
+    /// codex also compacts at the START of an ordinary turn, before writing
+    /// that turn's prompt; the prompt follows within milliseconds in the same
+    /// task. That compaction belongs to the prompt's round and asks for no
+    /// prompt of its own. Nor does a compaction-only task the file ends
+    /// inside: it has not shown yet whether a prompt follows.
+    #[test]
+    fn a_compaction_with_its_own_prompt_or_still_open_gets_no_compact_prompt() {
+        let header = record(
+            "2026-11-25T08:52:13.000Z",
+            "session_meta",
+            serde_json::json!({"id": "compact-2", "cwd": "/w", "cli_version": "0.171.0"}),
+        );
+        let mut pre_turn = vec![header.clone()];
+        pre_turn.extend(prompted_task("52:13", "t1", "hello one", "Reply 1: done."));
+        let mut second = compact_task("58:00", "t2", false);
+        second.extend(prompted_task("58:01", "t2", "hello two", "Reply 2: done.").into_iter().skip(1));
+        pre_turn.extend(second);
+        let detail = parse_rollout("pre-turn-compaction", &jsonl(&pre_turn), "compact-2");
+        let shape = turn_texts(&detail);
+        assert!(
+            !shape.iter().any(|(_, text)| text.as_deref() == Some("/compact")),
+            "{shape:?}"
+        );
+        assert_eq!(shape.iter().filter(|(role, _)| *role == "user").count(), 2, "{shape:?}");
+
+        let mut open = vec![header];
+        open.extend(prompted_task("52:13", "t1", "hello one", "Reply 1: done."));
+        open.extend(compact_task("58:00", "t2", false));
+        let detail = parse_rollout("open-compaction", &jsonl(&open), "compact-2");
+        let shape = turn_texts(&detail);
+        assert!(
+            !shape.iter().any(|(_, text)| text.as_deref() == Some("/compact")),
+            "{shape:?}"
+        );
+    }
+
+    /// A turn another agent's message started has no user record either, and
+    /// it compacts like any turn that reaches the context limit. It is no
+    /// `/compact`: codex 0.171 marks it a regular turn with a
+    /// `turn_attribution`, and older codex shows the message that started it
+    /// as a `response_item.agent_message`. Neither shape grows a prompt, in the
+    /// detail or in the sidebar count.
+    #[test]
+    fn an_agent_started_turn_that_compacts_gets_no_compact_prompt() {
+        let attributed = serde_json::json!({
+            "type": "task_started",
+            "turn_id": "t2",
+            "turn_attribution": {"turn_id": "t2", "turn_trigger": null, "parent_turn_id": null, "initiating_agent_path": null, "root_turn_id": "t2"}
+        });
+        let agent_input = record(
+            "2026-11-25T08:58:00.710Z",
+            "response_item",
+            serde_json::json!({"type": "agent_message", "id": "amsg_1", "author": "/root/review", "recipient": "/root", "content": [{"type": "input_text", "text": "Message Type: FINAL_ANSWER"}]}),
+        );
+        for (label, started, input) in [
+            ("attributed", attributed, None),
+            ("agent-input", serde_json::json!({"type": "task_started", "turn_id": "t2"}), Some(agent_input)),
+        ] {
+            let mut records = vec![record(
+                "2026-11-25T08:52:13.000Z",
+                "session_meta",
+                serde_json::json!({"id": "compact-3", "cwd": "/w", "cli_version": "0.171.0"}),
+            )];
+            records.extend(prompted_task("52:13", "t1", "hello one", "Reply 1: done."));
+            let mut task = compact_task("58:00", "t2", true);
+            task[0] = record("2026-11-25T08:58:00.700Z", "event_msg", started);
+            if let Some(input) = input {
+                task.insert(1, input);
+            }
+            records.extend(task);
+            let content = jsonl(&records);
+            let detail = parse_rollout(label, &content, "compact-3");
+            let shape = turn_texts(&detail);
+            assert!(
+                !shape.iter().any(|(_, text)| text.as_deref() == Some("/compact")),
+                "{label}: {shape:?}"
+            );
+            assert!(
+                detail.turns.iter().any(|t| super::is_codex_compaction_divider(&t.blocks)),
+                "{label}: the divider stays"
+            );
+            // The prompt and the reply; nothing for the compaction.
+            assert_eq!(
+                summary_of(&format!("{label}-sum"), &content).message_count,
+                2,
+                "{label}"
+            );
+        }
     }
 
     /// A note steered into a running codex turn (codex-acp 2.4.0 + codex
