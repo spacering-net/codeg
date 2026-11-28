@@ -79,9 +79,15 @@ mod tests {
     #[tokio::test]
     async fn adds_the_indexes_and_takes_them_down() {
         let conn = Database::connect("sqlite::memory:").await.expect("db");
-        // A database whose history ends at the step before.
-        let before = u32::try_from(<Migrator as MigratorTrait>::migrations().len() - 1).unwrap();
-        Migrator::up(&conn, Some(before)).await.expect("migrate to 000002");
+        // A database whose history ends at the step before. Found by name:
+        // later migrations follow this one.
+        let idx = <Migrator as MigratorTrait>::migrations()
+            .iter()
+            .position(|m| m.name() == "m20261125_000003_personal_agent_indexes")
+            .expect("listed");
+        Migrator::up(&conn, Some(idx as u32))
+            .await
+            .expect("migrate to 000002");
         assert_eq!(indexes(&conn).await, 0);
         Migrator::up(&conn, None).await.expect("upgrade");
         assert_eq!(indexes(&conn).await, 3);
