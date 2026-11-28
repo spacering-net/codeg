@@ -433,9 +433,6 @@ pub struct ActivityRow {
 /// cannot be read at all. A matter's own marks need it not — what it waits on
 /// changes with the matter — and must not take it: its reminder's row and its
 /// own are one mark.
-///
-/// `@` and `#` part the mark: the thing is all before the last `@`
-/// ([`super::activity_dismiss`] keeps one mark per thing).
 pub fn dismiss_mark(row: &ActivityRow) -> String {
     let at = match (&row.item, &row.today) {
         (Some(i), None) => i.updated_at,
@@ -2685,9 +2682,15 @@ mod tests {
         let v = view(WatchHealth::ReadFailed("auth".into()), &ignored);
         let (g, r) = find(&v, "pr:1");
         assert_eq!(g, "needs");
-        assert!(r
-            .dismiss
-            .as_ref()
-            .is_some_and(|m| m.ends_with("#read_failed:auth")));
+        let unread = r.dismiss.clone().expect("waits on the owner");
+        assert!(unread.ends_with("#read_failed:auth"), "{unread}");
+
+        // Ignored that way too, and read again with its checks still slow:
+        // back where it was ignored first, it stays out of sight.
+        let ignored = [ignored[0].clone(), unread];
+        let v = view(WatchHealth::ReadFailed("auth".into()), &ignored);
+        assert!(v.groups.needs.is_empty());
+        let v = view(WatchHealth::ChecksSlow(7), &ignored);
+        assert!(v.groups.needs.is_empty(), "its first mark is still kept");
     }
 }
