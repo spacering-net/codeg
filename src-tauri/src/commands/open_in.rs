@@ -325,16 +325,21 @@ fn validate_open_local_file_path(path: &str) -> Result<PathBuf, AppCommandError>
 /// a document: a program, a script the shell executes, a shortcut, an
 /// installer. A file reference's badge shows whatever text the message gave it
 /// (`[report.pdf](./setup.exe)` reads as a PDF), so "Open with default app"
-/// must not be a one-click way to run what an agent's reply pointed at. Judged
-/// by the name the shell will see and, through a symlink, by the file it
-/// names; on Unix any execute bit counts too (`open` runs an extensionless
-/// executable in Terminal, and some `xdg-open` setups run one directly).
+/// must not be a one-click way to run what an agent's reply pointed at.
+///
+/// Judged by the name the shell will see and, through a symlink, by the file
+/// it names: a runnable type ([`RUNNABLE_EXTENSIONS`]), and on Windows also a
+/// type the shell itself flags as dangerous or whose registered handler is a
+/// script host (`.py` → `py.exe`, …). On Unix, an executable that really is a
+/// program or script (`#!`, ELF, Mach-O) — `open` runs an extensionless one in
+/// Terminal — but not the execute bit alone, which exFAT/FAT volumes set on
+/// every file.
 #[cfg(any(test, feature = "tauri-runtime"))]
 fn runs_code_when_opened(path: &Path, meta: &std::fs::Metadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if meta.permissions().mode() & 0o111 != 0 {
+        if meta.permissions().mode() & 0o111 != 0 && starts_like_a_program(path) {
             return true;
         }
     }
@@ -346,6 +351,26 @@ fn runs_code_when_opened(path: &Path, meta: &std::fs::Metadata) -> bool {
         .any(extension_runs_code)
 }
 
+/// A shebang or an executable image header (ELF; Mach-O thin, either byte
+/// order, or fat). Unreadable counts as not: the launch would fail anyway.
+#[cfg(all(any(test, feature = "tauri-runtime"), unix))]
+fn starts_like_a_program(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 4];
+    let read = std::fs::File::open(path)
+        .and_then(|mut file| file.read(&mut head))
+        .unwrap_or(0);
+    let head = &head[..read];
+    head.starts_with(b"#!")
+        || head == b"\x7fELF"
+        || matches!(
+            head,
+            [0xfe, 0xed, 0xfa, 0xce | 0xcf]
+                | [0xce | 0xcf, 0xfa, 0xed, 0xfe]
+                | [0xca, 0xfe, 0xba, 0xbe]
+        )
+}
+
 #[cfg(any(test, feature = "tauri-runtime"))]
 fn extension_runs_code(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
@@ -355,15 +380,108 @@ fn extension_runs_code(path: &Path) -> bool {
     if RUNNABLE_EXTENSIONS.contains(&ext.as_str()) {
         return true;
     }
-    // Whatever else this machine runs by name (`PATHEXT` is `.COM;.EXE;…`).
     #[cfg(windows)]
-    if let Some(pathext) = std::env::var_os("PATHEXT") {
-        return pathext
-            .to_string_lossy()
-            .split(';')
-            .any(|entry| entry.trim_start_matches('.').eq_ignore_ascii_case(&ext));
+    {
+        // Whatever else this machine runs by name (`PATHEXT` is `.COM;.EXE;…`).
+        let in_pathext = std::env::var_os("PATHEXT").is_some_and(|pathext| {
+            pathext
+                .to_string_lossy()
+                .split(';')
+                .any(|entry| entry.trim_start_matches('.').eq_ignore_ascii_case(&ext))
+        });
+        if in_pathext || windows_type_runs_code(&ext) {
+            return true;
+        }
     }
     false
+}
+
+/// What this machine's registrations say about `.ext`: flagged dangerous by
+/// the shell (its built-in list plus `FTA_AlwaysUnsafe`), or opened by a
+/// script host — a language installer that associates its scripts with its
+/// interpreter (Python's `.py`/`.pyw` with `py.exe`, by default) makes "open"
+/// mean "run", whatever the extension.
+#[cfg(all(any(test, feature = "tauri-runtime"), windows))]
+fn windows_type_runs_code(ext: &str) -> bool {
+    use windows_sys::Win32::UI::Shell::{
+        AssocIsDangerous, AssocQueryStringW, ASSOCF_NOTRUNCATE, ASSOCSTR_EXECUTABLE,
+    };
+    let assoc: Vec<u16> = format!(".{ext}")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `assoc` is NUL-terminated and outlives the call.
+    if unsafe { AssocIsDangerous(assoc.as_ptr()) } != 0 {
+        return true;
+    }
+    let mut buf = vec![0u16; 1024];
+    let mut len = buf.len() as u32;
+    // SAFETY: `buf` holds `len` u16s; the shell writes at most that many and
+    // reports the count written (terminator included) back through `len`.
+    let hr = unsafe {
+        AssocQueryStringW(
+            ASSOCF_NOTRUNCATE,
+            ASSOCSTR_EXECUTABLE,
+            assoc.as_ptr(),
+            std::ptr::null(),
+            buf.as_mut_ptr(),
+            &mut len,
+        )
+    };
+    if hr < 0 {
+        return false;
+    }
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    is_script_host(&String::from_utf16_lossy(&buf[..end]))
+}
+
+/// Whether the program a file type opens with runs its argument as code: an
+/// interpreter or script host, by its file name (`C:\…\py.exe`, `wscript.exe`).
+#[cfg(any(test, all(feature = "tauri-runtime", windows)))]
+fn is_script_host(program: &str) -> bool {
+    let name = program
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    let stem = name.strip_suffix(".exe").unwrap_or(&name);
+    const HOSTS: &[&str] = &[
+        "py",
+        "pyw",
+        "wscript",
+        "cscript",
+        "powershell",
+        "pwsh",
+        "cmd",
+        "java",
+        "javaw",
+        "perl",
+        "wperl",
+        "ruby",
+        "rubyw",
+        "node",
+        "deno",
+        "bun",
+        "php",
+        "php-win",
+        "bash",
+        "sh",
+        "wsl",
+        "mshta",
+        "rundll32",
+        "regedit",
+        "regsvr32",
+        "msiexec",
+        "tclsh",
+        "wish",
+        "autoit3",
+        "hh",
+    ];
+    HOSTS.contains(&stem)
+        || stem.starts_with("python")
+        || stem.starts_with("autohotkey")
+        || stem.starts_with("tclsh")
+        || stem.starts_with("wish")
 }
 
 /// File types whose default action runs or installs something.
@@ -419,6 +537,19 @@ const RUNNABLE_EXTENSIONS: &[&str] = &[
     "search-ms",
     "website",
     "gadget",
+    "py",
+    "pyw",
+    "pyz",
+    "pyzw",
+    "pyc",
+    "pyo",
+    "pl",
+    "rb",
+    "rbw",
+    "php",
+    "tcl",
+    "ahk",
+    "au3",
 ];
 
 #[cfg(all(any(test, feature = "tauri-runtime"), target_os = "macos"))]
@@ -940,6 +1071,47 @@ mod tests {
         let err = validate_open_local_file_path(link.to_str().expect("utf8"))
             .expect_err("link to a runnable type");
         assert!(err.message.contains("can run code"), "{err:?}");
+    }
+
+    /// exFAT/FAT volumes report every file executable; a document there is
+    /// still a document.
+    #[cfg(unix)]
+    #[test]
+    fn local_file_opens_a_document_whose_execute_bit_is_set() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let doc = dir.path().join("report.pdf");
+        fs::write(&doc, "%PDF-1.7").expect("write file");
+        fs::set_permissions(&doc, fs::Permissions::from_mode(0o777)).expect("chmod");
+        validate_open_local_file_path(doc.to_str().expect("utf8")).expect("a document");
+
+        let binary = dir.path().join("LICENSE");
+        fs::write(&binary, b"\x7fELF\x02\x01").expect("write file");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("chmod");
+        let err = validate_open_local_file_path(binary.to_str().expect("utf8"))
+            .expect_err("an executable image");
+        assert!(err.message.contains("can run code"), "{err:?}");
+    }
+
+    #[test]
+    fn script_hosts_are_known_by_their_program_name() {
+        for host in [
+            r"C:\Windows\py.exe",
+            r"C:\Python313\pythonw.exe",
+            r"C:\Windows\System32\WScript.exe",
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            r"C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe",
+            "/usr/bin/python3",
+        ] {
+            assert!(is_script_host(host), "{host}");
+        }
+        for viewer in [
+            r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
+            r"C:\Windows\System32\notepad.exe",
+            r"C:\Program Files\Microsoft VS Code\Code.exe",
+        ] {
+            assert!(!is_script_host(viewer), "{viewer}");
+        }
     }
 
     /// A launcher stub: `body` is the shell script after the shebang.
